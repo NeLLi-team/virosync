@@ -1,0 +1,202 @@
+schema_version: 1
+
+orchestration:
+  database_root: null
+  core_resources_url: https://dl.newlineages.com/virosync/resources_v1_0_6.tar.gz
+  core_resources_version: v1.0.6
+  core_resources_sha256: 1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a
+  core_resources_manifest_sha256: 7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f
+  tmvec_resources_url: null
+  interproscan_resources_url: null
+  max_concurrent_genomes: 6
+  retries: 1
+  retry_delay_seconds: 60
+  gpu_id: null
+
+ablation:
+  id: A0
+  contract_sha256: bcde3b3053760d897e1756454038e0ba8aa5bf75148e0c6eabc56cb080653bd2
+
+databases:
+  hmm_database: null
+  hmm_allowlist: null
+  marker_faa_dir: null
+  marker_faa_db: null
+  marker_db: null
+  gene_taxonomy_faa_db: null
+  faa_dir: null
+  gvclass_db: null
+  diamond_db: null
+  taxonomy_labels_file: null
+  seed_marker_allowlist:
+    - GVOGm0003
+    - GVOGm0013
+    - GVOGm0054
+    - GVOGm0461
+    - GVOGm0760
+    - GVOGm0890
+    - gamadvirusMCP
+    - VS000086
+    - VS000309
+    - VP_MCP_1
+    - VP_MCP_2
+    - VP_MCP_3
+    - VP_MCP_4
+    - VP_MCP_5
+    - VP_MCP_6
+    - VP_MCP_7
+    - VP_ATPase_1
+    - VP_ATPase_2
+    - VP_ATPase_3
+    - VP_ATPase_4
+    - VP_Penton_1
+    - VP_Penton_2
+    - VP_Penton_3
+    - VP_Penton_4
+    - VP_Penton_6
+    - VP_Penton_7
+    - VP_PRO_1
+    - VP_PRO_2
+    - PLV_PC_054
+    - PLV_MCP_1
+    - PLV_MCP_2
+    - PLV_MCP_3
+    - PLV_MCP_4
+    - PLV_MCP_5
+    - PLV_MCP_6
+    - PLV_MCP_8
+    - PLV_MCP_9
+    - PLV_MCP_10
+    - Mirus_JellyRoll
+    - Mirus_MCP
+    - Mirus_Portal
+    - Mirus_Terminase_ATPase
+    - Mirus_Terminase_merged
+    - Mirus_Triplex1
+    - Mirus_Triplex2
+    - GVOGm0172
+
+compute:
+  threads: 16
+  max_threads: 48
+  device: cpu
+  search_backend: diamond
+  gene_taxonomy_threads: null
+  interproscan_threads: 4
+
+host:
+  label: ARC
+  prefixes:
+    - ARC__
+  high_pident_threshold: 70.0
+
+phase1:
+  rebuild_db: false
+  assembly_mode: default
+  hmm_chunk_size: null
+  initial_window_bp: 10000
+  initial_window_genes: 5
+  min_markers_initial: 1
+  extension_kb: 5
+  merge_distance: 1000
+  host_taxonomy_deviation_enabled: true
+  host_taxonomy_deviation_allow_seeds: true
+  host_taxonomy_deviation_min_token_len: 6
+  host_taxonomy_deviation_min_tokens: 3
+  host_taxonomy_deviation_overlap_threshold: 0.3
+  host_taxonomy_deviation_max_pident: 70.0
+  host_taxonomy_deviation_max_hits: 5
+  host_taxonomy_deviation_window_bp: 5000
+  host_taxonomy_deviation_window_count: 25
+  host_taxonomy_deviation_window_seed: 13
+  host_taxonomy_deviation_window_min_markers: 1
+  host_taxonomy_deviation_seed_window_bp: 10000
+  host_taxonomy_deviation_seed_min_markers: 3
+  marker_validation_top_k: 10
+  novel_marker_min_score: 30.0
+  novel_marker_min_coverage: 0.5
+  novel_marker_require_cluster: true
+
+phase2:
+  taxonomy_weight_mode: rank
+  taxonomy_ml_enabled: false
+  taxonomy_ml_model: logreg
+  taxonomy_ml_threshold: 0.5
+  taxonomy_ml_neighbor_window: 3
+  host_trim_enabled: true
+  host_trim_window_bp: 5000
+  host_trim_step_bp: 1000
+  host_trim_max_host_fraction: 0.3
+  host_trim_min_viral_fraction: 0.05
+  host_trim_score_threshold: 0.5
+  host_trim_buffer_kb: 5
+  host_signature_min_token_len: 6
+  host_trim_min_overlap_score: 0.4
+  diamond_flank_genes: 10
+  diamond_control_sample_size: 100
+  diamond_control_min_distance: 30
+  diamond_top_k: 10
+  diamond_chunk_size: 10000
+  diamond_random_seed: 42
+
+phase3:
+  host_signature_evidence_threshold: 0.3
+  high_tier_threshold: 0.8
+  low_tier_threshold: 0.4
+  use_crf_in_final_score: false
+  priority_marker_list:
+    - mcp
+  marker_floor_priority_only: 0.55
+  marker_floor_priority_plus_family: 0.7
+  marker_floor_priority_multi_family: 0.8
+  marker_family_bonus_per_family: 0.06
+  marker_multi_family_bonus: 0.08
+  enable_phylogenetic: false
+  skip_structural: true
+  use_boltz: false
+  boltz_mcp_only: true
+  boltz_use_msa_server: false
+  boltz_min_seq_len: 100
+  boltz_max_seq_len: 1000
+  boltz_no_kernels: true
+  use_tmvec_database: false
+  tmvec_require_gpu: false
+  tmvec_databases:
+    - bfvd
+  tmvec_database_dir: null
+  tmvec_min_score: 0.5
+  viral_structure_db: null
+  extended_output: true
+  export_all_eve_sequences: true
+  interproscan_enabled: false
+  interproscan_dir: null
+  interproscan_keywords:
+    - viral
+    - virion
+    - virophage
+    - capsid
+    - major capsid
+    - mcp
+    - portal
+    - terminase
+    - packaging
+    - ncldv
+    - mirus
+    - pox
+    - polymerase
+    - helicase
+    - transcription factor
+    - vltf
+  interproscan_applications:
+    - Pfam
+  run_gvclass: false
+  gvclass_path: null
+
+execution:
+  masking:
+    backend: "off"
+    failure_policy: strict
+    fallback_backend: null
+    repeatmasker_species: null
+    repeatmasker_library: null
+  resume: true

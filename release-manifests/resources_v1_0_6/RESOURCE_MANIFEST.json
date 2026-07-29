@@ -1,0 +1,95 @@
+{
+  "files": [
+    {
+      "path": "DB_VERSION",
+      "role": "bundle_version",
+      "sha256": "349638c59d94d5497f53b57165b90f37b6d73bf5afaa7a51f789a92544dcab1e",
+      "size": 7
+    },
+    {
+      "path": "DATABASE_README.txt",
+      "role": "bundle_documentation",
+      "sha256": "c86bf0bc099334ae65ac6d31a7c18701486650deb18b1db25a2e95c286dbf1d5",
+      "size": 690
+    },
+    {
+      "path": "models/combined.hmm",
+      "role": "hmm_models",
+      "sha256": "7e6cd1fd06915df7dc62d381bcc9cc261eadaf1716e7ede0387341dcea87b40e",
+      "size": 156735010
+    },
+    {
+      "path": "models/combined.hmm.h3f",
+      "role": "hmm_index",
+      "sha256": "8b59266588ee406406eadd52bfbddcd273902eab0bc4b6ea562c26b732ffbf81",
+      "size": 28349221
+    },
+    {
+      "path": "models/combined.hmm.h3i",
+      "role": "hmm_index",
+      "sha256": "c326930ef85c1265658c57e169bb98c6f4de25e58465261237992701b15feda4",
+      "size": 85690
+    },
+    {
+      "path": "models/combined.hmm.h3m",
+      "role": "hmm_index",
+      "sha256": "99f6858e3947d9991d959238539b43b93ef45392075bad18844d53a09c9c0dc7",
+      "size": 65021442
+    },
+    {
+      "path": "models/combined.hmm.h3p",
+      "role": "hmm_index",
+      "sha256": "3384d3f6ad9afd8c5a72c4d3ebb72b2e14b93fa9b0cac0d27343d791719d1fc7",
+      "size": 76282662
+    },
+    {
+      "path": "models/model_annotations_with_interpro.tsv",
+      "role": "model_annotations",
+      "sha256": "c2dce2c7731afe523312de600a983863379b60beed27e07029b0e436655e12d5",
+      "size": 166935
+    },
+    {
+      "path": "models/og_marker_name_map.tsv",
+      "role": "og_marker_mappings",
+      "sha256": "82588c34dc7295d7448b5ea32ae44563ca50933b0815764c7f3d33cf380ce199",
+      "size": 114481
+    },
+    {
+      "path": "marker/marker.faa",
+      "role": "marker_proteins",
+      "sha256": "a3cd2d4759a246fc0447dad6c1d17030a52282f749e0a2f2be6af5280e807bc1",
+      "size": 1570415192
+    },
+    {
+      "path": "marker/marker.dmnd",
+      "role": "marker_diamond_database",
+      "sha256": "f9fa4c590ce5f334933aabc69e084dacf863a903555208a73300575a42930e23",
+      "size": 1611178743
+    },
+    {
+      "path": "genomes/combined_proteome.dmnd",
+      "role": "proteome_diamond_database",
+      "sha256": "98f571603b6f71df1deb2a6e06f5b91b33ca1c7e692af3e4636a7b56b8cff2b9",
+      "size": 11269683342
+    },
+    {
+      "path": "taxonomy/labels.tsv",
+      "role": "taxonomy_labels",
+      "sha256": "75f632f2dcc90209f49862a1daf139f7810cbab3058b68bd9c48027c1363bcdb",
+      "size": 26633040
+    }
+  ],
+  "resource_version": "v1.0.6",
+  "schema_version": 1,
+  "semantic_counts": {
+    "hmm_index_files": 4,
+    "hmm_models": 1053,
+    "marker_diamond_sequences": 3864300,
+    "marker_proteins": 3864300,
+    "model_annotations": 1053,
+    "og_marker_mappings": 808,
+    "proteome_diamond_sequences": 46765751,
+    "taxonomy_labels": 190317
+  },
+  "version": "v1.0.6"
+}

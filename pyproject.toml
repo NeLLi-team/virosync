@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools==79.0.1", "wheel==0.46.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "virosync"
+version = "1.0.0"
+description = "Framework for discovering and characterizing ancient viral elements in eukaryotic genomes"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "ViroSync Development Team" }
+]
+
+[project.scripts]
+virosync = "virosync.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# Report notebooks share globals across cells, which static analysis cannot see;
+# exclude them from the correctness lint.
+extend-exclude = [
+    "src/virosync/report/eve_analysis.py",
+]
+
+[tool.ruff.lint]
+# High-signal correctness rules enforced in CI (real bugs: syntax errors,
+# undefined names, bad __all__, use-before-assignment, return-outside-function).
+# Broader style rules (unused imports/vars, redefinitions, f-string nits) are
+# intentionally not gated yet to avoid churn across the legacy tree; they can be
+# enabled incrementally.
+select = ["E9", "F821", "F822", "F823", "F706"]

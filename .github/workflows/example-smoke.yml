@@ -1,0 +1,99 @@
+name: example-smoke
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"   # weekly, Mondays 09:17 UTC
+  # Runs on the self-hosted `nelli-gpu` runner, which has the ViroSync resource
+  # bundle provisioned (VIROSYNC_CI_RESOURCES in the runner's .env), so it skips
+  # the multi-GB download and runs the real end-to-end example weekly and for
+  # release tags. PR gating remains the `tests` workflow.
+
+permissions:
+  contents: read
+
+jobs:
+  example:
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: [self-hosted, nelli-gpu]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install authenticated Pixi
+        run: bash scripts/ci/install_pixi.sh
+
+      - name: Install locked environment
+        run: pixi install --locked
+
+      - name: Fully verify provisioned resources
+        env:
+          EXPECTED_DB_VERSION: v1.0.6
+        run: |
+          test -n "$VIROSYNC_CI_RESOURCES" || { echo "VIROSYNC_CI_RESOURCES not set on this runner"; exit 1; }
+          test -f "$VIROSYNC_CI_RESOURCES/DB_VERSION" || { echo "resources not found at $VIROSYNC_CI_RESOURCES"; exit 1; }
+          found="$(cat "$VIROSYNC_CI_RESOURCES/DB_VERSION")"
+          test "$found" = "$EXPECTED_DB_VERSION" || { echo "provisioned DB_VERSION '$found' != expected '$EXPECTED_DB_VERSION'"; exit 1; }
+          printf 'VIROSYNC_DB_ROOT=%s\n' "$VIROSYNC_CI_RESOURCES" >> "$GITHUB_ENV"
+          pixi run virosync orchestrate resources verify \
+            --config config/orchestration.yaml \
+            --db-root "$VIROSYNC_CI_RESOURCES" \
+            --full
+          echo "Provisioned resources passed full v1.0.6 verification."
+
+      - name: Run clean shipped example
+        run: |
+          pixi run virosync \
+            -i example/ \
+            -o results/ci_example \
+            --config config/orchestration.yaml \
+            -w 1 \
+            --threads-per-worker 4 \
+            --clean-run
+
+      - name: Validate clean completion artifacts
+        run: |
+          pixi run python scripts/ci/validate_example_run.py \
+            results/ci_example \
+            --write-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
+            --expect-predictions 6 \
+            --expect-accepted 1
+          pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
+
+      - name: Run unchanged resume
+        run: |
+          pixi run virosync \
+            -i example/ \
+            -o results/ci_example \
+            --config config/orchestration.yaml \
+            -w 1 \
+            --threads-per-worker 4
+
+      - name: Validate unchanged resume parity
+        run: |
+          pixi run python scripts/ci/validate_example_run.py \
+            results/ci_example \
+            --compare-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
+            --require-resume \
+            --expect-predictions 6 \
+            --expect-accepted 1
+          pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
+
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: virosync-example-smoke
+          path: |
+            results/ci_example/batch_summary.tsv
+            results/ci_example/batch_report.md
+            results/ci_example/*/phase3_synthesis/virosync_summary.json

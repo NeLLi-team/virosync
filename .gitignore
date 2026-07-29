@@ -1,0 +1,203 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+*.egg
+
+# Benchmark harness, results and manuscript live in the virosync-bench repo.
+/benchmarking/
+
+# Virtual environments
+.venv/
+.pixi/
+uv.lock
+
+# Workflow-engine run artifacts
+.nextflow/
+.nextflow.log*
+
+# Samtools/bgzip index sidecars generated next to inputs
+*.fna.fai
+*.fa.fai
+*.fasta.fai
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Data (large files - download via scripts)
+data/raw/
+data/processed/
+data/databases/
+data/faa/
+data/fna/
+data/gvclass/
+data/hmms/
+data/viralrecall_db/
+data/manifests/
+data/query_genomes/
+data/virophage_plv/
+!data/truth/
+data/resource_metrics/
+resource_metrics/
+filemap.tsv
+
+# Results (generated)
+results/
+queries/
+# Existing pre-v2 benchmark work remains local development material. The shared
+# metric/theme modules, v2 harness, and router README are curated tracked surfaces.
+benchmarks/reports/
+benchmarks/results/
+benchmarks/euk_parallel_benchmark_*/
+config/orchestration_*_benchmark.yaml
+tests/test_repeat_spike_benchmark.py
+runs/
+test_results/
+tests/results/
+tests/example_files/
+# Archive / deletion staging areas
+DEL/
+*/DEL/
+# Per-session working notes (kept in local checkout only)
+tasks/
+docs/handoffs/
+
+# Documentation (release docs tracked; private manuscript/plan material stays local)
+docs/DEL/
+# Manuscript source lives in the virosync-bench repo.
+/docs/ms/
+docs/plans/
+docs/syn2_real_benchmark_results_writeup.md
+docs/syn2_real_benchmark_results_writeup.qmd
+docs/METHODS.qmd
+docs/references.bib
+
+# Local test genomes / datasets
+naomi/
+user_test/
+all_euk/
+combined/
+resources/
+*.fna
+*.fna.gz
+
+# Exception: allow example genome files
+!example/test-1.fna
+
+# Model checkpoints (large)
+*.pt
+*.pth
+*.ckpt
+models/checkpoints/
+models/
+
+# Logs
+logs/
+*.log
+RM_*/
+RM_*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environment
+.env
+.env.*
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Local large artifacts in repo root
+ostreococcus_prodigal.faa
+pixi.lock
+!/pixi.lock
+!tools/boltz_runtime/pixi.lock
+
+# Analysis working directories and packed resource archives (never commit)
+resources_work/
+resources_v*.tar.gz
+
+# Resource installs land beside the repo when --db-root points here.
+/resources
+/resources-*/
+/.resources.*
+
+# Archive
+DEL/
+virosyncDEL/
+
+# Local developer context and editor state - never committed
+*.local.md
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+COPILOT.md
+MEMORY.md
+.claude/
+.claude_resources.json
+.codexloop/
+.cursor/
+.cursorrules
+.codex/
+.memd/
+.agents/
+
+# Data files (large)
+*.npy
+
+# Test results (keep tests/unit/ only)
+tests/results*/
+tests/analysis_*/
+tests/eve_evaluation/
+tests/gvclass_comparison/
+tests/example_files/
+
+# Large external tools/data
+gvclass/
+stenamoeba_eve/
+stena/
+
+# Downloaded test genomes
+tests/algae/
+tests/legacy/
+
+# Development planning artifacts
+.planning/
+EXPERIENCES.md
+
+# Local working data and scratch (not part of the distribution)
+analysis/
+*.full.pdf
+.ppv_rebuild/
+del/
+
+# Benchmark v2 tracked source and generated/private boundaries. These rules are
+# last so the curated fixture FASTAs and nested lock override global patterns.
+# Comparator environment definitions are flat. Ignore any nested local
+# materialization, except curated fixture trees that the static audit tracks.
+
+# flat pre-v2 manuscript and its generated renders remain ignored.

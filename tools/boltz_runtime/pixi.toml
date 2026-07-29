@@ -1,0 +1,18 @@
+[workspace]
+# Kept separate from the main ViroSync environment to avoid dependency drift
+# in the primary analysis/runtime stack.
+name = "boltz-runtime"
+version = "0.1.0"
+description = "Isolated runtime for Boltz CLI to avoid dependency conflicts with the main ViroSync environment"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "==3.11.14"
+pip = "==25.3"
+
+[pypi-dependencies]
+boltz = "==2.2.1"
+
+[tasks]
+boltz = "boltz"

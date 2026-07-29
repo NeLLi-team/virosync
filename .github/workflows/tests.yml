@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install authenticated Pixi
+        run: bash scripts/ci/install_pixi.sh
+
+      - name: Install locked environment
+        run: pixi install --locked
+
+      - name: Run locked lint
+        run: pixi run lint
+
+  pytest:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install authenticated Pixi
+        run: bash scripts/ci/install_pixi.sh
+
+      - name: Install locked environment
+        run: pixi install --locked
+
+      - name: Run tests
+        run: pixi run python -m pytest
+
+      - name: Compile Python sources
+        run: pixi run python -m compileall -q src tests scripts
+
+      - name: Check production release surfaces
+        run: pixi run check-production-ready
+
+      - name: Check CLI version
+        run: pixi run virosync --version

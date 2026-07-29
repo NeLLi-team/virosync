@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper for the isolated Boltz pixi environment used by ViroSync optional
+# structural runs. Keeping it in-repo avoids leaking the main pixi activation
+# context into the Boltz runtime.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MANIFEST_PATH="${REPO_ROOT}/tools/boltz_runtime/pixi.toml"
+
+exec env -u PIXI_ENVIRONMENT_NAME -u PIXI_PROJECT_ROOT \
+    pixi run --manifest-path "${MANIFEST_PATH}" -e default boltz "$@"

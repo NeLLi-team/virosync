@@ -1,0 +1,193 @@
+{
+  "ablation": {
+    "contract_sha256": "bcde3b3053760d897e1756454038e0ba8aa5bf75148e0c6eabc56cb080653bd2",
+    "id": "A0"
+  },
+  "compute": {
+    "device": "cpu",
+    "gene_taxonomy_threads": null,
+    "interproscan_threads": 4,
+    "max_threads": 48,
+    "search_backend": "diamond",
+    "threads": 8
+  },
+  "databases": {
+    "diamond_db": null,
+    "faa_dir": null,
+    "gene_taxonomy_faa_db": null,
+    "gvclass_db": null,
+    "hmm_allowlist": null,
+    "hmm_database": null,
+    "marker_db": null,
+    "marker_faa_db": null,
+    "marker_faa_dir": null,
+    "seed_marker_allowlist": null,
+    "taxonomy_labels_file": null
+  },
+  "effective_config_sha256": "ad7b345cb16cc32aeca228dd5013b300cd3db4d2bec278bf8f6402e2468c82c1",
+  "execution": {
+    "masking": {
+      "backend": "off",
+      "failure_policy": "strict",
+      "fallback_backend": null,
+      "repeatmasker_library": null,
+      "repeatmasker_species": null
+    },
+    "resume": true
+  },
+  "host": {
+    "high_pident_threshold": 70.0,
+    "label": "EUK",
+    "prefixes": [
+      "EUK__",
+      "MITO__",
+      "PLASTID__"
+    ]
+  },
+  "optional_features": {
+    "boltz": {
+      "details": [],
+      "enabled": false,
+      "reason_code": null,
+      "requested": false,
+      "required": false
+    },
+    "interproscan": {
+      "details": [],
+      "enabled": false,
+      "reason_code": null,
+      "requested": false,
+      "required": false
+    },
+    "tmvec": {
+      "details": [],
+      "enabled": false,
+      "reason_code": null,
+      "requested": false,
+      "required": false
+    }
+  },
+  "orchestration": {
+    "core_resources_manifest_sha256": "7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f",
+    "core_resources_sha256": "1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a",
+    "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_0_6.tar.gz",
+    "core_resources_version": "v1.0.6",
+    "database_root": null,
+    "gpu_id": null,
+    "interproscan_resources_url": null,
+    "max_concurrent_genomes": 6,
+    "retries": 1,
+    "retry_delay_seconds": 60,
+    "tmvec_resources_url": null
+  },
+  "phase1": {
+    "assembly_mode": "default",
+    "extension_kb": 5,
+    "hmm_chunk_size": null,
+    "host_taxonomy_deviation_allow_seeds": false,
+    "host_taxonomy_deviation_enabled": false,
+    "host_taxonomy_deviation_max_hits": 5,
+    "host_taxonomy_deviation_max_pident": 70.0,
+    "host_taxonomy_deviation_min_token_len": 6,
+    "host_taxonomy_deviation_min_tokens": 3,
+    "host_taxonomy_deviation_overlap_threshold": 0.3,
+    "host_taxonomy_deviation_seed_min_markers": 3,
+    "host_taxonomy_deviation_seed_window_bp": 10000,
+    "host_taxonomy_deviation_window_bp": 5000,
+    "host_taxonomy_deviation_window_count": 25,
+    "host_taxonomy_deviation_window_min_markers": 1,
+    "host_taxonomy_deviation_window_seed": 13,
+    "initial_window_bp": 10000,
+    "initial_window_genes": 5,
+    "marker_validation_top_k": 10,
+    "merge_distance": 1000,
+    "min_markers_initial": 1,
+    "novel_marker_min_coverage": 0.5,
+    "novel_marker_min_score": 30.0,
+    "novel_marker_require_cluster": true,
+    "rebuild_db": false
+  },
+  "phase2": {
+    "diamond_chunk_size": 10000,
+    "diamond_control_min_distance": 30,
+    "diamond_control_sample_size": 100,
+    "diamond_flank_genes": 10,
+    "diamond_random_seed": 42,
+    "diamond_superset_prototype_enabled": false,
+    "diamond_top_k": 10,
+    "host_signature_min_token_len": 3,
+    "host_trim_buffer_kb": 5,
+    "host_trim_enabled": true,
+    "host_trim_max_host_fraction": 0.3,
+    "host_trim_min_overlap_score": 0.4,
+    "host_trim_min_viral_fraction": 0.05,
+    "host_trim_score_threshold": 0.3,
+    "host_trim_step_bp": 1000,
+    "host_trim_window_bp": 5000,
+    "taxonomy_ml_enabled": false,
+    "taxonomy_ml_model": "logreg",
+    "taxonomy_ml_neighbor_window": 3,
+    "taxonomy_ml_threshold": 0.5,
+    "taxonomy_weight_mode": "rank"
+  },
+  "phase3": {
+    "boltz_max_seq_len": 1000,
+    "boltz_mcp_only": true,
+    "boltz_min_seq_len": 100,
+    "boltz_no_kernels": true,
+    "boltz_use_msa_server": false,
+    "enable_phylogenetic": false,
+    "export_all_eve_sequences": true,
+    "extended_output": true,
+    "gvclass_path": null,
+    "high_tier_threshold": 0.7,
+    "host_signature_evidence_threshold": 0.3,
+    "interproscan_applications": [
+      "Pfam"
+    ],
+    "interproscan_dir": null,
+    "interproscan_enabled": false,
+    "interproscan_keywords": [
+      "viral",
+      "virion",
+      "virophage",
+      "capsid",
+      "major capsid",
+      "mcp",
+      "portal",
+      "terminase",
+      "packaging",
+      "ncldv",
+      "mirus",
+      "pox",
+      "polymerase",
+      "helicase",
+      "transcription factor",
+      "vltf"
+    ],
+    "low_tier_threshold": 0.2,
+    "marker_family_bonus_per_family": 0.06,
+    "marker_floor_priority_multi_family": 0.8,
+    "marker_floor_priority_only": 0.55,
+    "marker_floor_priority_plus_family": 0.7,
+    "marker_multi_family_bonus": 0.08,
+    "priority_marker_list": [
+      "mcp"
+    ],
+    "run_gvclass": false,
+    "skip_structural": true,
+    "tmvec_database_dir": null,
+    "tmvec_databases": [
+      "bfvd",
+      "cath",
+      "swissprot"
+    ],
+    "tmvec_min_score": 0.5,
+    "tmvec_require_gpu": false,
+    "use_boltz": false,
+    "use_crf_in_final_score": false,
+    "use_tmvec_database": false,
+    "viral_structure_db": null
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,44 @@
+name: production-guards
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+  schedule:
+    - cron: "41 8 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  release-surfaces:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install authenticated Pixi
+        run: bash scripts/ci/install_pixi.sh
+
+      - name: Install locked environment
+        run: pixi install --locked
+
+      - name: Check production release surfaces
+        run: pixi run check-production-ready
+
+      - name: Verify public resource URL
+        if: >-
+          github.event_name == 'schedule' ||
+          github.event_name == 'workflow_dispatch' ||
+          startsWith(github.ref, 'refs/tags/v')
+        run: |
+          URL=$(awk '/core_resources_url:/{print $2; exit}' config/orchestration.yaml)
+          echo "Verifying resource URL: $URL"
+          curl --retry 3 --retry-delay 10 --connect-timeout 20 --max-time 60 -fsSI "$URL"

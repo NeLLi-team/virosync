@@ -1,0 +1,128 @@
+# ViroSync: Framework for discovering ancient viral elements in eukaryotic genomes
+# Configuration for pixi package manager
+
+[workspace]
+name = "virosync"
+version = "1.0.0"
+description = "Framework for discovering and characterizing ancient viral elements (EVEs) in eukaryotic genomes"
+authors = ["ViroSync Development Team"]
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[dependencies]
+# Python runtime
+python = "==3.11.14"
+pip = "==25.3"
+
+# Core scientific libraries
+numpy = "==2.2.6"
+pandas = "==2.2.3"
+scipy = "==1.16.3"
+scikit-learn = "==1.8.0"
+biopython = "==1.86"
+hdbscan = "==0.8.41"
+
+# Visualization
+matplotlib = ">=3.8.0"
+seaborn = ">=0.13.0"
+
+# Data storage
+h5py = "==3.15.1"
+pyarrow = "==21.0.0"
+
+# CLI and utilities
+click = "==8.3.1"
+pyyaml = "==6.0.3"
+tqdm = "==4.67.1"
+psutil = "==7.1.3"
+quarto = "==1.8.27"
+tectonic = "==0.15.0"
+
+# Bioinformatics Python bindings
+pyhmmer = "==0.11.3"
+
+# Bioinformatics CLI tools
+diamond = "==2.2.1"
+bedtools = "==2.31.1"
+trf = "==4.10.0rc2"
+repeatmasker = "==4.2.2"
+prodigal-gv = "==2.11.0"
+seqkit = "==2.10.1"
+skani = "==0.2.0"
+
+# Structural analysis
+foldseek = "==10.941cd33"
+
+# Testing and core modeling utilities
+pytest = "==9.0.2"
+networkx = "==3.6.1"
+intervaltree = ">=3.1.0,<4"
+xgboost = ">=3.1.3,<4"
+plotly = ">=6.6.0,<7"
+python-kaleido = ">=1.2.0,<2"
+
+[pypi-dependencies]
+# Notebook report generation (per-genome EVE report is Jupyter-only via jupytext)
+papermill = ">=2.6"
+nbformat = ">=5.9"
+jupytext = ">=1.16"
+
+[tasks]
+# Unified CLI entrypoint.  Bare `-i/-o` invocations are auto-forwarded to
+# `run` by the CLI, so all subcommands work through this single task:
+#   pixi run virosync run -i <input> -o <output>       → run pipeline
+#   pixi run virosync -i <input> -o <output>            → run pipeline (shortcut)
+#   pixi run virosync orchestrate setup ...             → setup
+#   pixi run virosync info                              → system info
+virosync = "PYTHONPATH=src python -m virosync.cli.main"
+
+# === Main Pipeline ===
+run = { cmd = "PYTHONPATH=src python -m virosync.cli.main run", depends-on = ["setup-databases"] }
+
+# === Example / Quick Start ===
+# Minimal example genome shipped in example/
+example = { cmd = "PYTHONPATH=src python -m virosync.cli.main run -i example/ -o results/example/ --config config/orchestration.yaml -w 1 --threads-per-worker 8 --clean-run", depends-on = ["setup-databases"] }
+
+# === Database Setup ===
+# Provision resources (downloads + config path updates) and then validate DB files.
+# Override installation target by setting VIROSYNC_DB_ROOT.
+# When VIROSYNC_DB_ROOT is unset we avoid rewriting config on every pipeline run.
+setup-virosync-resources = "PYTHONPATH=src python -m virosync.cli.main orchestrate setup --config config/orchestration.yaml --no-interactive-optional --no-write-config"
+setup-databases = { cmd = "echo 'ViroSync resource setup complete.'", depends-on = ["setup-virosync-resources"] }
+check-structural-runtime = "PYTHONPATH=src python scripts/check_structural_runtime.py --config config/orchestration.yaml"
+
+# === Development ===
+lint = "ruff check src tests scripts"
+check-production-ready = "python scripts/ci/check_production_ready.py"
+
+[feature.dev.dependencies]
+# Development tools
+black = "*"
+flake8 = "*"
+ruff = "==0.15.21"
+mypy = "*"
+pre-commit = "*"
+ipython = "*"
+jupyter = "*"
+
+[feature.cpu.dependencies]
+# Default runtime: CPU-only PyTorch
+pytorch-cpu = "==2.9.1"
+
+[feature.gpu.pypi-dependencies]
+# GPU runtime for optional TMVec structural similarity.
+# Boltz is kept in tools/boltz_runtime/pixi.toml because its dependency stack
+# drifts independently from the main ViroSync runtime.
+torch = "==2.9.1"
+transformers = "==4.57.3"
+fair-esm = "==2.0.0"
+omegaconf = "==2.3.0"
+tm-vec = "==1.0.3"
+pytorch-lightning = "==2.5.5"
+
+# NOTE: Shared workstation - use max 48 threads (of 64 available)
+
+[environments]
+default = { features = ["dev", "cpu"], solve-group = "default" }
+gpu = { features = ["dev", "gpu"], solve-group = "gpu" }
+structural = { features = ["dev", "gpu"], solve-group = "gpu" }
