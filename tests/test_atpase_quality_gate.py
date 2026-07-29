@@ -33,7 +33,7 @@ def test_atpase_only_high_medium_plv_is_gated_out() -> None:
         _result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2)
     )
     assert not decision.kept
-    assert decision.reason == "plv_vp_high_medium_gate"
+    assert decision.reason == "small_dna_high_medium_gate"
 
 
 def test_non_atpase_hallmark_high_medium_plv_passes() -> None:
@@ -41,7 +41,7 @@ def test_non_atpase_hallmark_high_medium_plv_passes() -> None:
         _result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2)
     )
     assert decision.kept
-    assert decision.reason == "plv_vp_high_medium_pass"
+    assert decision.reason == "small_dna_high_medium_pass"
 
 
 def test_mcp_only_high_medium_plv_passes() -> None:
@@ -57,7 +57,7 @@ def test_atpase_only_low_plv_is_gated_out() -> None:
         _result(confidence_tier="LOW", hallmark_genes=["PLV_PC_054"], hallmark_count=1)
     )
     assert not decision.kept
-    assert decision.reason == "plv_vp_low_gate"
+    assert decision.reason == "small_dna_low_gate"
 
 
 def test_mcp_low_plv_is_promoted() -> None:
@@ -70,4 +70,4 @@ def test_mcp_low_plv_is_promoted() -> None:
         )
     )
     assert decision.kept
-    assert decision.reason == "plv_vp_low_promoted"
+    assert decision.reason == "small_dna_low_promoted"

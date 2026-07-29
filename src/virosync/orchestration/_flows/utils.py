@@ -155,7 +155,7 @@ def log_region_statistics(
     Calculate and log summary statistics for candidate regions.
 
     Computes region count, length range/mean, marker counts,
-    lineage support (NCLDV, MIRUS, PLV, VP), MCP presence.
+    lineage support (NCLDV, MIRUS, PPV), MCP presence.
 
     Args:
         regions: List of candidate region objects (Anchor or similar)
@@ -175,13 +175,9 @@ def log_region_statistics(
     mirus_counts = [
         sum(1 for m in r.markers if getattr(m, "has_mirus", 0)) for r in regions
     ]
-    # ``has_plv`` covers both PLV__ and PPV__ markers, so it is the Preplasmiviricota
-    # (PPV) count. ``has_vp`` is the legacy VP__-only field, unused since v1.0.6.
+    # ``has_plv`` covers legacy PLV__ and current PPV__ labels.
     ppv_counts = [
         sum(1 for m in r.markers if getattr(m, "has_plv", 0)) for r in regions
-    ]
-    vp_counts = [
-        sum(1 for m in r.markers if getattr(m, "has_vp", 0)) for r in regions
     ]
     mcp_counts = [
         sum(1 for m in r.markers if getattr(m, "is_mcp", False)) for r in regions
@@ -209,10 +205,6 @@ def log_region_statistics(
     ppv_count = sum(1 for c in ppv_counts if c > 0)
     logger.info(
         f"    PPV: {ppv_count} regions ({ppv_count*100/len(regions):.0f}%)"
-    )
-    vp_count = sum(1 for c in vp_counts if c > 0)
-    logger.info(
-        f"    VP (legacy): {vp_count} regions ({vp_count*100/len(regions):.0f}%)"
     )
     mcp_count = sum(1 for c in mcp_counts if c > 0)
     logger.info(

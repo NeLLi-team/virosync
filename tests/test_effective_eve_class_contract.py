@@ -15,31 +15,61 @@ from virosync.output_contract import (
     OUTPUT_SCHEMA_VERSION,
     effective_eve_class_count_total,
     normalize_effective_eve_class,
+    normalize_effective_eve_class_counts,
     resolve_effective_eve_class,
 )
 from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+from virosync.pipeline.phase3.evidence_synthesizer import (
+    VerificationResult,
+    infer_likely_family,
+)
 
 
 def test_effective_class_partition_and_output_schema_are_versioned() -> None:
     assert EFFECTIVE_EVE_CLASSES == (
         "NCLDV",
-        "VP",
-        "PLV",
         "MIRUS",
-        "MIXED",
         "PPV",
+        "CRESS",
+        "MIXED",
         "UNKNOWN",
     )
     assert tuple(EFFECTIVE_EVE_CLASS_COUNT_KEYS) == EFFECTIVE_EVE_CLASSES
-    assert OUTPUT_SCHEMA_VERSION == 3
+    assert OUTPUT_SCHEMA_VERSION == 4
 
 
 def test_persisted_effective_class_normalization_is_exhaustive() -> None:
     assert normalize_effective_eve_class(" ppv ") == "PPV"
+    assert normalize_effective_eve_class("vp") == "PPV"
+    assert normalize_effective_eve_class("plv") == "PPV"
+    assert normalize_effective_eve_class("cress") == "CRESS"
     assert normalize_effective_eve_class("mixed") == "MIXED"
     assert normalize_effective_eve_class("") == "UNKNOWN"
     assert normalize_effective_eve_class("future-lineage") == "UNKNOWN"
     assert normalize_effective_eve_class(None) == "UNKNOWN"
+
+
+def test_legacy_class_counts_fold_vp_and_plv_into_ppv() -> None:
+    counts = normalize_effective_eve_class_counts(
+        {
+            "NCLDV": 1,
+            "VP": 2,
+            "PLV": 3,
+            "MIRUS": 4,
+            "MIXED": 5,
+            "PPV": 6,
+            "UNKNOWN": 7,
+        }
+    )
+
+    assert counts == {
+        "NCLDV": 1,
+        "MIRUS": 4,
+        "PPV": 11,
+        "CRESS": 0,
+        "MIXED": 5,
+        "UNKNOWN": 7,
+    }
 
 
 def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
@@ -64,6 +94,39 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
     )
     assert decision.kept is True
     assert decision.effective_class == "NCLDV"
+
+
+def test_cress_reuses_small_dna_virus_gate() -> None:
+    decision = evaluate_v2_quality_gate(
+        SimpleNamespace(
+            confidence_tier="HIGH",
+            start=0,
+            end=3000,
+            hallmark_count=2,
+            hallmark_genes=["marker_a", "marker_b"],
+            has_mcp=False,
+            region_classification="UNKNOWN",
+            classification="",
+            likely_family="CRESS",
+        )
+    )
+
+    assert decision.kept is True
+    assert decision.effective_class == "CRESS"
+
+
+def test_cress_is_reachable_from_identity_qualified_gene_taxonomy() -> None:
+    result = VerificationResult(
+        eve_id="EVE_CRESS",
+        scaffold="ctg",
+        start=0,
+        end=3000,
+        region_classification="UNKNOWN",
+        marker_dominant_family="UNKNOWN",
+        gene_taxonomy_dominant_family="CRESS",
+    )
+
+    assert infer_likely_family(result) == "CRESS"
 
 
 def test_empty_prediction_summary_has_full_exclusive_surface() -> None:

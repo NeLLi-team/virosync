@@ -23,17 +23,16 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         "medium_tier",
         "low_tier",
         "ncldv",
-        "vp",
-        "plv",
         "mirus",
+        "ppv",
+        "cress",
         "mixed",
+        "unknown",
         "total_bp",
         "genes",
         "hallmarks",
         "elapsed_sec",
         "error",
-        "ppv",
-        "unknown",
     ]
     row = {
         "genome_id": "example",
@@ -46,17 +45,16 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         "medium_tier": "0",
         "low_tier": "1",
         "ncldv": "1",
-        "vp": "1",
-        "plv": "0",
         "mirus": "0",
+        "ppv": "1",
+        "cress": "0",
         "mixed": "0",
+        "unknown": "0",
         "total_bp": "42",
         "genes": "7",
         "hallmarks": "2",
         "elapsed_sec": elapsed,
         "error": "",
-        "ppv": "0",
-        "unknown": "0",
     }
     with (output_root / "batch_summary.tsv").open(
         "w", newline="", encoding="utf-8"
@@ -83,11 +81,10 @@ def valid_example(monkeypatch, tmp_path: Path):
         "tier_counts": {"HIGH": 1, "MEDIUM": 0, "LOW": 1},
         "class_counts": {
             "NCLDV": 1,
-            "VP": 1,
-            "PLV": 0,
             "MIRUS": 0,
+            "PPV": 1,
+            "CRESS": 0,
             "MIXED": 0,
-            "PPV": 0,
             "UNKNOWN": 0,
         },
     }
@@ -95,7 +92,7 @@ def valid_example(monkeypatch, tmp_path: Path):
         relative_path="virosync_predictions.tsv",
         size=12,
         sha256="b" * 64,
-        schema="canonical-predictions-v3",
+        schema="canonical-predictions-v4",
         row_count=2,
     )
     state = SimpleNamespace(
@@ -124,6 +121,17 @@ def test_snapshot_is_deterministic_path_free_and_count_bound(valid_example) -> N
     assert run["run_state_sha256"] == hashlib.sha256(state_bytes).hexdigest()
     assert run["result"]["canonical_rows"] == 2
     assert run["artifacts"][0]["sha256"] == "b" * 64
+
+
+def test_snapshot_schema_error_names_current_version(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text('{"schema_version": 1}\n', encoding="utf-8")
+
+    with pytest.raises(
+        validate_example_run.ExampleValidationError,
+        match="is not schema v2",
+    ):
+        validate_example_run._load_snapshot(snapshot_path)
 
 
 def test_validator_rejects_batch_state_count_disagreement(valid_example) -> None:

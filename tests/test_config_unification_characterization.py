@@ -13,6 +13,9 @@ import yaml
 from virosync.ablation import ABLATION_CONTRACT_SHA256, AblationID
 from virosync.config import ApplicationConfig, ConfigError, PipelineConfig
 from virosync.config.pipeline_config import FIELD_SPECS, _RETIRED_PIPELINE_KEYS
+from virosync.orchestration._flows.single_genome import (
+    orchestrator as orchestrator_module,
+)
 from virosync.orchestration._flows.single_genome.orchestrator import (
     _single_genome_flow_impl,
     single_genome_flow,
@@ -57,9 +60,42 @@ def test_every_emitted_pipeline_key_has_exactly_one_runner_parameter() -> None:
         "genome_path",
         "output_dir",
         "genome_id",
+        "progress_callback",
     }
 
     assert emitted == runner_parameters
+
+
+def test_progress_callback_is_forwarded_once_with_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_impl(**kwargs):
+        captured.update(kwargs)
+        return {"success": True}
+
+    fake_impl.__signature__ = inspect.signature(_single_genome_flow_impl)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_single_genome_flow_impl",
+        fake_impl,
+    )
+
+    def callback(percent, stage, failed):
+        return None
+
+    result = single_genome_flow(
+        genome_path=tmp_path / "input.fna",
+        output_dir=tmp_path / "output",
+        genome_id="input",
+        config=PipelineConfig(),
+        progress_callback=callback,
+    )
+
+    assert result == {"success": True}
+    assert captured["progress_callback"] is callback
 
 
 def test_every_pipeline_dataclass_field_has_exactly_one_field_spec() -> None:

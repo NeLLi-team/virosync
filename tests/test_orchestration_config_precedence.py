@@ -844,7 +844,13 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Config loaded and validated." in result.output
+    assert "Config loaded and validated." not in result.output
+    assert "Software version" in result.output
+    assert "Database version" in result.output
+    assert isinstance(
+        received["progress"],
+        orchestration_cli.BatchProgress,
+    )
     pipeline = received["config"]
     assert pipeline.host.label == host_label
     assert pipeline.host.prefixes == host_prefixes
@@ -854,6 +860,26 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
     assert effective["phase3"]["export_all_eve_sequences"] is True
     assert len(effective["effective_config_sha256"]) == 64
     assert effective == json.loads(golden_path.read_text())
+
+    received.clear()
+    verbose_result = CliRunner().invoke(
+        orchestrate,
+        [
+            "run",
+            "-i",
+            str(input_fasta),
+            "-o",
+            str(tmp_path / "verbose-results"),
+            "--config",
+            str(config_path.resolve()),
+            "--verbose",
+        ],
+    )
+
+    assert verbose_result.exit_code == 0, verbose_result.output
+    assert "Config loaded and validated." in verbose_result.output
+    assert "Effective config (CLI overrides applied):" in verbose_result.output
+    assert received["progress"] is None
 
 
 # The pipeline used to have two scientific configurations: `orchestrate run` has no

@@ -21,6 +21,7 @@ from typing import Optional
 
 from Bio import SeqIO
 
+from virosync.output_contract import canonical_family
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.utils.path_safety import (
     require_strict_child,
@@ -156,9 +157,20 @@ def summarize_dominant_family(
     if not taxonomies:
         return "UNKNOWN", 0.0
     family_counts = {
-        family: sum(1 for t in taxonomies if family in (t.top10_prefixes or []))
-        for family in ("NCLDV", "MIRUS", "VP", "PLV", "PPV")
+        family: 0 for family in ("NCLDV", "MIRUS", "PPV", "CRESS")
     }
+    for taxonomy in taxonomies:
+        supported = {
+            canonical_family(prefix.rstrip("_"))
+            for prefix, pident in zip(
+                taxonomy.top10_prefixes or [],
+                taxonomy.top10_pidents or [],
+            )
+            if pident >= MIN_VIRAL_HIT_PIDENT
+        }
+        for family in family_counts:
+            if family in supported:
+                family_counts[family] += 1
     dominant_family = max(family_counts, key=family_counts.get)
     dominant_count = family_counts[dominant_family]
     if dominant_count == 0:

@@ -93,7 +93,6 @@ def test_summarize_predictions_tsv_counts_canonical_rows_as_accepted(tmp_path) -
     assert stats["ncldv_count"] == 1
     # Legacy "VP" rows roll up under the unified Preplasmiviricota class.
     assert stats["ppv_count"] == 1
-    assert stats["vp_count"] == 0
     assert stats["mirus_count"] == 1
 
 

@@ -8,6 +8,7 @@ from typing import Optional
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASSES,
+    canonical_family,
     normalize_effective_eve_class,
 )
 from virosync.pipeline.phase3.acceptance_selection import (
@@ -21,6 +22,7 @@ from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.orchestration.runtime import call_task
 from virosync.pipeline.phase2.boundary_diamond import (
+    MIN_VIRAL_HIT_PIDENT,
     filter_taxonomy_to_boundary,
     get_flanking_taxonomy,
     build_gene_taxonomy_record,
@@ -523,31 +525,25 @@ def _run_phase3_subflow(
                 n_ncldv_mirus_total = n_ncldv_mirus_interior + n_ncldv_mirus_flanking
                 n_vp_plv_total = n_vp_plv_interior + n_vp_plv_flanking
 
-                # Calculate dominant_family based on NCLDV/MIRUS/VP/PLV counts in top10
+                # Calculate the dominant public viral family from top-10 hits.
                 # Use interior genes only to avoid flanking contamination.
                 # boundary_diamond stores prefixes with trailing underscores.
                 all_genes_for_family = list(filtered_taxonomy)
                 family_counts = {
-                    "NCLDV": sum(
-                        1 for t in all_genes_for_family
-                        if any(p in {"NCLDV__", "NCLDV"} for p in (t.top10_prefixes or []))
-                    ),
-                    "MIRUS": sum(
-                        1 for t in all_genes_for_family
-                        if any(p in {"MIRUS__", "MIRUS"} for p in (t.top10_prefixes or []))
-                    ),
-                    "VP": sum(
-                        1 for t in all_genes_for_family
-                        if any(p in {"VP__", "VP"} for p in (t.top10_prefixes or []))
-                    ),
-                    "PLV": sum(
-                        1 for t in all_genes_for_family
-                        if any(p in {"PLV__", "PLV"} for p in (t.top10_prefixes or []))
-                    ),
-                    "PPV": sum(
-                        1 for t in all_genes_for_family
-                        if any(p in {"PPV__", "PPV"} for p in (t.top10_prefixes or []))
-                    ),
+                    family: sum(
+                        1
+                        for taxonomy in all_genes_for_family
+                        if family
+                        in {
+                            canonical_family(prefix.rstrip("_"))
+                            for prefix, pident in zip(
+                                taxonomy.top10_prefixes or [],
+                                taxonomy.top10_pidents or [],
+                            )
+                            if pident >= MIN_VIRAL_HIT_PIDENT
+                        }
+                    )
+                    for family in ("NCLDV", "MIRUS", "PPV", "CRESS")
                 }
                 dominant_family = "UNKNOWN"
                 dominant_fraction = 0.0
@@ -917,15 +913,7 @@ def _run_phase3_subflow(
             tier_counts[tier] += 1
 
     # Compute classification statistics for canonical accepted regions.
-    classification_stats = {
-        "NCLDV": 0,
-        "VP": 0,
-        "PLV": 0,
-        "MIRUS": 0,
-        "MIXED": 0,
-        "PPV": 0,
-        "UNKNOWN": 0,
-    }
+    classification_stats = {eve_class: 0 for eve_class in EFFECTIVE_EVE_CLASSES}
     accepted_bp = 0
     total_genes = 0
     total_hallmarks = 0

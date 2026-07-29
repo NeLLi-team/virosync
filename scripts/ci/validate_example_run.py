@@ -26,14 +26,13 @@ from virosync.orchestration._flows.single_genome.run_state import (
 )
 
 
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 CLASS_FIELDS = {
     "ncldv": "NCLDV",
-    "vp": "VP",
-    "plv": "PLV",
     "mirus": "MIRUS",
-    "mixed": "MIXED",
     "ppv": "PPV",
+    "cress": "CRESS",
+    "mixed": "MIXED",
     "unknown": "UNKNOWN",
 }
 TIER_FIELDS = {
@@ -52,11 +51,10 @@ SNAPSHOT_SUMMARY_FIELDS = (
     "medium_tier",
     "low_tier",
     "ncldv",
-    "vp",
-    "plv",
     "mirus",
-    "mixed",
     "ppv",
+    "cress",
+    "mixed",
     "unknown",
     "total_bp",
     "genes",
@@ -266,7 +264,9 @@ def _load_snapshot(path: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ExampleValidationError(f"cannot read snapshot {path}: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
-        raise ExampleValidationError(f"snapshot {path} is not schema v1")
+        raise ExampleValidationError(
+            f"snapshot {path} is not schema v{SNAPSHOT_SCHEMA_VERSION}"
+        )
     return payload
 
 

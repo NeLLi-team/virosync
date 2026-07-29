@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import asdict
 from functools import wraps
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import virosync
 from virosync.ablation import (
@@ -594,9 +594,9 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "ablation_events.json":
         return "virosync.ablation_events/v1"
     if path.name == "virosync_predictions.tsv":
-        return "canonical-predictions-v3"
+        return "canonical-predictions-v4"
     if path.name == "virosync_predictions_detailed.tsv":
-        return "detailed-predictions-v3"
+        return "detailed-predictions-v4"
     if path.name == "virosync_predictions.bed":
         return "canonical-predictions-bed-v1"
     if path.name == "virosync_predictions.gff3":
@@ -1472,6 +1472,7 @@ def _single_genome_flow_impl(
     resume: bool,
     # Search backend (diamond -- sole backend)
     search_backend: str = "diamond",
+    progress_callback: Optional[Callable[[float, str, bool], None]] = None,
 ) -> dict:
     """
     Implementation of single genome flow (internal).
@@ -1491,6 +1492,12 @@ def _single_genome_flow_impl(
     host_label = (host_label or "EUK").upper()
 
     logger = get_orchestration_logger(__name__)
+
+    def report_progress(percent: float, stage: str) -> None:
+        if progress_callback is not None:
+            progress_callback(percent, stage, False)
+
+    report_progress(0, "starting")
     _pin_cuda_device(device=device, logger=logger)
     genome_start_time = time.time()
     logger.info("=" * 60)
@@ -1590,6 +1597,7 @@ def _single_genome_flow_impl(
             completed_artifacts = None
         if completed_artifacts is not None:
             logger.info("Resume: completed schema-3 outputs validated")
+            report_progress(100, "complete")
             return {
                 "genome_id": genome_id,
                 "success": True,
@@ -1693,6 +1701,7 @@ def _single_genome_flow_impl(
                 promoted_low_rows=recovered_promoted_low,
             ),
         )
+        report_progress(100, "complete")
         return {
             "genome_id": genome_id,
             "success": True,
@@ -1745,6 +1754,7 @@ def _single_genome_flow_impl(
             masking_result=masking_result,
             requested_masking=run_identity["requested_masking"],
         )
+    report_progress(20, "phase 0 complete")
 
     # === PHASE 1: Seeding ===
     phase1_result = _run_phase1_subflow(
@@ -1810,6 +1820,7 @@ def _single_genome_flow_impl(
         resume_authorized=1 in reusable_phases,
         ablation_id=selected_ablation,
     )
+    report_progress(45, "phase 1 complete")
 
     # Handle Phase 1 early exit (error or no predictions)
     if "success" in phase1_result:
@@ -1956,6 +1967,7 @@ def _single_genome_flow_impl(
             resume_authorized=2 in reusable_phases,
             ablation_id=selected_ablation,
         )
+    report_progress(75, "phase 2 complete")
 
     # Handle Phase 2 early exit (no seeds or no boundaries)
     if "success" in phase2_result:
@@ -2097,6 +2109,7 @@ def _single_genome_flow_impl(
         ablation_id=selected_ablation,
         assembly_mode=assembly_mode,
     )
+    report_progress(90, "phase 3 complete")
 
     # Release GPU memory after Phase 3 (TMVec models ~45 GiB).
     try:
@@ -2510,6 +2523,7 @@ def _single_genome_flow_impl(
     )
     logger.info("=" * 60)
 
+    report_progress(100, "complete")
     return {
         "genome_id": genome_id,
         "success": True,
@@ -2638,6 +2652,7 @@ def single_genome_flow(
     boundary_diamond_random_seed: int = 42,
     boundary_diamond_superset_prototype_enabled: bool = False,
     resume: bool = True,
+    progress_callback: Optional[Callable[[float, str, bool], None]] = None,
 ) -> dict:
     """
     Process a single genome through all ViroSync phases.
@@ -2779,13 +2794,20 @@ def single_genome_flow(
                 boundary_diamond_superset_prototype_enabled
             ),
             resume=resume,
+            progress_callback=progress_callback,
         )
 
     # Detect explicit overrides (values different from signature defaults)
     explicit_overrides = _detect_explicit_overrides(
         signature=inspect.signature(single_genome_flow),
         passed_kwargs=locals().copy(),
-        exclude_keys={'config', 'genome_path', 'output_dir', 'genome_id'},
+        exclude_keys={
+            'config',
+            'genome_path',
+            'output_dir',
+            'genome_id',
+            'progress_callback',
+        },
     )
     if "skip_masking" in explicit_overrides:
         if "masking" in explicit_overrides:
@@ -2800,7 +2822,13 @@ def single_genome_flow(
     merged = _merge_config_with_kwargs(
         config=config,
         explicit_kwargs=explicit_overrides,
-        exclude_keys={'config', 'genome_path', 'output_dir', 'genome_id'},
+        exclude_keys={
+            'config',
+            'genome_path',
+            'output_dir',
+            'genome_id',
+            'progress_callback',
+        },
     )
 
     # Filter merged kwargs to match impl signature and fill missing params with defaults
@@ -2809,12 +2837,14 @@ def single_genome_flow(
         target_signature=inspect.signature(_single_genome_flow_impl),
         defaults_signature=inspect.signature(single_genome_flow),
     )
+    filtered.pop("progress_callback", None)
 
     # Call implementation with filtered values
     return _single_genome_flow_impl(
         genome_path=genome_path,
         output_dir=output_dir,
         genome_id=genome_id,
+        progress_callback=progress_callback,
         **filtered,
     )
 

@@ -401,7 +401,7 @@ def classify_region_by_markers(
     if categories_present > 1:
         if vp_plv_count >= 2 and ncldv_count <= 1 and mirus_count == 0:
             # One Preplasmiviricota lineage. The vp_/plv_ marker split is kept in
-            # the vp_plv_subclass column, not in the class token.
+            # the ppv_subtype column, not in the class token.
             return "PPV"
         if ncldv_count >= 2 and vp_plv_count <= 1 and mirus_count == 0:
             return "NCLDV"

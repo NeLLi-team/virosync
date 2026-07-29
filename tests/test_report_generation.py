@@ -25,12 +25,14 @@ def test_generate_eve_report_writes_jupyter_notebook(
         parameters: dict[str, str],
         cwd: str,
         kernel_name: str,
+        progress_bar: bool,
     ) -> None:
         # Source is a real notebook materialized from the jupytext .py source.
         assert input_path.endswith(".ipynb")
         assert Path(cwd) == tmp_path
         captured["parameters"] = parameters
         captured["kernel_name"] = kernel_name
+        captured["progress_bar"] = progress_bar
         Path(output_path).write_text("{}")
 
     monkeypatch.setitem(
@@ -46,6 +48,7 @@ def test_generate_eve_report_writes_jupyter_notebook(
     assert captured["parameters"]["GENOME_ID"] == "demo"
     assert captured["parameters"]["RESULTS_DIR"] == str(tmp_path)
     assert captured["kernel_name"] == "python3"
+    assert captured["progress_bar"] is False
     # marimo output must no longer be produced
     assert not (tmp_path / "notebooks" / "marimo").exists()
     assert not hasattr(report_paths, "marimo")

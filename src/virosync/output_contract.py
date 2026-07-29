@@ -1,28 +1,132 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 3
+OUTPUT_SCHEMA_VERSION = 4
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
 EFFECTIVE_EVE_CLASSES = (
     "NCLDV",
-    "VP",
-    "PLV",
     "MIRUS",
-    "MIXED",
     "PPV",
+    "CRESS",
+    "MIXED",
     "UNKNOWN",
 )
-CONCRETE_EVE_CLASSES = frozenset({"NCLDV", "VP", "PLV", "MIRUS", "PPV"})
+CONCRETE_EVE_CLASSES = frozenset({"NCLDV", "MIRUS", "PPV", "CRESS"})
 EFFECTIVE_EVE_CLASS_COUNT_KEYS = {
     "NCLDV": "ncldv_count",
-    "VP": "vp_count",
-    "PLV": "plv_count",
     "MIRUS": "mirus_count",
-    "MIXED": "mixed_count",
     "PPV": "ppv_count",
+    "CRESS": "cress_count",
+    "MIXED": "mixed_count",
     "UNKNOWN": "unknown_count",
 }
+
+DETAILED_TAXONOMY_PARTITION = (
+    "EUK",
+    "MITO",
+    "PLASTID",
+    "BAC",
+    "ARC",
+    "UNK",
+    "NO_HITS",
+    "NCLDV",
+    "MIRUS",
+    "PPV",
+    "CRESS",
+    "GVMAG",
+    "PHAGE",
+)
+
+DETAILED_PREDICTION_COLUMNS = (
+    # Identity and final calls
+    "eve_id",
+    "scaffold",
+    "start",
+    "end",
+    "length",
+    "confidence_tier",
+    "final_confidence",
+    "effective_eve_class",
+    "likely_family",
+    "ppv_subtype",
+    "likely_group",
+    # Candidate provenance
+    "candidate_start",
+    "candidate_end",
+    "candidate_length",
+    "candidate_reduction_bp",
+    "candidate_reduction_reason",
+    "seed_sources",
+    # Marker evidence
+    "hallmark_total",
+    "hallmark_unique",
+    "mcp_gene_ids",
+    "tier1_bypassed_marker_count",
+    "tier1_bypassed_marker_ids",
+    "tier1_bypassed_marker_models",
+    "gvogm_count",
+    "gvogm_names",
+    "og_count",
+    "og_names",
+    "gvogm_unvalidated_count",
+    "gvogm_unvalidated_names",
+    "og_unvalidated_count",
+    "og_unvalidated_names",
+    "marker_complement_score",
+    "family_consistency_score",
+    "seed_marker_names",
+    "other_marker_names",
+    "seed_marker_patterns",
+    "other_marker_patterns",
+    # Gene taxonomy
+    "total_proteins",
+    "ncldv_top10_proteins",
+    "mirus_top10_proteins",
+    "ppv_top10_proteins",
+    "cress_top10_proteins",
+    "taxonomy_best_hits",
+    # Composition and host evidence
+    "kfd",
+    "gc_deviation",
+    "region_gc_percent",
+    "genome_gc_percent",
+    "gc_delta",
+    "host_signature_gene_count",
+    "host_signature_fraction",
+    "host_signature_weighted_mean",
+    # InterProScan evidence
+    "interproscan_total_hits",
+    "interproscan_viral_hits",
+    "interproscan_keyword_hits",
+    "interproscan_category_score",
+    "interproscan_score",
+    # Marker-set completeness
+    "vp_completeness",
+    "ppv_completeness",
+    "ncldv_completeness",
+    "mirus_completeness",
+)
+
+DETAILED_PREDICTION_EXTENDED_COLUMNS = frozenset(
+    {
+        "seed_sources",
+        "marker_complement_score",
+        "family_consistency_score",
+        "seed_marker_names",
+        "other_marker_names",
+        "seed_marker_patterns",
+        "other_marker_patterns",
+        "host_signature_gene_count",
+        "host_signature_fraction",
+        "host_signature_weighted_mean",
+        "interproscan_category_score",
+        "vp_completeness",
+        "ppv_completeness",
+        "ncldv_completeness",
+        "mirus_completeness",
+    }
+)
 
 # GVClass unified Polinton-like viruses and virophages into the single phylum
 # Preplasmiviricota, and the v1.0.6 reference bundle followed: it carries 95,947
@@ -111,8 +215,33 @@ def empty_effective_eve_class_counts() -> dict[str, int]:
     return {key: 0 for key in EFFECTIVE_EVE_CLASS_COUNT_KEYS.values()}
 
 
+def normalize_effective_eve_class_counts(
+    counts: dict[str, int],
+) -> dict[str, int]:
+    """Fold legacy VP/PLV count keys into the current public partition."""
+    normalized = {eve_class: 0 for eve_class in EFFECTIVE_EVE_CLASSES}
+    current_keys = set(EFFECTIVE_EVE_CLASSES)
+    legacy_keys = {
+        "NCLDV",
+        "VP",
+        "PLV",
+        "MIRUS",
+        "MIXED",
+        "PPV",
+        "UNKNOWN",
+    }
+    if set(counts) not in (current_keys, legacy_keys):
+        raise ValueError(
+            "class_counts must contain the current or legacy complete "
+            "effective EVE class partition"
+        )
+    for eve_class, count in counts.items():
+        normalized[normalize_effective_eve_class(eve_class)] += int(count)
+    return normalized
+
+
 def effective_eve_class_count_total(summary: dict) -> int:
-    """Sum the seven exclusive public class counts in a result mapping."""
+    """Sum the six exclusive public class counts in a result mapping."""
     return sum(int(summary.get(key, 0) or 0) for key in EFFECTIVE_EVE_CLASS_COUNT_KEYS.values())
 
 

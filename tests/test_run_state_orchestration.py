@@ -49,6 +49,7 @@ from virosync.orchestration._flows.single_genome.run_state import (
 )
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASSES,
+    OUTPUT_SCHEMA_VERSION,
     normalize_effective_eve_class,
 )
 from virosync.pipeline.phase0.masking import (
@@ -175,7 +176,7 @@ class _MockPipeline:
             },
             "coordinate_schema_version": 2,
             "coordinate_convention": "0-based, half-open [start, end)",
-            "output_schema_version": 3,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "summary_schema_version": 3,
             "requested_masking": orchestrator._masking_request_identity(
                 MaskingConfig()
@@ -498,7 +499,7 @@ class _MockPipeline:
                     "virosync_version": "test",
                     "coordinate_schema_version": 2,
                     "coordinate_convention": "0-based, half-open [start, end)",
-                    "output_schema_version": 3,
+                    "output_schema_version": OUTPUT_SCHEMA_VERSION,
                     "statistics": {
                         "canonical_predictions": rows,
                         "total_candidates": detailed_rows,
@@ -1261,7 +1262,7 @@ def test_duplicate_final_outputs_must_agree(
         content = (
             mocked_pipeline.output_dir / source_relative
         ).read_text().replace("0.91", "0.92")
-        schema = "canonical-predictions-v3"
+        schema = "canonical-predictions-v4"
         expected_error = "duplicate canonical prediction tables disagree"
     else:
         source_relative = next(

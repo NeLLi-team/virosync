@@ -22,7 +22,11 @@ from virosync.pipeline.phase3.gene_taxonomy import (
 
 def _gene(porf_id: str, prefixes: list[str]) -> GeneTaxonomy:
     return GeneTaxonomy(
-        porf_id=porf_id, porf_start=0, porf_end=300, top10_prefixes=prefixes
+        porf_id=porf_id,
+        porf_start=0,
+        porf_end=300,
+        top10_prefixes=prefixes,
+        top10_pidents=[50.0] * len(prefixes),
     )
 
 
@@ -36,8 +40,13 @@ def test_no_viral_prefix_has_no_dominant_family() -> None:
 def test_dominant_family_reports_majority_and_fraction() -> None:
     genes = [_gene("g1", ["PLV"]), _gene("g2", ["PLV"]), _gene("g3", ["NCLDV"])]
     family, fraction = summarize_dominant_family(genes)
-    assert family == "PLV"
+    assert family == "PPV"
     assert fraction == 2 / 3
+
+
+def test_cress_can_be_the_dominant_family() -> None:
+    genes = [_gene("g1", ["CRESS"]), _gene("g2", ["CRESS"]), _gene("g3", ["EUK"])]
+    assert summarize_dominant_family(genes) == ("CRESS", 2 / 3)
 
 
 def test_batch_summary_reports_unknown_without_hits(tmp_path: Path) -> None:

@@ -182,6 +182,38 @@ pixi run virosync \
 
 `pixi run example` remains available as a convenience wrapper around the shipped example input and repository defaults.
 
+### Console output
+
+Setup and pipeline runs print the ViroSync banner, software version, database
+version, and one aggregate progress bar. Interactive terminals update
+the bar in place. Redirected output records progress at bounded milestones.
+
+Pass `--verbose` to the setup or run command to print configuration, phase
+details, and diagnostic logs:
+
+```bash
+pixi run virosync run --verbose \
+  -i genome.fasta \
+  -o results/run_name \
+  --config config/orchestration.yaml
+```
+
+Pass the root `--quiet` flag before the command to suppress the banner,
+progress, and final summary while retaining errors:
+
+```bash
+pixi run virosync --quiet run \
+  -i genome.fasta \
+  -o results/run_name \
+  --config config/orchestration.yaml
+```
+
+Fresh setup prompts and the download-size notice remain visible in quiet mode
+because they require an explicit install-location and download decision.
+
+Pixi can print task and cache messages before ViroSync starts. ViroSync
+verbosity flags do not control those messages.
+
 ## Optional Annotation Layers
 
 TMVec, InterProScan, and Boltz/Foldseek are optional and disabled unless explicitly enabled. The default `pixi install` is CPU-oriented and does not install the GPU/TMVec runtime or Boltz.
@@ -312,10 +344,32 @@ Key output semantics:
 | `<genome_id>/phase<N>.complete.json` | Ordered phase record with dependency and artifact identities |
 | `batch_summary.tsv` | Per-genome status and count summary for the batch run |
 
-The canonical and detailed prediction TSVs append `effective_eve_class`. The pipeline
-writes one of `NCLDV`, `MIRUS`, `PPV`, `MIXED`, or `UNKNOWN`; each accepted prediction
-contributes to one class count. Legacy `VP` and `PLV` are accepted when reading result
-files written before the Preplasmiviricota migration and are folded onto `PPV`.
+The output schema version is 4. `effective_eve_class` is one of `NCLDV`,
+`MIRUS`, `PPV`, `CRESS`, `MIXED`, or `UNKNOWN`, and each accepted prediction
+contributes to one class count. `PPV` contains the VP and PLV subtypes. The
+detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
+subtype-specific marker evidence supports one subtype and not the other.
+Ambiguous PPV candidates retain `effective_eve_class=PPV` and use `.` for
+`ppv_subtype`.
+
+The detailed table groups columns by final call, candidate provenance, marker
+evidence, gene taxonomy, composition and host evidence, InterProScan evidence,
+and marker-set completeness. Its `taxonomy_best_hits` partition is:
+
+```text
+EUK;MITO;PLASTID;BAC;ARC;UNK;NO_HITS;NCLDV;MIRUS;PPV;CRESS;GVMAG;PHAGE
+```
+
+The four `*_top10_proteins` columns count raw top-10 prefix support. The
+mutually exclusive partition assigns a viral family only when the supporting
+hit reaches 25% amino-acid identity. When markers do not assign another family,
+identity-qualified gene taxonomy can assign CRESS. `vp_completeness` records
+VP-subtype evidence;
+`ppv_completeness` combines the PPV marker sets.
+
+The result reader maps `VP` and `PLV` class aliases to `PPV`. Batch summaries
+report the parent classes only:
+`ncldv`, `mirus`, `ppv`, `cress`, `mixed`, and `unknown`.
 
 Normal runs validate schema-v3 state before reuse. The run fingerprint binds the input,
 effective output-determining configuration, source code, locked runtime, enabled tools
@@ -353,9 +407,9 @@ have been removed. A defensive quality gate remains in Phase 3 so that any
 future candidate reaching scoring without an `hhg` entry in `seed_sources` is
 demoted to LOW unless it meets at least one of:
 
-- `hallmark_count >= 3` — three or more Phase-3-validated hallmark genes
-- `hallmark_count >= 1 AND has_mcp` — at least one hallmark and it is an MCP
-- `non-host gene count >= 5` — five or more interior genes without host-like taxonomy
+- `hallmark_count >= 3`: three or more Phase-3-validated hallmark genes
+- `hallmark_count >= 1 AND has_mcp`: at least one hallmark and it is an MCP
+- `non-host gene count >= 5`: five or more interior genes without host-like taxonomy
 
 The seeding provenance for each candidate is recorded in the `seed_sources`
 column of `virosync_predictions_detailed.tsv` (typical values under the
@@ -375,20 +429,21 @@ is gated as a viral region under the standard rule rather than discarded.
 
 | EVE class | Length | Marker requirement |
 |-----------|--------|-------------------|
-| PPV (incl. PLV, VP), MIXED | > 2 kb | has MCP OR (hallmark >= 2 with >= 1 non-ATPase) |
+| PPV, CRESS, MIXED | > 2 kb | has MCP OR (hallmark >= 2 with >= 1 non-ATPase) |
 | NCLDV, MIRUS | > 5 kb | None |
 | NCLDV, MIRUS | <= 5 kb | has MCP |
 
-Here PPV (Preplasmiviricota) is the class that encompasses Polinton-like (PLV) and
-virophage (VP); the v1.0.5 database uses the unified `PPV__` label, with `PLV__`/`VP__`
-retained only as transitional subgroup tags.
+PPV (Preplasmiviricota) contains Polinton-like viruses (PLV) and virophages
+(VP). The v1.0.6 database uses the parent `PPV__` taxonomy label. ViroSync
+assigns a VP or PLV subtype only from unambiguous subtype-specific marker
+evidence.
 
 **LOW confidence (promoted if):**
 
 | EVE class | Length | Marker requirement |
 |---------------|--------|-------------------|
 | NCLDV, MIRUS | > 5 kb | >= 2 validated hallmark markers |
-| PPV (incl. PLV, VP), MIXED | > 2 kb | has MCP OR >= 1 non-ATPase hallmark |
+| PPV, CRESS, MIXED | > 2 kb | has MCP OR (hallmark >= 2 with >= 1 non-ATPase) |
 
 Other LOW-confidence calls are not exported. This design recovers degraded
 EVEs in heavily endogenized genomes (e.g. *Chlamydomonas* sp. ICE-L) that

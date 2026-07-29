@@ -1,6 +1,7 @@
 """Tests for the plain-Python orchestration backend."""
 
 import csv
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,10 +68,11 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
             "medium_tier": 0,
             "low_tier": 0,
             "ncldv_count": 1,
-            "vp_count": 0,
-            "plv_count": 0,
             "mirus_count": 0,
+            "ppv_count": 0,
+            "cress_count": 0,
             "mixed_count": 0,
+            "unknown_count": 0,
             "accepted_bp": 100,
             "total_genes": 5,
             "total_hallmarks": 2,
@@ -94,7 +96,10 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
         "genome_id\tstatus\tbenchmark_eligible\tlegacy_resume\t"
         "predictions\taccepted"
     )
-    assert summary[0].endswith("\terror\tppv\tunknown")
+    assert summary[0].endswith(
+        "\tncldv\tmirus\tppv\tcress\tmixed\tunknown\t"
+        "total_bp\tgenes\thallmarks\telapsed_sec\terror"
+    )
     assert summary[1].startswith("b\tsuccess\ttrue\tfalse\t2\t1\t1")
     assert summary[2].startswith("a\tsuccess\ttrue\tfalse\t2\t1\t1")
     assert (tmp_path / "out" / "batch_report.md").exists()
@@ -390,8 +395,8 @@ def test_batch_summary_quotes_multiline_tabbed_errors(tmp_path: Path) -> None:
     assert rows[0]["error"] == error
 
 
-def test_batch_outputs_include_ppv_unknown_and_exclusive_total(tmp_path: Path) -> None:
-    result = {
+def test_batch_outputs_fold_legacy_subtypes_and_include_cress(tmp_path: Path) -> None:
+    legacy_result = {
         "genome_id": "synthetic",
         "success": True,
         "benchmark_eligible": True,
@@ -405,14 +410,16 @@ def test_batch_outputs_include_ppv_unknown_and_exclusive_total(tmp_path: Path) -
         "vp_count": 1,
         "plv_count": 1,
         "mirus_count": 1,
-        "mixed_count": 1,
+        "mixed_count": 0,
         "ppv_count": 1,
+        "cress_count": 1,
         "unknown_count": 1,
         "accepted_bp": 21007,
         "total_genes": 7,
         "total_hallmarks": 7,
         "elapsed_sec": 1,
     }
+    result = python_runner._normalize_worker_result("synthetic", legacy_result)
 
     summary_path = python_runner._write_batch_summary(tmp_path, [result])
     report_path = python_runner._write_batch_report(tmp_path, [result])
@@ -421,17 +428,50 @@ def test_batch_outputs_include_ppv_unknown_and_exclusive_total(tmp_path: Path) -
         reader = csv.DictReader(handle, delimiter="\t")
         rows = list(reader)
     assert reader.fieldnames is not None
-    assert reader.fieldnames[-2:] == ["ppv", "unknown"]
-    assert rows[0]["ppv"] == rows[0]["unknown"] == "1"
+    assert "vp" not in reader.fieldnames
+    assert "plv" not in reader.fieldnames
+    assert rows[0]["ppv"] == "3"
+    assert rows[0]["cress"] == rows[0]["unknown"] == "1"
 
     report = report_path.read_text()
-    assert "| PPV | 1 |" in report
+    assert "| PPV | 3 |" in report
+    assert "| CRESS | 1 |" in report
     assert "| UNKNOWN | 1 |" in report
+    assert "| VP |" not in report
+    assert "| PLV |" not in report
     assert "| **Total** | **7** |" in report
     assert (
-        "| synthetic | success | yes | no | 7 | 0 | 0 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |"
+        "| synthetic | success | yes | no | 7 | 0 | 0 | 1 | 1 | 3 | 1 | 0 | 1 |"
         in report
     )
+
+
+def test_batch_progress_is_monotonic_and_finishes_failed_queries() -> None:
+    stream = io.StringIO()
+    progress = python_runner.BatchProgress(
+        2,
+        stream=stream,
+        is_tty=False,
+        unit="genomes",
+    )
+
+    progress.update("first", 20, "phase 0")
+    progress.update("first", 10, "stale update")
+    progress.update("second", 40, "phase 1")
+    progress.update("first", 50, "failed", failed=True)
+    progress.update("second", 100, "complete")
+    progress.finish(False)
+
+    lines = [line for line in stream.getvalue().splitlines() if line]
+    assert [line.split("] ", 1)[1].split("%", 1)[0].strip() for line in lines] == [
+        "10",
+        "30",
+        "70",
+        "100",
+        "100",
+    ]
+    assert "2/2 genomes" in lines[-1]
+    assert lines[-1].endswith("finished with failures")
 
 
 def test_batch_outputs_fail_offsetting_per_genome_class_mismatches(

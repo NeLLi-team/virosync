@@ -5,8 +5,13 @@ from pathlib import Path
 from click.testing import CliRunner
 import yaml
 
+from virosync.cli.main import cli
 from virosync.config import ApplicationConfig
-from virosync.orchestration.cli import _resolve_pipeline_resources, orchestrate
+from virosync.orchestration.cli import (
+    _database_version,
+    _resolve_pipeline_resources,
+    orchestrate,
+)
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.resource_manifest import ResourceValidationResult
 
@@ -147,6 +152,7 @@ def test_setup_cli_exposes_digest_controls_and_has_no_fast_activation() -> None:
     assert result.exit_code == 0, result.output
     assert "--core-resource-sha256" in result.output
     assert "--core-manifest-sha256" in result.output
+    assert "--verbose" in result.output
     assert "--fast" not in result.output
 
 
@@ -186,6 +192,148 @@ def test_custom_setup_source_does_not_inherit_shipped_digest_pins(
     assert captured[0]["archive_sha256"] is None
     assert captured[0]["manifest_sha256"] is None
     assert captured[0]["full"] is True
+    assert callable(captured[0]["progress_callback"])
+    assert "Software version" in result.output
+    assert "Database version" in result.output
+    assert "Progress:" in result.output
+    assert "Installing ViroSync core resources" not in result.output
+    assert "Core source:" not in result.output
+
+    captured.clear()
+    verbose_result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            "config/orchestration.yaml",
+            "--db-root",
+            str(tmp_path / "verbose-resources" / "virosync"),
+            "--core-resource",
+            str(tmp_path / "custom.tar.gz"),
+            "--no-write-config",
+            "--verbose",
+        ],
+    )
+
+    assert verbose_result.exit_code == 0, verbose_result.output
+    assert "Installing ViroSync core resources" in verbose_result.output
+    assert "Core source:" in verbose_result.output
+    assert "Progress:" in verbose_result.output
+    assert callable(captured[0]["progress_callback"])
+
+
+def test_setup_reports_only_explicit_optional_resource_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_optional_archive",
+        classmethod(lambda cls, **_kwargs: False),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "interproscan_available",
+        classmethod(lambda cls, _path: False),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            "config/orchestration.yaml",
+            "--db-root",
+            str(database_root),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--tmvec-url",
+            str(tmp_path / "tmvec.tar.gz"),
+            "--no-write-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "TMVec unavailable" in result.output
+    assert "InterProScan unavailable" not in result.output
+
+
+def test_fresh_setup_prompts_before_starting_progress(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "default_database_path",
+        classmethod(lambda cls: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "interproscan_available",
+        classmethod(lambda cls, _path: False),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(tmp_path / "missing.yaml"),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--no-write-config",
+        ],
+        input="\n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.index("Download and install to") < result.output.index(
+        "Progress:"
+    )
+
+
+def test_database_version_is_read_from_installed_bundle_only(tmp_path: Path) -> None:
+    database_root = tmp_path / "resources"
+    hmm_path = database_root / "models" / "combined.hmm"
+    config = ApplicationConfig.from_dict(
+        {"databases": {"hmm_database": str(hmm_path)}}
+    ).pipeline
+
+    assert _database_version(config) == "unknown"
+    database_root.mkdir(parents=True)
+    (database_root / "DB_VERSION").write_text("v9.9.9\n", encoding="utf-8")
+    assert _database_version(config) == "v9.9.9"
+
+
+def test_info_honors_environment_database_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "custom-resources"
+    database_root.mkdir()
+    (database_root / "DB_VERSION").write_text("v9.9.9\n", encoding="utf-8")
+    monkeypatch.setenv("VIROSYNC_DB_ROOT", str(database_root))
+
+    result = CliRunner().invoke(
+        cli,
+        ["info", "--config", str(tmp_path / "missing.yaml")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Database version v9.9.9" in result.output
 
 
 def test_setup_writes_null_when_runtime_bundle_has_no_marker_source(

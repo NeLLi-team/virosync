@@ -6,21 +6,29 @@ import csv
 import io
 import json
 import logging
+import shutil
+import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, TextIO
 
 from virosync.config import PipelineConfig
 from virosync.orchestration._flows.single_genome import single_genome_flow
-from virosync.output_contract import effective_eve_class_count_total
+from virosync.output_contract import (
+    EFFECTIVE_EVE_CLASS_COUNT_KEYS,
+    effective_eve_class_count_total,
+)
 from virosync.utils.atomic_write import atomic_write
 from virosync.utils.path_safety import require_strict_child, validate_path_component
 from virosync.validation.tsv_invariants import TSVInvariantError
 
 logger = logging.getLogger(__name__)
+
+QueryProgressCallback = Callable[[float, str, bool], None]
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,99 @@ class GenomeRunSpec:
     input_path: Path
     genome_id: str
     output_dir: Path
+
+
+class BatchProgress:
+    """Render one GVClass-style aggregate progress bar for concurrent genomes."""
+
+    def __init__(
+        self,
+        total_queries: int,
+        *,
+        stream: TextIO | None = None,
+        is_tty: bool | None = None,
+        unit: str = "queries",
+    ) -> None:
+        self.total_queries = total_queries
+        self.stream = stream or sys.stdout
+        self.is_tty = self.stream.isatty() if is_tty is None else is_tty
+        self.unit = unit
+        self._query_progress: dict[str, float] = {}
+        self._completed: set[str] = set()
+        self._failed: set[str] = set()
+        self._last_output = ""
+        self._last_percent = -1
+        self._label = "starting"
+        self._lock = threading.Lock()
+
+    def update(
+        self,
+        query: str,
+        progress: float,
+        stage: str,
+        failed: bool = False,
+    ) -> None:
+        with self._lock:
+            progress = max(
+                self._query_progress.get(query, 0.0),
+                min(100.0, max(0.0, float(progress))),
+            )
+            if failed:
+                progress = 100.0
+                self._failed.add(query)
+            elif progress >= 100.0:
+                self._completed.add(query)
+            self._query_progress[query] = progress
+            query_label = query if len(query) <= 28 else query[:25] + "..."
+            self._label = f"{query_label}: {stage.replace('_', ' ')}"
+            self._render()
+
+    def finish(self, success: bool) -> None:
+        with self._lock:
+            missing = self.total_queries - len(self._query_progress)
+            for index in range(max(0, missing)):
+                self._query_progress[f"__complete_{index}"] = 100.0
+            self._label = "complete" if success else "finished with failures"
+            self._render(force=True)
+            if self.is_tty and self._last_output:
+                print(file=self.stream, flush=True)
+
+    def _render(self, force: bool = False) -> None:
+        if self.total_queries <= 0:
+            return
+        percent = int(
+            sum(self._query_progress.values()) / self.total_queries
+        )
+        percent = max(0, min(100, percent))
+        if (
+            not force
+            and not self.is_tty
+            and self._last_percent >= 0
+            and percent < self._last_percent + 10
+        ):
+            return
+        bar_width = max(
+            20,
+            min(40, shutil.get_terminal_size((100, 20)).columns - 70),
+        )
+        filled = int(bar_width * percent / 100)
+        bar = "#" * filled + "-" * (bar_width - filled)
+        finished = min(
+            len(self._completed | self._failed),
+            self.total_queries,
+        )
+        output = (
+            f"Progress: [{bar}] {percent:3d}% | "
+            f"{finished}/{self.total_queries} {self.unit} | {self._label}"
+        )
+        if output == self._last_output:
+            return
+        if self.is_tty:
+            print(f"\r{output}\x1b[K", end="", file=self.stream, flush=True)
+        else:
+            print(output, file=self.stream, flush=True)
+        self._last_output = output
+        self._last_percent = percent
 
 
 def _exclusive_class_count_violation(result: dict) -> str | None:
@@ -148,6 +249,14 @@ def _normalize_worker_result(genome_id: str, result: object) -> dict:
     normalized.setdefault("genome_id", genome_id)
     normalized.setdefault("benchmark_eligible", False)
     normalized.setdefault("legacy_resume", False)
+    if "vp_count" in normalized or "plv_count" in normalized:
+        normalized["ppv_count"] = (
+            int(normalized.get("ppv_count", 0) or 0)
+            + int(normalized.pop("vp_count", 0) or 0)
+            + int(normalized.pop("plv_count", 0) or 0)
+        )
+    for count_key in EFFECTIVE_EVE_CLASS_COUNT_KEYS.values():
+        normalized.setdefault(count_key, 0)
     return normalized
 
 
@@ -177,12 +286,19 @@ def _run_one_genome(
     config: PipelineConfig,
     retries: int = 1,
     retry_delay_seconds: int = 60,
+    progress_callback: QueryProgressCallback | None = None,
 ) -> dict:
     run_single = _single_genome_callable()
     last_exc: BaseException | None = None
 
     for attempt in range(retries + 1):
         try:
+            if progress_callback is not None:
+                progress_callback(
+                    0,
+                    "starting" if attempt == 0 else f"retry {attempt}/{retries}",
+                    False,
+                )
             if attempt:
                 logger.info(
                     "%s: retry %d/%d after %.0fs",
@@ -194,21 +310,33 @@ def _run_one_genome(
             attempt_config = (
                 config if attempt == 0 else config.with_overrides(resume=True)
             )
-            return _normalize_worker_result(
+            run_kwargs = {
+                "genome_path": spec.input_path,
+                "output_dir": spec.output_dir,
+                "genome_id": spec.genome_id,
+                "config": attempt_config,
+            }
+            if progress_callback is not None:
+                run_kwargs["progress_callback"] = progress_callback
+            result = _normalize_worker_result(
                 spec.genome_id,
-                run_single(
-                    genome_path=spec.input_path,
-                    output_dir=spec.output_dir,
-                    genome_id=spec.genome_id,
-                    config=attempt_config,
-                ),
+                run_single(**run_kwargs),
             )
+            if progress_callback is not None:
+                progress_callback(
+                    100,
+                    "complete" if result.get("success", False) else "failed",
+                    not result.get("success", False),
+                )
+            return result
         except TSVInvariantError as exc:
             logger.error(
                 "%s: deterministic invariant failure: %s",
                 spec.genome_id,
                 exc,
             )
+            if progress_callback is not None:
+                progress_callback(100, "failed", True)
             return _failure_result(spec.genome_id, exc)
         except Exception as exc:
             last_exc = exc
@@ -222,6 +350,8 @@ def _run_one_genome(
                 time.sleep(retry_delay_seconds)
 
     assert last_exc is not None
+    if progress_callback is not None:
+        progress_callback(100, "failed", True)
     return _failure_result(spec.genome_id, last_exc)
 
 
@@ -239,17 +369,16 @@ def _write_batch_summary(output_base_dir: Path, results: list[dict]) -> Path:
         "medium_tier",
         "low_tier",
         "ncldv",
-        "vp",
-        "plv",
         "mirus",
+        "ppv",
+        "cress",
         "mixed",
+        "unknown",
         "total_bp",
         "genes",
         "hallmarks",
         "elapsed_sec",
         "error",
-        "ppv",
-        "unknown",
     ]
     buffer = io.StringIO()
     writer = csv.DictWriter(
@@ -276,17 +405,16 @@ def _write_batch_summary(output_base_dir: Path, results: list[dict]) -> Path:
                 "medium_tier": result.get("medium_tier", 0),
                 "low_tier": result.get("low_tier", 0),
                 "ncldv": result.get("ncldv_count", 0),
-                "vp": result.get("vp_count", 0),
-                "plv": result.get("plv_count", 0),
                 "mirus": result.get("mirus_count", 0),
+                "ppv": result.get("ppv_count", 0),
+                "cress": result.get("cress_count", 0),
                 "mixed": result.get("mixed_count", 0),
+                "unknown": result.get("unknown_count", 0),
                 "total_bp": result.get("accepted_bp", 0),
                 "genes": result.get("total_genes", 0),
                 "hallmarks": result.get("total_hallmarks", 0),
                 "elapsed_sec": f"{result.get('elapsed_sec', 0):.0f}",
                 "error": result.get("error", "") or "",
-                "ppv": result.get("ppv_count", 0),
-                "unknown": result.get("unknown_count", 0),
             }
         )
     atomic_write(summary_path, buffer.getvalue())
@@ -317,19 +445,17 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
     total_low = sum(r.get("low_tier", 0) for r in results)
     total_time = sum(r.get("elapsed_sec", 0) for r in results)
     total_ncldv = sum(r.get("ncldv_count", 0) for r in results)
-    total_vp = sum(r.get("vp_count", 0) for r in results)
-    total_plv = sum(r.get("plv_count", 0) for r in results)
     total_mirus = sum(r.get("mirus_count", 0) for r in results)
-    total_mixed = sum(r.get("mixed_count", 0) for r in results)
     total_ppv = sum(r.get("ppv_count", 0) for r in results)
+    total_cress = sum(r.get("cress_count", 0) for r in results)
+    total_mixed = sum(r.get("mixed_count", 0) for r in results)
     total_unknown = sum(r.get("unknown_count", 0) for r in results)
     total_classified = (
         total_ncldv
-        + total_vp
-        + total_plv
         + total_mirus
-        + total_mixed
         + total_ppv
+        + total_cress
+        + total_mixed
         + total_unknown
     )
     if total_classified != total_accepted:
@@ -370,11 +496,10 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         handle.write("| Category | Count | Description |\n")
         handle.write("|----------|-------|-------------|\n")
         handle.write(f"| NCLDV | {total_ncldv} | Nucleocytoviricota (giant viruses) |\n")
-        handle.write(f"| VP | {total_vp} | Virophages |\n")
-        handle.write(f"| PLV | {total_plv} | Polinton-like viruses |\n")
         handle.write(f"| MIRUS | {total_mirus} | Mirusviricota |\n")
-        handle.write(f"| MIXED | {total_mixed} | Multiple viral lineages |\n")
         handle.write(f"| PPV | {total_ppv} | Preplasmiviricota |\n")
+        handle.write(f"| CRESS | {total_cress} | CRESS DNA viruses |\n")
+        handle.write(f"| MIXED | {total_mixed} | Multiple viral lineages |\n")
         handle.write(f"| UNKNOWN | {total_unknown} | Unrecognized effective class |\n")
         handle.write(f"| **Total** | **{total_classified}** | |\n\n")
         handle.write("### Region Statistics (Canonical EVEs)\n\n")
@@ -391,10 +516,10 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         handle.write("\n")
         handle.write("## Per-Genome Results\n\n")
         handle.write(
-            "| Genome | Status | Benchmark eligible | Legacy resume | HIGH | MED | LOW | NCLDV | VP | PLV | MIRUS | Mixed | PPV | Unknown | bp | Genes | Time |\n"
+            "| Genome | Status | Benchmark eligible | Legacy resume | HIGH | MED | LOW | NCLDV | MIRUS | PPV | CRESS | Mixed | Unknown | bp | Genes | Time |\n"
         )
         handle.write(
-            "|--------|--------|--------------------|---------------|------|-----|-----|-------|----|-----|-------|-------|-----|---------|----|-------|------|\n"
+            "|--------|--------|--------------------|---------------|------|-----|-----|-------|-------|-----|-------|-------|---------|----|-------|------|\n"
         )
         for result in sorted(results, key=lambda r: (-r.get("predictions", 0), r.get("genome_id", ""))):
             gid = result.get("genome_id", "?")
@@ -405,15 +530,15 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
                     f"{'yes' if result.get('legacy_resume') is True else 'no'} | "
                     f"{result.get('high_tier', 0)} | "
                     f"{result.get('medium_tier', 0)} | {result.get('low_tier', 0)} | "
-                    f"{result.get('ncldv_count', 0)} | {result.get('vp_count', 0)} | "
-                    f"{result.get('plv_count', 0)} | {result.get('mirus_count', 0)} | "
-                    f"{result.get('mixed_count', 0)} | {result.get('ppv_count', 0)} | "
+                    f"{result.get('ncldv_count', 0)} | {result.get('mirus_count', 0)} | "
+                    f"{result.get('ppv_count', 0)} | {result.get('cress_count', 0)} | "
+                    f"{result.get('mixed_count', 0)} | "
                     f"{result.get('unknown_count', 0)} | {result.get('accepted_bp', 0):,} | "
                     f"{result.get('total_genes', 0)} | {result.get('elapsed_sec', 0):.0f}s |\n"
                 )
             else:
                 handle.write(
-                    f"| {gid} | failed | no | no | - | - | - | - | - | - | - | - | - | - | - | - | FAILED |\n"
+                    f"| {gid} | failed | no | no | - | - | - | - | - | - | - | - | - | - | - | FAILED |\n"
                 )
         if failed_results:
             handle.write("\n## Failed Genomes\n\n")
@@ -434,6 +559,7 @@ def run_batch_python(
     retries: int = 1,
     retry_delay_seconds: int = 60,
     effective_config: dict | None = None,
+    progress: BatchProgress | None = None,
 ) -> list[dict]:
     """Run genomes concurrently with standard-library Python primitives."""
     genome_paths = [Path(path) for path in genome_paths]
@@ -464,6 +590,14 @@ def run_batch_python(
                 config=config,
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
+                progress_callback=(
+                    (
+                        lambda percent, stage, failed=False, genome_id=spec.genome_id:
+                        progress.update(genome_id, percent, stage, failed)
+                    )
+                    if progress is not None
+                    else None
+                ),
             ): (idx, spec.genome_id)
             for idx, spec in enumerate(run_specs)
         }
@@ -497,8 +631,15 @@ def run_batch_python(
     results = _enforce_exclusive_class_counts(
         [results_by_index[idx] for idx in range(len(run_specs))]
     )
-    summary_path = _write_batch_summary(output_base_dir, results)
-    report_path = _write_batch_report(output_base_dir, results)
+    try:
+        summary_path = _write_batch_summary(output_base_dir, results)
+        report_path = _write_batch_report(output_base_dir, results)
+    except Exception:
+        if progress is not None:
+            progress.finish(False)
+        raise
+    if progress is not None:
+        progress.finish(all(result.get("success", False) for result in results))
     logger.info("Batch summary written: %s", summary_path)
     logger.info("Batch report written: %s", report_path)
     return results

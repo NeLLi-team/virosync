@@ -26,13 +26,19 @@ from Bio.SeqRecord import SeqRecord
 from virosync import __version__
 from virosync.output_contract import (
     CONCRETE_EVE_CLASSES,
+    DETAILED_PREDICTION_COLUMNS,
+    DETAILED_PREDICTION_EXTENDED_COLUMNS,
+    DETAILED_TAXONOMY_PARTITION,
+    canonical_family,
     coordinate_contract_metadata,
+    normalize_effective_eve_class,
     resolve_effective_eve_class,
 )
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 from .evidence_synthesizer import VerificationResult
+from .gene_taxonomy import MIN_VIRAL_HIT_PIDENT
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,64 @@ logger = logging.getLogger(__name__)
 # its own scoring branch; MIXED is deliberately kept out of this set so a
 # concrete family always wins label resolution, but it is NOT disqualified.
 _V2_EVE_CLASSES = CONCRETE_EVE_CLASSES
+_PUBLIC_VIRAL_TAXONOMY = frozenset(
+    {"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"}
+)
+
+
+def _taxonomy_prefixes(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_prefixes = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        raw_prefixes = value
+    else:
+        raw_prefixes = []
+    return [
+        canonical_family(str(prefix).rstrip("_"))
+        for prefix in raw_prefixes
+        if str(prefix).strip()
+    ]
+
+
+def _qualified_viral_prefixes(record: dict) -> list[str]:
+    prefixes = _taxonomy_prefixes(record.get("top10_prefixes"))
+    raw_pidents = record.get("top10_pidents") or []
+    if isinstance(raw_pidents, str):
+        raw_pidents = raw_pidents.split(",")
+    pidents: list[float] = []
+    for value in raw_pidents:
+        try:
+            pidents.append(float(value))
+        except (TypeError, ValueError):
+            pidents.append(0.0)
+    return [
+        prefix
+        for prefix, pident in zip(prefixes, pidents)
+        if prefix in _PUBLIC_VIRAL_TAXONOMY
+        and pident >= MIN_VIRAL_HIT_PIDENT
+    ]
+
+
+def _taxonomy_partition_bucket(record: dict) -> str:
+    top1_target = str(record.get("top1_target") or "")
+    if not top1_target or top1_target in {".", "NA", "None"}:
+        return "NO_HITS"
+
+    qualified_viral = _qualified_viral_prefixes(record)
+    if qualified_viral:
+        return qualified_viral[0]
+
+    raw_top1 = (
+        top1_target.split("__", 1)[0].upper()
+        if "__" in top1_target
+        else "UNKNOWN"
+    )
+    if raw_top1 in {"MITO", "PLASTID"}:
+        return raw_top1
+    top1 = canonical_family(record.get("top1_prefix") or "UNKNOWN")
+    if top1 in {"EUK", "BAC", "ARC"}:
+        return top1
+    return "UNK"
 
 
 def _gff3_escape(value: object) -> str:
@@ -129,9 +193,9 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class not in _V2_EVE_CLASSES:
             return QualityGateDecision(False, eve_class, "unsupported_class")
-        if eve_class in ("PLV", "VP", "PPV"):
+        if eve_class in ("PPV", "CRESS"):
             kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
-            reason = "plv_vp_high_medium_pass" if kept else "plv_vp_high_medium_gate"
+            reason = "small_dna_high_medium_pass" if kept else "small_dna_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class in ("NCLDV", "MIRUS"):
             kept = length > 5000 or has_mcp
@@ -152,9 +216,9 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
         # kept here: an MCP is the primary diagnostic for Preplasmiviricota, and
         # dropping it would reject 58% of published LOW PPV calls, which is a
         # sensitivity change rather than a correctness fix.
-        if family in ("PLV", "VP", "PPV"):
+        if family in ("PPV", "CRESS"):
             kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
-            reason = "plv_vp_low_promoted" if kept else "plv_vp_low_gate"
+            reason = "small_dna_low_promoted" if kept else "small_dna_low_gate"
             return QualityGateDecision(kept, family, reason, promoted_low=kept)
         if family == "MIXED":
             kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
@@ -1217,7 +1281,7 @@ class OutputGenerator:
                     "gene_taxonomy_vp_plv_top10",
                     "gene_taxonomy_dominant_family",
                     "gene_taxonomy_dominant_fraction",
-                    "vp_plv_subclass",
+                    "ppv_subtype",
                     "host_signature_gene_count",
                     "host_signature_fraction",
                     "host_signature_weighted_mean",
@@ -1226,7 +1290,7 @@ class OutputGenerator:
                     "marker_complement_score",
                     "family_consistency_score",
                     "vp_completeness",
-                    "plv_completeness",
+                    "ppv_completeness",
                     "ncldv_completeness",
                     "mirus_completeness",
                     "seed_marker_names",
@@ -1262,7 +1326,7 @@ class OutputGenerator:
                     str(r.region_classification_ncldv_markers),
                     str(r.region_classification_vp_plv_markers),
                     str(r.region_classification_mirus_markers),
-                    r.likely_family or "UNKNOWN",
+                    normalize_effective_eve_class(r.likely_family),
                     getattr(r, "likely_group", "") or ".",
                     f"{r.kfd:.4f}",
                     f"{r.gc_deviation:.4f}",
@@ -1329,7 +1393,15 @@ class OutputGenerator:
                             str(r.gene_taxonomy_vp_plv_top10),
                             r.gene_taxonomy_dominant_family or "UNKNOWN",
                             f"{r.gene_taxonomy_dominant_fraction:.4f}",
-                            r.vp_plv_subclass or "UNKNOWN",
+                            (
+                                r.ppv_subtype
+                                if (
+                                    evaluate_v2_quality_gate(r).effective_class
+                                    == "PPV"
+                                    and r.ppv_subtype in {"VP", "PLV"}
+                                )
+                                else "."
+                            ),
                             str(r.host_signature_gene_count),
                             f"{r.host_signature_fraction:.4f}",
                             f"{getattr(r, 'host_signature_weighted_mean', 0.0):.4f}",
@@ -1338,7 +1410,7 @@ class OutputGenerator:
                             f"{r.marker_complement_score:.4f}",
                             f"{r.family_consistency_score:.4f}",
                             r.vp_completeness,
-                            r.plv_completeness,
+                            r.ppv_completeness,
                             r.ncldv_completeness,
                             r.mirus_completeness,
                             "|".join(seed_markers_legacy) if seed_markers_legacy else ".",
@@ -1377,72 +1449,11 @@ class OutputGenerator:
         self._ensure_protein_to_models_cache(eve_regions)
 
         columns = [
-            "eve_id",
-            "scaffold",
-            "start",
-            "end",
-            "length",
-            "confidence_tier",
-            "final_confidence",
-            "classification",
-            "likely_group",
-            "kfd",
-            "gc_deviation",
-            "hallmark_total",
-            "hallmark_unique",
-            "mcp_gene_ids",
-            "tier1_bypassed_marker_count",
-            "tier1_bypassed_marker_ids",
-            "tier1_bypassed_marker_models",
-            "gvogm_count",
-            "gvogm_names",
-            "og_count",
-            "og_names",
-            "gvogm_unvalidated_count",
-            "gvogm_unvalidated_names",
-            "og_unvalidated_count",
-            "og_unvalidated_names",
-            "total_proteins",
-            "ncldv_top10_proteins",
-            "mirus_top10_proteins",
-            "ppv_top10_proteins",
-            "plv_top10_proteins",
-            "vp_top10_proteins",
-            "taxonomy_best_hits",
-            "interproscan_total_hits",
-            "interproscan_viral_hits",
-            "interproscan_keyword_hits",
-            "interproscan_score",
-            "candidate_start",
-            "candidate_end",
-            "candidate_length",
-            "candidate_reduction_bp",
-            "candidate_reduction_reason",
-            "region_gc_percent",
-            "genome_gc_percent",
-            "gc_delta",
+            column
+            for column in DETAILED_PREDICTION_COLUMNS
+            if self.extended_output
+            or column not in DETAILED_PREDICTION_EXTENDED_COLUMNS
         ]
-        if self.extended_output:
-            columns.extend(
-                [
-                    "interproscan_category_score",
-                    "host_signature_gene_count",
-                    "host_signature_fraction",
-                    "host_signature_weighted_mean",
-                    "marker_complement_score",
-                    "family_consistency_score",
-                    "vp_completeness",
-                    "plv_completeness",
-                    "ncldv_completeness",
-                    "mirus_completeness",
-                    "seed_marker_names",
-                    "other_marker_names",
-                    "seed_marker_patterns",  # NEW: protein-pattern grouping
-                    "other_marker_patterns",  # NEW: protein-pattern grouping
-                    "seed_sources",           # seeding method: hhg|compositional|novelty
-                ]
-            )
-        columns.append("effective_eve_class")
 
         with atomic_write_context(output_path, "w") as f:
             f.write("\t".join(columns) + "\n")
@@ -1489,24 +1500,13 @@ class OutputGenerator:
                         elif target_upper.startswith("OG"):
                             unvalidated_og_names.add(target)
 
-                ncldv_count = 0
-                mirus_count = 0
-                euk_count = 0
-                mito_count = 0
-                plastid_count = 0
-                bac_count = 0
-                arc_count = 0
-                unk_count = 0
-                no_hit_count = 0
-                ncldv_best_count = 0
-                mirus_best_count = 0
-                vp_best_count = 0
-                plv_best_count = 0
-                ppv_best_count = 0
-                phage_best_count = 0
-                vp_top10_count = 0
-                plv_top10_count = 0
-                ppv_top10_count = 0
+                taxonomy_counts = {
+                    prefix: 0 for prefix in DETAILED_TAXONOMY_PARTITION
+                }
+                top10_support = {
+                    prefix: 0
+                    for prefix in ("NCLDV", "MIRUS", "PPV", "CRESS")
+                }
 
                 all_gene_tax_records = getattr(r, "gene_taxonomy_records", []) or []
                 gene_tax_records = []
@@ -1521,82 +1521,15 @@ class OutputGenerator:
                             record if isinstance(record, dict) else getattr(record, "__dict__", {})
                         )
                 summary_gene_tax_total = getattr(r, "gene_taxonomy_total", 0) or 0
-                gene_tax_total = summary_gene_tax_total if gene_tax_records else 0
                 if gene_tax_records:
                     for record in gene_tax_records:
-                        top1_target = record.get("top1_target") or ""
-                        if not top1_target or top1_target in {".", "NA", "None"}:
-                            no_hit_count += 1
-                            continue
-                        raw_top1 = "UNKNOWN"
-                        if "__" in top1_target:
-                            raw_top1 = top1_target.split("__", 1)[0]
-                        top1 = record.get("top1_prefix") or "UNKNOWN"
-                        if raw_top1 in {"MITO", "PLASTID"}:
-                            top1 = "EUK"
-                        top10 = record.get("top10_prefixes") or []
-                        if isinstance(top10, str):
-                            top10_list = [p for p in top10.split(",") if p]
-                        else:
-                            top10_list = list(top10)
-                        top10_tokens = {str(p).rstrip("_").upper() for p in top10_list if p}
-                        top10_raw = record.get("top10_raw_prefixes") or []
-                        if isinstance(top10_raw, str):
-                            top10_raw_list = [p for p in top10_raw.split(",") if p]
-                        else:
-                            top10_raw_list = list(top10_raw)
-                        if "NCLDV" in top10_tokens:
-                            ncldv_count += 1
-                        if "MIRUS" in top10_tokens:
-                            mirus_count += 1
-                        if "PPV" in top10_tokens:
-                            ppv_top10_count += 1
-                        if "VP" in top10_tokens:
-                            vp_top10_count += 1
-                        if "PLV" in top10_tokens:
-                            plv_top10_count += 1
-
-                        # Viral prefixes in top10 override non-viral top1 assignments
-                        # This ensures PLV/VP/NCLDV/MIRUS hits are counted even when
-                        # top1 is cellular (EUK/BAC/ARC) or UNKNOWN
-                        viral_override = any(p in {"NCLDV", "MIRUS", "VP", "PLV", "PPV"} for p in top10_tokens)
-                        if viral_override and top1 not in {"NCLDV", "MIRUS", "VP", "PLV", "PPV", "GVMAG", "PHAGE"}:
-                            if "NCLDV" in top10_tokens:
-                                ncldv_best_count += 1
-                            elif "MIRUS" in top10_tokens:
-                                mirus_best_count += 1
-                            elif "PPV" in top10_tokens:
-                                ppv_best_count += 1
-                            elif "PLV" in top10_tokens:
-                                plv_best_count += 1
-                            elif "VP" in top10_tokens:
-                                vp_best_count += 1
-                        else:
-                            if top1 == "EUK":
-                                if raw_top1 == "MITO":
-                                    mito_count += 1
-                                elif raw_top1 == "PLASTID":
-                                    plastid_count += 1
-                                else:
-                                    euk_count += 1
-                            elif top1 == "BAC":
-                                bac_count += 1
-                            elif top1 == "ARC":
-                                arc_count += 1
-                            elif top1 == "NCLDV":
-                                ncldv_best_count += 1
-                            elif top1 == "MIRUS":
-                                mirus_best_count += 1
-                            elif top1 == "PPV":
-                                ppv_best_count += 1
-                            elif top1 == "PLV":
-                                plv_best_count += 1
-                            elif top1 == "VP":
-                                vp_best_count += 1
-                            elif top1 == "PHAGE":
-                                phage_best_count += 1
-                            else:
-                                unk_count += 1
+                        raw_viral = set(
+                            _taxonomy_prefixes(record.get("top10_prefixes"))
+                        )
+                        for family in top10_support:
+                            if family in raw_viral:
+                                top10_support[family] += 1
+                        taxonomy_counts[_taxonomy_partition_bucket(record)] += 1
 
                 if not gene_tax_records:
                     for porf_id in porfs:
@@ -1606,105 +1539,31 @@ class OutputGenerator:
                             continue
                         has_ncldv, has_mirus = flags
                         if has_ncldv:
-                            ncldv_count += 1
+                            top10_support["NCLDV"] += 1
                         if has_mirus:
-                            mirus_count += 1
-                    unk_count = len(porfs)
+                            top10_support["MIRUS"] += 1
+                    taxonomy_counts["UNK"] = len(porfs)
 
-                total_proteins = gene_tax_total if gene_tax_records and gene_tax_total else (
-                    len(gene_tax_records) if gene_tax_records else len(porfs)
+                total_proteins = (
+                    max(summary_gene_tax_total, len(gene_tax_records))
+                    if gene_tax_records
+                    else len(porfs)
                 )
-                if gene_tax_records and gene_tax_total:
-                    observed_total = (
-                        euk_count
-                        + mito_count
-                        + plastid_count
-                        + bac_count
-                        + arc_count
-                        + unk_count
-                        + no_hit_count
-                        + ncldv_best_count
-                        + mirus_best_count
-                        + vp_best_count
-                        + plv_best_count
-                        + ppv_best_count
-                        + phage_best_count
-                    )
-                    if observed_total < gene_tax_total:
-                        unk_count += gene_tax_total - observed_total
+                observed_total = sum(taxonomy_counts.values())
+                if observed_total < total_proteins:
+                    taxonomy_counts["UNK"] += total_proteins - observed_total
 
                 region_gc = self._region_gc(r.scaffold, r.start, r.end)
 
-                taxonomy_summary = (
-                    f"EUK:{euk_count};"
-                    f"MITO:{mito_count};"
-                    f"PLASTID:{plastid_count};"
-                    f"BAC:{bac_count};"
-                    f"ARC:{arc_count};"
-                    f"UNK:{unk_count};"
-                    f"NO_HITS:{no_hit_count};"
-                    f"NCLDV:{ncldv_best_count};"
-                    f"MIRUS:{mirus_best_count};"
-                    f"PPV:{ppv_best_count};"
-                    f"VP:{vp_best_count};"
-                    f"PLV:{plv_best_count};"
-                    f"PHAGE:{phage_best_count}"
+                taxonomy_summary = ";".join(
+                    f"{prefix}:{taxonomy_counts[prefix]}"
+                    for prefix in DETAILED_TAXONOMY_PARTITION
                 )
 
-                row = [
-                    r.eve_id,
-                    r.scaffold,
-                    str(r.start),
-                    str(r.end),
-                    str(r.length),
-                    r.confidence_tier or "UNKNOWN",
-                    f"{r.final_confidence:.4f}",
-                    r.likely_family or "UNKNOWN",
-                    getattr(r, "likely_group", "") or ".",
-                    f"{r.kfd:.4f}",
-                    f"{r.gc_deviation:.4f}",
-                    str(hallmark_total if hallmark_total else r.hallmark_count),
-                    str(hallmark_unique if hallmark_unique else r.hallmark_diversity),
-                    "|".join(r.mcp_gene_ids) if r.mcp_gene_ids else ".",
-                    str(len(r.tier1_bypassed_marker_ids)),
-                    (
-                        "|".join(r.tier1_bypassed_marker_ids)
-                        if r.tier1_bypassed_marker_ids
-                        else "."
-                    ),
-                    (
-                        "|".join(r.tier1_bypassed_marker_models)
-                        if r.tier1_bypassed_marker_models
-                        else "."
-                    ),
-                    str(gvogm_count),
-                    self._format_counted_names(gvogm_model_counts),
-                    str(og_count),
-                    self._format_counted_names(og_model_counts),
-                    str(len(unvalidated_gvogm_names)),
-                    ",".join(sorted(unvalidated_gvogm_names)) if unvalidated_gvogm_names else ".",
-                    str(len(unvalidated_og_names)),
-                    ",".join(sorted(unvalidated_og_names)) if unvalidated_og_names else ".",
-                    str(total_proteins),
-                    str(ncldv_count),
-                    str(mirus_count),
-                    str(ppv_top10_count),
-                    str(plv_top10_count),
-                    str(vp_top10_count),
-                    taxonomy_summary,
-                    str(r.interproscan_total_hits),
-                    str(r.interproscan_viral_hits),
-                    "|".join(r.interproscan_keyword_hits) if r.interproscan_keyword_hits else ".",
-                    f"{r.interproscan_score:.4f}",
-                    str(r.candidate_start) if r.candidate_start is not None else ".",
-                    str(r.candidate_end) if r.candidate_end is not None else ".",
-                    str(r.candidate_length or 0),
-                    str(r.candidate_reduction_bp or 0),
-                    r.candidate_reduction_reason or ".",
-                    f"{region_gc:.3f}",
-                    f"{genome_gc:.3f}",
-                    f"{(region_gc - genome_gc):.3f}",
-                ]
+                seed_markers_legacy: list[str] = []
+                other_markers_legacy: list[str] = []
+                seed_markers_patterns: list[str] = []
+                other_markers_patterns: list[str] = []
                 if self.extended_output:
                     marker_names = self._marker_names_for_region(r.scaffold, r.start, r.end)
                     if self.seed_marker_allowlist:
@@ -1730,27 +1589,158 @@ class OutputGenerator:
                         other_markers, r.scaffold, r.start, r.end, use_protein_patterns=True
                     )
 
-                    row.extend(
-                        [
-                            f"{r.interproscan_category_score:.4f}",
-                            str(r.host_signature_gene_count),
-                            f"{r.host_signature_fraction:.4f}",
-                            f"{getattr(r, 'host_signature_weighted_mean', 0.0):.4f}",
-                            f"{r.marker_complement_score:.4f}",
-                            f"{r.family_consistency_score:.4f}",
-                            r.vp_completeness,
-                            r.plv_completeness,
-                            r.ncldv_completeness,
-                            r.mirus_completeness,
-                            "|".join(seed_markers_legacy) if seed_markers_legacy else ".",
-                            "|".join(other_markers_legacy) if other_markers_legacy else ".",
-                            "|".join(seed_markers_patterns) if seed_markers_patterns else ".",  # NEW
-                            "|".join(other_markers_patterns) if other_markers_patterns else ".",  # NEW
-                            "|".join(sorted(r.seed_sources)) if r.seed_sources else ".",
-                        ]
-                    )
-                row.append(evaluate_v2_quality_gate(r).effective_class)
-                f.write("\t".join(row) + "\n")
+                effective_class = evaluate_v2_quality_gate(r).effective_class
+                ppv_subtype = (
+                    r.ppv_subtype
+                    if effective_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}
+                    else "."
+                )
+                row_values = {
+                    "eve_id": r.eve_id,
+                    "scaffold": r.scaffold,
+                    "start": str(r.start),
+                    "end": str(r.end),
+                    "length": str(r.length),
+                    "confidence_tier": r.confidence_tier or "UNKNOWN",
+                    "final_confidence": f"{r.final_confidence:.4f}",
+                    "effective_eve_class": effective_class,
+                    "likely_family": normalize_effective_eve_class(
+                        r.likely_family
+                    ),
+                    "ppv_subtype": ppv_subtype,
+                    "likely_group": getattr(r, "likely_group", "") or ".",
+                    "candidate_start": (
+                        str(r.candidate_start)
+                        if r.candidate_start is not None
+                        else "."
+                    ),
+                    "candidate_end": (
+                        str(r.candidate_end)
+                        if r.candidate_end is not None
+                        else "."
+                    ),
+                    "candidate_length": str(r.candidate_length or 0),
+                    "candidate_reduction_bp": str(r.candidate_reduction_bp or 0),
+                    "candidate_reduction_reason": (
+                        r.candidate_reduction_reason or "."
+                    ),
+                    "seed_sources": (
+                        "|".join(sorted(r.seed_sources)) if r.seed_sources else "."
+                    ),
+                    "hallmark_total": str(
+                        hallmark_total if hallmark_total else r.hallmark_count
+                    ),
+                    "hallmark_unique": str(
+                        hallmark_unique
+                        if hallmark_unique
+                        else r.hallmark_diversity
+                    ),
+                    "mcp_gene_ids": (
+                        "|".join(r.mcp_gene_ids) if r.mcp_gene_ids else "."
+                    ),
+                    "tier1_bypassed_marker_count": str(
+                        len(r.tier1_bypassed_marker_ids)
+                    ),
+                    "tier1_bypassed_marker_ids": (
+                        "|".join(r.tier1_bypassed_marker_ids)
+                        if r.tier1_bypassed_marker_ids
+                        else "."
+                    ),
+                    "tier1_bypassed_marker_models": (
+                        "|".join(r.tier1_bypassed_marker_models)
+                        if r.tier1_bypassed_marker_models
+                        else "."
+                    ),
+                    "gvogm_count": str(gvogm_count),
+                    "gvogm_names": self._format_counted_names(
+                        gvogm_model_counts
+                    ),
+                    "og_count": str(og_count),
+                    "og_names": self._format_counted_names(og_model_counts),
+                    "gvogm_unvalidated_count": str(
+                        len(unvalidated_gvogm_names)
+                    ),
+                    "gvogm_unvalidated_names": (
+                        ",".join(sorted(unvalidated_gvogm_names))
+                        if unvalidated_gvogm_names
+                        else "."
+                    ),
+                    "og_unvalidated_count": str(len(unvalidated_og_names)),
+                    "og_unvalidated_names": (
+                        ",".join(sorted(unvalidated_og_names))
+                        if unvalidated_og_names
+                        else "."
+                    ),
+                    "marker_complement_score": (
+                        f"{r.marker_complement_score:.4f}"
+                    ),
+                    "family_consistency_score": (
+                        f"{r.family_consistency_score:.4f}"
+                    ),
+                    "seed_marker_names": (
+                        "|".join(seed_markers_legacy)
+                        if seed_markers_legacy
+                        else "."
+                    ),
+                    "other_marker_names": (
+                        "|".join(other_markers_legacy)
+                        if other_markers_legacy
+                        else "."
+                    ),
+                    "seed_marker_patterns": (
+                        "|".join(seed_markers_patterns)
+                        if seed_markers_patterns
+                        else "."
+                    ),
+                    "other_marker_patterns": (
+                        "|".join(other_markers_patterns)
+                        if other_markers_patterns
+                        else "."
+                    ),
+                    "total_proteins": str(total_proteins),
+                    "ncldv_top10_proteins": str(top10_support["NCLDV"]),
+                    "mirus_top10_proteins": str(top10_support["MIRUS"]),
+                    "ppv_top10_proteins": str(top10_support["PPV"]),
+                    "cress_top10_proteins": str(top10_support["CRESS"]),
+                    "taxonomy_best_hits": taxonomy_summary,
+                    "kfd": f"{r.kfd:.4f}",
+                    "gc_deviation": f"{r.gc_deviation:.4f}",
+                    "region_gc_percent": f"{region_gc:.3f}",
+                    "genome_gc_percent": f"{genome_gc:.3f}",
+                    "gc_delta": f"{(region_gc - genome_gc):.3f}",
+                    "host_signature_gene_count": str(
+                        r.host_signature_gene_count
+                    ),
+                    "host_signature_fraction": (
+                        f"{r.host_signature_fraction:.4f}"
+                    ),
+                    "host_signature_weighted_mean": (
+                        f"{getattr(r, 'host_signature_weighted_mean', 0.0):.4f}"
+                    ),
+                    "interproscan_total_hits": str(
+                        r.interproscan_total_hits
+                    ),
+                    "interproscan_viral_hits": str(
+                        r.interproscan_viral_hits
+                    ),
+                    "interproscan_keyword_hits": (
+                        "|".join(r.interproscan_keyword_hits)
+                        if r.interproscan_keyword_hits
+                        else "."
+                    ),
+                    "interproscan_category_score": (
+                        f"{r.interproscan_category_score:.4f}"
+                    ),
+                    "interproscan_score": f"{r.interproscan_score:.4f}",
+                    "vp_completeness": r.vp_completeness,
+                    "ppv_completeness": r.ppv_completeness,
+                    "ncldv_completeness": r.ncldv_completeness,
+                    "mirus_completeness": r.mirus_completeness,
+                }
+                f.write(
+                    "\t".join(str(row_values[column]) for column in columns)
+                    + "\n"
+                )
 
         logger.info(f"Wrote {len(results)} detailed predictions to {output_path}")
         return output_path
@@ -1785,6 +1775,7 @@ class OutputGenerator:
             for r in results:
                 persisted_confidence = float(f"{r.final_confidence:.4f}")
                 score = int(min(1000, persisted_confidence * 1000))
+                effective_class = evaluate_v2_quality_gate(r).effective_class
 
                 # Build attributes
                 attrs = [
@@ -1793,7 +1784,10 @@ class OutputGenerator:
                     f"confidence={r.final_confidence:.4f}",
                     f"status={_gff3_escape(r.status.value)}",
                     f"hallmark_diversity={r.hallmark_diversity}",
+                    f"effective_eve_class={_gff3_escape(effective_class)}",
                 ]
+                if effective_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}:
+                    attrs.append(f"ppv_subtype={_gff3_escape(r.ppv_subtype)}")
 
                 if r.region_classification:
                     attrs.append(

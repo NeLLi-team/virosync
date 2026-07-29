@@ -1,4 +1,4 @@
-# ViroSync Methods (Code-Verified, July 10, 2026)
+# ViroSync Methods (Code-Verified, July 29, 2026)
 
 
 ## Workflow summary
@@ -31,6 +31,15 @@ Primary command entrypoint:
 ``` bash
 pixi run virosync -i <input_fasta_or_dir> -o <output_dir> --config config/orchestration.yaml
 ```
+
+Default setup and run output consists of the ViroSync banner, software and
+database versions, an aggregate progress bar, and a final run summary.
+`--verbose` on either command enables configuration, phase, and diagnostic
+output. The root `--quiet` flag suppresses the banner, progress, and final
+summary but does not suppress errors. Fresh setup prompts and the download-size
+notice remain visible because setup requires explicit location and download
+confirmation. Pixi task and cache messages are outside the ViroSync output
+controls.
 
 ## Inputs, resources, and environment
 
@@ -325,11 +334,41 @@ Top-level run files:
 - `run.log` (timing and run summary)
 - optional: `gvclass_results.tsv`
 
-Both prediction TSVs append `effective_eve_class` after the existing columns. The
-pipeline writes one of `NCLDV`, `MIRUS`, `PPV`, `MIXED`, or `UNKNOWN`. Legacy `VP` and
-`PLV` are accepted when reading pre-migration result files and are folded onto `PPV`.
-Canonical rows contribute to exactly one class total. Batch TSVs preserve their existing
-column order and append `ppv` and `unknown`.
+The output schema version is 4. Both prediction TSVs contain
+`effective_eve_class`, with exactly one of `NCLDV`, `MIRUS`, `PPV`, `CRESS`,
+`MIXED`, or `UNKNOWN`. Canonical rows contribute to exactly one class total.
+Result parsing maps the `VP` and `PLV` aliases to the parent `PPV` class.
+
+The detailed TSV groups columns in this order:
+
+1. identity and final calls;
+2. candidate provenance;
+3. marker evidence;
+4. gene taxonomy;
+5. composition and host evidence;
+6. InterProScan evidence;
+7. marker-set completeness.
+
+`ppv_subtype` is `VP` or `PLV` only when subtype-specific marker evidence
+supports one subtype and not the other. It is `.` for ambiguous PPV calls and
+for every non-PPV parent class. The top-10 support columns are
+`ncldv_top10_proteins`, `mirus_top10_proteins`, `ppv_top10_proteins`, and
+`cress_top10_proteins`. The mutually exclusive `taxonomy_best_hits` partition
+is ordered as:
+
+``` text
+EUK;MITO;PLASTID;BAC;ARC;UNK;NO_HITS;NCLDV;MIRUS;PPV;CRESS;GVMAG;PHAGE
+```
+
+The `*_top10_proteins` columns count raw top-10 prefix support. The disjoint
+partition requires at least 25% amino-acid identity before assigning a viral
+family. When markers do not assign a different concrete family,
+identity-qualified gene taxonomy can assign CRESS. `vp_completeness` records
+subtype evidence, while
+`ppv_completeness` combines the PPV marker sets.
+
+Batch TSV class columns are `ncldv`, `mirus`, `ppv`, `cress`, `mixed`, and
+`unknown`. They are mutually exclusive and sum to `accepted`.
 
 Batch mode additionally writes batch summaries (`batch_summary.tsv`,
 `batch_report.md`). For benchmarking and manuscript summaries,

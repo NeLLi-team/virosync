@@ -224,6 +224,7 @@ COLORS = {
     'PPV':       '#EE7733',
     'PLV':       '#EE7733',
     'VP':        '#AA3377',
+    'CRESS':     '#CCBB44',
     'MIRUS':     '#882255',
     'NCLDV':     '#009988',
     'HOST':      '#0077BB',
@@ -565,12 +566,13 @@ FAMILY_COLORS = {
     'PPV':     COLORS['PPV'],       # orange -- Preplasmiviricota (PLV + virophages)
     'NCLDV':   COLORS['NCLDV'],     # teal
     'MIRUS':   COLORS['MIRUS'],     # dark magenta
+    'CRESS':   COLORS['CRESS'],     # yellow
     'PHAGE':   '#CC3311',           # red
     'PLV':     COLORS['PLV'],       # legacy label from pre-PPV result files
     'VP':      COLORS['VP'],        # legacy label from pre-PPV result files
     'UNKNOWN': COLORS['UNKNOWN'],   # gray
 }
-family_order = ['PPV', 'NCLDV', 'MIRUS', 'PHAGE', 'PLV', 'VP', 'UNKNOWN']
+family_order = ['PPV', 'NCLDV', 'MIRUS', 'CRESS', 'PHAGE', 'PLV', 'VP', 'UNKNOWN']
 tier_order = ['HIGH', 'MEDIUM', 'LOW']
 
 tier_family_counts = {t: Counter() for t in tier_order}
@@ -892,6 +894,8 @@ else:
             return 'HOST' if is_host_gene(species_key) else 'EUK'
         if origin == 'NCLDV':
             return 'NCLDV'
+        if origin == 'CRESS':
+            return 'CRESS'
         if origin == 'HOST_SPECIFIC':
             return 'HOST'
         if origin in ('BAC', 'PHAGE'):
@@ -1280,7 +1284,9 @@ if not eve_genes_extended:
     print('No data for gene distribution.')
 else:
     # ---- Stacked bar: core vs flank gene composition ----
-    categories_all = ['PPV', 'NCLDV', 'MIRUS', 'HOST', 'EUK', 'BAC', 'UNKNOWN']
+    categories_all = [
+        'PPV', 'NCLDV', 'MIRUS', 'CRESS', 'HOST', 'EUK', 'BAC', 'UNKNOWN'
+    ]
     regions = ['Left Flank', 'EVE Core', 'Right Flank']
     region_counters = [flank_cats_left, eve_cats, flank_cats_right]
     region_totals = [sum(rc.values()) for rc in region_counters]

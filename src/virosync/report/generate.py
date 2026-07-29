@@ -71,6 +71,7 @@ def generate_eve_report(
             parameters=parameters,
             cwd=str(output_dir),
             kernel_name=_KERNEL,
+            progress_bar=logger.isEnabledFor(logging.DEBUG),
         )
 
     if not output_path.exists():

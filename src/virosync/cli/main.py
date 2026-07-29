@@ -11,6 +11,8 @@ Usage:
 """
 
 import logging
+import os
+from pathlib import Path
 import sys
 from typing import Optional
 
@@ -19,7 +21,7 @@ from virosync import __version__
 
 # Configure root logger
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.ERROR,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -28,7 +30,7 @@ logger = logging.getLogger("virosync")
 _GLOBAL_CLI_FLAGS = {"-v", "--verbose", "-q", "--quiet"}
 
 
-def print_banner():
+def print_banner(database_version: str = "not resolved"):
     """Print ViroSync banner."""
     banner = f"""
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -41,7 +43,8 @@ def print_banner():
 ║     ╚═══╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝   ║
 ║                                                                      ║
 ║   Giant Endogenous Viral Element Detection Framework                 ║
-║   Version {__version__:<59}║
+║   Software version {__version__:<50}║
+║   Database version {database_version:<50}║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
     click.echo(banner)
@@ -63,9 +66,10 @@ def cli(ctx, verbose: bool, quiet: bool):
         logging.getLogger().setLevel(logging.DEBUG)
         ctx.obj["verbose"] = True
     elif quiet:
-        logging.getLogger().setLevel(logging.WARNING)
+        logging.getLogger().setLevel(logging.ERROR)
         ctx.obj["quiet"] = True
     else:
+        logging.getLogger().setLevel(logging.ERROR)
         ctx.obj["verbose"] = False
         ctx.obj["quiet"] = False
 
@@ -74,12 +78,41 @@ def cli(ctx, verbose: bool, quiet: bool):
 
 
 @cli.command()
-def info():
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=Path("config/orchestration.yaml"),
+    show_default=True,
+    help="Configuration used to resolve the database root",
+)
+def info(config_path: Path):
     """Show ViroSync configuration and system info."""
     import torch
     import psutil
+    import yaml
 
-    print_banner()
+    from virosync.utils.database_manager import ViroSyncDatabaseManager
+
+    configured_root = None
+    if config_path.is_file():
+        try:
+            payload = yaml.safe_load(config_path.read_text()) or {}
+            configured_root = (payload.get("orchestration") or {}).get(
+                "database_root"
+            )
+        except (OSError, TypeError, yaml.YAMLError):
+            configured_root = None
+    database_root_value = (
+        os.environ.get("VIROSYNC_DB_ROOT")
+        or configured_root
+        or ViroSyncDatabaseManager.default_database_path()
+    )
+    database_root = Path(database_root_value)
+    if configured_root and not database_root.is_absolute():
+        database_root = config_path.parent / database_root
+    database_root = ViroSyncDatabaseManager.normalize_path(database_root)
+    print_banner(ViroSyncDatabaseManager.get_database_version(database_root))
 
     click.echo("System Information:")
     click.echo(f"  Python: {sys.version.split()[0]}")

@@ -1,9 +1,8 @@
-"""PPV (Preplasmiviricota) regions gate identically to the legacy PLV/VP classes.
+"""PPV (Preplasmiviricota) gate and conservative subtype behavior.
 
 After the GVClass PPV unification, a region labeled ``PPV`` must be accepted by the v2
-quality gate under the same length/marker rules as the former PLV and VP classes
-(virophage + PLV are now class-rank subcategories of one PPV domain). VP/PLV remain
-accepted transitionally so a pre-relabel bundle still gates correctly.
+quality gate under the same length/marker rules as the former PLV and VP classes.
+VP and PLV are optional PPV subtypes, not separate result classes.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from virosync.pipeline.phase3.gene_taxonomy import extract_prefix
+from virosync.pipeline.phase3.evidence_synthesizer import infer_ppv_subtype
 from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 
 
@@ -35,7 +35,7 @@ def test_ppv_mcp_high_medium_passes() -> None:
         _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_mcp=True)
     )
     assert decision.kept
-    assert decision.reason == "plv_vp_high_medium_pass"
+    assert decision.reason == "small_dna_high_medium_pass"
 
 
 def test_ppv_atpase_only_high_medium_is_gated_out() -> None:
@@ -44,7 +44,7 @@ def test_ppv_atpase_only_high_medium_is_gated_out() -> None:
         _result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2)
     )
     assert not decision.kept
-    assert decision.reason == "plv_vp_high_medium_gate"
+    assert decision.reason == "small_dna_high_medium_gate"
 
 
 def test_ppv_non_atpase_hallmark_high_medium_passes() -> None:
@@ -64,7 +64,14 @@ def test_ppv_low_mcp_is_promoted() -> None:
         )
     )
     assert decision.kept
-    assert decision.reason == "plv_vp_low_promoted"
+    assert decision.reason == "small_dna_low_promoted"
+
+
+def test_ppv_subtype_requires_unambiguous_non_atpase_markers() -> None:
+    assert infer_ppv_subtype(["VP_MCP_1", "VP_Penton_1"]) == "VP"
+    assert infer_ppv_subtype(["PLV_MCP_1"]) == "PLV"
+    assert infer_ppv_subtype(["VP_MCP_1", "PLV_MCP_1"]) == ""
+    assert infer_ppv_subtype(["VP_ATPase_1", "PLV_PC_054"]) == ""
 
 
 def test_extract_prefix_resolves_ppv_and_legacy_vp_plv() -> None:

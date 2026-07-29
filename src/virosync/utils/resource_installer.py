@@ -28,8 +28,10 @@ from virosync.utils.resource_manifest import RESOURCE_MANIFEST_NAME, load_resour
 logger = logging.getLogger(__name__)
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+DOWNLOAD_PERCENT_PATTERN = re.compile(rb"(?<!\d)(\d{1,3})(?:\.\d+)?%")
 ARCHIVE_ROOT = "virosync"
 INSTALL_METADATA_MAX_BYTES = 1024 * 1024
+DOWNLOAD_ERROR_TAIL_BYTES = 64 * 1024
 
 INSTALL_FAULT_PHASES = (
     "after_download",
@@ -94,12 +96,114 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _download_error_detail(stderr: object) -> str:
+    """Return a short URL-redacted download diagnostic."""
+    if isinstance(stderr, bytes):
+        text = stderr.decode("utf-8", errors="replace")
+    else:
+        text = str(stderr or "")
+    lines = [line.strip() for line in text.replace("\r", "\n").splitlines() if line.strip()]
+    diagnostic_lines = [
+        line
+        for line in lines
+        if re.search(
+            r"error|failed|unable|resolv|connect|certificate|timed out|not found|denied|curl:",
+            line,
+            re.IGNORECASE,
+        )
+    ]
+    selected = diagnostic_lines[-2:] or lines[-1:]
+    redacted: list[str] = []
+    for line in selected:
+        line = re.sub(r"(?:https?|ftp)://\S+", "<url>", line)
+        endpoint_match = re.match(r"(Resolving|Connecting to)\b", line, re.IGNORECASE)
+        if endpoint_match:
+            outcome = re.search(r"\b(failed|connected)\b.*$", line, re.IGNORECASE)
+            line = f"{endpoint_match.group(1)} <host>"
+            if outcome:
+                line += f": {outcome.group(0)}"
+        line = re.sub(
+            r"(resolve host:)\s+(?!<url>)\S+",
+            r"\1 <host>",
+            line,
+            flags=re.IGNORECASE,
+        )
+        redacted.append(line)
+    detail = " | ".join(redacted)
+    return detail[:500]
+
+
+def _run_streamed_download(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    progress_callback: Callable[[float], None],
+    popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
+) -> subprocess.CompletedProcess:
+    """Capture downloader stderr while forwarding parsed percentage updates."""
+    process = popen_factory(
+        command,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    stderr_tail = bytearray()
+    overlap = b""
+    last_percent = -1
+    stream = process.stderr
+    if stream is None:
+        raise ResourceInstallError("downloader did not expose its diagnostic stream")
+    read_chunk = getattr(stream, "read1", stream.read)
+    try:
+        while True:
+            chunk = read_chunk(4096)
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode()
+            stderr_tail.extend(chunk)
+            if len(stderr_tail) > DOWNLOAD_ERROR_TAIL_BYTES:
+                del stderr_tail[:-DOWNLOAD_ERROR_TAIL_BYTES]
+            scan = overlap + chunk
+            for match in DOWNLOAD_PERCENT_PATTERN.finditer(scan):
+                percent = int(match.group(1))
+                if percent > 100:
+                    continue
+                if percent > last_percent:
+                    progress_callback(float(percent))
+                    last_percent = percent
+            overlap = scan[-16:]
+        returncode = process.wait()
+    except BaseException:
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except (OSError, ProcessLookupError):
+            pass
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        stream.close()
+    if returncode == 0 and last_percent < 100:
+        progress_callback(100.0)
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        stdout=b"",
+        stderr=bytes(stderr_tail),
+    )
+
+
 def copy_or_download_archive(
     source: str,
     archive_path: Path,
     *,
     ca_bundle: str | None = None,
     command_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
+    progress_callback: Callable[[float], None] | None = None,
 ) -> None:
     """Copy a local archive or download one with bounded retries and timeouts."""
     normalized_source = (
@@ -111,12 +215,21 @@ def copy_or_download_archive(
             raise ResourceInstallError(f"Archive source is not a file: {local_path}")
         logger.info("Using local archive source: %s", local_path)
         shutil.copy2(local_path, archive_path)
+        if progress_callback is not None:
+            progress_callback(100.0)
         return
 
     if not source.startswith(("http://", "https://", "ftp://")):
         raise FileNotFoundError(f"Archive source not found and not a URL: {source}")
 
-    wget_command = ["wget", "--tries=3", "--timeout=120", "-O", str(archive_path)]
+    wget_command = [
+        "wget",
+        "--progress=bar:force:noscroll",
+        "--tries=3",
+        "--timeout=120",
+        "-O",
+        str(archive_path),
+    ]
     curl_command = [
         "curl",
         "-fL",
@@ -126,6 +239,8 @@ def copy_or_download_archive(
         "5",
         "--connect-timeout",
         "30",
+        "--progress-bar",
+        "--show-error",
         "-o",
         str(archive_path),
     ]
@@ -137,16 +252,32 @@ def copy_or_download_archive(
 
     errors: list[str] = []
     commands = (("wget", wget_command), ("curl", curl_command))
+    last_reported_percent = -1.0
+
+    def report_progress(percent: float) -> None:
+        nonlocal last_reported_percent
+        if progress_callback is not None and percent > last_reported_percent:
+            progress_callback(percent)
+            last_reported_percent = percent
+
     for index, (tool, command) in enumerate(commands):
         if index:
             logger.warning("%s failed, trying %s...", commands[index - 1][0], tool)
         try:
-            result = command_runner(
-                command,
-                env=sanitized_ssl_env(),
-                stdout=subprocess.DEVNULL,
-                stderr=None,
-            )
+            if progress_callback is not None:
+                result = _run_streamed_download(
+                    command,
+                    env=sanitized_ssl_env(),
+                    progress_callback=report_progress,
+                    popen_factory=popen_factory,
+                )
+            else:
+                result = command_runner(
+                    command,
+                    env=sanitized_ssl_env(),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
         except FileNotFoundError:
             result = subprocess.CompletedProcess(command, 127)
         if (
@@ -156,7 +287,9 @@ def copy_or_download_archive(
         ):
             return
         archive_path.unlink(missing_ok=True)
-        errors.append(f"{tool}: exit code {result.returncode}")
+        detail = _download_error_detail(result.stderr)
+        suffix = f": {detail}" if detail else ""
+        errors.append(f"{tool}: exit code {result.returncode}{suffix}")
     raise ResourceInstallError("archive download failed (" + "; ".join(errors) + ")")
 
 
@@ -998,9 +1131,15 @@ def install_core_resources(
     reject_invalid_existing: bool = False,
     semantic_runner: Callable[..., subprocess.CompletedProcess] | None = None,
     fault_injector: FaultInjector | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> Path:
     """Authenticate, stage, validate, finalize, and atomically activate a bundle."""
     target = Path(target)
+
+    def report(progress: float, stage: str) -> None:
+        if progress_callback is not None:
+            progress_callback(progress, stage)
+
     source = ResourceSource(
         version=source.version,
         source=source.source,
@@ -1035,13 +1174,16 @@ def install_core_resources(
                     manifest=manifest,
                 )
                 if receipt_is_current:
+                    report(100, "core resources already installed")
                     return target
+                report(60, "validating existing resources")
                 verify_tree(active, **verification_kwargs)
                 _make_tree_immutable(active, finalize_root=False)
                 _write_install_metadata(active, source, required_files)
                 _chmod_if_needed(active, 0o555)
                 _fsync_tree(active)
                 _fsync_directory(target.parent)
+                report(100, "core resources ready")
                 return target
             if (
                 reject_invalid_existing
@@ -1069,10 +1211,12 @@ def install_core_resources(
         archive_path = stage_root / source.filename
         promoted = False
         try:
+            report(5, "downloading core resources")
             copy_archive(source.source, archive_path)
             _invoke_fault(fault_injector, "after_download")
             if not archive_path.is_file() or archive_path.stat().st_size == 0:
                 raise ResourceInstallError("Downloaded core-resource archive is empty")
+            report(35, "verifying archive checksum")
             actual_archive_sha = sha256_file(archive_path)
             if actual_archive_sha != source.archive_sha256:
                 raise ResourceInstallError(
@@ -1080,11 +1224,13 @@ def install_core_resources(
                     f"expected {source.archive_sha256}, found {actual_archive_sha}"
                 )
             _invoke_fault(fault_injector, "after_archive_verify")
+            report(45, "extracting archive")
             safe_extract_archive(archive_path, payload_root)
             manifest = _load_core_install_manifest(payload_root, source)
             required_files = [item.path for item in manifest.files]
             _validate_extracted_inventory(payload_root, required_files)
             _invoke_fault(fault_injector, "after_extract")
+            report(70, "validating extracted resources")
             verify_tree(payload_root, **verification_kwargs)
             _invoke_fault(fault_injector, "after_stage_validate")
 
@@ -1121,11 +1267,13 @@ def install_core_resources(
                 _fsync_tree(candidate)
             _fsync_directory(target.parent)
             _invoke_fault(fault_injector, "after_candidate_promote")
+            report(90, "activating resources")
             _activate_candidate(
                 target,
                 candidate,
                 fault_injector=fault_injector,
             )
+            report(100, "core resources ready")
             return target
         except BaseException:
             if promoted and not target.is_symlink():

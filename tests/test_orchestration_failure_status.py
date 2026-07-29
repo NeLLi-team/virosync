@@ -28,7 +28,16 @@ def _invoke_batch(
 
     output_root = tmp_path / "results"
 
-    def _fake_single(*, genome_path, output_dir, genome_id, config):
+    def _fake_single(
+        *,
+        genome_path,
+        output_dir,
+        genome_id,
+        config,
+        progress_callback=None,
+    ):
+        if progress_callback is not None:
+            progress_callback(20, "phase 0", False)
         output_dir.mkdir(parents=True, exist_ok=True)
         outcome = outcomes[genome_id]
         if isinstance(outcome, BaseException):

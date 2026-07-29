@@ -215,7 +215,7 @@ def summarize_marker_hits(
         categories.update(_categorize_text(gene))
         if gene_key.startswith(("vp_", "plv_")):
             # vp_ and plv_ markers are both Preplasmiviricota; the subgroup is
-            # kept separately in vp_plv_subclass.
+            # kept separately in ppv_subtype.
             families["PPV"] += 1
         elif gene_key.startswith("mirus_"):
             families["MIRUS"] += 1
@@ -383,13 +383,13 @@ def compute_marker_completeness(
     ncldv_total = totals["ncldv_total"]
     mirus_total = totals["mirus_total"]
     plv_total = totals["plv_total"]
-    plv_combined_total = vp_total + plv_total
-    plv_combined_hits = len(vp_hits) + len(plv_hits)
+    ppv_total = vp_total + plv_total
+    ppv_hits = len(vp_hits) + len(plv_hits)
 
     vp_ratio = (len(vp_hits) / vp_total) if vp_total else 0.0
     ncldv_ratio = (len(ncldv_hits) / ncldv_total) if ncldv_total else 0.0
     mirus_ratio = (len(mirus_hits) / mirus_total) if mirus_total else 0.0
-    plv_ratio = (plv_combined_hits / plv_combined_total) if plv_combined_total else 0.0
+    ppv_ratio = (ppv_hits / ppv_total) if ppv_total else 0.0
 
     return {
         "vp_completeness": f"{len(vp_hits)}/{vp_total}",
@@ -398,44 +398,35 @@ def compute_marker_completeness(
         "ncldv_completeness_ratio": ncldv_ratio,
         "mirus_completeness": f"{len(mirus_hits)}/{mirus_total}",
         "mirus_completeness_ratio": mirus_ratio,
-        "plv_completeness": f"{plv_combined_hits}/{plv_combined_total}",
-        "plv_completeness_ratio": plv_ratio,
+        "ppv_completeness": f"{ppv_hits}/{ppv_total}",
+        "ppv_completeness_ratio": ppv_ratio,
     }
 
 
-def infer_vp_plv_subclass(
-    hallmark_genes: list[str],
-    hallmark_hits: Optional[list[dict]] = None,
-) -> str:
-    vp_hits: set[str] = set()
+def infer_ppv_subtype(hallmark_genes: list[str]) -> str:
+    """Return VP or PLV only for unambiguous subtype-specific marker evidence."""
+    has_vp = False
     has_plv = False
     for gene in hallmark_genes:
         key = gene.lower()
         for label, prefixes in VP_CORE_MARKER_PREFIXES.items():
-            if key.startswith(prefixes):
-                vp_hits.add(label)
-        if key.startswith("plv_"):
+            if label != "atpase" and key.startswith(prefixes):
+                has_vp = True
+        if key.startswith(PLV_CORE_MARKER_PREFIXES["mcp"]):
             has_plv = True
 
-    if hallmark_hits:
-        for hit in hallmark_hits:
-            if not isinstance(hit, dict):
-                continue
-            top10 = hit.get("top10_prefixes", "") or ""
-            top10_prefixes = {p for p in top10.split(",") if p}
-            if "PLV__" in top10_prefixes:
-                has_plv = True
-
+    if has_vp == has_plv:
+        return ""
+    if has_vp:
+        return "VP"
     if has_plv:
         return "PLV"
-    if vp_hits:
-        return "VP"
-    return "UNKNOWN"
+    return ""
 
 
 def infer_likely_family(result: "VerificationResult") -> str:
     classification = result.region_classification or ""
-    if canonical_family(classification) in {"NCLDV", "MIRUS", "PPV"}:
+    if canonical_family(classification) in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
         return canonical_family(classification)
     if classification == "MIXED":
         marker_family = canonical_family(result.marker_dominant_family)
@@ -443,16 +434,16 @@ def infer_likely_family(result: "VerificationResult") -> str:
             return marker_family
         return classification
 
-    # vp_plv_subclass keeps the VP/PLV subgroup; the family label is the lineage.
-    if result.vp_plv_subclass and result.vp_plv_subclass != "UNKNOWN":
-        return canonical_family(result.vp_plv_subclass)
+    # ppv_subtype keeps the VP/PLV subgroup; the family label is the lineage.
+    if result.ppv_subtype:
+        return canonical_family(result.ppv_subtype)
 
     marker_family = canonical_family(result.marker_dominant_family)
-    if marker_family in {"NCLDV", "MIRUS", "PPV"}:
+    if marker_family in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
         return marker_family
 
     tax_family = canonical_family(result.gene_taxonomy_dominant_family)
-    if tax_family in {"NCLDV", "MIRUS", "PPV"}:
+    if tax_family in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
         return tax_family
 
     return "UNKNOWN"
@@ -732,8 +723,8 @@ class VerificationResult:
     family_consistency_score: float = 0.0
     vp_completeness: str = "0/4"
     vp_completeness_ratio: float = 0.0
-    plv_completeness: str = "0/0"
-    plv_completeness_ratio: float = 0.0
+    ppv_completeness: str = "0/0"
+    ppv_completeness_ratio: float = 0.0
     ncldv_completeness: str = "0/0"
     ncldv_completeness_ratio: float = 0.0
     mirus_completeness: str = "0/0"
@@ -759,7 +750,7 @@ class VerificationResult:
     region_classification_ncldv_markers: int = 0
     region_classification_vp_plv_markers: int = 0
     region_classification_mirus_markers: int = 0
-    vp_plv_subclass: str = "UNKNOWN"
+    ppv_subtype: str = ""
     likely_family: str = "UNKNOWN"
     likely_group: str = ""  # capscan Bellas2026 group (Trimcap/PgVV/...) below the class
     confidence_tier: str = "LOW"  # HIGH, MEDIUM, or LOW
@@ -915,8 +906,8 @@ class VerificationResult:
             "family_consistency_score": self.family_consistency_score,
             "vp_completeness": self.vp_completeness,
             "vp_completeness_ratio": self.vp_completeness_ratio,
-            "plv_completeness": self.plv_completeness,
-            "plv_completeness_ratio": self.plv_completeness_ratio,
+            "ppv_completeness": self.ppv_completeness,
+            "ppv_completeness_ratio": self.ppv_completeness_ratio,
             "ncldv_completeness": self.ncldv_completeness,
             "ncldv_completeness_ratio": self.ncldv_completeness_ratio,
             "mirus_completeness": self.mirus_completeness,
@@ -948,7 +939,7 @@ class VerificationResult:
             "gene_taxonomy_has_vp_plv": self.gene_taxonomy_has_vp_plv,
             "gene_taxonomy_dominant_family": self.gene_taxonomy_dominant_family,
             "gene_taxonomy_dominant_fraction": self.gene_taxonomy_dominant_fraction,
-            "vp_plv_subclass": self.vp_plv_subclass,
+            "ppv_subtype": self.ppv_subtype,
             "likely_family": self.likely_family,
             "likely_group": self.likely_group,
             "confidence_tier": self.confidence_tier,
@@ -1440,7 +1431,7 @@ def calculate_eve_confidence(
         _add_common_bonus(0.05)
     completeness_ratio = max(
         result.vp_completeness_ratio,
-        result.plv_completeness_ratio,
+        result.ppv_completeness_ratio,
         result.ncldv_completeness_ratio,
         result.mirus_completeness_ratio,
     )
@@ -1995,22 +1986,18 @@ class EvidenceSynthesizer:
         )
         result.vp_completeness = completeness["vp_completeness"]
         result.vp_completeness_ratio = completeness["vp_completeness_ratio"]
-        result.plv_completeness = completeness["plv_completeness"]
-        result.plv_completeness_ratio = completeness["plv_completeness_ratio"]
+        result.ppv_completeness = completeness["ppv_completeness"]
+        result.ppv_completeness_ratio = completeness["ppv_completeness_ratio"]
         result.ncldv_completeness = completeness["ncldv_completeness"]
         result.ncldv_completeness_ratio = completeness["ncldv_completeness_ratio"]
         result.mirus_completeness = completeness["mirus_completeness"]
         result.mirus_completeness_ratio = completeness["mirus_completeness_ratio"]
-        result.vp_plv_subclass = infer_vp_plv_subclass(hallmark_genes, deduped_hits)
-        if result.vp_plv_subclass == "UNKNOWN" and result.seed_sources:
-            result.vp_plv_subclass = infer_vp_plv_subclass(result.seed_sources)
+        result.ppv_subtype = infer_ppv_subtype(hallmark_genes)
         if result.region_classification in {"VP", "PLV", "PPV", "UNKNOWN", ""}:
-            if result.vp_plv_subclass in {"VP", "PLV"}:
-                # The subgroup stays in vp_plv_subclass; the class token is the
+            if result.ppv_subtype in {"VP", "PLV"}:
+                # The subgroup stays in ppv_subtype; the class token is the
                 # unified Preplasmiviricota lineage.
                 result.region_classification = "PPV"
-            elif result.vp_plv_subclass == "MIXED":
-                result.region_classification = "MIXED"
 
     def _process_gene_taxonomy(
         self,

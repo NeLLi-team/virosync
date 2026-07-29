@@ -5,6 +5,9 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
+
+from virosync.output_contract import DETAILED_PREDICTION_COLUMNS
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 from virosync.pipeline.phase3.output_generator import OutputGenerator
 from virosync.validation.tsv_invariants import run_tsv_invariant_checks
@@ -47,31 +50,42 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
         confidence_tier="HIGH",
         final_confidence=0.95,
         likely_family="VP",
-        gene_count=5,
-        gene_taxonomy_total=5,
+        gene_count=6,
+        gene_taxonomy_total=6,
         gene_taxonomy_records=[
             {
                 "top1_target": "EUK__host_a",
                 "top1_prefix": "EUK",
                 "top10_prefixes": ["NCLDV"],
+                "top10_pidents": [24.9],
                 "is_flanking": False,
             },
             {
                 "top1_target": "MIRUS__hit",
                 "top1_prefix": "MIRUS",
                 "top10_prefixes": ["MIRUS"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
                 "top1_target": "VP__hit",
                 "top1_prefix": "VP",
                 "top10_prefixes": ["VP"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
                 "top1_target": "PLV__hit",
                 "top1_prefix": "PLV",
                 "top10_prefixes": ["PLV"],
+                "top10_pidents": [50.0],
+                "is_flanking": False,
+            },
+            {
+                "top1_target": "CRESS__hit",
+                "top1_prefix": "CRESS",
+                "top10_prefixes": ["CRESS"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
@@ -97,16 +111,23 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
     ordered_fieldnames = list(reader.fieldnames or [])
     fieldnames = set(ordered_fieldnames)
 
-    assert "classification" in fieldnames
+    assert ordered_fieldnames == list(DETAILED_PREDICTION_COLUMNS)
+    assert "likely_family" in fieldnames
+    assert "ppv_subtype" in fieldnames
     assert "likely_group" in fieldnames  # capscan MCP group column
     assert "hallmark_total" in fieldnames
     assert "hallmark_unique" in fieldnames
-    assert "plv_top10_proteins" in fieldnames
-    assert "vp_top10_proteins" in fieldnames
-    assert ordered_fieldnames[-1] == "effective_eve_class"
+    assert "cress_top10_proteins" in fieldnames
+    assert "plv_top10_proteins" not in fieldnames
+    assert "vp_top10_proteins" not in fieldnames
+    assert ordered_fieldnames[7:11] == [
+        "effective_eve_class",
+        "likely_family",
+        "ppv_subtype",
+        "likely_group",
+    ]
 
     assert "status" not in fieldnames
-    assert "likely_family" not in fieldnames
     assert "crf_confidence" not in fieldnames
     assert "crf_posterior" not in fieldnames
     assert "seed_compositional_score" not in fieldnames
@@ -127,8 +148,9 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
 
     # GVClass unified VP and PLV into Preplasmiviricota; a legacy "VP" label
     # resolves to the PPV lineage in the public class column.
-    assert row["classification"] == "VP"
+    assert row["likely_family"] == "PPV"
     assert row["effective_eve_class"] == "PPV"
+    assert row["ppv_subtype"] == "."
     assert row["likely_group"] == "."  # no capscan group-defining marker -> "."
     assert row["hallmark_total"] == "5"
     assert row["hallmark_unique"] == "4"
@@ -140,8 +162,13 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
     assert row["gvogm_unvalidated_names"] == "GVOGm0007"
     assert row["ncldv_top10_proteins"] == "1"
     assert row["mirus_top10_proteins"] == "1"
-    assert row["plv_top10_proteins"] == "1"
-    assert row["vp_top10_proteins"] == "1"
+    assert row["ppv_top10_proteins"] == "2"
+    assert row["cress_top10_proteins"] == "1"
+    assert "NCLDV:0" in row["taxonomy_best_hits"]
+    assert "PPV:2" in row["taxonomy_best_hits"]
+    assert "CRESS:1" in row["taxonomy_best_hits"]
+    assert ";VP:" not in row["taxonomy_best_hits"]
+    assert ";PLV:" not in row["taxonomy_best_hits"]
     assert row["host_signature_fraction"] == "0.2000"
 
 
@@ -170,24 +197,28 @@ def test_detailed_tsv_invariants_allow_counted_names_to_exceed_unique_protein_co
                 "top1_target": "EUK__host_a",
                 "top1_prefix": "EUK",
                 "top10_prefixes": ["NCLDV"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
                 "top1_target": "MIRUS__hit",
                 "top1_prefix": "MIRUS",
                 "top10_prefixes": ["MIRUS"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
                 "top1_target": "VP__hit",
                 "top1_prefix": "VP",
                 "top10_prefixes": ["VP"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
                 "top1_target": "PLV__hit",
                 "top1_prefix": "PLV",
                 "top10_prefixes": ["PLV"],
+                "top10_pidents": [50.0],
                 "is_flanking": False,
             },
             {
@@ -206,6 +237,82 @@ def test_detailed_tsv_invariants_allow_counted_names_to_exceed_unique_protein_co
     report = run_tsv_invariant_checks(detailed_tsv)
 
     assert report.passed, report.issues
+
+
+@pytest.mark.parametrize(
+    ("field", "check"),
+    [
+        ("ppv_top10_proteins", "ppv_top_count_out_of_range"),
+        ("cress_top10_proteins", "cress_top_count_out_of_range"),
+    ],
+)
+def test_detailed_tsv_invariants_check_schema_v4_family_support_counts(
+    tmp_path: Path,
+    field: str,
+    check: str,
+) -> None:
+    output_dir = tmp_path / "phase3_synthesis"
+    output_dir.mkdir()
+    generator = OutputGenerator(output_dir=output_dir, extended_output=True)
+    result = VerificationResult(
+        eve_id="EVE_scaf1_100-400",
+        scaffold="scaf1",
+        start=100,
+        end=400,
+        confidence_tier="HIGH",
+        final_confidence=0.95,
+        likely_family="PPV",
+        gene_count=1,
+        gene_taxonomy_total=1,
+        gene_taxonomy_records=[
+            {
+                "top1_target": "PPV__hit",
+                "top1_prefix": "PPV",
+                "top10_prefixes": ["PPV"],
+                "top10_pidents": [50.0],
+                "is_flanking": False,
+            }
+        ],
+    )
+    detailed_tsv = generator.write_predictions_detailed_tsv([result])
+    with detailed_tsv.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames or [])
+    rows[0][field] = "2"
+    with detailed_tsv.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    report = run_tsv_invariant_checks(detailed_tsv)
+
+    assert not report.passed
+    assert check in {issue.check for issue in report.issues}
+
+
+def test_detailed_tsv_invariants_allow_minimal_zero_row_header(
+    tmp_path: Path,
+) -> None:
+    detailed_tsv = tmp_path / "empty.tsv"
+    detailed_tsv.write_text("eve_id\n", encoding="utf-8")
+
+    report = run_tsv_invariant_checks(detailed_tsv)
+
+    assert report.passed
+    assert report.rows_checked == 0
+
+
+def test_detailed_tsv_invariants_reject_missing_v4_support_header(
+    tmp_path: Path,
+) -> None:
+    detailed_tsv = tmp_path / "truncated.tsv"
+    detailed_tsv.write_text("eve_id\ttotal_proteins\nEVE_1\t0\n", encoding="utf-8")
+
+    report = run_tsv_invariant_checks(detailed_tsv)
+
+    assert not report.passed
+    assert "detailed_tsv_schema" in {issue.check for issue in report.issues}
 
 
 def test_detailed_tsv_ignores_stale_taxonomy_total_without_records(

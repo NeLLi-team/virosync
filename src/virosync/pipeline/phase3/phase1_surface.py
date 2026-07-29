@@ -12,7 +12,7 @@ from virosync.output_contract import canonical_family
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
-    infer_vp_plv_subclass,
+    infer_ppv_subtype,
     summarize_marker_hits,
 )
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
@@ -88,6 +88,8 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
         if is_mcp_gene(anchor.hallmark_gene)
     ]
     region_classification = canonical_family(seed.predicted_family)
+    # Phase 1 has no CRESS marker family. Identity-qualified gene taxonomy may
+    # assign CRESS later during evidence synthesis.
     likely_family = (
         region_classification
         if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"}
@@ -122,7 +124,7 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
         region_classification_ncldv_markers=seed.region_classification_ncldv_markers,
         region_classification_vp_plv_markers=seed.region_classification_vp_plv_markers,
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
-        vp_plv_subclass=infer_vp_plv_subclass(hallmark_genes),
+        ppv_subtype=infer_ppv_subtype(hallmark_genes),
         likely_family=likely_family,
         seed_sources=sorted(set(seed.sources)),
         seed_confidence=seed.confidence,

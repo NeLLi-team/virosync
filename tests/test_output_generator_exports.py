@@ -29,6 +29,8 @@ from virosync.pipeline.phase3.output_generator import OutputGenerator
 from virosync.output_contract import (
     COORDINATE_CONVENTION,
     COORDINATE_SCHEMA_VERSION,
+    DETAILED_PREDICTION_COLUMNS,
+    DETAILED_PREDICTION_EXTENDED_COLUMNS,
     OUTPUT_SCHEMA_VERSION,
 )
 
@@ -86,7 +88,7 @@ CANONICAL_EXTENDED_FIELDS = (
     "gene_taxonomy_vp_plv_top10",
     "gene_taxonomy_dominant_family",
     "gene_taxonomy_dominant_fraction",
-    "vp_plv_subclass",
+    "ppv_subtype",
     "host_signature_gene_count",
     "host_signature_fraction",
     "host_signature_weighted_mean",
@@ -95,7 +97,7 @@ CANONICAL_EXTENDED_FIELDS = (
     "marker_complement_score",
     "family_consistency_score",
     "vp_completeness",
-    "plv_completeness",
+    "ppv_completeness",
     "ncldv_completeness",
     "mirus_completeness",
     "seed_marker_names",
@@ -103,71 +105,6 @@ CANONICAL_EXTENDED_FIELDS = (
     "seed_marker_patterns",
     "other_marker_patterns",
 )
-DETAILED_BASE_FIELDS = (
-    "eve_id",
-    "scaffold",
-    "start",
-    "end",
-    "length",
-    "confidence_tier",
-    "final_confidence",
-    "classification",
-    "likely_group",
-    "kfd",
-    "gc_deviation",
-    "hallmark_total",
-    "hallmark_unique",
-    "mcp_gene_ids",
-    "tier1_bypassed_marker_count",
-    "tier1_bypassed_marker_ids",
-    "tier1_bypassed_marker_models",
-    "gvogm_count",
-    "gvogm_names",
-    "og_count",
-    "og_names",
-    "gvogm_unvalidated_count",
-    "gvogm_unvalidated_names",
-    "og_unvalidated_count",
-    "og_unvalidated_names",
-    "total_proteins",
-    "ncldv_top10_proteins",
-    "mirus_top10_proteins",
-    "ppv_top10_proteins",
-    "plv_top10_proteins",
-    "vp_top10_proteins",
-    "taxonomy_best_hits",
-    "interproscan_total_hits",
-    "interproscan_viral_hits",
-    "interproscan_keyword_hits",
-    "interproscan_score",
-    "candidate_start",
-    "candidate_end",
-    "candidate_length",
-    "candidate_reduction_bp",
-    "candidate_reduction_reason",
-    "region_gc_percent",
-    "genome_gc_percent",
-    "gc_delta",
-)
-DETAILED_EXTENDED_FIELDS = (
-    "interproscan_category_score",
-    "host_signature_gene_count",
-    "host_signature_fraction",
-    "host_signature_weighted_mean",
-    "marker_complement_score",
-    "family_consistency_score",
-    "vp_completeness",
-    "plv_completeness",
-    "ncldv_completeness",
-    "mirus_completeness",
-    "seed_marker_names",
-    "other_marker_names",
-    "seed_marker_patterns",
-    "other_marker_patterns",
-    "seed_sources",
-)
-
-
 def _write_genome_fasta(path: Path) -> None:
     path.write_text(
         ">contig_1\n"
@@ -667,21 +604,25 @@ def test_prediction_tsv_writers_append_tier_aware_effective_class(
         rows = list(reader)
     assert reader.fieldnames is not None
     if writer_name == "write_predictions_tsv":
-        expected_legacy_fields = CANONICAL_BASE_FIELDS + (
+        expected_fields = CANONICAL_BASE_FIELDS + (
             CANONICAL_EXTENDED_FIELDS
             if extended_output
             else ("interproscan_score",)
-        )
+        ) + ("effective_eve_class",)
     else:
-        expected_legacy_fields = DETAILED_BASE_FIELDS + (
-            DETAILED_EXTENDED_FIELDS if extended_output else ()
+        expected_fields = tuple(
+            column
+            for column in DETAILED_PREDICTION_COLUMNS
+            if extended_output
+            or column not in DETAILED_PREDICTION_EXTENDED_COLUMNS
         )
-    assert reader.fieldnames[:-1] == list(expected_legacy_fields)
-    assert reader.fieldnames[-1] == "effective_eve_class"
+    assert reader.fieldnames == list(expected_fields)
     assert rows[0]["effective_eve_class"] == "NCLDV"
-    assert rows[0]["classification"] == "NCLDV"
     if writer_name == "write_predictions_tsv":
         assert rows[0]["region_classification"] == "PPV"
+        assert rows[0]["classification"] == "NCLDV"
+    else:
+        assert rows[0]["likely_family"] == "NCLDV"
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -690,8 +631,34 @@ def test_prediction_tsv_writers_append_tier_aware_effective_class(
         writer_name,
     )([])
     empty_header = empty_output.read_text().splitlines()[0].split("\t")
-    assert empty_header[:-1] == list(expected_legacy_fields)
-    assert empty_header[-1] == "effective_eve_class"
+    assert empty_header == list(expected_fields)
+
+
+def test_canonical_tsv_uses_dot_for_unassigned_ppv_subtype(
+    tmp_path: Path,
+) -> None:
+    result = _build_result(
+        eve_id="EVE_PPV",
+        scaffold="ctg",
+        start=0,
+        end=6001,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+        region_classification="PPV",
+        likely_family="PPV",
+        hallmark_count=2,
+    )
+    result.ppv_subtype = ""
+
+    output_path = OutputGenerator(
+        output_dir=tmp_path,
+        extended_output=True,
+    ).write_predictions_tsv([result])
+
+    with output_path.open(newline="") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["effective_eve_class"] == "PPV"
+    assert row["ppv_subtype"] == "."
 
 
 def test_summary_records_coordinate_contract(tmp_path: Path) -> None:

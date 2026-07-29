@@ -344,8 +344,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
             (ablation_events, "virosync.ablation_events/v1"),
-            (canonical, "canonical-predictions-v3"),
-            (detailed, "detailed-predictions-v3"),
+            (canonical, "canonical-predictions-v4"),
+            (detailed, "detailed-predictions-v4"),
             (bed, "canonical-predictions-bed-v1"),
             (gff, "canonical-predictions-gff3-v1"),
             (summary, "virosync-summary-v3"),
@@ -581,10 +581,8 @@ def test_summarize_predictions_tsv_counts_canonical_rows_for_rollups(tmp_path: P
     assert stats["total_hallmarks"] == 3
     assert stats["ncldv_count"] == 1
     # Legacy "PLV" and "VP" rows both roll up under the unified
-    # Preplasmiviricota class, so neither legacy counter fires.
+    # Preplasmiviricota class.
     assert stats["ppv_count"] == 2
-    assert stats["plv_count"] == 0
-    assert stats["vp_count"] == 0
 
 
 def test_summarize_predictions_tsv_counts_detailed_candidates_without_accepting(

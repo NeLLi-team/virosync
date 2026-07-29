@@ -248,12 +248,19 @@ class ViroSyncDatabaseManager:
         )
 
     @classmethod
-    def _copy_or_download_archive(cls, source: str, archive_path: Path) -> None:
+    def _copy_or_download_archive(
+        cls,
+        source: str,
+        archive_path: Path,
+        *,
+        progress_callback=None,
+    ) -> None:
         copy_or_download_archive(
             source,
             archive_path,
             ca_bundle=cls._certifi_ca_bundle(),
             command_runner=subprocess.run,
+            progress_callback=progress_callback,
         )
 
     @staticmethod
@@ -277,6 +284,7 @@ class ViroSyncDatabaseManager:
         source: str,
         filename: Optional[str] = None,
         force: bool = False,
+        progress_callback=None,
     ) -> None:
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         archive_name = filename or Path(source).name or "resources.tar.gz"
@@ -287,9 +295,26 @@ class ViroSyncDatabaseManager:
             stage_root = Path(stage_name)
             archive_path = stage_root / Path(archive_name).name
             payload_path = stage_root / "payload"
-            cls._copy_or_download_archive(source, archive_path)
+            cls._copy_or_download_archive(
+                source,
+                archive_path,
+                progress_callback=(
+                    (
+                        lambda percent: progress_callback(
+                            percent * 0.70,
+                            f"downloading ({int(percent)}%)",
+                        )
+                    )
+                    if progress_callback is not None
+                    else None
+                ),
+            )
+            if progress_callback is not None:
+                progress_callback(70, "extracting")
             logger.info("Extracting archive: %s", archive_path)
             cls._extract_optional_archive(archive_path, payload_path)
+            if progress_callback is not None:
+                progress_callback(90, "activating")
             if force:
                 if target_dir.is_symlink() or (
                     target_dir.exists() and not target_dir.is_dir()
@@ -306,6 +331,8 @@ class ViroSyncDatabaseManager:
                         f"Optional resource target is not a directory: {target_dir}"
                     )
                 shutil.copytree(payload_path, target_dir, dirs_exist_ok=True)
+            if progress_callback is not None:
+                progress_callback(100, "ready")
 
     @classmethod
     def _validate_core_tree(
@@ -389,6 +416,7 @@ class ViroSyncDatabaseManager:
         full: bool = True,
         semantic_runner=None,
         fault_injector=None,
+        progress_callback=None,
     ) -> Path:
         """Install one authenticated bundle behind the stable database pointer."""
         if database_path:
@@ -413,10 +441,26 @@ class ViroSyncDatabaseManager:
                 **kwargs,
             )
 
+        def _copy_archive(source_value: str, archive_path: Path) -> None:
+            cls._copy_or_download_archive(
+                source_value,
+                archive_path,
+                progress_callback=(
+                    (
+                        lambda percent: progress_callback(
+                            5 + percent * 0.30,
+                            f"downloading core resources ({int(percent)}%)",
+                        )
+                    )
+                    if progress_callback is not None
+                    else None
+                ),
+            )
+
         installed = install_core_resources(
             db_path,
             selected,
-            copy_archive=cls._copy_or_download_archive,
+            copy_archive=_copy_archive,
             verify_tree=_verify_tree,
             required_files=list(RUNTIME_RESOURCE_FILES),
             full=full,
@@ -424,6 +468,7 @@ class ViroSyncDatabaseManager:
             reject_invalid_existing=implicit_source and not force,
             semantic_runner=semantic_runner,
             fault_injector=fault_injector,
+            progress_callback=progress_callback,
         )
         logger.info("Database setup complete")
         return installed
@@ -454,6 +499,7 @@ class ViroSyncDatabaseManager:
         required_files: list[str],
         version: str = "unknown",
         force: bool = False,
+        progress_callback=None,
     ) -> bool:
         if source is None:
             missing = [rel for rel in required_files if not (target_path / rel).exists()]
@@ -479,9 +525,14 @@ class ViroSyncDatabaseManager:
             return True
 
         try:
-            cls._install_archive(target_path, source, force=force)
+            cls._install_archive(
+                target_path,
+                source,
+                force=force,
+                progress_callback=progress_callback,
+            )
         except Exception as exc:
-            logger.warning("%s installation failed: %s", name, exc)
+            logger.error("%s installation failed: %s", name, exc)
             return False
 
         missing = [rel for rel in required_files if not (target_path / rel).exists()]

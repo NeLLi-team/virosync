@@ -150,11 +150,11 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/resume_state.json": "virosync.phase1.resume_state/v1",
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v2",
     "phase2/resume_state.json": "virosync.phase2.resume_state/v1",
-    "virosync_predictions.tsv": "canonical-predictions-v3",
-    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v3",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v3",
+    "virosync_predictions.tsv": "canonical-predictions-v4",
+    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v4",
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v4",
     "phase3_synthesis/virosync_predictions_detailed.tsv": (
-        "detailed-predictions-v3"
+        "detailed-predictions-v4"
     ),
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
     "phase3_synthesis/virosync_predictions.bed": (
@@ -498,8 +498,8 @@ def _observe_artifact(
                 if row_mode == "table":
                     if nonempty_rows == 0:
                         if schema in {
-                            "canonical-predictions-v3",
-                            "detailed-predictions-v3",
+                            "canonical-predictions-v4",
+                            "detailed-predictions-v4",
                         }:
                             raise ValueError(
                                 "final prediction table has no header: "
@@ -2216,12 +2216,11 @@ def _validated_result(result: Mapping[str, object]) -> dict[str, object]:
             _require_nonnegative_int(value, f"{field}.{name}")
         if sum(counts.values()) != canonical_rows:  # type: ignore[arg-type]
             raise ValueError(f"{field} must sum to canonical_rows")
-    from virosync.output_contract import EFFECTIVE_EVE_CLASSES
+    from virosync.output_contract import normalize_effective_eve_class_counts
 
-    if set(normalized["class_counts"]) != set(EFFECTIVE_EVE_CLASSES):
-        raise ValueError(
-            "class_counts must contain the complete effective EVE class partition"
-        )
+    normalized["class_counts"] = normalize_effective_eve_class_counts(
+        normalized["class_counts"]
+    )
     if set(normalized["tier_counts"]) != {"HIGH", "MEDIUM", "LOW"}:
         raise ValueError("tier_counts must contain HIGH, MEDIUM, and LOW")
     promoted_low_rows = normalized.get(
@@ -2444,6 +2443,7 @@ def _prediction_coordinates(
 ]:
     from virosync.output_contract import (
         EFFECTIVE_EVE_CLASSES,
+        PPV_LEGACY_ALIASES,
         normalize_effective_eve_class,
     )
 
@@ -2500,7 +2500,9 @@ def _prediction_coordinates(
                 f"prediction table {relative_path} has invalid confidence"
             )
         persisted_class = str(row["effective_eve_class"]).strip().upper()
-        if persisted_class not in EFFECTIVE_EVE_CLASSES:
+        if persisted_class not in (
+            set(EFFECTIVE_EVE_CLASSES) | set(PPV_LEGACY_ALIASES)
+        ):
             raise ValueError(
                 f"prediction table {relative_path} has an invalid effective class"
             )

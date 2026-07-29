@@ -137,13 +137,6 @@ def _parse_taxonomy_counts(raw: str) -> tuple[dict[str, int], Optional[str]]:
     return counts, None
 
 
-def _first_present(row: dict[str, object], candidates: list[str]) -> tuple[Optional[str], object]:
-    for key in candidates:
-        if key in row:
-            return key, row.get(key)
-    return None, None
-
-
 def _has_marker_token(marker_blob: str, pattern: re.Pattern[str]) -> bool:
     if _is_empty(marker_blob):
         return False
@@ -244,13 +237,22 @@ def run_tsv_invariant_checks(
 
     with detailed_tsv.open() as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        if "eve_id" not in set(reader.fieldnames or []):
+        fieldnames = set(reader.fieldnames or [])
+        required_support_fields = {
+            "total_proteins",
+            "ncldv_top10_proteins",
+            "mirus_top10_proteins",
+            "ppv_top10_proteins",
+            "cress_top10_proteins",
+        }
+        missing_support_fields = sorted(required_support_fields - fieldnames)
+        if "eve_id" not in fieldnames:
             issues.append(
                 InvariantIssue(
                     eve_id=".",
                     check="detailed_tsv_schema",
                     severity="error",
-                    message="Detailed TSV header is missing required column 'eve_id'",
+                    message="Detailed TSV header is missing required column: eve_id",
                 )
             )
         for row in reader:
@@ -272,20 +274,10 @@ def run_tsv_invariant_checks(
             gvogm_count = _parse_int(row.get("gvogm_count"))
             og_unvalidated_count = _parse_int(row.get("og_unvalidated_count"))
             gvogm_unvalidated_count = _parse_int(row.get("gvogm_unvalidated_count"))
-            ncldv_col, ncldv_raw = _first_present(
-                row,
-                ["ncldv_top10_proteins", "ncldv_top5_proteins"],
-            )
-            mirus_col, mirus_raw = _first_present(
-                row,
-                ["mirus_top10_proteins", "mirus_top5_proteins"],
-            )
-            plv_col, plv_raw = _first_present(row, ["plv_top10_proteins"])
-            vp_col, vp_raw = _first_present(row, ["vp_top10_proteins"])
-            ncldv_top_count = _parse_int(ncldv_raw)
-            mirus_top_count = _parse_int(mirus_raw)
-            plv_top_count = _parse_int(plv_raw)
-            vp_top_count = _parse_int(vp_raw)
+            ncldv_top_count = _parse_int(row.get("ncldv_top10_proteins"))
+            mirus_top_count = _parse_int(row.get("mirus_top10_proteins"))
+            ppv_top_count = _parse_int(row.get("ppv_top10_proteins"))
+            cress_top_count = _parse_int(row.get("cress_top10_proteins"))
             host_sig_count = _parse_int(row.get("host_signature_gene_count"))
             host_sig_fraction = _parse_float(row.get("host_signature_fraction"))
 
@@ -295,10 +287,10 @@ def run_tsv_invariant_checks(
                 ("gvogm_count", gvogm_count),
                 ("og_unvalidated_count", og_unvalidated_count),
                 ("gvogm_unvalidated_count", gvogm_unvalidated_count),
-                (ncldv_col or "ncldv_top*_proteins", ncldv_top_count),
-                (mirus_col or "mirus_top*_proteins", mirus_top_count),
-                (plv_col or "plv_top10_proteins", plv_top_count),
-                (vp_col or "vp_top10_proteins", vp_top_count),
+                ("ncldv_top10_proteins", ncldv_top_count),
+                ("mirus_top10_proteins", mirus_top_count),
+                ("ppv_top10_proteins", ppv_top_count),
+                ("cress_top10_proteins", cress_top_count),
                 ("host_signature_gene_count", host_sig_count),
                 ("host_signature_fraction", host_sig_fraction),
             ):
@@ -319,10 +311,10 @@ def run_tsv_invariant_checks(
                 ncldv_top_count = 0
             if mirus_top_count is None:
                 mirus_top_count = 0
-            if plv_top_count is None:
-                plv_top_count = 0
-            if vp_top_count is None:
-                vp_top_count = 0
+            if ppv_top_count is None:
+                ppv_top_count = 0
+            if cress_top_count is None:
+                cress_top_count = 0
             if host_sig_count is None:
                 host_sig_count = 0
             if host_sig_fraction is None:
@@ -344,22 +336,22 @@ def run_tsv_invariant_checks(
             if ncldv_top_count > total_proteins:
                 add_issue(
                     "ncldv_top_count_out_of_range",
-                    f"{ncldv_col or 'ncldv_top*_proteins'}={ncldv_top_count} > total_proteins={total_proteins}",
+                    f"ncldv_top10_proteins={ncldv_top_count} > total_proteins={total_proteins}",
                 )
             if mirus_top_count > total_proteins:
                 add_issue(
                     "mirus_top_count_out_of_range",
-                    f"{mirus_col or 'mirus_top*_proteins'}={mirus_top_count} > total_proteins={total_proteins}",
+                    f"mirus_top10_proteins={mirus_top_count} > total_proteins={total_proteins}",
                 )
-            if plv_top_count > total_proteins:
+            if ppv_top_count > total_proteins:
                 add_issue(
-                    "plv_top_count_out_of_range",
-                    f"{plv_col or 'plv_top10_proteins'}={plv_top_count} > total_proteins={total_proteins}",
+                    "ppv_top_count_out_of_range",
+                    f"ppv_top10_proteins={ppv_top_count} > total_proteins={total_proteins}",
                 )
-            if vp_top_count > total_proteins:
+            if cress_top_count > total_proteins:
                 add_issue(
-                    "vp_top_count_out_of_range",
-                    f"{vp_col or 'vp_top10_proteins'}={vp_top_count} > total_proteins={total_proteins}",
+                    "cress_top_count_out_of_range",
+                    f"cress_top10_proteins={cress_top_count} > total_proteins={total_proteins}",
                 )
 
             if host_sig_count > total_proteins:
@@ -506,13 +498,26 @@ def run_tsv_invariant_checks(
                 if ncldv_top_count != interior_ncldv:
                     add_issue(
                         "gene_taxonomy_ncldv_mismatch",
-                        f"{ncldv_col or 'ncldv_top*_proteins'}={ncldv_top_count}, interior_ncldv_top10={interior_ncldv}",
+                        f"ncldv_top10_proteins={ncldv_top_count}, interior_ncldv_top10={interior_ncldv}",
                     )
                 if mirus_top_count != interior_mirus:
                     add_issue(
                         "gene_taxonomy_mirus_mismatch",
-                        f"{mirus_col or 'mirus_top*_proteins'}={mirus_top_count}, interior_mirus_top10={interior_mirus}",
+                        f"mirus_top10_proteins={mirus_top_count}, interior_mirus_top10={interior_mirus}",
                     )
+
+        if rows_checked and missing_support_fields:
+            issues.append(
+                InvariantIssue(
+                    eve_id=".",
+                    check="detailed_tsv_schema",
+                    severity="error",
+                    message=(
+                        "Non-empty detailed TSV header is missing required columns: "
+                        + ", ".join(missing_support_fields)
+                    ),
+                )
+            )
 
     return InvariantReport(rows_checked=rows_checked, issues=issues)
 

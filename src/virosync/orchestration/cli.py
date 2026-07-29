@@ -5,6 +5,7 @@ import yaml
 import copy
 import hashlib
 import importlib.util
+import logging
 import os
 import sys
 import shutil
@@ -17,6 +18,7 @@ from click.core import ParameterSource
 
 import virosync
 from virosync.orchestration.python_runner import (
+    BatchProgress,
     _batch_result_status,
     _preflight_genome_runs,
     run_batch_python,
@@ -212,6 +214,39 @@ def _prompt_optional_archive_choice(
 
 def _warn_optional_resource(message: str) -> None:
     click.echo(click.style(f"Warning: {message}", fg="yellow"), err=True)
+
+
+def _command_output_flags(local_verbose: bool = False) -> tuple[bool, bool]:
+    """Resolve root and command-local verbosity and configure logging."""
+    root_obj = click.get_current_context().find_root().obj or {}
+    verbose = bool(local_verbose or root_obj.get("verbose"))
+    quiet = bool(root_obj.get("quiet")) and not verbose
+    logging.getLogger().setLevel(
+        logging.DEBUG if verbose else logging.ERROR
+    )
+    return verbose, quiet
+
+
+def _database_version(config: PipelineConfig) -> str:
+    """Return the installed database version, never the requested version."""
+    for value in (
+        config.databases.hmm_database,
+        config.databases.marker_db,
+        config.databases.gene_taxonomy_faa_db,
+    ):
+        if value is None:
+            continue
+        path = Path(value)
+        for candidate in (path.parent, path.parent.parent):
+            if (candidate / "DB_VERSION").is_file():
+                return ViroSyncDatabaseManager.get_database_version(candidate)
+    return "unknown"
+
+
+def _print_banner(database_version: str) -> None:
+    from virosync.cli.main import print_banner
+
+    print_banner(database_version)
 
 
 def _tmvec_runtime_issues(config: PipelineConfig) -> list[str]:
@@ -657,6 +692,12 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     show_default=True,
     help="Write resolved resource paths back to config file",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show setup details and diagnostic logs",
+)
 def setup(
     config_path: Path,
     db_root: Optional[Path],
@@ -672,8 +713,10 @@ def setup(
     interactive_optional: bool,
     force: bool,
     write_config: bool,
+    verbose: bool,
 ):
     """Install ViroSync resources and optional TMVec/InterProScan assets."""
+    verbose, quiet = _command_output_flags(verbose)
     application_config = (
         _load_config(config_path)
         if config_path.exists()
@@ -728,11 +771,20 @@ def setup(
         )
         or (source_record or {}).get("manifest_sha256")
     )
+    if not quiet:
+        installed_version = ViroSyncDatabaseManager.get_database_version(root)
+        _print_banner(
+            installed_version
+            if installed_version != "unknown"
+            else selected_version or "not installed"
+        )
+    progress = BatchProgress(1, unit="resource set") if not quiet else None
 
     if db_root is None and not env_db_root and not orchestration_cfg.get("database_root"):
         # Skip prompt if databases already exist at the default location
         if not ViroSyncDatabaseManager._check_missing_files(root):
-            click.echo(f"Using existing database at: {root}")
+            if verbose:
+                click.echo(f"Using existing database at: {root}")
         else:
             click.echo("ViroSync core resources:")
             click.echo("  Download size: ~6.8 GB (compressed)")
@@ -744,8 +796,12 @@ def setup(
             if not click.confirm(f"Download and install to {root}?", default=True):
                 raise SystemExit("Setup cancelled.")
 
-    click.echo(f"Installing ViroSync core resources into: {root}")
-    click.echo(f"Core source: {source}")
+    if progress is not None:
+        progress.update("resources", 0, "starting")
+
+    if verbose:
+        click.echo(f"Installing ViroSync core resources into: {root}")
+        click.echo(f"Core source: {source}")
 
     try:
         installed_root = ViroSyncDatabaseManager.setup_database(
@@ -756,10 +812,26 @@ def setup(
             manifest_sha256=selected_manifest_sha256,
             force=force,
             full=True,
+            progress_callback=(
+                (
+                    lambda percent, stage: progress.update(
+                        "resources",
+                        percent * 0.85,
+                        stage,
+                    )
+                )
+                if progress is not None
+                else None
+            ),
         )
     except Exception as exc:
+        if progress is not None:
+            progress.update("resources", 100, "failed", True)
+            progress.finish(False)
         click.echo(click.style(f"Core setup failed: {exc}", fg="red"), err=True)
         raise SystemExit(1)
+    if progress is not None:
+        progress.update("resources", 85, "checking optional resources")
 
     defaults = ViroSyncDatabaseManager.default_paths(installed_root)
     interactive_optional = interactive_optional and sys.stdin.isatty()
@@ -770,7 +842,12 @@ def setup(
         or defaults["tmvec_database_dir"]
     )
     tmvec_source = tmvec_url or orchestration_cfg.get("tmvec_resources_url")
-    tmvec_requested = True
+    tmvec_requested = bool(
+        tmvec_url is not None
+        or tmvec_dir is not None
+        or tmvec_source
+        or phase3_cfg.get("use_tmvec_database")
+    )
     tmvec_databases = (
         phase3_cfg.get("tmvec_databases")
         or orchestration_cfg.get("tmvec_databases")
@@ -786,7 +863,12 @@ def setup(
         or ViroSyncDatabaseManager.default_interproscan_path(installed_root)
     )
     interpro_source = interproscan_url or orchestration_cfg.get("interproscan_resources_url")
-    interpro_requested = True
+    interpro_requested = bool(
+        interproscan_url is not None
+        or interproscan_dir is not None
+        or interpro_source
+        or phase3_cfg.get("interproscan_enabled")
+    )
 
     boltz_db_path = None
     if boltz_db_dir or phase3_cfg.get("viral_structure_db"):
@@ -795,6 +877,8 @@ def setup(
         )
 
     if interactive_optional:
+        if progress is not None and progress.is_tty:
+            click.echo()
         if tmvec_url is None and tmvec_dir is None:
             tmvec_requested, tmvec_target, tmvec_source = _prompt_optional_archive_choice(
                 name="TMVec",
@@ -835,6 +919,17 @@ def setup(
             source=tmvec_source,
             required_files=tmvec_required,
             force=force,
+            progress_callback=(
+                (
+                    lambda percent, stage: progress.update(
+                        "resources",
+                        85 + percent * 0.07,
+                        f"TMVec {stage}",
+                    )
+                )
+                if progress is not None
+                else None
+            ),
         )
     else:
         tmvec_ok = not ViroSyncDatabaseManager.missing_tmvec_files(
@@ -842,14 +937,14 @@ def setup(
             databases=tmvec_databases,
         )
 
-    if tmvec_ok:
+    if tmvec_ok and verbose:
         click.echo(
             click.style(
                 f"TMVec ready ({','.join(tmvec_databases)}): {tmvec_target}",
                 fg="green",
             )
         )
-    else:
+    elif not tmvec_ok and (tmvec_requested or verbose):
         if tmvec_requested:
             click.echo(
                 click.style(
@@ -866,6 +961,8 @@ def setup(
                 ),
                 err=True,
             )
+    if progress is not None:
+        progress.update("resources", 92, "TMVec check complete")
 
     if interpro_requested:
         interpro_ok = ViroSyncDatabaseManager.setup_optional_archive(
@@ -874,13 +971,24 @@ def setup(
             source=interpro_source,
             required_files=ViroSyncDatabaseManager.INTERPROSCAN_REQUIRED_FILES,
             force=force,
+            progress_callback=(
+                (
+                    lambda percent, stage: progress.update(
+                        "resources",
+                        92 + percent * 0.05,
+                        f"InterProScan {stage}",
+                    )
+                )
+                if progress is not None
+                else None
+            ),
         )
     else:
         interpro_ok = ViroSyncDatabaseManager.interproscan_available(interpro_target)
 
-    if interpro_ok:
+    if interpro_ok and verbose:
         click.echo(click.style(f"InterProScan ready: {interpro_target}", fg="green"))
-    else:
+    elif not interpro_ok and (interpro_requested or verbose):
         if interpro_requested:
             click.echo(
                 click.style(
@@ -897,6 +1005,8 @@ def setup(
                 ),
                 err=True,
             )
+    if progress is not None:
+        progress.update("resources", 97, "InterProScan check complete")
 
     if write_config:
         cfg = config_data
@@ -935,9 +1045,14 @@ def setup(
             ApplicationConfig.from_dict(cfg).to_yaml(config_path)
         except ConfigError as exc:
             raise click.ClickException(str(exc)) from exc
-        click.echo(f"Updated config: {config_path}")
+        if verbose:
+            click.echo(f"Updated config: {config_path}")
 
-    click.echo(click.style("Setup complete.", fg="green"))
+    if progress is not None:
+        progress.update("resources", 100, "complete")
+        progress.finish(True)
+    if not quiet:
+        click.echo(click.style("Setup complete.", fg="green"))
 
 
 @orchestrate.group("resources")
@@ -1219,6 +1334,12 @@ def verify_resources(config_path: Path, db_root: Optional[Path], full: bool) -> 
     type=click.Choice(["logreg", "gbdt", "xgboost"]),
     help="Taxonomy boundary ML model choice (logreg|gbdt|xgboost)",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show configuration and diagnostic logs",
+)
 def run(
     input_path: Path,
     output_dir: Path,
@@ -1258,6 +1379,7 @@ def run(
     interproscan: Optional[bool],
     use_taxonomy_ml: Optional[bool],
     taxonomy_ml_model: Optional[str],
+    verbose: bool,
     ):
     """Run ViroSync pipeline with standard-library Python parallelization.
 
@@ -1280,6 +1402,7 @@ def run(
         # List file
         virosync run -i genomes.txt -o results/ -w 8
     """
+    verbose, quiet = _command_output_flags(verbose)
     ctx = click.get_current_context()
 
     def explicit(name: str, value):
@@ -1383,16 +1506,17 @@ def run(
         raise click.ClickException(str(exc)) from exc
 
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    click.echo(f"Run start (UTC): {timestamp}")
-    click.echo(f"Pipeline: ViroSync {virosync.__version__}")
-    if config_path:
-        click.echo(f"Config file: {config_path}")
+    if verbose:
+        click.echo(f"Run start (UTC): {timestamp}")
+        click.echo(f"Pipeline: ViroSync {virosync.__version__}")
+        if config_path:
+            click.echo(f"Config file: {config_path}")
 
     selected_gpu = _apply_gpu_id_env(
         explicit("gpu_id", gpu_id),
         application_config.orchestration.gpu_id,
     )
-    if selected_gpu is not None:
+    if selected_gpu is not None and verbose:
         click.echo(f"GPU selection: {selected_gpu}")
 
     try:
@@ -1405,7 +1529,7 @@ def run(
         _validate_runtime_config(pipeline_config)
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
-    if config_path:
+    if config_path and verbose:
         click.echo("Config loaded and validated.")
     application_config = replace(
         application_config,
@@ -1416,14 +1540,25 @@ def run(
         optional_features,
     )
 
-    click.echo(
-        f"Processing {len(genome_paths)} genomes with "
-        f"{effective_concurrency} concurrent genomes"
+    if not quiet:
+        _print_banner(
+            _database_version(pipeline_config)
+        )
+    if verbose:
+        click.echo(
+            f"Processing {len(genome_paths)} genomes with "
+            f"{effective_concurrency} concurrent genomes"
+        )
+        click.echo(f"Threads per genome: {pipeline_config.compute.threads}")
+        click.echo(f"Output directory: {output_dir}")
+        click.echo("Effective config (CLI overrides applied):")
+        click.echo(yaml.safe_dump(effective_payload, sort_keys=False).strip())
+
+    progress = (
+        BatchProgress(len(genome_paths))
+        if not verbose and not quiet
+        else None
     )
-    click.echo(f"Threads per genome: {pipeline_config.compute.threads}")
-    click.echo(f"Output directory: {output_dir}")
-    click.echo("Effective config (CLI overrides applied):")
-    click.echo(yaml.safe_dump(effective_payload, sort_keys=False).strip())
 
     results = run_batch_python(
         genome_paths=genome_paths,
@@ -1433,6 +1568,7 @@ def run(
         retries=application_config.orchestration.retries,
         retry_delay_seconds=(application_config.orchestration.retry_delay_seconds),
         effective_config=effective_payload,
+        progress=progress,
     )
 
     # Summary
@@ -1447,56 +1583,67 @@ def run(
     total_candidates = sum(r.get("predictions", 0) for r in results)
     total_time = sum(r.get("elapsed_sec", 0) for r in results)
 
-    click.echo("")
-    click.echo("=" * 50)
+    if not quiet:
+        click.echo("")
+        click.echo("=" * 50)
     if failed_results:
         heading = "Batch Processing Failed"
     elif ineligible_results:
         heading = "Batch Processing Completed with Warnings"
     else:
         heading = "Batch Processing Complete"
-    click.echo(click.style(heading, bold=True))
-    click.echo(f"Successful: {successful}/{len(results)} genomes")
-    click.echo(
-        f"Benchmark eligible: {successful - len(ineligible_results)}/"
-        f"{successful} successful genomes"
-    )
-    click.echo(
-        click.style(
-            f"Total EVEs: {total_accepted} canonical ({total_candidates} candidates)",
-            fg="green",
+    if not quiet:
+        click.echo(click.style(heading, bold=True))
+        click.echo(f"Successful: {successful}/{len(results)} genomes")
+        click.echo(
+            f"Benchmark eligible: {successful - len(ineligible_results)}/"
+            f"{successful} successful genomes"
         )
-    )
-    click.echo(f"Total time: {total_time:.0f}s")
+        click.echo(
+            click.style(
+                f"Total EVEs: {total_accepted} canonical "
+                f"({total_candidates} candidates)",
+                fg="green",
+            )
+        )
+        click.echo(f"Total time: {total_time:.0f}s")
 
     # Show per-genome summary
-    click.echo("")
-    click.echo("Per-genome results:")
-    for result in results:
-        genome_id = result.get("genome_id", "unknown")
-        if result.get("success", False):
-            accepted = result.get("accepted", 0)
-            candidates = result.get("predictions", 0)
-            elapsed = result.get("elapsed_sec", 0)
-            warning = ""
-            if _batch_result_status(result) == "success_with_warnings":
-                warning = (
-                    " [SUCCESS WITH WARNINGS: benchmark_eligible=false, "
-                    f"legacy_resume={str(result.get('legacy_resume') is True).lower()}]"
+    if not quiet:
+        click.echo("")
+        click.echo("Per-genome results:")
+        for result in results:
+            genome_id = result.get("genome_id", "unknown")
+            if result.get("success", False):
+                accepted = result.get("accepted", 0)
+                candidates = result.get("predictions", 0)
+                elapsed = result.get("elapsed_sec", 0)
+                warning = ""
+                if _batch_result_status(result) == "success_with_warnings":
+                    warning = (
+                        " [SUCCESS WITH WARNINGS: benchmark_eligible=false, "
+                        "legacy_resume="
+                        f"{str(result.get('legacy_resume') is True).lower()}]"
+                    )
+                click.echo(
+                    f"  {genome_id}: {accepted} canonical EVEs "
+                    f"({candidates} candidates, {elapsed:.0f}s){warning}"
                 )
-            click.echo(
-                f"  {genome_id}: {accepted} canonical EVEs "
-                f"({candidates} candidates, {elapsed:.0f}s){warning}"
-            )
-        else:
-            error = result.get("error", "Unknown error")
-            click.echo(click.style(f"  {genome_id}: FAILED - {error}", fg="red"))
+            else:
+                error = result.get("error", "Unknown error")
+                click.echo(
+                    click.style(
+                        f"  {genome_id}: FAILED - {error}",
+                        fg="red",
+                    )
+                )
 
     summary_path = output_dir / "batch_summary.tsv"
     report_path = output_dir / "batch_report.md"
-    click.echo("")
-    click.echo(f"Batch summary: {summary_path}")
-    click.echo(f"Batch report: {report_path}")
+    if not quiet:
+        click.echo("")
+        click.echo(f"Batch summary: {summary_path}")
+        click.echo(f"Batch report: {report_path}")
 
     if failed_results or ineligible_results:
         problems = []
