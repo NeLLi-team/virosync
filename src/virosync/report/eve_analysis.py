@@ -15,7 +15,7 @@
 # %% [markdown]
 # # EVE Analysis: ViroSync Results
 #
-# Publication-quality visualizations of Giant Endogenous Viral Elements (GEVEs)
+# Publication-quality visualizations of Giant Endogenous Viral Elements (EVEs)
 # detected by ViroSync, with flanking region context, taxonomy-colored genes,
 # and structural markers.
 #
@@ -533,7 +533,7 @@ if _host_model and _level_tokens:
 # %% [markdown]
 # ## EVE Summary
 #
-# Counts and sizes of the canonical GEVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by likely viral family and prints the tier total above each bar. Panel B shows the length distribution of each family as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. In both panels a fixed family key colors PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, Mirusviricota, and phage, and draws any other label, including MIXED and UNKNOWN, in gray.
+# Counts and sizes of the canonical EVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by likely viral family and prints the tier total above each bar. Panel B shows the length distribution of each family as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. In both panels a fixed family key colors PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, Mirusviricota, and phage, and draws any other label, including MIXED and UNKNOWN, in gray.
 
 # %%
 # ---- EVE summary stats ----
@@ -541,7 +541,7 @@ status_counts = Counter(p['status'] for p in profiles.values())
 tier_counts = Counter(p.get('confidence_tier', 'UNKNOWN') for p in profiles.values())
 total_bp = sum(p['length'] for p in profiles.values())
 
-print(f'Total canonical GEVE predictions: {len(profiles)}')
+print(f'Total canonical EVE predictions: {len(profiles)}')
 print(f'Total EVE coverage:   {total_bp:,} bp ({total_bp/1e6:.2f} Mb)')
 print()
 print('Canonical tiers:')
@@ -650,7 +650,7 @@ if box_data:
     ax2.set_xticks(range(len(families_present)))
     ax2.set_xticklabels(families_present)
 else:
-    ax2.text(0.5, 0.5, 'No canonical GEVEs', ha='center', va='center',
+    ax2.text(0.5, 0.5, 'No canonical EVEs', ha='center', va='center',
              transform=ax2.transAxes)
     ax2.set_xticks([])
 ax2.set_ylabel('EVE length (kb)')

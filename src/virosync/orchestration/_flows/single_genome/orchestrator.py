@@ -1073,7 +1073,7 @@ def _publish_a1_seed_surface(
         handle.write("## Results Summary\n")
         handle.write("Prediction stage: Phase-1 seed surface (A1)\n")
         handle.write(
-            f"Canonical GEVEs: {persisted_summary['accepted']}\n"
+            f"Canonical EVEs: {persisted_summary['accepted']}\n"
         )
         handle.write(
             f"Detailed candidates: {persisted_summary['predictions']}\n"
@@ -2354,7 +2354,7 @@ def _single_genome_flow_impl(
         f.write(f"Seeds identified: {len(merged_seeds)}\n")
         f.write(f"Boundaries refined: {len(refined_boundaries)}\n")
         f.write(f"Phase-3 candidates: {len(verification_results)}\n")
-        f.write(f"Canonical GEVEs: {accepted}\n")
+        f.write(f"Canonical EVEs: {accepted}\n")
         f.write(f"Quality-gate dropped: {quality_gate_dropped}\n")
         f.write(
             "  Candidate tiers: "
@@ -2412,7 +2412,7 @@ def _single_genome_flow_impl(
                     f.write(f"  {key}.{subkey}: {subpath}\n")
             else:
                 f.write(f"  {key}: {path}\n")
-        f.write("\n## Detected GEVEs by Tier\n")
+        f.write("\n## Detected EVEs by Tier\n")
         for tier in ["HIGH", "MEDIUM", "LOW"]:
             tier_results = [vr for vr in accepted_results if vr.confidence_tier == tier]
             if tier_results:
@@ -2502,7 +2502,7 @@ def _single_genome_flow_impl(
     logger.info(f"GENOME COMPLETE: {genome_id}")
     logger.info(f"  Total time: {total_elapsed:.1f}s")
     logger.info(
-        f"  Result: {accepted} canonical GEVEs "
+        f"  Result: {accepted} canonical EVEs "
         f"({len(verification_results)} candidates; "
         f"HIGH={tier_counts['HIGH']}, MEDIUM={tier_counts['MEDIUM']}, "
         f"LOW={tier_counts['LOW']}, "

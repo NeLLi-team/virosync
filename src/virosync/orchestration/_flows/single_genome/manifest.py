@@ -93,7 +93,7 @@ def _write_empty_run_log(
         f.write("## Results Summary\n")
         f.write("Seeds identified: 0\n")
         f.write("Boundaries refined: 0\n")
-        f.write("GEVEs detected: 0\n")
+        f.write("EVEs detected: 0\n")
         f.write(f"Early-exit reason: {reason}\n")
         f.write("\n## Detailed TSV Invariant Check\n")
         f.write(f"Status: {invariant_report.status}\n")

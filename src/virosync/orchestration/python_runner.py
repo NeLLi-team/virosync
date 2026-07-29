@@ -358,7 +358,7 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         )
         handle.write(f"- **Legacy resumes:** {legacy_resumes}\n")
         handle.write(
-            f"- **Total GEVEs:** {total_accepted} canonical "
+            f"- **Total EVEs:** {total_accepted} canonical "
             f"({total_predictions} candidates)\n"
         )
         handle.write(
@@ -366,7 +366,7 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
             f"LOW={total_low}\n"
         )
         handle.write(f"- **Total processing time:** {total_time:.0f}s\n\n")
-        handle.write("### GEVE Classification\n\n")
+        handle.write("### EVE Classification\n\n")
         handle.write("| Category | Count | Description |\n")
         handle.write("|----------|-------|-------------|\n")
         handle.write(f"| NCLDV | {total_ncldv} | Nucleocytoviricota (giant viruses) |\n")
@@ -377,7 +377,7 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         handle.write(f"| PPV | {total_ppv} | Preplasmiviricota |\n")
         handle.write(f"| UNKNOWN | {total_unknown} | Unrecognized effective class |\n")
         handle.write(f"| **Total** | **{total_classified}** | |\n\n")
-        handle.write("### Region Statistics (Canonical GEVEs)\n\n")
+        handle.write("### Region Statistics (Canonical EVEs)\n\n")
         handle.write(f"- **Total bp:** {total_bp:,}\n")
         handle.write(f"- **Total genes:** {total_genes:,}\n")
         handle.write(f"- **Total hallmark markers:** {total_hallmarks:,}\n")

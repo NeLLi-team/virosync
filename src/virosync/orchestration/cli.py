@@ -1463,7 +1463,7 @@ def run(
     )
     click.echo(
         click.style(
-            f"Total GEVEs: {total_accepted} canonical ({total_candidates} candidates)",
+            f"Total EVEs: {total_accepted} canonical ({total_candidates} candidates)",
             fg="green",
         )
     )
@@ -1485,7 +1485,7 @@ def run(
                     f"legacy_resume={str(result.get('legacy_resume') is True).lower()}]"
                 )
             click.echo(
-                f"  {genome_id}: {accepted} canonical GEVEs "
+                f"  {genome_id}: {accepted} canonical EVEs "
                 f"({candidates} candidates, {elapsed:.0f}s){warning}"
             )
         else:

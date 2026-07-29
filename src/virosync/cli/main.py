@@ -3,7 +3,7 @@
 ViroSync CLI - Main Entry Point.
 
 A next-generation framework for detecting Giant Endogenous Viral Elements
-(GEVEs) in eukaryotic genomes.
+(EVEs) in eukaryotic genomes.
 
 Usage:
     virosync run -i genome.fasta -o results/ --config config/orchestration.yaml

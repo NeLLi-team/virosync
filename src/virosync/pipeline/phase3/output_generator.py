@@ -1780,7 +1780,7 @@ class OutputGenerator:
             # Version, not a wall-clock timestamp: a generation time in a data file
             # makes two runs of the same input differ, and virosync_summary.json
             # already records generated_at for provenance.
-            f.write(f"# ViroSync-Next predictions, virosync {__version__}\n")
+            f.write(f"# ViroSync predictions, virosync {__version__}\n")
 
             for r in results:
                 persisted_confidence = float(f"{r.final_confidence:.4f}")

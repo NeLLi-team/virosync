@@ -32,6 +32,6 @@ extend-exclude = [
 # High-signal correctness rules enforced in CI (real bugs: syntax errors,
 # undefined names, bad __all__, use-before-assignment, return-outside-function).
 # Broader style rules (unused imports/vars, redefinitions, f-string nits) are
-# intentionally not gated yet to avoid churn across the legacy tree; they can be
+# intentionally not gated yet to avoid churn across the existing codebase; they can be
 # enabled incrementally.
 select = ["E9", "F821", "F822", "F823", "F706"]
