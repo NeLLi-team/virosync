@@ -1379,21 +1379,70 @@ def get_flanking_taxonomy(
     - Within flank_genes positions from the boundary
     - NOT overlapping with the EVE region
 
-    When seed_mapping is provided (from Phase 2b), uses pre-computed flanking
-    gene lists for consistent and reliable retrieval. Otherwise falls back
-    to position-based lookup.
+    Flanks are selected relative to the final refined boundary. The seed
+    mapping is only a fallback when the final boundary cannot be placed in the
+    proteome index. This matters when refinement contracts a seed: genes that
+    were inside the seed then become final-boundary flanks.
 
     Args:
         taxonomy_map: Pre-computed taxonomy keyed by pORF ID
         proteome_index: Scaffold -> sorted list of pORF objects
         refined_boundary: RefinedBoundary object with final coordinates
         flank_genes: Number of genes on each side to include
-        seed_mapping: Optional SeedGeneMapping from Phase 2b for reliable flanking lookup
+        seed_mapping: Optional Phase 2b mapping used only as a fallback
 
     Returns:
         Tuple of (upstream_taxonomy, downstream_taxonomy) lists
     """
-    # If we have pre-computed seed mapping, use it for reliable flanking gene retrieval
+    scaffold = refined_boundary.scaffold
+    scaffold_porfs = proteome_index.get(scaffold, [])
+
+    # Prefer positions relative to the final boundary. Pre-computed seed flank
+    # IDs describe the original seed and can omit genes exposed by contraction.
+    eve_indices = [
+        index
+        for index, porf in enumerate(scaffold_porfs)
+        if porf.start < refined_boundary.end and porf.end > refined_boundary.start
+    ]
+    if eve_indices:
+        first_eve_idx = min(eve_indices)
+        last_eve_idx = max(eve_indices)
+        upstream_start_idx = max(0, first_eve_idx - flank_genes)
+        downstream_end_idx = min(
+            len(scaffold_porfs),
+            last_eve_idx + 1 + flank_genes,
+        )
+        upstream_porfs = scaffold_porfs[upstream_start_idx:first_eve_idx]
+        downstream_porfs = scaffold_porfs[last_eve_idx + 1:downstream_end_idx]
+
+        upstream_taxonomy = [
+            taxonomy_map[porf.id]
+            for porf in upstream_porfs
+            if porf.id in taxonomy_map
+        ]
+        downstream_taxonomy = [
+            taxonomy_map[porf.id]
+            for porf in downstream_porfs
+            if porf.id in taxonomy_map
+        ]
+        missing_upstream = len(upstream_porfs) - len(upstream_taxonomy)
+        missing_downstream = len(downstream_porfs) - len(downstream_taxonomy)
+        if missing_upstream > 0 or missing_downstream > 0:
+            logger.warning(
+                "Flanking gene taxonomy incomplete for %s:%d-%d: "
+                "%d/%d upstream missing, %d/%d downstream missing",
+                scaffold,
+                refined_boundary.start,
+                refined_boundary.end,
+                missing_upstream,
+                len(upstream_porfs),
+                missing_downstream,
+                len(downstream_porfs),
+            )
+        return upstream_taxonomy, downstream_taxonomy
+
+    # Fall back to the original seed mapping only when the final boundary
+    # cannot be located in the proteome index.
     if seed_mapping is not None:
         upstream_taxonomy = []
         downstream_taxonomy = []
@@ -1452,67 +1501,7 @@ def get_flanking_taxonomy(
 
         return upstream_taxonomy, downstream_taxonomy
 
-    # Fallback: position-based lookup (when no seed_mapping available)
-    scaffold = refined_boundary.scaffold
-    scaffold_porfs = proteome_index.get(scaffold, [])
-    if not scaffold_porfs:
-        return [], []
-
-    # Find pORFs within EVE (overlapping)
-    eve_indices = []
-    for i, p in enumerate(scaffold_porfs):
-        if p.start < refined_boundary.end and p.end > refined_boundary.start:
-            eve_indices.append(i)
-
-    if not eve_indices:
-        # No genes in EVE, cannot determine flanking
-        return [], []
-
-    first_eve_idx = min(eve_indices)
-    last_eve_idx = max(eve_indices)
-
-    # Get upstream flanking genes (before the EVE)
-    upstream_start_idx = max(0, first_eve_idx - flank_genes)
-    upstream_porfs = scaffold_porfs[upstream_start_idx:first_eve_idx]
-
-    # Get downstream flanking genes (after the EVE)
-    downstream_end_idx = min(len(scaffold_porfs), last_eve_idx + 1 + flank_genes)
-    downstream_porfs = scaffold_porfs[last_eve_idx + 1:downstream_end_idx]
-
-    # Look up taxonomy for flanking pORFs with explicit counting
-    upstream_taxonomy = []
-    missing_upstream = 0
-    for porf in upstream_porfs:
-        tax = taxonomy_map.get(porf.id)
-        if tax:
-            upstream_taxonomy.append(tax)
-        else:
-            missing_upstream += 1
-
-    downstream_taxonomy = []
-    missing_downstream = 0
-    for porf in downstream_porfs:
-        tax = taxonomy_map.get(porf.id)
-        if tax:
-            downstream_taxonomy.append(tax)
-        else:
-            missing_downstream += 1
-
-    # Log if any flanking genes are missing from taxonomy map
-    if missing_upstream > 0 or missing_downstream > 0:
-        logger.warning(
-            "Flanking gene taxonomy incomplete for %s:%d-%d: "
-            "%d/%d upstream missing, %d/%d downstream missing",
-            scaffold,
-            refined_boundary.start,
-            refined_boundary.end,
-            missing_upstream,
-            len(upstream_porfs),
-            missing_downstream,
-            len(downstream_porfs),
-        )
-
-    return upstream_taxonomy, downstream_taxonomy
+    return [], []
 
 
 def compute_control_stats(

@@ -15,7 +15,7 @@
 # %% [markdown]
 # # EVE Analysis: ViroSync Results
 #
-# Publication-quality visualizations of Giant Endogenous Viral Elements (EVEs)
+# Publication-quality visualizations of endogenous viral elements (EVEs)
 # detected by ViroSync, with flanking region context, taxonomy-colored genes,
 # and structural markers.
 #
@@ -37,6 +37,12 @@ import subprocess
 import tempfile
 import pandas as pd
 import numpy as np
+from IPython import get_ipython
+
+_ipython = get_ipython()
+if _ipython is not None:
+    _ipython.run_line_magic('matplotlib', 'inline')
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
@@ -53,6 +59,96 @@ from urllib.parse import quote
 
 _PORTABLE_FILENAME_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 _MAX_FILENAME_COMPONENT_LENGTH = 180
+_REPORT_NCLDV_MCP_MODELS = frozenset({
+    "og1352",
+    "og484",
+    "vs000086",
+    "vs000309",
+    "gamadvirusmcp",
+    "gvogm0003",
+})
+_REPORT_MCP_HMM_PREFIXES = (
+    "gamadvirusmcp",
+    "mcp_mirus",
+    "mcp_poli",
+    "mirus_mcp",
+    "plv_mcp",
+    "vp_mcp",
+)
+_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"mcp"})
+_REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
+
+
+def _report_is_mcp_gene(name):
+    """Mirror the pipeline MCP detector while keeping this notebook portable."""
+    if not name:
+        return False
+    lower = str(name).lower().strip()
+    if not lower:
+        return False
+    if lower in _REPORT_MCP_HMM_EXACT:
+        return True
+    for prefix in _REPORT_MCP_HMM_PREFIXES:
+        if lower.startswith(prefix):
+            suffix = lower[len(prefix):]
+            if _REPORT_MCP_WORD_CHARS_ONLY.match(suffix):
+                return True
+    return False
+
+
+def _csv_values(value):
+    if value is None or (not isinstance(value, (list, tuple)) and pd.isna(value)):
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return [item for item in str(value).split(',') if item]
+
+
+def _report_resolve_taxonomy_target(target, taxonomy_lookup):
+    """Mirror the pipeline target resolver while keeping this notebook portable."""
+    org_id = str(target or '').split('|', 1)[0]
+    if not taxonomy_lookup or org_id in taxonomy_lookup:
+        return org_id
+
+    candidates = [org_id]
+    legacy_prefix = 'PHAGE__VARDNA__'
+    if org_id.startswith(legacy_prefix):
+        candidates.append('PHAGE__' + org_id.removeprefix(legacy_prefix))
+
+    for base in candidates:
+        if base in taxonomy_lookup:
+            return base
+        if '__' not in base:
+            continue
+        prefix, suffix = base.split('__', 1)
+        parts = suffix.split('_')
+        for index in range(len(parts) - 1, 0, -1):
+            candidate = prefix + '__' + '_'.join(parts[:index])
+            if candidate in taxonomy_lookup:
+                return candidate
+    return org_id
+
+
+def _report_target_lineage(target, taxonomy_lookup):
+    org_id = _report_resolve_taxonomy_target(target, taxonomy_lookup)
+    return taxonomy_lookup.get(org_id, '')
+
+
+def _report_canonical_viral_category(prefix, target, taxonomy_lookup):
+    """Normalize current and legacy viral taxonomy labels for display."""
+    prefix = str(prefix or '').rstrip('_').upper()
+    if prefix in {'PPV', 'PLV', 'VP', 'VP_PLV'}:
+        return 'PPV'
+    if prefix == 'PHAGE':
+        lineage_tokens = {
+            token.strip().lower()
+            for token in _report_target_lineage(target, taxonomy_lookup).split('|')
+            if token.strip()
+        }
+        return 'PPV' if 'preplasmiviricota' in lineage_tokens else 'PHAGE'
+    if prefix in {'NCLDV', 'MIRUS', 'CRESS', 'GVMAG'}:
+        return prefix
+    return None
 
 
 def safe_ratio(numerator, denominator):
@@ -175,49 +271,88 @@ if TAX_LABELS_PATH is not None and TAX_LABELS_PATH.is_file():
 else:
     print("Taxonomy labels were not configured -- host detection will be limited")
 
-# --- Auto-detect host lineage from the host signature model ---
-# The host signature model (built in Phase 1 from COG/BUSCO marker hits) carries
-# the weighted host taxon tokens (e.g. flabellinia > thecamoebida > stenamoeba).
-# We map each token to its lineage level via the taxonomy labels (column 2 is
-# pipe-delimited) and keep the dominant token per level. That host lineage is
-# what distinguishes host genes from other eukaryotes in the figures below.
-HOST_GENUS = ''
-HOST_TAXA = set()  # lowercased host lineage taxa for is_host_gene()
-_LINEAGE_LEVELS = ['Domain', 'Supergroup', 'Order', 'Suborder', 'Family', 'Genus', 'Species']
+# --- Resolve taxonomy and infer the dominant host lineage for display ---
 _host_model_path = BASE / 'phase1' / 'marker_validation' / 'host_signature_model.json'
+_boundary_taxonomy_path = BASE / 'phase2' / 'boundary_diamond' / 'taxonomy_map.tsv'
+_boundary_taxonomy = (
+    pd.read_csv(_boundary_taxonomy_path, sep='\t', engine='python')
+    if _boundary_taxonomy_path.exists()
+    else pd.DataFrame()
+)
+BOUNDARY_TAXONOMY = (
+    _boundary_taxonomy.set_index('porf_id', drop=False).to_dict('index')
+    if not _boundary_taxonomy.empty
+    else {}
+)
+
+
+def _resolve_taxonomy_target(target):
+    return _report_resolve_taxonomy_target(target, tax_labels)
+
+
+def _target_lineage(target):
+    return _report_target_lineage(target, tax_labels)
+
+
+HOST_GENUS = ''
+HOST_TAXA = set()
+_LINEAGE_LEVELS = ['Domain', 'Supergroup', 'Order', 'Suborder', 'Family', 'Genus', 'Species']
 if _host_model_path.exists() and tax_labels:
     with open(_host_model_path) as _f:
         _host_weights = json.load(_f).get('token_weights', {})
-    # Map each host token to the shallowest lineage position it occupies.
     _tok_level = {}
     for _lineage in tax_labels.values():
         for _i, _level in enumerate(_lineage.split('|')):
-            _t = _level.strip().lower()
-            if _t in _host_weights and _i < _tok_level.get(_t, 99):
-                _tok_level[_t] = _i
+            _token = _level.strip().lower()
+            if _token in _host_weights and _i < _tok_level.get(_token, 99):
+                _tok_level[_token] = _i
     _by_level = defaultdict(list)
-    for _t, _i in _tok_level.items():
-        _by_level[_i].append(_t)
-    # Dominant (highest-weight) token at each level, skipping Domain (too broad).
-    for _i in sorted(_by_level):
-        if _i == 0:
+    for _token, _level_index in _tok_level.items():
+        _by_level[_level_index].append(_token)
+    for _level_index in sorted(_by_level):
+        if _level_index == 0:
             continue
-        _best = max(_by_level[_i], key=lambda _x: _host_weights.get(_x, 0.0))
+        _best = max(
+            _by_level[_level_index],
+            key=lambda token: _host_weights.get(token, 0.0),
+        )
         HOST_TAXA.add(_best)
-        if _i == 5:  # Genus
+        if _level_index == 5:
             HOST_GENUS = _best
 print(f'Host genus: {HOST_GENUS!r}  Host lineage taxa: {sorted(HOST_TAXA)}')
 
-def is_host_gene(species_key):
-    """True when a gene's best-hit lineage falls within the host organism's lineage."""
-    if not species_key:
-        return False
-    if HOST_GENUS and HOST_GENUS in species_key.lower():
-        return True
-    if HOST_TAXA:
-        gene_taxa = {t.strip().lower() for t in tax_labels.get(species_key, '').split('|') if t.strip()}
-        return bool(gene_taxa & HOST_TAXA)
-    return False
+
+def is_host_gene(target):
+    """Return whether a best-hit lineage overlaps the run's dominant host lineage."""
+    lineage_tokens = {
+        token.strip().lower()
+        for token in _target_lineage(target).split('|')
+        if token.strip()
+    }
+    return bool(lineage_tokens & HOST_TAXA)
+
+
+def _canonical_viral_category(prefix, target):
+    return _report_canonical_viral_category(prefix, target, tax_labels)
+
+
+def _marker_viral_category(taxonomy_record):
+    """Use the highest-ranked identity-qualified viral hit for a validated marker."""
+    if not taxonomy_record:
+        return None
+    prefixes = _csv_values(taxonomy_record.get('top10_prefixes'))
+    targets = _csv_values(taxonomy_record.get('top10_targets'))
+    pidents = _csv_values(taxonomy_record.get('top10_pidents'))
+    for index, prefix in enumerate(prefixes):
+        try:
+            pident = float(pidents[index])
+        except (IndexError, TypeError, ValueError):
+            continue
+        target = targets[index] if index < len(targets) else ''
+        category = _canonical_viral_category(prefix, target)
+        if category and pident >= 25.0:
+            return category
+    return None
 
 # --- Colorblind-safe palette (Tol bright) ---
 COLORS = {
@@ -227,11 +362,14 @@ COLORS = {
     'CRESS':     '#CCBB44',
     'MIRUS':     '#882255',
     'NCLDV':     '#009988',
+    'GVMAG':     '#332288',
     'HOST':      '#0077BB',
     'EUK_HOST':  '#0077BB',
     'EUK':       '#33BBEE',
     'EUK_OTHER': '#33BBEE',
     'BAC':       '#CC3311',
+    'ARC':       '#AA4499',
+    'PHAGE':     '#FF7F00',
     'UNKNOWN':   '#BBBBBB',
 }
 
@@ -278,6 +416,51 @@ else:
     core_genes = pd.DataFrame()
     flanking_genes = pd.DataFrame()
 
+# 2b. Complete Prodigal gene coordinates and strands
+porf_strands = {}
+proteome_genes_by_scaffold = defaultdict(list)
+_proteome_path = BASE / 'phase0' / 'proteome.fasta'
+if _proteome_path.exists():
+    with open(_proteome_path) as f:
+        for line in f:
+            if not line.startswith('>'):
+                continue
+            header = line[1:].rstrip('\n')
+            parts = header.split(' # ')
+            if len(parts) < 4:
+                continue
+            porf_id = parts[0].strip().split()[0]
+            try:
+                start = int(parts[1]) - 1
+                end = int(parts[2])
+            except ValueError:
+                continue
+            strand = {'1': '+', '-1': '-'}.get(parts[3].strip())
+            id_match = re.search(r'ID=([^;]+)', header)
+            gene_index = (
+                id_match.group(1).rsplit('_', 1)[-1]
+                if id_match
+                else porf_id.rsplit('_', 1)[-1]
+            )
+            scaffold = (
+                porf_id[:-(len(gene_index) + 1)]
+                if gene_index and porf_id.endswith(f'_{gene_index}')
+                else porf_id.rsplit('_', 1)[0]
+            )
+            porf_strands[porf_id] = strand or '.'
+            proteome_genes_by_scaffold[scaffold].append({
+                'porf_id': porf_id,
+                'start': start,
+                'end': end,
+                'strand': strand or '.',
+            })
+for scaffold_genes in proteome_genes_by_scaffold.values():
+    scaffold_genes.sort(key=lambda gene: (gene['start'], gene['end'], gene['porf_id']))
+print(
+    f'Prodigal genes: {len(porf_strands):,} across '
+    f'{len(proteome_genes_by_scaffold):,} scaffolds'
+)
+
 # 3. Jelly roll capsid proteins -> porf_id map
 jelly_roll_map = {}
 jr_path = SYNTHESIS / 'virosync_jelly_roll_proteins.tsv'
@@ -299,8 +482,7 @@ if jr_path.exists():
 print(f'Jelly roll proteins: {len(jelly_roll_map)}')
 
 # 3b. MCP (major capsid protein) marker genes -> porf_id set.
-# Sourced from validated HMM marker hits (e.g. plv_MCP_*, vp_MCP_*, which both
-# report under PPV), so MCP
+# Sourced from validated HMM marker hits (e.g. plv_MCP_* and vp_MCP_*), so MCP
 # genes are highlighted even when structural jelly-roll detection is off.
 mcp_porf_ids = set()
 _mh_path = BASE / 'phase1' / 'marker_validation' / 'validated_marker_hits.tsv'
@@ -317,7 +499,7 @@ if _mh_path.exists():
             cols = line.rstrip('\n').split('\t')
             if len(cols) <= max(_qi, _ti, _vi):
                 continue
-            if 'MCP' in cols[_ti].upper() and cols[_vi] == 'validated':
+            if _report_is_mcp_gene(cols[_ti]) and cols[_vi] == 'validated':
                 _m = re.match(r'^(.+)\|aa\d+-\d+$', cols[_qi])
                 mcp_porf_ids.add(_m.group(1) if _m else cols[_qi])
 print(f'MCP marker genes: {len(mcp_porf_ids)}')
@@ -348,7 +530,7 @@ print(f'Predictions: {len(predictions)}')
 #
 # ViroSync builds a host signature model from **COG** and **BUSCO** marker genes found in the genome's predicted proteome. These are universal cellular genes (ribosomal proteins, metabolic enzymes) that indicate host origin. Each COG/BUSCO gene is searched against a Diamond database, and the top-10 hits' taxonomy lineages are aggregated into a weighted token model (`weight_mode=rank`: best hit = 10, rank 2 = 9, ..., rank 10 = 1; bitscores are not used).
 #
-# The resulting model captures the host's taxonomic identity at every level, from domain down to species. It is used in Phase 2 boundary refinement to distinguish host genes from viral insertions. Tokens from distant taxa (e.g. SAR, Fungi) appear because COG/BUSCO genes are universal and some Diamond top-10 hits come from organisms outside the host lineage.
+# The resulting model captures the host's taxonomic identity at every level, from domain down to species. It is used in Phase 2 boundary refinement to distinguish host genes from viral insertions. Tokens from distant taxa (e.g. SAR, Fungi) appear because COG/BUSCO genes are universal and some Diamond top-10 hits come from organisms outside the host lineage. Percent labels in the plot report each token's weight relative to the largest model weight; `n` is the number of token occurrences, not a sample percentage.
 
 # %%
 # ---- Host Signature Model Summary ----
@@ -406,10 +588,10 @@ if _host_model and tax_labels:
     for _i in range(len(_LEVEL_NAMES)):
         _level_tokens[_i] = sorted(_level_tokens.get(_i, []), key=lambda x: -x[1])
 
-    # Inject EUK at Domain level -- excluded from model (DOMAIN_TOKENS filter)
-    # but implied by host_prefixes; use max_weight since all hits are EUK
+    # Inject EUK at Domain level. Domain tokens are excluded from scoring, but
+    # the model's host prefixes and marker count still document the source.
     if 'EUK__' in _host_prefixes and not any(t[0] == 'EUK' for t in _level_tokens.get(0, [])):
-        _euk_hits = sum(tc for _, _, tc in _level_tokens.get(1, []))
+        _euk_hits = len(_host_hits)
         _level_tokens[0].insert(0, ('EUK', _host_model.get('max_weight', 0), _euk_hits))
 
 # 4. Print summary
@@ -432,9 +614,17 @@ if _host_model:
             print(f'  {_name:<12s}  --')
             continue
         _best = _tokens[0]
-        print(f'  {_name:<12s}  {_best[0]:<30s}  {safe_ratio(_best[1], _max_w)*100:>5.1f}%  (n={_best[2]})', end='')
+        print(
+            f'  {_name:<12s}  {_best[0]:<30s}  '
+            f'{safe_ratio(_best[1], _max_w)*100:>5.1f}% of max weight  '
+            f'({int(_best[2])} token occurrences)',
+            end='',
+        )
         if len(_tokens) > 1:
-            _others = ', '.join(f'{t[0]} ({safe_ratio(t[1], _max_w)*100:.0f}%)' for t in _tokens[1:3])
+            _others = ', '.join(
+                f'{t[0]} ({safe_ratio(t[1], _max_w)*100:.0f}% of max)'
+                for t in _tokens[1:3]
+            )
             print(f'   next: {_others}', end='')
         print()
 
@@ -491,7 +681,8 @@ if _host_model and _level_tokens:
             pct = safe_ratio(w, _max_w) * 100
             ax.text(bar.get_width() + _max_w * 0.01,
                     bar.get_y() + bar.get_height() / 2,
-                    f'{pct:.0f}%  (n={cnt})', va='center', fontsize=7, color='#555555')
+                    f'{pct:.0f}% max; n={int(cnt)}', va='center',
+                    fontsize=7, color='#555555')
 
         ax.set_ylabel(_name, fontsize=9, fontweight='bold', rotation=0,
                       ha='right', va='center', labelpad=65)
@@ -503,7 +694,10 @@ if _host_model and _level_tokens:
 
     axes_list = [fig.axes[i] for i in range(len(fig.axes))]
     if axes_list:
-        axes_list[-1].set_xlabel('Cumulative weight', fontsize=9)
+        axes_list[-1].set_xlabel(
+            'Cumulative token weight (% labels are relative to the model maximum)',
+            fontsize=9,
+        )
 
     # COG/BUSCO panel (right side, spanning middle rows)
     if _has_markers:
@@ -526,7 +720,7 @@ if _host_model and _level_tokens:
         ax_m.spines['top'].set_visible(False)
         ax_m.spines['right'].set_visible(False)
 
-    fig.suptitle(f'{GENOME_ID} Host Signature: Per-Level Taxonomy Breakdown',
+    fig.suptitle(f'{GENOME_ID} Host Signature: Taxonomy Token Weights',
                  fontsize=13, fontweight='bold')
     plt.savefig(BASE / 'host_signature_model.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -872,7 +1066,7 @@ else:
 # %% [markdown]
 # ## EVE Gene Map with Flanking Context
 #
-# Each canonical EVE drawn as a horizontal track together with its flanking host context, so the shift from host to viral sequence is visible in one view. Each gene is a colored rectangle placed by position and colored by the taxonomy of its best protein hit: PPV (Preplasmiviricota), NCLDV, Mirusviricota, host, other eukaryote (EUK), bacterial (BAC), and UNKNOWN. The core EVE region has a white background, and the flanks, taken from a window of FLANK_SIZE bp on each side, have a gray background. Structural hallmark genes are overlaid on the track: a yellow star for a major capsid protein, a black-edged star for a double jelly-roll capsid, a blue-edged star for a single jelly-roll capsid, and a triangle for a reverse transcriptase. The label color of each EVE encodes its confidence tier, and the scale bar gives length in bp. A viral-gene core set against host-gene flanks is the pattern expected for a true integration.
+# Each canonical EVE is drawn with its flanking host context. Every Prodigal gene in the displayed span is shown. The gray flanks cover `FLANK_SIZE` (5 kb by default) and extend when needed to include the three nearest genes on each side. Arrow direction follows the Prodigal strand. Most arrows are colored by their best protein hit; eukaryotic hits that share the dominant Phase 1 host lineage are separated from other eukaryotes. Gold stars mark validated MCPs. The underlying MCP arrow uses the highest-ranked viral top-10 hit with at least 25% amino-acid identity. This prevents a duplicate cellular entry from obscuring independent viral taxonomy evidence for the validated marker. Legacy PHAGE targets whose resolved lineage belongs to Preplasmiviricota are shown as PPV. The white interval is the final ViroSync boundary.
 
 # %%
 if not profiles:
@@ -881,96 +1075,133 @@ if not profiles:
 else:
     # ---- Build extended gene map data ----
     
-    # FLANK_SIZE is set in parameters cell
-    
-    def classify_gene(origin, target):
-        """Map best_hit_origin + target to display category."""
-        species_key = target.split('|')[0] if target else ''
-        if origin in ('PPV', 'PLV', 'VP', 'VP_PLV'):
-            return 'PPV'
-        if origin == 'MIRUS':
-            return 'MIRUS'
+    NEAREST_FLANK_GENES = 3
+
+    def _clean_text(value):
+        return '' if value is None or pd.isna(value) else str(value)
+
+    def classify_gene(origin, target, taxonomy_record, is_marker=False):
+        """Map one gene's evidence to its report display category."""
+        if is_marker:
+            marker_category = _marker_viral_category(taxonomy_record)
+            if marker_category:
+                return marker_category
+        viral_category = _canonical_viral_category(origin, target)
+        if viral_category:
+            return viral_category
         if origin == 'EUK':
-            return 'HOST' if is_host_gene(species_key) else 'EUK'
-        if origin == 'NCLDV':
-            return 'NCLDV'
-        if origin == 'CRESS':
-            return 'CRESS'
+            return 'HOST' if is_host_gene(target) else 'EUK'
         if origin == 'HOST_SPECIFIC':
             return 'HOST'
-        if origin in ('BAC', 'PHAGE'):
+        if origin == 'BAC':
             return 'BAC'
+        if origin == 'ARC':
+            return 'ARC'
         return 'UNKNOWN'
-    
-    # Build per-EVE gene lists
+
+    def _make_gene_record(gene, region):
+        porf_id = gene['porf_id']
+        taxonomy_record = BOUNDARY_TAXONOMY.get(porf_id, {})
+        origin = _clean_text(taxonomy_record.get('top1_prefix')).rstrip('_')
+        origin = origin if origin else 'UNKNOWN'
+        target = _clean_text(taxonomy_record.get('top1_target'))
+        jr_info = jelly_roll_map.get(porf_id, {})
+        is_mcp = porf_id in mcp_porf_ids
+        return {
+            'start': gene['start'],
+            'end': gene['end'],
+            'strand': gene['strand'],
+            'category': classify_gene(
+                origin,
+                target,
+                taxonomy_record,
+                is_marker=is_mcp,
+            ),
+            'best_hit_origin': origin,
+            'best_hit_target': target,
+            'is_capsid': porf_id in jelly_roll_map,
+            'is_mcp': is_mcp,
+            'is_rt': porf_id in rt_gene_ids,
+            'porf_id': porf_id,
+            'host_lineage_match': origin == 'EUK' and is_host_gene(target),
+            'jr_type': jr_info.get('type', ''),
+            'jr_confidence': jr_info.get('confidence', 0),
+            'region': region,
+        }
+
     eve_genes_extended = {}
     for eve_id, profile in profiles.items():
-        eve_start = profile.get('start', 0)
-        eve_end = profile.get('end', 0)
-        scaffold = profile.get('scaffold', '')
+        eve_start = int(profile.get('start', 0))
+        eve_end = int(profile.get('end', 0))
+        scaffold = str(profile.get('scaffold', ''))
+        scaffold_genes = proteome_genes_by_scaffold.get(scaffold, [])
+
+        core_genes_for_eve = [
+            gene for gene in scaffold_genes
+            if gene['start'] < eve_end and gene['end'] > eve_start
+        ]
+        left_candidates = [
+            gene for gene in scaffold_genes
+            if gene['end'] <= eve_start
+        ]
+        right_candidates = [
+            gene for gene in scaffold_genes
+            if gene['start'] >= eve_end
+        ]
+        nearest_left_ids = {
+            gene['porf_id']
+            for gene in sorted(
+                left_candidates,
+                key=lambda gene: (eve_start - gene['end'], -gene['end']),
+            )[:NEAREST_FLANK_GENES]
+        }
+        nearest_right_ids = {
+            gene['porf_id']
+            for gene in sorted(
+                right_candidates,
+                key=lambda gene: (gene['start'] - eve_end, gene['start']),
+            )[:NEAREST_FLANK_GENES]
+        }
+        left_genes = [
+            gene for gene in left_candidates
+            if gene['end'] >= eve_start - FLANK_SIZE
+            or gene['porf_id'] in nearest_left_ids
+        ]
+        right_genes = [
+            gene for gene in right_candidates
+            if gene['start'] <= eve_end + FLANK_SIZE
+            or gene['porf_id'] in nearest_right_ids
+        ]
+
         ext_start = max(0, eve_start - FLANK_SIZE)
+        if left_genes:
+            ext_start = min(ext_start, min(gene['start'] for gene in left_genes))
         ext_end = eve_end + FLANK_SIZE
-    
+        if right_genes:
+            ext_end = max(ext_end, max(gene['end'] for gene in right_genes))
+
         eve_genes_extended[eve_id] = {
             'eve_start': eve_start,
             'eve_end': eve_end,
+            'scaffold': scaffold,
             'ext_start': ext_start,
             'ext_end': ext_end,
-            'scaffold': scaffold,
             'length': ext_end - ext_start,
             'eve_length': eve_end - eve_start,
             'status': profile.get('status', ''),
             'confidence': profile.get('final_confidence', 0),
             'confidence_tier': profile.get('confidence_tier', ''),
             'likely_family': profile.get('likely_family', ''),
-            'left_flank_genes': [],
-            'eve_genes': [],
-            'right_flank_genes': [],
+            'left_flank_genes': [
+                _make_gene_record(gene, 'left_flank') for gene in left_genes
+            ],
+            'eve_genes': [
+                _make_gene_record(gene, 'eve') for gene in core_genes_for_eve
+            ],
+            'right_flank_genes': [
+                _make_gene_record(gene, 'right_flank') for gene in right_genes
+            ],
         }
-    
-    # Assign genes to their EVE + region
-    for _, gene in gene_tax.iterrows():
-        eve_id = gene['eve_id']
-        if eve_id not in eve_genes_extended:
-            continue
-        eve_info = eve_genes_extended[eve_id]
-        ext_start = eve_info['ext_start']
-    
-        porf_id = gene['porf_id']
-        origin = gene.get('best_hit_origin', 'UNKNOWN')
-        target = str(gene.get('best_hit_target', ''))
-        category = classify_gene(origin, target)
-    
-        is_flanking = int(gene.get('is_flanking', 0))
-        flank_pos = str(gene.get('flank_position', '.'))
-    
-        jr_info = jelly_roll_map.get(porf_id, {})
-        is_capsid = porf_id in jelly_roll_map
-        is_mcp = porf_id in mcp_porf_ids
-        is_rt = porf_id in rt_gene_ids
-    
-        gene_rec = {
-            'start': gene['start'] - ext_start,
-            'end': gene['end'] - ext_start,
-            'abs_start': gene['start'],
-            'category': category,
-            'is_capsid': is_capsid,
-            'is_mcp': is_mcp,
-            'is_rt': is_rt,
-            'porf_id': porf_id,
-            'jr_type': jr_info.get('type', ''),
-            'jr_confidence': jr_info.get('confidence', 0),
-        }
-    
-        if is_flanking == 1 and flank_pos == 'upstream':
-            gene_rec['region'] = 'left_flank'
-            eve_info['left_flank_genes'].append(gene_rec)
-        elif is_flanking == 1 and flank_pos == 'downstream':
-            gene_rec['region'] = 'right_flank'
-            eve_info['right_flank_genes'].append(gene_rec)
-        else:
-            gene_rec['region'] = 'eve'
-            eve_info['eve_genes'].append(gene_rec)
     
     total_eve = sum(len(e['eve_genes']) for e in eve_genes_extended.values())
     total_left = sum(len(e['left_flank_genes']) for e in eve_genes_extended.values())
@@ -1014,30 +1245,10 @@ else:
     
     ALL_SHOW_TIERS = SHOW_TIERS
     
-    # Re-compute cluster metadata for all tiers
-    all_cluster_best_tier = {}
-    all_cluster_size = {}
-    for eid, info in eve_genes_extended.items():
-        if info['confidence_tier'] not in ALL_SHOW_TIERS:
-            continue
-        clabel = eve_cluster_map.get(eid, 'singleton')
-        tier_rank = TIER_ORDER.get(info['confidence_tier'], 3)
-        if clabel not in all_cluster_best_tier or tier_rank < all_cluster_best_tier[clabel]:
-            all_cluster_best_tier[clabel] = tier_rank
-        all_cluster_size[clabel] = all_cluster_size.get(clabel, 0) + 1
-    
     def sort_key_all(item):
-        eid, info = item
-        clabel = eve_cluster_map.get(eid, 'singleton')
-        is_singleton = 1 if clabel == 'singleton' else 0
+        _, info = item
         tier_rank = TIER_ORDER.get(info['confidence_tier'], 3)
-        if is_singleton:
-            return (1, 0, 0, tier_rank, -info['confidence'], -info['eve_length'])
-        else:
-            best_tier = all_cluster_best_tier.get(clabel, 3)
-            size = all_cluster_size.get(clabel, 1)
-            cluster_idx = int(clabel.split('_')[1]) if '_' in clabel else 999
-            return (0, best_tier, -size, tier_rank, -info['confidence'], -info['eve_length'])
+        return (tier_rank, -info['confidence'], -info['eve_length'])
     
     all_sorted_eves = sorted(
         [(eid, info) for eid, info in eve_genes_extended.items()
@@ -1053,8 +1264,6 @@ else:
     
     max_len = max(e[1]['length'] for e in all_sorted_eves)
     
-    all_cluster_spans = {}
-    
     for i, (eve_id, eve_info) in enumerate(all_sorted_eves):
         y = n_all - 1 - i
         total_length = eve_info['length']
@@ -1062,14 +1271,6 @@ else:
         eve_end_rel = eve_info['eve_end'] - eve_info['ext_start']
         confidence = eve_info['confidence']
         tier = eve_info['confidence_tier']
-        clabel = eve_cluster_map.get(eve_id, 'singleton')
-    
-        if clabel != 'singleton':
-            if clabel not in all_cluster_spans:
-                all_cluster_spans[clabel] = [i, i]
-            else:
-                all_cluster_spans[clabel][1] = i
-    
         # Background: gray flanks, white EVE core
         ax.barh(y, eve_start_rel, left=0, height=BAR_HEIGHT,
                 color=FLANK_COLOR, edgecolor=FLANK_EDGE, linewidth=0.5)
@@ -1086,19 +1287,45 @@ else:
             + eve_info['right_flank_genes']
         )
         for gene in all_genes:
-            gs = max(0, gene['start'])
-            ge = min(total_length, gene['end'])
+            gs = max(0, gene['start'] - eve_info['ext_start'])
+            ge = min(total_length, gene['end'] - eve_info['ext_start'])
             if ge <= gs:
                 continue
             gw = ge - gs
             color = COLORS.get(gene['category'], COLORS['UNKNOWN'])
             alpha = 0.95 if gene['region'] == 'eve' else 0.70
-    
-            rect = plt.Rectangle(
-                (gs, y - BAR_HEIGHT * 0.4), gw, BAR_HEIGHT * 0.8,
+
+            half_height = BAR_HEIGHT * 0.4
+            head_width = min(gw * 0.45, 300)
+            if gene['strand'] == '+':
+                points = [
+                    (gs, y - half_height),
+                    (ge - head_width, y - half_height),
+                    (ge, y),
+                    (ge - head_width, y + half_height),
+                    (gs, y + half_height),
+                ]
+            elif gene['strand'] == '-':
+                points = [
+                    (gs, y),
+                    (gs + head_width, y - half_height),
+                    (ge, y - half_height),
+                    (ge, y + half_height),
+                    (gs + head_width, y + half_height),
+                ]
+            else:
+                points = [
+                    (gs, y - half_height),
+                    (ge, y - half_height),
+                    (ge, y + half_height),
+                    (gs, y + half_height),
+                ]
+            gene_arrow = mpatches.Polygon(
+                points,
+                closed=True,
                 facecolor=color, edgecolor='none', alpha=alpha, zorder=5,
             )
-            ax.add_patch(rect)
+            ax.add_patch(gene_arrow)
     
             midx = gs + gw / 2
             if gene.get('is_mcp'):
@@ -1135,33 +1362,6 @@ else:
         ax.text(total_length + max_len * CONF_X_PAD_FRAC, y, f'{confidence:.2f}',
                 ha='left', va='center', fontsize=CONF_FONT, color='#555555')
     
-    # ---- Cluster separator lines + labels ----
-    for clabel, (idx_start, idx_end) in all_cluster_spans.items():
-        n_members = idx_end - idx_start + 1
-        if idx_start > 0:
-            sep_y = n_all - idx_start - 0.5 + 0.5
-            ax.axhline(sep_y, color='#4488AA', linestyle='--', linewidth=0.8, alpha=0.6)
-        sep_y_below = n_all - idx_end - 0.5 - 0.5
-        ax.axhline(sep_y_below, color='#4488AA', linestyle='--', linewidth=0.8, alpha=0.6)
-    
-        mid_y = n_all - 1 - (idx_start + idx_end) / 2
-        ax.text(-max_len * LABEL_X_FRAC * 0.60, mid_y,
-                f'{clabel}\n(n={n_members})',
-                ha='center', va='center', fontsize=7, fontstyle='italic',
-                color='#4488AA',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='#F0F8FF',
-                          edgecolor='#4488AA', alpha=0.8, linewidth=0.6))
-    
-    # Separator between clustered and singleton sections
-    n_clustered_all = sum(1 for eid, _ in all_sorted_eves
-                          if eve_cluster_map.get(eid, 'singleton') != 'singleton')
-    if 0 < n_clustered_all < n_all:
-        sep_y = n_all - n_clustered_all - 0.5
-        ax.axhline(sep_y, color='#888888', linestyle='-', linewidth=1.2, alpha=0.6)
-        ax.text(-max_len * LABEL_X_FRAC * 0.92, sep_y + 0.15,
-                'singletons below', ha='center', va='bottom', fontsize=7,
-                color='#888888', fontstyle='italic')
-    
     # ---- Tier separator lines + margin labels ----
     tier_spans_all = {}
     running = 0
@@ -1189,10 +1389,13 @@ else:
     
     ax.set_xlim(-max_len * LABEL_X_FRAC, max_len * 1.08)
     ax.set_ylim(-1.5, n_all - 0.2)
-    ax.set_xlabel('Position (bp) -- Gray: +/-5 kb flanking | White: EVE core',
-                  fontsize=XLABEL_FONT)
+    ax.set_xlabel(
+        f'Position (bp) | Gray: {FLANK_SIZE / 1000:g} kb minimum + '
+        f'{NEAREST_FLANK_GENES} nearest genes per flank | White: EVE core',
+        fontsize=XLABEL_FONT,
+    )
     ax.set_title(
-        f'{GENOME_ID} EVE Gene Map -- All Confident EVEs  ({tier_str_all})',
+        f'{GENOME_ID} EVE Gene Map: All Confident EVEs  ({tier_str_all})',
         fontsize=TITLE_FONT, fontweight='bold',
     )
     ax.set_yticks([])
@@ -1210,9 +1413,15 @@ else:
         mpatches.Patch(facecolor=COLORS['PPV'], label='PPV / Preplasmiviricota'),
         mpatches.Patch(facecolor=COLORS['MIRUS'], label='Mirusviricota'),
         mpatches.Patch(facecolor=COLORS['NCLDV'], label='NCLDV'),
-        mpatches.Patch(facecolor=COLORS['HOST'], label=f'Host ({HOST_GENUS.title()})' if HOST_GENUS else 'Host'),
+        mpatches.Patch(facecolor=COLORS['GVMAG'], label='Giant-virus MAG'),
+        mpatches.Patch(facecolor=COLORS['PHAGE'], label='Phage'),
+        mpatches.Patch(
+            facecolor=COLORS['HOST'],
+            label=f'Host lineage ({HOST_GENUS.title()})' if HOST_GENUS else 'Host lineage',
+        ),
         mpatches.Patch(facecolor=COLORS['EUK'], label='Other Eukaryote'),
         mpatches.Patch(facecolor=COLORS['BAC'], label='Bacteria'),
+        mpatches.Patch(facecolor=COLORS['ARC'], label='Archaea'),
         mpatches.Patch(facecolor=COLORS['UNKNOWN'], label='Unknown'),
     ]
     if mcp_porf_ids:
@@ -1275,6 +1484,212 @@ else:
     FileLink(str(BASE / 'eve_gene_map_with_flanks.png'))
 
 # %% [markdown]
+# ## Detailed Gene Contexts
+#
+# The overview above uses one common horizontal scale, which makes short loci hard to inspect when a genome also contains long calls. This figure redraws up to six of the shortest calls from the highest available confidence tier on independent axes so that gene order remains visible. It uses HIGH calls when present, then MEDIUM or LOW. The plot is a report view, not an additional filtering step. Coordinates are relative to each predicted EVE start, dashed lines mark its boundaries, gray outlines mark flanking genes, and arrow direction follows the retained Prodigal strand.
+
+# %%
+if not eve_genes_extended:
+    print('No EVEs available for detailed gene contexts.')
+else:
+    DETAIL_MAX_EVES = 6
+    detail_tier = next(
+        (
+            tier
+            for tier in ['HIGH', 'MEDIUM', 'LOW']
+            if any(
+                info['confidence_tier'] == tier
+                for info in eve_genes_extended.values()
+            )
+        ),
+        None,
+    )
+    detail_eves = sorted(
+        [
+            (eve_id, info)
+            for eve_id, info in eve_genes_extended.items()
+            if info['confidence_tier'] == detail_tier
+        ],
+        key=lambda item: (item[1]['eve_length'], -item[1]['confidence']),
+    )[:DETAIL_MAX_EVES]
+
+    if not detail_eves:
+        print('No confident EVEs available for detailed gene contexts.')
+    else:
+        n_detail = len(detail_eves)
+        fig, axes = plt.subplots(
+            n_detail,
+            1,
+            figsize=(11, max(3.4, 1.45 * n_detail + 1.4)),
+            squeeze=False,
+        )
+        axes = axes[:, 0]
+        detail_categories = set()
+
+        for ax, (eve_id, eve_info) in zip(axes, detail_eves):
+            eve_start = eve_info['eve_start']
+            eve_length_kb = eve_info['eve_length'] / 1000
+            all_genes = (
+                eve_info['left_flank_genes']
+                + eve_info['eve_genes']
+                + eve_info['right_flank_genes']
+            )
+            xmin = (eve_info['ext_start'] - eve_start) / 1000
+            xmax = (eve_info['ext_end'] - eve_start) / 1000
+            padding = max((xmax - xmin) * 0.025, 0.25)
+            head_kb = max((xmax - xmin) * 0.012, 0.06)
+
+            ax.axvspan(0, eve_length_kb, color='#0077BB', alpha=0.07, zorder=0)
+            ax.broken_barh(
+                [(0, eve_length_kb)],
+                (0.72, 0.08),
+                facecolors='#0077BB',
+                edgecolors='none',
+                alpha=0.80,
+                zorder=2,
+            )
+            for boundary in (0, eve_length_kb):
+                ax.axvline(
+                    boundary,
+                    color='#0077BB',
+                    linewidth=0.8,
+                    linestyle='--',
+                    alpha=0.75,
+                    zorder=1,
+                )
+
+            for gene in all_genes:
+                start = (gene['start'] - eve_start) / 1000
+                end = (gene['end'] - eve_start) / 1000
+                width = end - start
+                if width <= 0:
+                    continue
+                strand = gene.get('strand', '.')
+                direction = width if strand == '+' else -width
+                x = start if strand == '+' else end
+                edge = '#555555' if gene['region'] != 'eve' else 'white'
+                detail_categories.add(gene['category'])
+                ax.add_patch(
+                    mpatches.FancyArrow(
+                        x,
+                        0.40,
+                        direction,
+                        0,
+                        width=0.18,
+                        head_width=0.30,
+                        head_length=min(width * 0.45, head_kb),
+                        length_includes_head=True,
+                        facecolor=COLORS.get(gene['category'], COLORS['UNKNOWN']),
+                        edgecolor=edge,
+                        linewidth=0.45,
+                        alpha=0.82 if gene['region'] != 'eve' else 0.96,
+                        zorder=4,
+                    )
+                )
+                marker_x = (start + end) / 2
+                if gene.get('is_mcp'):
+                    ax.plot(marker_x, 0.64, **MARKER_MCP)
+                elif gene.get('is_capsid'):
+                    marker = MARKER_SJR if gene.get('jr_type') == 'SJR' else MARKER_DJR
+                    ax.plot(marker_x, 0.64, **marker)
+                if gene.get('is_rt'):
+                    ax.plot(marker_x, 0.64, **MARKER_RT)
+
+            short_id = eve_id.replace('EVE_', '')
+            if len(short_id) > 64:
+                short_id = f'{short_id[:30]}…{short_id[-30:]}'
+            ax.text(
+                0,
+                1.03,
+                short_id,
+                transform=ax.transAxes,
+                ha='left',
+                va='bottom',
+                fontsize=8,
+                fontweight='bold',
+            )
+            ax.text(
+                1,
+                1.03,
+                f'{eve_info["likely_family"]} | {eve_info["eve_length"] / 1000:.1f} kb '
+                f'| score {eve_info["confidence"]:.2f}',
+                transform=ax.transAxes,
+                ha='right',
+                va='bottom',
+                fontsize=7.5,
+            )
+            ax.set_xlim(xmin - padding, xmax + padding)
+            ax.set_ylim(0, 1)
+            ax.set_yticks([])
+            ax.tick_params(axis='x', labelsize=7)
+            finalize_axes(ax, despine_left=True)
+
+        axes[-1].set_xlabel('Position relative to predicted EVE start (kb)')
+        fig.suptitle(
+            f'{GENOME_ID}: Detailed {detail_tier}-confidence EVE Gene Contexts',
+            fontsize=13,
+            fontweight='bold',
+        )
+
+        detail_order = [
+            'PPV', 'MIRUS', 'NCLDV', 'GVMAG', 'CRESS', 'PHAGE',
+            'HOST', 'EUK', 'BAC', 'ARC', 'UNKNOWN',
+        ]
+        detail_labels = {
+            'PPV': 'PPV / Preplasmiviricota',
+            'MIRUS': 'Mirusviricota',
+            'NCLDV': 'NCLDV',
+            'GVMAG': 'Giant-virus MAG',
+            'CRESS': 'CRESS',
+            'PHAGE': 'Phage',
+            'HOST': f'Host lineage ({HOST_GENUS.title()})' if HOST_GENUS else 'Host lineage',
+            'EUK': 'Other eukaryote',
+            'BAC': 'Bacteria',
+            'ARC': 'Archaea',
+            'UNKNOWN': 'Unknown',
+        }
+        detail_handles = [
+            mpatches.Patch(
+                facecolor=COLORS[category],
+                label=detail_labels[category],
+            )
+            for category in detail_order
+            if category in detail_categories
+        ]
+        detail_handles.extend([
+            mpatches.Patch(
+                facecolor='white',
+                edgecolor='#555555',
+                label='Gray outline: flanking gene',
+            ),
+            Line2D(
+                [0],
+                [0],
+                **{k: v for k, v in MARKER_MCP.items() if k != 'zorder'},
+                label='MCP',
+            ),
+        ])
+        fig.legend(
+            handles=detail_handles,
+            loc='lower center',
+            bbox_to_anchor=(0.5, 0.01),
+            ncol=4,
+            frameon=False,
+            fontsize=7,
+        )
+        plt.tight_layout(rect=[0, 0.12, 1, 0.96])
+        plt.savefig(
+            BASE / 'eve_gene_context_high.png',
+            dpi=300,
+            bbox_inches='tight',
+            facecolor='white',
+        )
+        plt.show()
+
+        from IPython.display import FileLink
+        FileLink(str(BASE / 'eve_gene_context_high.png'))
+
+# %% [markdown]
 # ## Gene Category Distribution: Core vs Flanking
 #
 # Summarizes the gene map as fractions rather than individual loci. Each bar is one region (left flank, EVE core, or right flank) split into the fraction of genes in each taxonomy category, with the gene count for that region printed on the axis. A core weighted toward viral categories (PPV, NCLDV, Mirusviricota) beside flanks weighted toward host and eukaryotic genes is consistent with a true integration. Viral genes reaching into the flanks, or host genes filling the core, mark a boundary worth a closer look.
@@ -1285,7 +1700,8 @@ if not eve_genes_extended:
 else:
     # ---- Stacked bar: core vs flank gene composition ----
     categories_all = [
-        'PPV', 'NCLDV', 'MIRUS', 'CRESS', 'HOST', 'EUK', 'BAC', 'UNKNOWN'
+        'PPV', 'NCLDV', 'MIRUS', 'GVMAG', 'CRESS', 'PHAGE',
+        'HOST', 'EUK', 'BAC', 'ARC', 'UNKNOWN'
     ]
     regions = ['Left Flank', 'EVE Core', 'Right Flank']
     region_counters = [flank_cats_left, eve_cats, flank_cats_right]

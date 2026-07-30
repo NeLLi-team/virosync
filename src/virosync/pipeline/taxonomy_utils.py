@@ -110,16 +110,23 @@ def resolve_org_id(target: str, taxonomy_lookup: dict) -> str:
     org_id = target.split("|", 1)[0]
     if not taxonomy_lookup or org_id in taxonomy_lookup:
         return org_id
-    # Progressive strip: remove trailing _Word segments
-    if "__" not in org_id:
-        return org_id
-    prefix, suffix = org_id.split("__", 1)
-    parts = suffix.split("_")
-    # Try removing trailing parts one at a time
-    for i in range(len(parts) - 1, 0, -1):
-        candidate = prefix + "__" + "_".join(parts[:i])
-        if candidate in taxonomy_lookup:
-            return candidate
+
+    candidates = [org_id]
+    legacy_prefix = "PHAGE__VARDNA__"
+    if org_id.startswith(legacy_prefix):
+        candidates.append("PHAGE__" + org_id.removeprefix(legacy_prefix))
+
+    for base in candidates:
+        if base in taxonomy_lookup:
+            return base
+        if "__" not in base:
+            continue
+        prefix, suffix = base.split("__", 1)
+        parts = suffix.split("_")
+        for i in range(len(parts) - 1, 0, -1):
+            candidate = prefix + "__" + "_".join(parts[:i])
+            if candidate in taxonomy_lookup:
+                return candidate
     return org_id
 
 

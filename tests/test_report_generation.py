@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from virosync.report import generate as report_generate
@@ -41,7 +42,10 @@ def test_generate_eve_report_writes_jupyter_notebook(
         SimpleNamespace(execute_notebook=_execute_notebook),
     )
 
-    report_paths = generate_eve_report(output_dir=tmp_path, genome_id="demo")
+    report_paths = generate_eve_report(
+        output_dir=tmp_path,
+        genome_id="demo",
+    )
 
     assert report_paths.jupyter == tmp_path / "notebooks" / "jupyter" / "eve_analysis.ipynb"
     assert report_paths.jupyter.exists()
@@ -129,6 +133,81 @@ def test_notebook_safe_ratio_handles_zero_denominators() -> None:
     assert safe_ratio(3, 2) == 1.5
     assert safe_ratio(7, 0) == 0.0
     assert safe_ratio(7, None) == 0.0
+
+
+def test_notebook_mcp_helper_matches_canonical_detector() -> None:
+    from virosync.pipeline.phase3.mcp_detection import (
+        MCP_HMM_EXACT,
+        MCP_HMM_PREFIXES,
+        is_mcp_gene,
+    )
+
+    namespace: dict[str, object] = {}
+    exec(_standalone_path_safety_cell(), namespace)
+
+    assert namespace["_REPORT_MCP_HMM_EXACT"] == MCP_HMM_EXACT
+    assert namespace["_REPORT_MCP_HMM_PREFIXES"] == MCP_HMM_PREFIXES
+    report_is_mcp_gene = namespace["_report_is_mcp_gene"]
+    corpus = [
+        "OG1352",
+        "gamadvirusMCP",
+        "plv_MCP_1",
+        "vp_MCP_3",
+        "mcp_mirus",
+        "dmcp",
+        "mcp_lookalike",
+        "ncmcp_pseudoprotein",
+        "polb",
+        "",
+        None,
+    ]
+    assert [report_is_mcp_gene(name) for name in corpus] == [
+        is_mcp_gene(name) for name in corpus
+    ]
+
+
+def test_notebook_taxonomy_resolver_matches_pipeline() -> None:
+    from virosync.pipeline.taxonomy_utils import resolve_org_id
+
+    taxonomy_lookup = {
+        "EUK__EP00224": "Eukaryota|Chlorophyta",
+        "PHAGE__GCA-000906975-1": (
+            "Viruses|Varidnaviria|Bamfordvirae|Preplasmiviricota"
+        ),
+    }
+    targets = [
+        "EUK__EP00224|protein",
+        "EUK__EP00224_Organism_Name|protein",
+        "PHAGE__VARDNA__GCA-000906975-1_23|protein",
+        "UNKNOWN__record_1|protein",
+        "plain-target|protein",
+        "",
+    ]
+    namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_path_safety_cell(), namespace)
+    report_resolve = namespace["_report_resolve_taxonomy_target"]
+
+    assert [report_resolve(target, taxonomy_lookup) for target in targets] == [
+        resolve_org_id(target, taxonomy_lookup) for target in targets
+    ]
+
+
+def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> None:
+    taxonomy_lookup = {
+        "PHAGE__plv": "Viruses|Varidnaviria|Preplasmiviricota",
+        "GVMAG__example": "Viruses|Varidnaviria|Nucleocytoviricota",
+    }
+    namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_path_safety_cell(), namespace)
+
+    csv_values = namespace["_csv_values"]
+    canonical = namespace["_report_canonical_viral_category"]
+    assert csv_values(None) == []
+    assert csv_values(float("nan")) == []
+    assert csv_values(("NCLDV__", "GVMAG__")) == ["NCLDV__", "GVMAG__"]
+    assert csv_values("NCLDV__,GVMAG__") == ["NCLDV__", "GVMAG__"]
+    assert canonical("PHAGE", "PHAGE__plv|protein", taxonomy_lookup) == "PPV"
+    assert canonical("GVMAG", "GVMAG__example|protein", taxonomy_lookup) == "GVMAG"
 
 
 def test_notebook_path_helpers_match_runtime_encoder() -> None:
