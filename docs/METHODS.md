@@ -371,12 +371,11 @@ Batch TSV class columns are `ncldv`, `mirus`, `ppv`, `cress`, `mixed`, and
 `unknown`. They are mutually exclusive and sum to `accepted`.
 
 Batch mode additionally writes batch summaries (`batch_summary.tsv`,
-`batch_report.md`). For benchmarking and manuscript summaries,
-`batch_summary.tsv`, `virosync_predictions.tsv`,
-`virosync_predictions.bed`, and `virosync_predictions.gff3` are the
-canonical count and coordinate surfaces. Use
-`virosync_predictions_detailed.tsv` to inspect candidates rejected by the
-acceptance gate.
+`batch_report.md`). The sibling `virosync-bench` repository uses
+`batch_summary.tsv`, `virosync_predictions.tsv`, `virosync_predictions.bed`,
+and `virosync_predictions.gff3` as its canonical count and coordinate
+surfaces. Use `virosync_predictions_detailed.tsv` to inspect candidates
+rejected by the acceptance gate.
 
 ## Reproducibility checks
 
@@ -423,13 +422,14 @@ Expected operational targets for current resource pinning:
 - core resource DB version: `v1.0.6`
 - example batch status: `success`
 
-The Python workflow runner v1.4 replaced the earlier Prefect/Dask
-orchestration and is the benchmarked ViroSync runtime. Per-tool wall time
-and peak resident memory for the SynEVEs-2 and real-genome panels were
-collected by the benchmark harness on one machine and are summarized in the
-manuscript runtime figure (`benchmark_figS1_runtime_memory`) and its source
-table. Runtime depends strongly on thread allocation and database caching and
-is reported for completeness rather than as an optimized comparison.
+The Python genome-parallel workflow runner is the benchmarked ViroSync
+runtime. The harness in the sibling `virosync-bench` repository records
+per-tool wall time and peak resident memory for the SynEVEs-2 and real-genome
+panels. Manuscript Figure 5 summarizes those results. Its source table retains
+the legacy name
+`manuscript/figures/benchmark_figS1_runtime_memory_with_vr30_data.tsv`.
+Runtime depends strongly on thread allocation and database caching and is
+reported for completeness rather than as an optimized comparison.
 
 Optional annotation/runtime notes:
 
@@ -480,8 +480,8 @@ document.
 - Foldseek: (Kempen et al. 2024).
 - GVClass: (Pitot, Bruna, and Schulz 2024).
 
-For manuscript-ready citation metadata and Quarto citation keys, use
-`references.bib`.
+The manuscript citation metadata and Quarto keys are in the sibling
+`virosync-bench` repository at `manuscript/references.bib`.
 
 ## Notes on accuracy boundaries
 

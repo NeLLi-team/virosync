@@ -55,13 +55,7 @@ filemap.tsv
 # Results (generated)
 results/
 queries/
-# Existing pre-v2 benchmark work remains local development material. The shared
-# metric/theme modules, v2 harness, and router README are curated tracked surfaces.
-benchmarks/reports/
-benchmarks/results/
-benchmarks/euk_parallel_benchmark_*/
 config/orchestration_*_benchmark.yaml
-tests/test_repeat_spike_benchmark.py
 runs/
 test_results/
 tests/results/
@@ -80,8 +74,6 @@ docs/DEL/
 docs/plans/
 docs/syn2_real_benchmark_results_writeup.md
 docs/syn2_real_benchmark_results_writeup.qmd
-docs/METHODS.qmd
-docs/references.bib
 
 # Local test genomes / datasets
 naomi/
@@ -165,6 +157,7 @@ MEMORY.md
 .codex/
 .memd/
 .agents/
+/memory.md
 
 # Data files (large)
 *.npy
@@ -190,14 +183,4 @@ tests/legacy/
 EXPERIENCES.md
 
 # Local working data and scratch (not part of the distribution)
-analysis/
-*.full.pdf
-.ppv_rebuild/
 del/
-
-# Benchmark v2 tracked source and generated/private boundaries. These rules are
-# last so the curated fixture FASTAs and nested lock override global patterns.
-# Comparator environment definitions are flat. Ignore any nested local
-# materialization, except curated fixture trees that the static audit tracks.
-
-# flat pre-v2 manuscript and its generated renders remain ignored.

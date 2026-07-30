@@ -5,6 +5,31 @@
 
 ViroSync detects candidate endogenous viral elements (EVEs) in assembled eukaryotic genomes. The active pipeline combines hallmark-marker discovery, taxonomy-guided boundary refinement, host-aware trimming, and multi-evidence confidence scoring to prioritize regions for downstream review.
 
+## Repository scope
+
+The tracked tree contains the ViroSync software, tests, setup files,
+documentation, and one example genome. The `virosync-bench` repository
+contains benchmark code, results, analysis notebooks, figures, and manuscript
+files.
+
+```text
+virosync/
+├── .github/                CI and release checks
+├── config/                 runtime configuration
+├── docs/                   methods, release, and resource reference
+├── example/                shipped example genome
+├── release-manifests/      resource checksums and metadata
+├── scripts/                setup, validation, and maintenance commands
+├── src/virosync/           Python package
+├── tests/                  automated tests and small fixtures
+└── tools/                  isolated optional-tool environments
+```
+
+`pixi install` creates the ignored `.pixi/` environment. Resource setup creates
+an ignored versioned directory under `resources/` and points
+`resources/virosync` to it. `tasks/`, `.memd/`, `memory.md`, and `AGENTS.md`
+are ignored local agent state. These paths are not part of the distribution.
+
 ## Workflow
 
 ViroSync follows a four-phase workflow.
@@ -131,9 +156,6 @@ pixi run virosync orchestrate setup \
 Setup validates the archive in a sibling staging directory, then switches the
 stable path to a relative symlink backed by a read-only versioned directory. It
 retains the previous working resource tree for recovery.
-
-Benchmarking and manuscript assets remain private until the preprint and are
-not part of the public release surface.
 
 ## Quick Start
 
