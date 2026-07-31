@@ -77,6 +77,8 @@ _REPORT_MCP_HMM_PREFIXES = (
 )
 _REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"mcp"})
 _REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
+_REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
+_REPORT_PREDICTION_COLOR = "#E3B341"
 
 
 def _report_is_mcp_gene(name):
@@ -148,6 +150,32 @@ def _report_canonical_viral_category(prefix, target, taxonomy_lookup):
         return 'PPV' if 'preplasmiviricota' in lineage_tokens else 'PHAGE'
     if prefix in {'NCLDV', 'MIRUS', 'CRESS', 'GVMAG'}:
         return prefix
+    return None
+
+
+def _report_identity_qualified_viral_category(
+    taxonomy_record,
+    taxonomy_lookup,
+):
+    """Return the highest-ranked identity-qualified viral class for one gene."""
+    if not taxonomy_record:
+        return None
+    prefixes = _csv_values(taxonomy_record.get('top10_prefixes'))
+    targets = _csv_values(taxonomy_record.get('top10_targets'))
+    pidents = _csv_values(taxonomy_record.get('top10_pidents'))
+    for index, prefix in enumerate(prefixes):
+        try:
+            pident = float(pidents[index])
+        except (IndexError, TypeError, ValueError):
+            continue
+        target = targets[index] if index < len(targets) else ''
+        category = _report_canonical_viral_category(
+            prefix,
+            target,
+            taxonomy_lookup,
+        )
+        if category and pident >= _REPORT_MIN_VIRAL_HIT_PIDENT:
+            return category
     return None
 
 
@@ -336,23 +364,12 @@ def _canonical_viral_category(prefix, target):
     return _report_canonical_viral_category(prefix, target, tax_labels)
 
 
-def _marker_viral_category(taxonomy_record):
-    """Use the highest-ranked identity-qualified viral hit for a validated marker."""
-    if not taxonomy_record:
-        return None
-    prefixes = _csv_values(taxonomy_record.get('top10_prefixes'))
-    targets = _csv_values(taxonomy_record.get('top10_targets'))
-    pidents = _csv_values(taxonomy_record.get('top10_pidents'))
-    for index, prefix in enumerate(prefixes):
-        try:
-            pident = float(pidents[index])
-        except (IndexError, TypeError, ValueError):
-            continue
-        target = targets[index] if index < len(targets) else ''
-        category = _canonical_viral_category(prefix, target)
-        if category and pident >= 25.0:
-            return category
-    return None
+def _report_viral_category(taxonomy_record):
+    """Use the highest-ranked identity-qualified viral hit for any gene."""
+    return _report_identity_qualified_viral_category(
+        taxonomy_record,
+        tax_labels,
+    )
 
 # --- Colorblind-safe palette (Tol bright) ---
 COLORS = {
@@ -1066,7 +1083,7 @@ else:
 # %% [markdown]
 # ## EVE Gene Map with Flanking Context
 #
-# Each canonical EVE is drawn with its flanking host context. Every Prodigal gene in the displayed span is shown. The gray flanks cover `FLANK_SIZE` (5 kb by default) and extend when needed to include the three nearest genes on each side. Arrow direction follows the Prodigal strand. Most arrows are colored by their best protein hit; eukaryotic hits that share the dominant Phase 1 host lineage are separated from other eukaryotes. Gold stars mark validated MCPs. The underlying MCP arrow uses the highest-ranked viral top-10 hit with at least 25% amino-acid identity. This prevents a duplicate cellular entry from obscuring independent viral taxonomy evidence for the validated marker. Legacy PHAGE targets whose resolved lineage belongs to Preplasmiviricota are shown as PPV. The white interval is the final ViroSync boundary.
+# Each canonical EVE is drawn with its flanking host context. Every Prodigal gene in the displayed span is shown. The gray flanks cover `FLANK_SIZE` (5 kb by default) and extend when needed to include the three nearest genes on each side. Arrow direction follows the Prodigal strand. Each arrow uses the highest-ranked viral top-10 hit with at least 25% amino-acid identity when present; otherwise it uses the best protein hit. Eukaryotic hits that share the dominant Phase 1 host lineage are separated from other eukaryotes. Gold stars independently mark validated MCPs. Legacy PHAGE targets whose resolved lineage belongs to Preplasmiviricota are shown as PPV. The white interval is the final ViroSync boundary.
 
 # %%
 if not profiles:
@@ -1080,12 +1097,11 @@ else:
     def _clean_text(value):
         return '' if value is None or pd.isna(value) else str(value)
 
-    def classify_gene(origin, target, taxonomy_record, is_marker=False):
+    def classify_gene(origin, target, taxonomy_record):
         """Map one gene's evidence to its report display category."""
-        if is_marker:
-            marker_category = _marker_viral_category(taxonomy_record)
-            if marker_category:
-                return marker_category
+        viral_category = _report_viral_category(taxonomy_record)
+        if viral_category:
+            return viral_category
         viral_category = _canonical_viral_category(origin, target)
         if viral_category:
             return viral_category
@@ -1115,7 +1131,6 @@ else:
                 origin,
                 target,
                 taxonomy_record,
-                is_marker=is_mcp,
             ),
             'best_hit_origin': origin,
             'best_hit_target': target,
@@ -1486,7 +1501,7 @@ else:
 # %% [markdown]
 # ## Detailed Gene Contexts
 #
-# The overview above uses one common horizontal scale, which makes short loci hard to inspect when a genome also contains long calls. This figure redraws up to six of the shortest calls from the highest available confidence tier on independent axes so that gene order remains visible. It uses HIGH calls when present, then MEDIUM or LOW. The plot is a report view, not an additional filtering step. Coordinates are relative to each predicted EVE start, dashed lines mark its boundaries, gray outlines mark flanking genes, and arrow direction follows the retained Prodigal strand.
+# The overview above uses one common horizontal scale, which makes short loci hard to inspect when a genome also contains long calls. This figure redraws up to six of the shortest calls from the highest available confidence tier on independent axes so that gene order remains visible. It uses HIGH calls when present, then MEDIUM or LOW. The plot is a report view, not an additional filtering step. Coordinates are relative to each predicted EVE start, yellow bands and dashed lines mark its boundaries, gray outlines mark flanking genes, and arrow direction follows the retained Prodigal strand.
 
 # %%
 if not eve_genes_extended:
@@ -1539,19 +1554,25 @@ else:
             padding = max((xmax - xmin) * 0.025, 0.25)
             head_kb = max((xmax - xmin) * 0.012, 0.06)
 
-            ax.axvspan(0, eve_length_kb, color='#0077BB', alpha=0.07, zorder=0)
+            ax.axvspan(
+                0,
+                eve_length_kb,
+                color=_REPORT_PREDICTION_COLOR,
+                alpha=0.18,
+                zorder=0,
+            )
             ax.broken_barh(
                 [(0, eve_length_kb)],
                 (0.72, 0.08),
-                facecolors='#0077BB',
+                facecolors=_REPORT_PREDICTION_COLOR,
                 edgecolors='none',
-                alpha=0.80,
+                alpha=0.90,
                 zorder=2,
             )
             for boundary in (0, eve_length_kb):
                 ax.axvline(
                     boundary,
-                    color='#0077BB',
+                    color=_REPORT_PREDICTION_COLOR,
                     linewidth=0.8,
                     linestyle='--',
                     alpha=0.75,

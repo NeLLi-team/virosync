@@ -193,7 +193,10 @@ def test_notebook_taxonomy_resolver_matches_pipeline() -> None:
 
 
 def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> None:
+    from virosync.pipeline.phase2.boundary_diamond import MIN_VIRAL_HIT_PIDENT
+
     taxonomy_lookup = {
+        "EUK__host": "Eukaryota|Chlorophyta",
         "PHAGE__plv": "Viruses|Varidnaviria|Preplasmiviricota",
         "GVMAG__example": "Viruses|Varidnaviria|Nucleocytoviricota",
     }
@@ -202,12 +205,38 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
 
     csv_values = namespace["_csv_values"]
     canonical = namespace["_report_canonical_viral_category"]
+    report_viral = namespace["_report_identity_qualified_viral_category"]
+    assert namespace["_REPORT_MIN_VIRAL_HIT_PIDENT"] == MIN_VIRAL_HIT_PIDENT
     assert csv_values(None) == []
     assert csv_values(float("nan")) == []
     assert csv_values(("NCLDV__", "GVMAG__")) == ["NCLDV__", "GVMAG__"]
     assert csv_values("NCLDV__,GVMAG__") == ["NCLDV__", "GVMAG__"]
     assert canonical("PHAGE", "PHAGE__plv|protein", taxonomy_lookup) == "PPV"
     assert canonical("GVMAG", "GVMAG__example|protein", taxonomy_lookup) == "GVMAG"
+    assert report_viral(
+        {
+            "top10_prefixes": "EUK__,GVMAG__",
+            "top10_targets": "EUK__host|protein,GVMAG__example|protein",
+            "top10_pidents": "99.0,31.0",
+        },
+        taxonomy_lookup,
+    ) == "GVMAG"
+    assert report_viral(
+        {
+            "top10_prefixes": "GVMAG__,EUK__,NCLDV__",
+            "top10_targets": "GVMAG__example|protein",
+            "top10_pidents": "not-a-number,99.0",
+        },
+        taxonomy_lookup,
+    ) is None
+    assert report_viral(
+        {
+            "top10_prefixes": "GVMAG__",
+            "top10_targets": "GVMAG__example|protein",
+            "top10_pidents": str(MIN_VIRAL_HIT_PIDENT - 0.1),
+        },
+        taxonomy_lookup,
+    ) is None
 
 
 def test_notebook_path_helpers_match_runtime_encoder() -> None:
