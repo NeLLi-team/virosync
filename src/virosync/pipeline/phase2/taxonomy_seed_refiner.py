@@ -165,6 +165,9 @@ def _refine_seeds_by_taxonomy_mode(
     contracted = 0
 
     for seed in merged_seeds:
+        if seed.predicted_family == "CRESS":
+            refined.append(seed)
+            continue
         mapping = seed_gene_mappings.get(seed.seed_id)
         if not mapping:
             refined.append(seed)

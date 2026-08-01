@@ -193,7 +193,22 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class not in _V2_EVE_CLASSES:
             return QualityGateDecision(False, eve_class, "unsupported_class")
-        if eve_class in ("PPV", "CRESS"):
+        if eve_class == "CRESS":
+            identity_marker_support = (
+                "CRESS" in (getattr(result, "marker_family_hits", []) or [])
+            )
+            kept = (
+                identity_marker_support
+                and length > 0
+                and hallmark >= 1
+            )
+            reason = (
+                "cress_identity_high_medium_pass"
+                if kept
+                else "cress_identity_required"
+            )
+            return QualityGateDecision(kept, eve_class, reason)
+        if eve_class == "PPV":
             kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "small_dna_high_medium_pass" if kept else "small_dna_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
@@ -216,7 +231,27 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
         # kept here: an MCP is the primary diagnostic for Preplasmiviricota, and
         # dropping it would reject 58% of published LOW PPV calls, which is a
         # sensitivity change rather than a correctness fix.
-        if family in ("PPV", "CRESS"):
+        if family == "CRESS":
+            identity_marker_support = (
+                "CRESS" in (getattr(result, "marker_family_hits", []) or [])
+            )
+            kept = (
+                identity_marker_support
+                and length > 0
+                and hallmark >= 1
+            )
+            reason = (
+                "cress_identity_low_promoted"
+                if kept
+                else "cress_identity_required"
+            )
+            return QualityGateDecision(
+                kept,
+                family,
+                reason,
+                promoted_low=kept,
+            )
+        if family == "PPV":
             kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "small_dna_low_promoted" if kept else "small_dna_low_gate"
             return QualityGateDecision(kept, family, reason, promoted_low=kept)

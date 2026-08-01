@@ -643,6 +643,9 @@ def _run_phase3_subflow(
                     "hmm_score": marker.hmm_score,
                     "score": marker.hmm_score,
                     "top10_prefixes": getattr(marker, "top10_prefixes", ""),
+                    "top10_targets": getattr(marker, "top10_targets", ""),
+                    "top10_pidents": getattr(marker, "top10_pidents", ""),
+                    "best_hit_target": getattr(marker, "best_hit_target", ""),
                     "validation_status": marker_role.original_validation_status,
                     "tier1_bypassed": marker_role.is_tier1_bypassed,
                 }

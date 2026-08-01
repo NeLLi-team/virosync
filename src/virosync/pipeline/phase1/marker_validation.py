@@ -684,7 +684,10 @@ def filter_validated_markers(
 
         # Extract ALL details from top-10 hits
         top10_targets = ",".join(target for target, _, _, _ in top10_hits)
-        top10_pidents = ",".join(f"{pident:.1f}" for _, _, pident, _ in top10_hits)
+        # Preserve the parsed DIAMOND identity exactly enough for downstream
+        # threshold checks. Rounding to one decimal can turn 24.96 into 25.0
+        # and incorrectly satisfy the 25% viral-identity cutoff.
+        top10_pidents = ",".join(str(pident) for _, _, pident, _ in top10_hits)
         top10_bitscores = ",".join(f"{bits:.1f}" for _, bits, _, _ in top10_hits)
         top10_evalues = ",".join(f"{evalue:.2e}" for _, _, _, evalue in top10_hits)
 

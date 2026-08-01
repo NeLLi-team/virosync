@@ -31,6 +31,10 @@ from typing import Optional
 from virosync.ablation import AblationID
 from virosync.pipeline.phase0.prodigal import GenePrediction, load_gene_predictions
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.viral_markers import (
+    base_marker_gene_id,
+    is_identity_qualified_cress_marker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +448,69 @@ def iterative_extension(
     return region
 
 
+def assemble_compact_cress_regions(
+    cress_hits: list[ValidatedMarkerHit],
+    gene_order: dict[str, list[GenePrediction]],
+    *,
+    max_gap_bp: int = 10_000,
+    max_intervening_genes: int = 1,
+) -> list[CandidateRegion]:
+    """Build exact gene-bounded regions for compact CRESS insertions."""
+
+    best_by_gene: dict[str, ValidatedMarkerHit] = {}
+    for hit in cress_hits:
+        if not is_identity_qualified_cress_marker(hit):
+            continue
+        gene_id = base_marker_gene_id(hit.query_porf)
+        current = best_by_gene.get(gene_id)
+        if current is None or hit.hmm_score > current.hmm_score:
+            best_by_gene[gene_id] = hit
+
+    hits_by_scaffold: dict[str, list[ValidatedMarkerHit]] = defaultdict(list)
+    for hit in best_by_gene.values():
+        hits_by_scaffold[hit.scaffold].append(hit)
+
+    regions: list[CandidateRegion] = []
+    for scaffold, scaffold_hits in sorted(hits_by_scaffold.items()):
+        ordered = sorted(scaffold_hits, key=lambda hit: (hit.start, hit.end))
+        cluster = [ordered[0]]
+        for hit in ordered[1:]:
+            previous = cluster[-1]
+            gap_bp = max(0, hit.start - previous.end)
+            intervening_genes = count_genes_between(
+                previous,
+                hit,
+                gene_order,
+            )
+            if (
+                gap_bp <= max_gap_bp
+                and intervening_genes <= max_intervening_genes
+            ):
+                cluster.append(hit)
+                continue
+            regions.append(
+                CandidateRegion(
+                    scaffold=scaffold,
+                    start=min(marker.start for marker in cluster),
+                    end=max(marker.end for marker in cluster),
+                    markers=list(cluster),
+                    predicted_family="CRESS",
+                )
+            )
+            cluster = [hit]
+        regions.append(
+            CandidateRegion(
+                scaffold=scaffold,
+                start=min(marker.start for marker in cluster),
+                end=max(marker.end for marker in cluster),
+                markers=list(cluster),
+                predicted_family="CRESS",
+            )
+        )
+
+    return regions
+
+
 def merge_overlapping_regions(
     regions: list[CandidateRegion],
     merge_distance: int = 1000,
@@ -634,12 +701,36 @@ def assemble_candidate_regions(
     logger.info(f"Validated markers on {len(hits_by_scaffold)} scaffolds")
 
     candidate_regions = []
+    compact_cress_regions = assemble_compact_cress_regions(
+        [
+            hit
+            for scaffold_hits in hits_by_scaffold.values()
+            for hit in scaffold_hits
+        ],
+        gene_order,
+    )
+    cress_gene_keys = {
+        (marker.scaffold, base_marker_gene_id(marker.query_porf))
+        for region in compact_cress_regions
+        for marker in region.markers
+    }
     total_clusters = 0
     extended_clusters = 0
     extension_added_markers = 0
 
     # Process each scaffold
     for scaffold, scaffold_hits in sorted(hits_by_scaffold.items()):
+        scaffold_hits = [
+            hit
+            for hit in scaffold_hits
+            if (
+                hit.scaffold,
+                base_marker_gene_id(hit.query_porf),
+            )
+            not in cress_gene_keys
+        ]
+        if not scaffold_hits:
+            continue
         logger.info(f"Processing scaffold: {scaffold} ({len(scaffold_hits)} markers)")
 
         # Step 4a: Initial clustering
@@ -699,6 +790,13 @@ def assemble_candidate_regions(
     merged_count = pre_merge_count - len(candidate_regions)
     if merged_count > 0:
         logger.info("  Merged %d overlapping regions", merged_count)
+    candidate_regions.extend(compact_cress_regions)
+    candidate_regions.sort(key=lambda region: (region.scaffold, region.start, region.end))
+    if compact_cress_regions:
+        logger.info(
+            "Added %d compact, gene-bounded CRESS regions",
+            len(compact_cress_regions),
+        )
 
     # Assign region IDs
     for idx, region in enumerate(candidate_regions, start=1):

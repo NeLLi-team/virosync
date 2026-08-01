@@ -20,6 +20,94 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+CRESS_MARKER_MODELS = frozenset(
+    f"VS{model_number:06d}" for model_number in range(792, 809)
+)
+CRESS_CAPSID_MARKER_MODELS = frozenset(
+    f"VS{model_number:06d}" for model_number in range(792, 803)
+)
+CRESS_REP_MARKER_MODELS = frozenset(
+    f"VS{model_number:06d}" for model_number in range(803, 809)
+)
+CRESS_MIN_PIDENT = 25.0
+
+
+def base_marker_gene_id(query_porf: str) -> str:
+    """Return the protein ID without an HMM domain suffix."""
+
+    return str(query_porf or "").split("|aa", 1)[0]
+
+
+def is_identity_qualified_cress_marker(
+    hit: object,
+    *,
+    min_pident: float = CRESS_MIN_PIDENT,
+) -> bool:
+    """Require a CRESS HMM plus paired CRESS reference identity support."""
+
+    if isinstance(hit, dict):
+        model = str(hit.get("hallmark_gene") or hit.get("hmm_target") or "")
+        validation_status = str(hit.get("validation_status") or "")
+        raw_prefixes = hit.get("top10_prefixes") or ""
+        raw_pidents = hit.get("top10_pidents") or ""
+    else:
+        model = str(
+            getattr(hit, "hallmark_gene", "")
+            or getattr(hit, "hmm_target", "")
+            or ""
+        )
+        validation_status = str(getattr(hit, "validation_status", "") or "")
+        raw_prefixes = getattr(hit, "top10_prefixes", "") or ""
+        raw_pidents = getattr(hit, "top10_pidents", "") or ""
+
+    if model not in CRESS_MARKER_MODELS or validation_status != "validated":
+        return False
+
+    prefixes = (
+        raw_prefixes.split(",")
+        if isinstance(raw_prefixes, str)
+        else list(raw_prefixes)
+    )
+    pident_values = (
+        raw_pidents.split(",")
+        if isinstance(raw_pidents, str)
+        else list(raw_pidents)
+    )
+    for prefix, pident_value in zip(prefixes, pident_values):
+        try:
+            pident = float(pident_value)
+        except (TypeError, ValueError):
+            continue
+        if str(prefix).strip() == "CRESS__" and pident >= min_pident:
+            return True
+    return False
+
+
+def is_cress_specific_top1_marker(hit: object) -> bool:
+    """Return whether a qualified CRESS marker has a CRESS-specific top hit."""
+
+    if not is_identity_qualified_cress_marker(hit):
+        return False
+
+    if isinstance(hit, dict):
+        raw_targets = hit.get("top10_targets") or hit.get("best_hit_target") or ""
+    else:
+        raw_targets = (
+            getattr(hit, "top10_targets", "")
+            or getattr(hit, "best_hit_target", "")
+            or ""
+        )
+    targets = (
+        raw_targets.split(",")
+        if isinstance(raw_targets, str)
+        else list(raw_targets)
+    )
+    if not targets:
+        return False
+    top1 = str(targets[0]).strip()
+    return top1.startswith(("CRESS__", "PHAGE__MONDNA__"))
+
+
 @dataclass
 class ViralFamilyProfile:
     """Defines marker profile for a viral family/lineage."""

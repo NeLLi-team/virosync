@@ -28,6 +28,12 @@ from virosync.output_contract import canonical_family
 from virosync.ablation import AblationID
 from virosync.config import get_config
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase1.viral_markers import (
+    CRESS_MARKER_MODELS,
+    base_marker_gene_id,
+    is_cress_specific_top1_marker,
+    is_identity_qualified_cress_marker,
+)
 from virosync.pipeline.host_signatures import (
     HostSignatureModel,
     host_signature_density_evalue_weighted,
@@ -86,6 +92,29 @@ PLV_CORE_MARKER_PREFIXES = {
     "mcp": ("plv_mcp",),
     "pc": ("plv_pc",),
 }
+
+def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
+    """Return identity-qualified and CRESS-specific-top-hit gene IDs."""
+
+    qualified: set[str] = set()
+    specific_top1: set[str] = set()
+    for hit in hallmark_hits:
+        if not is_identity_qualified_cress_marker(hit):
+            continue
+        if isinstance(hit, dict):
+            porf_id = str(hit.get("porf_id") or hit.get("query_name") or "")
+        else:
+            porf_id = str(
+                getattr(hit, "porf_id", None)
+                or getattr(hit, "query_porf", "")
+                or ""
+            )
+        if porf_id:
+            gene_id = base_marker_gene_id(porf_id)
+            qualified.add(gene_id)
+            if is_cress_specific_top1_marker(hit):
+                specific_top1.add(gene_id)
+    return qualified, specific_top1
 
 
 def _marker_totals_from_annotation(annotation_index: dict[str, dict]) -> dict[str, int]:
@@ -207,7 +236,10 @@ def summarize_marker_hits(
             family = annotation.get("family", "UNKNOWN")
             if family != "UNKNOWN":
                 families[family] += 1
-            if "capsid" in annotation.get("categories", set()):
+            if (
+                "capsid" in annotation.get("categories", set())
+                and gene.upper() not in CRESS_MARKER_MODELS
+            ):
                 has_mcp = True
             continue
 
@@ -1971,6 +2003,24 @@ class EvidenceSynthesizer:
             hallmark_genes,
             annotation_index=self.marker_annotation_index,
         )
+        (
+            identity_qualified_cress_genes,
+            specific_top1_cress_genes,
+        ) = _cress_gene_support(hallmark_hits)
+        canonical_cress_marker_support = (
+            len(identity_qualified_cress_genes) >= 2
+            or bool(specific_top1_cress_genes)
+        )
+        compact_cress_boundary = (
+            canonical_family(result.region_classification) == "CRESS"
+        )
+        if compact_cress_boundary and canonical_cress_marker_support:
+            marker_summary["families"] = sorted(
+                {*marker_summary["families"], "CRESS"}
+            )
+            if marker_summary["dominant_family"] == "UNKNOWN":
+                marker_summary["dominant_family"] = "CRESS"
+                marker_summary["dominant_fraction"] = 1.0
         result.marker_category_hits = marker_summary["categories"]
         result.marker_family_hits = marker_summary["families"]
         result.marker_complement_score = marker_summary["complement_score"]

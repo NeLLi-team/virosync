@@ -699,7 +699,12 @@ def _run_phase1_subflow(
     )
     for region in candidate_regions:
         anchors = []
-        for marker in anchor_markers:
+        region_anchor_markers = (
+            region.markers
+            if getattr(region, "predicted_family", "") == "CRESS"
+            else anchor_markers
+        )
+        for marker in region_anchor_markers:
             if marker.scaffold != region.scaffold:
                 continue
             if marker.start >= region.end or marker.end <= region.start:
@@ -737,6 +742,7 @@ def _run_phase1_subflow(
             cluster_ids=[],
             anchors=anchors,
             hhg_anchors=anchors,
+            predicted_family=getattr(region, "predicted_family", ""),
         ))
 
     # Assign stable seed_id (same format as seed_merger.py line 328-330)
@@ -750,7 +756,8 @@ def _run_phase1_subflow(
 
     # Compute region classification for each seed based on marker types
     for seed in merged_seeds:
-        seed.compute_classification(None)
+        if seed.predicted_family != "CRESS":
+            seed.compute_classification(None)
     phase1_ablation_counts = InterventionCounts(
         opportunities=phase1_ablation_counts.opportunities,
         interventions=phase1_ablation_counts.interventions,

@@ -81,6 +81,10 @@ def extend_seeds_by_genes(
         # Extend each seed by ±N genes
         extended_scaffold: list[MergedSeed] = []
         for seed in scaffold_seed_list:
+            if seed.predicted_family == "CRESS":
+                extended_scaffold.append(seed)
+                continue
+
             # Find genes overlapping the seed (midpoint within seed, or any overlap)
             overlapping_indices = []
             for i, p in enumerate(scaffold_porfs):
@@ -101,7 +105,10 @@ def extend_seeds_by_genes(
 
             # Extend by ±N genes, clamped to scaffold bounds
             ext_first = max(0, first_idx - extension_genes)
-            ext_last = min(len(scaffold_porfs) - 1, last_idx + extension_genes)
+            ext_last = min(
+                len(scaffold_porfs) - 1,
+                last_idx + extension_genes,
+            )
 
             new_start = scaffold_porfs[ext_first].start
             new_end = scaffold_porfs[ext_last].end
@@ -116,7 +123,11 @@ def extend_seeds_by_genes(
         current = extended_scaffold[0]
 
         for next_seed in extended_scaffold[1:]:
-            if next_seed.start < current.end:
+            cress_in_pair = (
+                current.predicted_family == "CRESS"
+                or next_seed.predicted_family == "CRESS"
+            )
+            if next_seed.start < current.end and not cress_in_pair:
                 # Overlapping — merge
                 combined_sources = sorted(set(current.sources) | set(next_seed.sources))
                 combined_anchors = current.anchors + [
@@ -476,10 +487,14 @@ def merge_adjacent_viral_boundaries(
         for next_boundary in scaffold_list[1:]:
             gap_start = current.end
             gap_end = next_boundary.start
+            cress_in_pair = (
+                getattr(current, "predicted_family", "") == "CRESS"
+                or getattr(next_boundary, "predicted_family", "") == "CRESS"
+            )
 
             # Strictly overlapping boundaries: merge unconditionally. Touching
             # half-open intervals continue through the evidence-aware gap path.
-            if gap_end < gap_start:
+            if gap_end < gap_start and not cress_in_pair:
                 from dataclasses import replace
 
                 combined_ncldv = (
@@ -524,7 +539,7 @@ def merge_adjacent_viral_boundaries(
                 continue
 
             # Check if gap is within merge distance
-            if gap_end - gap_start <= max_gap_bp:
+            if not cress_in_pair and gap_end - gap_start <= max_gap_bp:
                 # Find genes in the gap and check their taxonomy
                 gap_genes = []
                 for porf_id, tax in taxonomy_map.items():

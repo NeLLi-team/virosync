@@ -898,6 +898,9 @@ def _run_phase2_subflow(
         _n_no_seed_id = 0
         _n_no_mapping = 0
         for boundary in refined_boundaries:
+            if boundary.predicted_family == "CRESS":
+                trimmed_boundaries.append(boundary)
+                continue
             seed_mapping = None
             if boundary.seed_id:
                 seed_mapping = boundary_diamond_query.seed_gene_mappings.get(boundary.seed_id)

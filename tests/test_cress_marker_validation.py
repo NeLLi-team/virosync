@@ -87,6 +87,28 @@ def test_single_cress_top10_hit_below_identity_threshold_does_not_validate_marke
     assert markers[0].has_viral == 1
 
 
+def test_cress_identity_is_not_rounded_across_the_validation_threshold(
+    tmp_path: Path,
+) -> None:
+    proteome = tmp_path / "proteome.faa"
+    diamond = tmp_path / "diamond.tsv"
+    _write_proteome(proteome)
+    _write_diamond(
+        diamond,
+        "contig_1_1",
+        [
+            ("CRESS__IMGVR_UViG_1|gene_1", 210.0, 24.96),
+            ("NCLDV__virus_1", 200.0, 30.0),
+            ("EUK__host_1", 190.0, 70.0),
+        ],
+    )
+
+    markers = filter_validated_markers([_hmm_hit()], diamond, proteome)
+
+    assert markers[0].validation_status == "validated"
+    assert markers[0].top10_pidents.split(",")[0] == "24.96"
+
+
 def test_single_phage_top10_hit_does_not_validate_marker(tmp_path: Path) -> None:
     proteome = tmp_path / "proteome.faa"
     diamond = tmp_path / "diamond.tsv"

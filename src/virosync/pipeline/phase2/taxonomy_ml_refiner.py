@@ -467,6 +467,9 @@ def _refine_seed_boundaries(
     extended = 0
     contracted = 0
     for seed in merged_seeds:
+        if seed.predicted_family == "CRESS":
+            refined.append(seed)
+            continue
         seed_key = seed.seed_id or mapping_by_coords.get((seed.scaffold, seed.start, seed.end), "")
         mapping = seed_mappings.get(seed_key)
         rows = sorted(rows_by_seed.get(seed_key, []), key=lambda r: (r.start, r.end))

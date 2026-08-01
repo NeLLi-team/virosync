@@ -96,7 +96,7 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
     assert decision.effective_class == "NCLDV"
 
 
-def test_cress_reuses_small_dna_virus_gate() -> None:
+def test_cress_without_identity_marker_support_is_rejected() -> None:
     decision = evaluate_v2_quality_gate(
         SimpleNamespace(
             confidence_tier="HIGH",
@@ -104,6 +104,7 @@ def test_cress_reuses_small_dna_virus_gate() -> None:
             end=3000,
             hallmark_count=2,
             hallmark_genes=["marker_a", "marker_b"],
+            marker_family_hits=[],
             has_mcp=False,
             region_classification="UNKNOWN",
             classification="",
@@ -111,8 +112,9 @@ def test_cress_reuses_small_dna_virus_gate() -> None:
         )
     )
 
-    assert decision.kept is True
+    assert decision.kept is False
     assert decision.effective_class == "CRESS"
+    assert decision.reason == "cress_identity_required"
 
 
 def test_cress_is_reachable_from_identity_qualified_gene_taxonomy() -> None:

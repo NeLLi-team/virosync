@@ -286,6 +286,24 @@ def trim_seed_by_host_signature(
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
 
+    if seed.predicted_family == "CRESS":
+        return seed, {
+            "reason": "cress_exact_boundary",
+            "trimmed_start": seed.start,
+            "trimmed_end": seed.end,
+            "window_count": 0,
+            "good_windows": 0,
+            "good_marker_windows": 0,
+            "host_consensus_taxonomy": ".",
+            "ablation_id": ablation_id.value,
+            "counterfactual_trimmed_start": seed.start,
+            "counterfactual_trimmed_end": seed.end,
+            "counterfactual_reason": "cress_exact_boundary",
+            "host_coordinate_change_opportunities": 0,
+            "host_coordinate_change_interventions": 0,
+            "host_coordinate_change_changed": 0,
+        }
+
     counterfactual_seed, counterfactual_summary = _trim_seed_by_host_signature_normal(
         seed=seed,
         gene_records=gene_records,
