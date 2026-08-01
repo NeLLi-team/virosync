@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
 from virosync.report import generate as report_generate
 from virosync.report.generate import generate_eve_report
-from virosync.utils.path_safety import safe_filename_component, safe_filename_components
+from virosync.utils.path_safety import (
+    require_strict_child,
+    safe_filename_component,
+    safe_filename_components,
+)
 
 
 def test_generate_eve_report_writes_jupyter_notebook(
@@ -102,6 +110,97 @@ def _standalone_path_safety_cell() -> str:
     ]
     assert len(cells) == 1
     return cells[0]
+
+
+def _ani_clustering_cell() -> str:
+    jupytext = pytest.importorskip("jupytext")
+    notebook = jupytext.read(report_generate._SOURCE)
+    cells = [
+        cell.source
+        for cell in notebook.cells
+        if "if len(profiles) < 3:" in cell.source
+    ]
+    assert len(cells) == 1
+    return cells[0]
+
+
+def _ani_namespace(tmp_path: Path) -> dict[str, object]:
+    eve_ids = ["eve1", "eve2", "eve3"]
+    fasta = tmp_path / "demo_eves.fna"
+    fasta.write_text(
+        "".join(f">{eve_id} tier=LOW\nACGTACGT\n" for eve_id in eve_ids)
+    )
+    return {
+        "profiles": {eve_id: {} for eve_id in eve_ids},
+        "SHOW_TIERS": ("HIGH", "MEDIUM", "LOW"),
+        "BASE": tmp_path,
+        "tempfile": tempfile,
+        "Path": Path,
+        "subprocess": subprocess,
+        "safe_filename_components": safe_filename_components,
+        "require_strict_child": require_strict_child,
+        "ANI_THRESHOLD": 90.0,
+        "defaultdict": defaultdict,
+        "plt": plt,
+    }
+
+
+def test_notebook_ani_clustering_keeps_unsketchable_eves_as_singletons(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stderr="ERROR No genomes/sketches found.\n",
+        ),
+    )
+    namespace = _ani_namespace(tmp_path)
+
+    exec(_ani_clustering_cell(), namespace)
+
+    assert namespace["eve_cluster_map"] == {
+        "eve1": "singleton",
+        "eve2": "singleton",
+        "eve3": "singleton",
+    }
+    assert namespace["multi_clusters"] == []
+    assert (tmp_path / "eve_cluster_composition.png").is_file()
+
+
+def test_notebook_ani_clustering_rejects_missing_filtered_eves(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
+    namespace = _ani_namespace(tmp_path)
+    (tmp_path / "demo_eves.fna").write_text(
+        ">eve1 tier=REJECTED\nACGTACGT\n"
+    )
+
+    with pytest.raises(RuntimeError, match="EVE FASTA/profile mismatch"):
+        exec(_ani_clustering_cell(), namespace)
+
+
+def test_notebook_ani_clustering_keeps_other_skani_errors_fatal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stderr="ERROR corrupted sketch database\n",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="skani triangle failed"):
+        exec(_ani_clustering_cell(), _ani_namespace(tmp_path))
 
 
 def test_notebook_path_helpers_run_from_result_dir_without_virosync(

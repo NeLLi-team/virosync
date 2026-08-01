@@ -881,7 +881,7 @@ FileLink(str(BASE / 'eve_confidence_tiers.png'))
 # %% [markdown]
 # ## ANI Clustering of EVEs
 #
-# Groups the canonical EVEs by sequence similarity so that near-identical integrations become visible. skani computes all-versus-all average nucleotide identity, and two EVEs are linked when they clear both the ANI threshold and a minimum 50% aligned fraction; each connected component of the resulting graph is one cluster. Clustering runs only when at least three EVEs are present. Cluster assignments are carried onto the gene map and the marker heatmap below.
+# Groups canonical EVEs by sequence similarity. skani computes all-versus-all average nucleotide identity. Two EVEs share an edge when they meet the ANI threshold and a minimum 50% aligned fraction; each connected component forms one cluster. Clustering requires at least three EVEs. If skani cannot sketch any sequence from a complete, non-empty filtered EVE set, the report labels all of them as singletons. The gene map and marker heatmap use these cluster labels below.
 
 # %%
 if len(profiles) < 3:
@@ -941,6 +941,11 @@ else:
             filtered_records[current_id] = (current_header, ''.join(current_seq))
     
     print(f'Filtered {len(filtered_records)} EVEs from tiers: {", ".join(CLUSTER_TIERS)}')
+    if set(filtered_records) != set(profiles):
+        raise RuntimeError(
+            'EVE FASTA/profile mismatch: '
+            f'{len(filtered_records)} sequences for {len(profiles)} profiles'
+        )
     
     # 2. Write individual FASTAs for skani (one per EVE) and run all-vs-all
     tmpdir = tempfile.mkdtemp(prefix="skani_cluster_")
@@ -974,8 +979,12 @@ else:
     
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            print(f'skani error:\n{result.stderr}')
-            raise RuntimeError('skani triangle failed')
+            if 'No genomes/sketches found' in result.stderr:
+                print('skani could not sketch any filtered EVE; keeping all as singletons')
+                ani_out.write_text('Ref_file\tQuery_file\tANI\tAlign_fraction_ref\tAlign_fraction_query\n')
+            else:
+                print(f'skani error:\n{result.stderr}')
+                raise RuntimeError('skani triangle failed')
     
         # 3. Parse sparse output and cluster via union-find at ANI threshold
         parent = {eid: eid for eid in filtered_records}
