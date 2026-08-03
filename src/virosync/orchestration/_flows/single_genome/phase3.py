@@ -14,6 +14,11 @@ from virosync.output_contract import (
 from virosync.pipeline.phase3.acceptance_selection import (
     select_phase3_acceptance,
 )
+from virosync.pipeline.phase3.eve_ani_clustering import (
+    cluster_accepted_eves,
+    recluster_survivors,
+    unsupported_eve_ids,
+)
 from virosync.pipeline.phase3.output_generator import (
     _is_atpase_marker,
     evaluate_v2_quality_gate,
@@ -893,6 +898,27 @@ def _run_phase3_subflow(
             changed=sum(effect.changed for effect in effects),
         )
     accepted_results = list(acceptance_selection.canonical_results)
+    # Cluster the accepted EVEs before any class is counted or persisted: the
+    # manifest normalizes the persisted effective_eve_class through the contract
+    # and the orchestrator raises when persisted and in-memory counts disagree,
+    # so a class rewrite after this point would fail the run.
+    _edges_path, ani_pairs = cluster_accepted_eves(
+        accepted_results,
+        genome_fasta=masked_path,
+        output_dir=output_dir,
+        threads=threads,
+    )
+    # Then drop the EVEs with no viral evidence at all that no marker-bearing
+    # relative vouches for. This needs the clusters, and it is the one place
+    # Phase 3 changes the accepted set after the gate has run.
+    unsupported = unsupported_eve_ids(accepted_results)
+    if unsupported:
+        accepted_results = [
+            result for result in accepted_results if result.eve_id not in unsupported
+        ]
+        # Cluster sizes counted the dropped members; recount over the survivors
+        # so no published row claims a relative that is not published.
+        recluster_survivors(accepted_results, ani_pairs)
     quality_gate_dropped = len(verification_results) - len(accepted_results)
     counterfactual_quality_gate_dropped = sum(
         not decision.kept
@@ -921,16 +947,16 @@ def _run_phase3_subflow(
     total_genes = 0
     total_hallmarks = 0
 
-    for candidate in acceptance_selection.candidates:
-        if not candidate.canonical_kept:
-            continue
-        r = candidate.result
+    # Iterate the published list, not acceptance_selection.candidates: the
+    # unsupported-EVE drop above can remove a candidate the gate kept, and these
+    # counts must match what is written out.
+    for r in accepted_results:
         accepted_bp += r.end - r.start
         total_genes += getattr(r, 'gene_count', 0)
         total_hallmarks += getattr(r, 'hallmark_count', 0)
-        cls = normalize_effective_eve_class(
-            candidate.normal_gate_decision.effective_class
-        )
+        # Published class, not the gate decision: acceptance is the gate's job,
+        # the label is the taxonomy consensus over the region's own markers.
+        cls = normalize_effective_eve_class(getattr(r, "taxonomy_class", "UNKNOWN"))
         classification_stats[cls] += 1
 
     classified = sum(classification_stats[key] for key in EFFECTIVE_EVE_CLASSES)
@@ -951,15 +977,16 @@ def _run_phase3_subflow(
         )
         logger.info(
             "  %s kept %d/%d predictions "
-            "(HIGH=%d, MEDIUM=%d, LOW=%d; dropped=%d; "
-            "normal-gate-rejected=%d)",
+            "(HIGH=%d, MEDIUM=%d, LOW=%d; gate-dropped=%d; "
+            "no-viral-evidence-dropped=%d; normal-gate-rejected=%d)",
             "A6 acceptance bypass" if ablation_id is AblationID.A6 else "Canonical v2 gate",
             accepted,
             len(verification_results),
             tier_counts["HIGH"],
             tier_counts["MEDIUM"],
             tier_counts["LOW"],
-            quality_gate_dropped,
+            quality_gate_dropped - len(unsupported),
+            len(unsupported),
             counterfactual_quality_gate_dropped,
         )
         if accepted_results:
@@ -974,7 +1001,13 @@ def _run_phase3_subflow(
     return {
         "verification_results": verification_results,
         "accepted_results": accepted_results,
-        "promoted_low_results": list(acceptance_selection.promoted_low_results),
+        # Must stay a subset of accepted_results: a dropped EVE is no longer
+        # canonical, so it cannot remain in the promoted-LOW subset either.
+        "promoted_low_results": [
+            result
+            for result in acceptance_selection.promoted_low_results
+            if result.eve_id not in unsupported
+        ],
         "gene_taxonomy_map_batched": gene_taxonomy_map_batched,
         "hallmark_hits_map": hallmark_hits_map,
         "interproscan_map_batched": interproscan_map_batched,

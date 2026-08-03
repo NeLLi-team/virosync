@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,13 +11,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
+from virosync.pipeline.phase3.eve_ani_clustering import (
+    MIN_CLUSTER_ALIGNED_FRACTION,
+    MIN_CLUSTER_ANI,
+)
 from virosync.report import generate as report_generate
 from virosync.report.generate import generate_eve_report
-from virosync.utils.path_safety import (
-    require_strict_child,
-    safe_filename_component,
-    safe_filename_components,
-)
 
 
 def test_generate_eve_report_writes_jupyter_notebook(
@@ -100,115 +97,218 @@ def test_notebook_source_is_valid_jupytext_with_parameters_cell() -> None:
     assert tagged, "notebook source is missing a 'parameters'-tagged cell"
 
 
-def _standalone_path_safety_cell() -> str:
+def _notebook_cell(needle: str) -> str:
+    jupytext = pytest.importorskip("jupytext")
+    notebook = jupytext.read(report_generate._SOURCE)
+    cells = [cell.source for cell in notebook.cells if needle in cell.source]
+    assert len(cells) == 1, f"{needle!r} matched {len(cells)} cells"
+    return cells[0]
+
+
+def _notebook_code() -> str:
+    jupytext = pytest.importorskip("jupytext")
+    notebook = jupytext.read(report_generate._SOURCE)
+    return "\n".join(
+        cell.source for cell in notebook.cells if cell.cell_type == "code"
+    )
+
+
+def _standalone_helper_cell() -> str:
+    """Return the notebook's self-contained helper cell.
+
+    Anchored on the MCP detector because that helper mirrors a pipeline
+    predicate and is parity-tested below, so it cannot quietly leave the cell.
+    """
+    return _notebook_cell("def _report_is_mcp_gene(name):")
+
+
+def _parameter_defaults() -> dict[str, object]:
     jupytext = pytest.importorskip("jupytext")
     notebook = jupytext.read(report_generate._SOURCE)
     cells = [
         cell.source
         for cell in notebook.cells
-        if "def safe_filename_component(value):" in cell.source
+        if "parameters" in cell.get("metadata", {}).get("tags", [])
     ]
     assert len(cells) == 1
-    return cells[0]
+    namespace: dict[str, object] = {}
+    exec(cells[0], namespace)
+    return namespace
 
 
-def _ani_clustering_cell() -> str:
+def test_notebook_no_longer_runs_skani_itself() -> None:
+    """Clustering moved into Phase 3; the report must only read its results."""
+    code = _notebook_code()
+
+    # Only the invariant: one clustering, computed by Phase 3 and read here. A
+    # second skani run in the notebook would let its clusters disagree with the
+    # ones the pipeline published in the detailed TSV.
+    assert "skani" not in code
+    assert "eve_ani_edges.tsv" in code
+
+
+def test_notebook_ani_parameters_match_the_pipeline_clustering() -> None:
+    defaults = _parameter_defaults()
+
+    assert defaults["ANI_THRESHOLD"] == MIN_CLUSTER_ANI
+    assert defaults["MIN_ALIGNED_FRACTION"] == MIN_CLUSTER_ALIGNED_FRACTION
+
+
+def test_notebook_reads_published_taxonomy_class_not_likely_family() -> None:
+    """canon_family owns the only remaining read of the retired label."""
     jupytext = pytest.importorskip("jupytext")
     notebook = jupytext.read(report_generate._SOURCE)
     cells = [
         cell.source
         for cell in notebook.cells
-        if "if len(profiles) < 3:" in cell.source
+        if cell.cell_type == "code" and "likely_family" in cell.source
     ]
-    assert len(cells) == 1
-    return cells[0]
+
+    assert len(cells) == 1, "likely_family is read outside canon_family"
+    assert "def canon_family(profile):" in cells[0]
+    assert "profile.get('taxonomy_class') or profile.get('likely_family')" in cells[0]
+    assert "canon_family(" in _notebook_code()
+
+
+def test_notebook_canon_family_folds_retired_labels_and_falls_back() -> None:
+    namespace: dict[str, object] = {}
+    exec(_standalone_helper_cell(), namespace)
+    canon_family = namespace["canon_family"]
+
+    assert canon_family({"taxonomy_class": "MIXED"}) == "VIRAL_UNKNOWN"
+    assert canon_family({"taxonomy_class": "mixed"}) == "VIRAL_UNKNOWN"
+    assert canon_family({"taxonomy_class": "PLV"}) == "PPV"
+    assert canon_family({"taxonomy_class": "PHAGE"}) == "PHAGE"
+    # Result files written before taxonomy_class existed still render.
+    assert canon_family({"likely_family": "MIXED"}) == "VIRAL_UNKNOWN"
+    assert canon_family({"likely_family": "VP"}) == "PPV"
+    assert canon_family({"likely_family": "NCLDV"}) == "NCLDV"
+    assert canon_family({"taxonomy_class": "", "likely_family": "NCLDV"}) == "NCLDV"
+    # A published class always wins over the legacy one.
+    assert canon_family({"taxonomy_class": "PHAGE", "likely_family": "NCLDV"}) == "PHAGE"
+    assert canon_family({}) == "UNKNOWN"
 
 
 def _ani_namespace(tmp_path: Path) -> dict[str, object]:
-    eve_ids = ["eve1", "eve2", "eve3"]
-    fasta = tmp_path / "demo_eves.fna"
-    fasta.write_text(
-        "".join(f">{eve_id} tier=LOW\nACGTACGT\n" for eve_id in eve_ids)
-    )
+    """Namespace for the cluster and network cells, with two published clusters."""
+    (tmp_path / "phase3_synthesis").mkdir()
+    profiles = {
+        "EVE_demo|contig_1_10-90": {
+            "taxonomy_class": "NCLDV", "has_mcp": True,
+            "cluster_id": 0, "cluster_size": 2, "confidence_tier": "HIGH",
+        },
+        "EVE_demo|contig_2_10-90": {
+            "taxonomy_class": "NCLDV", "has_mcp": False,
+            "cluster_id": 0, "cluster_size": 2, "confidence_tier": "HIGH",
+        },
+        "EVE_demo|contig_3_10-90": {
+            "taxonomy_class": "PPV", "has_mcp": False,
+            "cluster_id": -1, "cluster_size": 1, "confidence_tier": "LOW",
+        },
+        # Pre-clustering result file: no cluster_id, no taxonomy_class.
+        "EVE_demo|contig_4_10-90": {"likely_family": "VP", "confidence_tier": "LOW"},
+    }
+    defaults = _parameter_defaults()
     return {
-        "profiles": {eve_id: {} for eve_id in eve_ids},
-        "SHOW_TIERS": ("HIGH", "MEDIUM", "LOW"),
+        "profiles": profiles,
         "BASE": tmp_path,
-        "tempfile": tempfile,
+        "SYNTHESIS": tmp_path / "phase3_synthesis",
+        "EVE_PREFIX": "EVE_demo",
+        "GENOME_ID": "demo",
         "Path": Path,
-        "subprocess": subprocess,
-        "safe_filename_components": safe_filename_components,
-        "require_strict_child": require_strict_child,
-        "ANI_THRESHOLD": 90.0,
-        "defaultdict": defaultdict,
         "plt": plt,
+        "defaultdict": defaultdict,
+        "FAMILY_COLORS": {"NCLDV": "#009988", "PPV": "#EE7733", "UNKNOWN": "#BBBBBB"},
+        "canon_family": _canon_family(),
+        "ANI_THRESHOLD": defaults["ANI_THRESHOLD"],
+        "MIN_ALIGNED_FRACTION": defaults["MIN_ALIGNED_FRACTION"],
     }
 
 
-def test_notebook_ani_clustering_keeps_unsketchable_eves_as_singletons(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=1,
-            stderr="ERROR No genomes/sketches found.\n",
-        ),
+def _canon_family():
+    namespace: dict[str, object] = {}
+    exec(_standalone_helper_cell(), namespace)
+    return namespace["canon_family"]
+
+
+def _write_edges(tmp_path: Path, rows: list[tuple[str, str, float, float, float]]) -> None:
+    (tmp_path / "phase3_synthesis" / "eve_ani_edges.tsv").write_text(
+        "eve_a\teve_b\tani\taf_a\taf_b\n"
+        + "".join(f"{a}\t{b}\t{ani}\t{af_a}\t{af_b}\n" for a, b, ani, af_a, af_b in rows)
     )
+
+
+def test_notebook_clusters_come_from_the_pipeline(tmp_path: Path) -> None:
     namespace = _ani_namespace(tmp_path)
 
-    exec(_ani_clustering_cell(), namespace)
+    exec(_notebook_cell("eve_cluster_map = {eid:"), namespace)
 
     assert namespace["eve_cluster_map"] == {
-        "eve1": "singleton",
-        "eve2": "singleton",
-        "eve3": "singleton",
+        "EVE_demo|contig_1_10-90": "Cluster_1",
+        "EVE_demo|contig_2_10-90": "Cluster_1",
+        "EVE_demo|contig_3_10-90": "singleton",
+        "EVE_demo|contig_4_10-90": "singleton",
     }
-    assert namespace["multi_clusters"] == []
+    assert [len(members) for _, members in namespace["multi_clusters"]] == [2]
     assert (tmp_path / "eve_cluster_composition.png").is_file()
 
 
-def test_notebook_ani_clustering_rejects_missing_filtered_eves(
-    monkeypatch,
+def test_notebook_network_filters_edges_at_95_ani_and_50_aligned_fraction(
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
     namespace = _ani_namespace(tmp_path)
-    (tmp_path / "demo_eves.fna").write_text(
-        ">eve1 tier=REJECTED\nACGTACGT\n"
+    exec(_notebook_cell("eve_cluster_map = {eid:"), namespace)
+    _write_edges(
+        tmp_path,
+        [
+            # kept: at both thresholds exactly
+            ("EVE_demo|contig_1_10-90", "EVE_demo|contig_2_10-90", 95.0, 50.0, 12.0),
+            # dropped: below the ANI threshold
+            ("EVE_demo|contig_1_10-90", "EVE_demo|contig_3_10-90", 94.9, 99.0, 99.0),
+            # dropped: neither sequence reaches the aligned fraction
+            ("EVE_demo|contig_2_10-90", "EVE_demo|contig_3_10-90", 99.9, 49.9, 49.9),
+            # dropped: an endpoint outside the displayed tiers
+            ("EVE_demo|contig_1_10-90", "EVE_demo|contig_9_10-90", 99.9, 99.0, 99.0),
+        ],
     )
 
-    with pytest.raises(RuntimeError, match="EVE FASTA/profile mismatch"):
-        exec(_ani_clustering_cell(), namespace)
+    exec(_notebook_cell("import graphviz"), namespace)
+
+    assert [(a, b) for a, b, _ in namespace["network_edges"]] == [
+        ("EVE_demo|contig_1_10-90", "EVE_demo|contig_2_10-90")
+    ]
+    # Only the connected pair is drawn; the two unconnected EVEs are counted out.
+    assert namespace["network_eves"] == [
+        "EVE_demo|contig_1_10-90",
+        "EVE_demo|contig_2_10-90",
+    ]
+    assert namespace["n_omitted"] == 2
+    assert (tmp_path / "eve_ani_network.png").is_file()
 
 
-def test_notebook_ani_clustering_keeps_other_skani_errors_fatal(
-    monkeypatch,
+@pytest.mark.parametrize("rows", [None, []])
+def test_notebook_network_skips_cleanly_without_qualifying_edges(
     tmp_path: Path,
+    rows: list | None,
 ) -> None:
-    monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=1,
-            stderr="ERROR corrupted sketch database\n",
-        ),
-    )
+    """A missing edge table and a header-only one must not write a figure."""
+    namespace = _ani_namespace(tmp_path)
+    exec(_notebook_cell("eve_cluster_map = {eid:"), namespace)
+    if rows is not None:
+        _write_edges(tmp_path, rows)
 
-    with pytest.raises(RuntimeError, match="skani triangle failed"):
-        exec(_ani_clustering_cell(), _ani_namespace(tmp_path))
+    exec(_notebook_cell("import graphviz"), namespace)
+
+    assert namespace["network_edges"] == []
+    assert not (tmp_path / "eve_ani_network.png").exists()
 
 
 def test_notebook_path_helpers_run_from_result_dir_without_virosync(
     tmp_path: Path,
 ) -> None:
-    helper_source = _standalone_path_safety_cell()
+    helper_source = _standalone_helper_cell()
     assert "from virosync" not in helper_source
-    script = helper_source + "\nassert safe_filename_component('../EVE/1').isascii()\n"
+    script = helper_source + "\nassert _report_is_mcp_gene('vp_mcp_1')\n"
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
 
@@ -226,7 +326,7 @@ def test_notebook_path_helpers_run_from_result_dir_without_virosync(
 
 def test_notebook_safe_ratio_handles_zero_denominators() -> None:
     namespace: dict[str, object] = {}
-    exec(_standalone_path_safety_cell(), namespace)
+    exec(_standalone_helper_cell(), namespace)
 
     safe_ratio = namespace["safe_ratio"]
     assert safe_ratio(3, 2) == 1.5
@@ -242,7 +342,7 @@ def test_notebook_mcp_helper_matches_canonical_detector() -> None:
     )
 
     namespace: dict[str, object] = {}
-    exec(_standalone_path_safety_cell(), namespace)
+    exec(_standalone_helper_cell(), namespace)
 
     assert namespace["_REPORT_MCP_HMM_EXACT"] == MCP_HMM_EXACT
     assert namespace["_REPORT_MCP_HMM_PREFIXES"] == MCP_HMM_PREFIXES
@@ -283,7 +383,7 @@ def test_notebook_taxonomy_resolver_matches_pipeline() -> None:
         "",
     ]
     namespace: dict[str, object] = {"pd": pd}
-    exec(_standalone_path_safety_cell(), namespace)
+    exec(_standalone_helper_cell(), namespace)
     report_resolve = namespace["_report_resolve_taxonomy_target"]
 
     assert [report_resolve(target, taxonomy_lookup) for target in targets] == [
@@ -300,7 +400,7 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
         "GVMAG__example": "Viruses|Varidnaviria|Nucleocytoviricota",
     }
     namespace: dict[str, object] = {"pd": pd}
-    exec(_standalone_path_safety_cell(), namespace)
+    exec(_standalone_helper_cell(), namespace)
 
     csv_values = namespace["_csv_values"]
     canonical = namespace["_report_canonical_viral_category"]
@@ -336,29 +436,3 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
         },
         taxonomy_lookup,
     ) is None
-
-
-def test_notebook_path_helpers_match_runtime_encoder() -> None:
-    namespace: dict[str, object] = {}
-    exec(_standalone_path_safety_cell(), namespace)
-    raw_ids = [
-        "EVE_ok",
-        "a/b",
-        "a|b",
-        "../EVE",
-        "EVE λ",
-        "EVE\n",
-        "x" * 300,
-        "λ" * 100,
-    ]
-
-    notebook_components = namespace["safe_filename_components"](
-        raw_ids,
-        label="EVE ID",
-    )
-
-    assert notebook_components == safe_filename_components(raw_ids, label="EVE ID")
-    assert all(
-        namespace["safe_filename_component"](raw_id) == safe_filename_component(raw_id)
-        for raw_id in raw_ids
-    )

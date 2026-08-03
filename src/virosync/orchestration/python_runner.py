@@ -20,6 +20,7 @@ from virosync.config import PipelineConfig
 from virosync.orchestration._flows.single_genome import single_genome_flow
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
+    LEGACY_EVE_CLASS_COUNT_KEYS,
     effective_eve_class_count_total,
 )
 from virosync.utils.atomic_write import atomic_write
@@ -249,12 +250,12 @@ def _normalize_worker_result(genome_id: str, result: object) -> dict:
     normalized.setdefault("genome_id", genome_id)
     normalized.setdefault("benchmark_eligible", False)
     normalized.setdefault("legacy_resume", False)
-    if "vp_count" in normalized or "plv_count" in normalized:
-        normalized["ppv_count"] = (
-            int(normalized.get("ppv_count", 0) or 0)
-            + int(normalized.pop("vp_count", 0) or 0)
-            + int(normalized.pop("plv_count", 0) or 0)
-        )
+    for legacy_key, current_key in LEGACY_EVE_CLASS_COUNT_KEYS.items():
+        if legacy_key in normalized:
+            normalized[current_key] = (
+                int(normalized.get(current_key, 0) or 0)
+                + int(normalized.pop(legacy_key, 0) or 0)
+            )
     for count_key in EFFECTIVE_EVE_CLASS_COUNT_KEYS.values():
         normalized.setdefault(count_key, 0)
     return normalized
@@ -372,7 +373,8 @@ def _write_batch_summary(output_base_dir: Path, results: list[dict]) -> Path:
         "mirus",
         "ppv",
         "cress",
-        "mixed",
+        "phage",
+        "viral_unknown",
         "unknown",
         "total_bp",
         "genes",
@@ -408,7 +410,8 @@ def _write_batch_summary(output_base_dir: Path, results: list[dict]) -> Path:
                 "mirus": result.get("mirus_count", 0),
                 "ppv": result.get("ppv_count", 0),
                 "cress": result.get("cress_count", 0),
-                "mixed": result.get("mixed_count", 0),
+                "phage": result.get("phage_count", 0),
+                "viral_unknown": result.get("viral_unknown_count", 0),
                 "unknown": result.get("unknown_count", 0),
                 "total_bp": result.get("accepted_bp", 0),
                 "genes": result.get("total_genes", 0),
@@ -448,14 +451,16 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
     total_mirus = sum(r.get("mirus_count", 0) for r in results)
     total_ppv = sum(r.get("ppv_count", 0) for r in results)
     total_cress = sum(r.get("cress_count", 0) for r in results)
-    total_mixed = sum(r.get("mixed_count", 0) for r in results)
+    total_phage = sum(r.get("phage_count", 0) for r in results)
+    total_viral_unknown = sum(r.get("viral_unknown_count", 0) for r in results)
     total_unknown = sum(r.get("unknown_count", 0) for r in results)
     total_classified = (
         total_ncldv
         + total_mirus
         + total_ppv
         + total_cress
-        + total_mixed
+        + total_phage
+        + total_viral_unknown
         + total_unknown
     )
     if total_classified != total_accepted:
@@ -499,7 +504,11 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         handle.write(f"| MIRUS | {total_mirus} | Mirusviricota |\n")
         handle.write(f"| PPV | {total_ppv} | Preplasmiviricota |\n")
         handle.write(f"| CRESS | {total_cress} | CRESS DNA viruses |\n")
-        handle.write(f"| MIXED | {total_mixed} | Multiple viral lineages |\n")
+        handle.write(f"| PHAGE | {total_phage} | Bacteriophages |\n")
+        handle.write(
+            f"| VIRAL_UNKNOWN | {total_viral_unknown} | "
+            "Viral, lineage unresolved |\n"
+        )
         handle.write(f"| UNKNOWN | {total_unknown} | Unrecognized effective class |\n")
         handle.write(f"| **Total** | **{total_classified}** | |\n\n")
         handle.write("### Region Statistics (Canonical EVEs)\n\n")
@@ -516,10 +525,10 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
         handle.write("\n")
         handle.write("## Per-Genome Results\n\n")
         handle.write(
-            "| Genome | Status | Benchmark eligible | Legacy resume | HIGH | MED | LOW | NCLDV | MIRUS | PPV | CRESS | Mixed | Unknown | bp | Genes | Time |\n"
+            "| Genome | Status | Benchmark eligible | Legacy resume | HIGH | MED | LOW | NCLDV | MIRUS | PPV | CRESS | Phage | Viral unknown | Unknown | bp | Genes | Time |\n"
         )
         handle.write(
-            "|--------|--------|--------------------|---------------|------|-----|-----|-------|-------|-----|-------|-------|---------|----|-------|------|\n"
+            "|--------|--------|--------------------|---------------|------|-----|-----|-------|-------|-----|-------|-------|---------------|---------|----|-------|------|\n"
         )
         for result in sorted(results, key=lambda r: (-r.get("predictions", 0), r.get("genome_id", ""))):
             gid = result.get("genome_id", "?")
@@ -532,13 +541,14 @@ def _write_batch_report(output_base_dir: Path, results: list[dict]) -> Path:
                     f"{result.get('medium_tier', 0)} | {result.get('low_tier', 0)} | "
                     f"{result.get('ncldv_count', 0)} | {result.get('mirus_count', 0)} | "
                     f"{result.get('ppv_count', 0)} | {result.get('cress_count', 0)} | "
-                    f"{result.get('mixed_count', 0)} | "
+                    f"{result.get('phage_count', 0)} | "
+                    f"{result.get('viral_unknown_count', 0)} | "
                     f"{result.get('unknown_count', 0)} | {result.get('accepted_bp', 0):,} | "
                     f"{result.get('total_genes', 0)} | {result.get('elapsed_sec', 0):.0f}s |\n"
                 )
             else:
                 handle.write(
-                    f"| {gid} | failed | no | no | - | - | - | - | - | - | - | - | - | - | - | FAILED |\n"
+                    f"| {gid} | failed | no | no | - | - | - | - | - | - | - | - | - | - | - | - | FAILED |\n"
                 )
         if failed_results:
             handle.write("\n## Failed Genomes\n\n")

@@ -166,6 +166,10 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     ),
     "virosync_summary.json": "virosync-summary-v3",
     "phase3_synthesis/virosync_summary.json": "virosync-summary-v3",
+    # Pinned but not required: a genome with fewer than two accepted EVEs, or one
+    # whose EVEs skani cannot sketch, legitimately publishes a header-only edge
+    # table, and a run that never reaches Phase 3 publishes none at all.
+    "phase3_synthesis/eve_ani_edges.tsv": "eve-ani-edges-v1",
     "virosync_tsv_invariant_report.tsv": "tsv-invariant-report-v1",
     "run.log": "run-log-v1",
     "virosync_run_complete.json": "completion-manifest-v2",
@@ -2501,14 +2505,14 @@ def _prediction_coordinates(
             )
         persisted_class = str(row["effective_eve_class"]).strip().upper()
         if persisted_class not in (
-            set(EFFECTIVE_EVE_CLASSES) | set(PPV_LEGACY_ALIASES)
+            set(EFFECTIVE_EVE_CLASSES) | set(PPV_LEGACY_ALIASES) | {"MIXED"}
         ):
             raise ValueError(
                 f"prediction table {relative_path} has an invalid effective class"
             )
-        # Fold legacy VP/PLV onto PPV exactly like the manifest summary does, so
-        # a pre-migration result directory still validates instead of forcing a
-        # full recompute.
+        # Fold legacy VP/PLV onto PPV and legacy MIXED onto VIRAL_UNKNOWN exactly
+        # like the manifest summary does, so a pre-migration result directory
+        # still validates instead of forcing a full recompute.
         eve_class = normalize_effective_eve_class(persisted_class)
         tier = str(row["confidence_tier"]).strip().upper()
         if tier not in tier_counts:

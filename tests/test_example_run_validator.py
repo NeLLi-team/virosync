@@ -26,7 +26,8 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         "mirus",
         "ppv",
         "cress",
-        "mixed",
+        "phage",
+        "viral_unknown",
         "unknown",
         "total_bp",
         "genes",
@@ -48,7 +49,8 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         "mirus": "0",
         "ppv": "1",
         "cress": "0",
-        "mixed": "0",
+        "phage": "0",
+        "viral_unknown": "0",
         "unknown": "0",
         "total_bp": "42",
         "genes": "7",
@@ -84,7 +86,8 @@ def valid_example(monkeypatch, tmp_path: Path):
             "MIRUS": 0,
             "PPV": 1,
             "CRESS": 0,
-            "MIXED": 0,
+            "PHAGE": 0,
+            "VIRAL_UNKNOWN": 0,
             "UNKNOWN": 0,
         },
     }
@@ -129,7 +132,7 @@ def test_snapshot_schema_error_names_current_version(tmp_path: Path) -> None:
 
     with pytest.raises(
         validate_example_run.ExampleValidationError,
-        match="is not schema v2",
+        match=f"is not schema v{validate_example_run.SNAPSHOT_SCHEMA_VERSION}",
     ):
         validate_example_run._load_snapshot(snapshot_path)
 

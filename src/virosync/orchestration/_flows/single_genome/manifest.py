@@ -478,11 +478,16 @@ def _summarize_predictions_tsv(
                         row.get("effective_eve_class")
                     )
                 else:
-                    effective_class = output_contract.resolve_effective_eve_class(
-                        confidence_tier=tier,
-                        region_classification=row.get("region_classification"),
-                        classification=row.get("classification"),
-                        likely_family=row.get("likely_family"),
+                    # The resolver answers in the GATE vocabulary, which still
+                    # carries MIXED, so a legacy tree without a persisted class
+                    # needs the published fold before it can index the partition.
+                    effective_class = output_contract.normalize_effective_eve_class(
+                        output_contract.resolve_effective_eve_class(
+                            confidence_tier=tier,
+                            region_classification=row.get("region_classification"),
+                            classification=row.get("classification"),
+                            likely_family=row.get("likely_family"),
+                        )
                     )
                 class_key = output_contract.EFFECTIVE_EVE_CLASS_COUNT_KEYS[
                     effective_class

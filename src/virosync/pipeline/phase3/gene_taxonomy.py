@@ -23,6 +23,7 @@ from Bio import SeqIO
 
 from virosync.output_contract import canonical_family
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
+from virosync.pipeline.taxonomy_utils import resolve_org_id
 from virosync.utils.path_safety import (
     require_strict_child,
     safe_filename_component,
@@ -33,6 +34,14 @@ logger = logging.getLogger(__name__)
 
 VIRAL_PREFIXES = {"NCLDV", "MIRUS", "VP", "PLV", "PPV", "CRESS", "GVMAG", "PHAGE"}
 MIN_VIRAL_HIT_PIDENT = 25.0
+
+# Reference namespaces that name a viral lineage. GVMAG and PHAGE are namespaces
+# rather than published classes, so callers that need a class fold them via
+# viral_hit_categories().
+PUBLISHED_VIRAL_PREFIXES = frozenset(
+    {"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"}
+)
+_PREPLASMIVIRICOTA_TOKEN = "preplasmiviricota"
 
 
 @dataclass
@@ -176,6 +185,83 @@ def summarize_dominant_family(
     if dominant_count == 0:
         return "UNKNOWN", 0.0
     return dominant_family, dominant_count / len(taxonomies)
+
+
+def _split_top10_field(value: object) -> list[str]:
+    """Split a top-10 field that may be a comma-joined string or a list."""
+    if isinstance(value, str):
+        return value.split(",")
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return []
+
+
+def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
+    """Return ``(prefix, target)`` for identity-qualified viral top-10 hits.
+
+    One place canonicalizes a top-10 hit list into viral reference namespaces:
+    VP and PLV fold onto PPV, and a hit below ``MIN_VIRAL_HIT_PIDENT`` does not
+    qualify. ``record`` needs ``top10_prefixes`` and ``top10_pidents``;
+    ``top10_targets`` is optional and yields ``""`` when absent.
+    """
+    prefixes = [
+        canonical_family(str(prefix).rstrip("_"))
+        for prefix in _split_top10_field(record.get("top10_prefixes"))
+        if str(prefix).strip()
+    ]
+    pidents: list[float] = []
+    for value in _split_top10_field(record.get("top10_pidents")):
+        try:
+            pidents.append(float(value))
+        except (TypeError, ValueError):
+            pidents.append(0.0)
+    targets = [
+        str(target).strip()
+        for target in _split_top10_field(record.get("top10_targets"))
+    ]
+    hits: list[tuple[str, str]] = []
+    for index, (prefix, pident) in enumerate(zip(prefixes, pidents)):
+        if prefix not in PUBLISHED_VIRAL_PREFIXES:
+            continue
+        if pident < MIN_VIRAL_HIT_PIDENT:
+            continue
+        hits.append((prefix, targets[index] if index < len(targets) else ""))
+    return hits
+
+
+def viral_hit_categories(
+    record: dict,
+    taxonomy_lookup: Optional[dict] = None,
+) -> list[str]:
+    """Return the published viral class of each qualified top-10 hit.
+
+    GVMAG is the giant-virus MAG namespace, so it reports NCLDV: without the
+    fold a marker with 8 GVMAG and 2 NCLDV hits would read as two lineages. A
+    PHAGE target reports PPV when its resolved lineage is Preplasmiviricota (the
+    legacy ``PHAGE__VARDNA__`` namespace holds virophage-like genomes) and PHAGE
+    otherwise. ``taxonomy_lookup`` of ``None`` skips lineage resolution.
+    """
+    categories: list[str] = []
+    for prefix, target in qualified_viral_hits(record):
+        if prefix == "GVMAG":
+            categories.append("NCLDV")
+        elif prefix == "PHAGE":
+            categories.append(
+                "PPV"
+                if _is_preplasmiviricota(target, taxonomy_lookup)
+                else "PHAGE"
+            )
+        else:
+            categories.append(prefix)
+    return categories
+
+
+def _is_preplasmiviricota(target: str, taxonomy_lookup: Optional[dict]) -> bool:
+    if not target or not taxonomy_lookup:
+        return False
+    org_id = resolve_org_id(target, taxonomy_lookup)
+    lineage = str(taxonomy_lookup.get(org_id) or "").lower()
+    return _PREPLASMIVIRICOTA_TOKEN in lineage
 
 
 def _resolve_diamond_db_prefix(target_path: Path) -> Path:

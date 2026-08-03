@@ -306,6 +306,88 @@ Tier mapping defaults:
 Candidates with priority-marker evidence can be promoted from `LOW` to
 `MEDIUM` under configured rules.
 
+### Taxonomy class assignment
+
+The published class of a region comes from a weighted vote over its genes. It
+labels the region and does not feed the acceptance gate. The gate resolves its
+own class from `region_classification` and the family-like columns, in a
+separate vocabulary that still carries `MIXED`.
+
+Every gene inside the refined boundary with an identity-qualified viral hit
+votes with its top-10 taxonomy:
+
+- a hit below 25% amino-acid identity does not qualify;
+- reference namespaces map onto published classes: `VP` and `PLV` to `PPV`,
+  `GVMAG` to `NCLDV`, and `PHAGE` to `PPV` when the target's resolved lineage
+  contains Preplasmiviricota (the legacy `PHAGE__VARDNA__` records) and to
+  `PHAGE` otherwise;
+- one distinct class across a gene's qualified hits is that gene's vote;
+  several distinct classes make the vote `VIRAL_UNKNOWN`, which carries weight
+  but can never win; no qualified viral hit is no vote.
+
+A gene without a vote is left out of the denominator. A validated marker with
+no qualified hit is the HMM-only `validated_novel` case.
+
+A marker-bearing gene is searched twice, against the marker validation database
+in Phase 1 and again in the Phase 2b all-gene search. Weights:
+
+- validated MCP marker: weight 5 on the marker call;
+- validated marker, all-gene search agrees: weight 3;
+- validated marker, all-gene search disagrees: weight 2 on the marker call and
+  weight 1 on the conflicting all-gene call;
+- no marker: weight 1 on the all-gene call.
+
+A lineage class (`NCLDV`, `MIRUS`, `PPV`, `CRESS`, or `PHAGE`) needs strictly
+more than half the total weight. Half is not enough, so two genes that disagree
+leave the region `VIRAL_UNKNOWN`. A region with no viral vote at all is
+`VIRAL_UNKNOWN` when it carries a validated marker and `UNKNOWN` when it
+carries none.
+
+The major capsid protein decides ahead of the weighted vote. An MCP marker that
+cast a vote sets the class alone, whatever the other genes say, including when
+its own top-10 spans several lineages and it votes `VIRAL_UNKNOWN`. An MCP with
+no qualified viral hit casts no vote and decides nothing. MCP markers that
+disagree fall through to the weighted vote at weight 5 each, which is the only
+place the weights break an MCP tie.
+
+Phase 3 drops an `UNKNOWN` region from the published set unless it shares an ANI
+cluster with a marker-bearing EVE. Such a region holds no viral evidence at all,
+so without a clustered relative to vouch for it the length rule admitted host
+sequence. The drop runs after clustering, and it is the only step that publishes
+fewer EVEs than the acceptance gate kept.
+
+`ppv_subtype` comes from VP-specific and PLV-specific HMM markers, not from
+taxonomy, and is reported only for regions published as `PPV`. The v1.0.6
+database labels Preplasmiviricota references `PPV__` and holds no `VP__` or
+`PLV__` records, so the top-10 hits cannot separate the two subtypes.
+
+### ANI clustering and class propagation
+
+Accepted regions of one genome are compared all against all with skani
+(`triangle -E --medium -m 200 -s 80`, minimum aligned fraction 50), before any
+class is counted or persisted. Two regions join when they reach 95% average
+nucleotide identity over at least 50% of either sequence, and each connected
+component is one cluster. Clusters are numbered by descending size, ties broken
+by lowest member EVE ID, so a rerun of one genome reproduces the numbering.
+
+A region may donate its class only when an MCP marker's own vote is the class
+that won. That is narrower than carrying an MCP: a capsid annotation, a
+structural jelly-roll call, and phylogenetic evidence also mark a region as
+MCP-bearing without casting a taxonomy vote. In a cluster holding both donors
+and non-donors whose donors agree on a single lineage class, every non-donor
+takes that class and records the source EVE ID. Nothing propagates when the
+donors disagree, or when the class they agree on is `VIRAL_UNKNOWN` or
+`UNKNOWN`.
+Clustering runs on the fixed accepted set and rewrites only the class. The
+clustering confidence bonus stays 0.0, since scoring has already run.
+
+Every pair skani reports is written to `phase3_synthesis/eve_ani_edges.tsv` as
+`eve_a`, `eve_b`, `ani`, `af_a`, `af_b`, including pairs below the 95% ANI
+threshold, so downstream readers filter from one table. Three cases give a
+header-only edge table and no propagation: fewer than two accepted regions, no
+`skani` binary on PATH, and regions skani cannot sketch. Any other skani
+failure fails the run.
+
 ## Output specification
 
 Per-genome outputs are split between `phase3_synthesis/` and top-level
@@ -319,6 +401,8 @@ Core synthesis files (`phase3_synthesis/`):
 - `virosync_predictions_detailed.tsv` (all Phase 3 candidates)
 - `virosync_summary.json`
 - `evidence_profiles.json`
+- `eve_ani_edges.tsv` (every accepted-EVE pair skani compared; header-only
+  when the genome has fewer than two accepted regions)
 - `virosync_tmvec_proteins.tsv` (can be header-only when TMVec is
   disabled or no hits are found)
 - optional: `virosync_jelly_roll_proteins.tsv`
@@ -334,10 +418,11 @@ Top-level run files:
 - `run.log` (timing and run summary)
 - optional: `gvclass_results.tsv`
 
-The output schema version is 4. Both prediction TSVs contain
+The output schema version is 5. Both prediction TSVs contain
 `effective_eve_class`, with exactly one of `NCLDV`, `MIRUS`, `PPV`, `CRESS`,
-`MIXED`, or `UNKNOWN`. Canonical rows contribute to exactly one class total.
-Result parsing maps the `VP` and `PLV` aliases to the parent `PPV` class.
+`PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`. Canonical rows contribute to exactly
+one class total. Result parsing maps the `VP` and `PLV` aliases to the parent
+`PPV` class, and the `MIXED` alias to `VIRAL_UNKNOWN`.
 
 The detailed TSV groups columns in this order:
 
@@ -347,7 +432,14 @@ The detailed TSV groups columns in this order:
 4. gene taxonomy;
 5. composition and host evidence;
 6. InterProScan evidence;
-7. marker-set completeness.
+7. marker-set completeness;
+8. ANI clustering.
+
+The ANI columns are `ani_cluster_id` (`.` for a region with no clustered
+relative), `ani_cluster_size` (`1` for a singleton), `ani_max_percent` (`.` for
+a singleton), `taxonomy_class_before_ani`, and
+`taxonomy_class_propagated_from`. The last two are filled only where a cluster
+donor supplied the class.
 
 `ppv_subtype` is `VP` or `PLV` only when subtype-specific marker evidence
 supports one subtype and not the other. It is `.` for ambiguous PPV calls and
@@ -367,8 +459,9 @@ identity-qualified gene taxonomy can assign CRESS. `vp_completeness` records
 subtype evidence, while
 `ppv_completeness` combines the PPV marker sets.
 
-Batch TSV class columns are `ncldv`, `mirus`, `ppv`, `cress`, `mixed`, and
-`unknown`. They are mutually exclusive and sum to `accepted`.
+Batch TSV class columns are `ncldv`, `mirus`, `ppv`, `cress`, `phage`,
+`viral_unknown`, and `unknown`. They are mutually exclusive and sum to
+`accepted`.
 
 Batch mode additionally writes batch summaries (`batch_summary.tsv`,
 `batch_report.md`). The sibling `virosync-bench` repository uses

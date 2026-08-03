@@ -295,7 +295,7 @@ def test_coordinate_convention_is_versioned_in_output_contract() -> None:
     contract = importlib.import_module("virosync.output_contract")
 
     assert contract.COORDINATE_SCHEMA_VERSION == 2
-    assert contract.OUTPUT_SCHEMA_VERSION == 4
+    assert contract.OUTPUT_SCHEMA_VERSION == 5
     assert "0-based" in contract.COORDINATE_CONVENTION.lower()
     assert "half-open" in contract.COORDINATE_CONVENTION.lower()
 

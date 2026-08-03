@@ -25,7 +25,10 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
 )
-from virosync.pipeline.phase3.output_generator import OutputGenerator
+from virosync.pipeline.phase3.output_generator import (
+    OutputGenerator,
+    evaluate_v2_quality_gate,
+)
 from virosync.output_contract import (
     COORDINATE_CONVENTION,
     COORDINATE_SCHEMA_VERSION,
@@ -136,6 +139,7 @@ def _build_result(
     status: VerificationStatus,
     region_classification: str = "NCLDV",
     likely_family: str = "NCLDV",
+    taxonomy_class: str = "NCLDV",
     hallmark_count: int = 0,
     has_mcp: bool = False,
 ) -> VerificationResult:
@@ -149,6 +153,7 @@ def _build_result(
         final_confidence=0.9 if confidence_tier != "LOW" else 0.1,
         region_classification=region_classification,
         likely_family=likely_family,
+        taxonomy_class=taxonomy_class,
         hallmark_count=hallmark_count,
         has_mcp=has_mcp,
     )
@@ -579,11 +584,13 @@ def test_prediction_tsv_writers_preserve_zero_candidate_start(
     ["write_predictions_tsv", "write_predictions_detailed_tsv"],
 )
 @pytest.mark.parametrize("extended_output", [False, True])
-def test_prediction_tsv_writers_append_tier_aware_effective_class(
+def test_prediction_tsv_writers_publish_the_taxonomy_class(
     tmp_path: Path,
     writer_name: str,
     extended_output: bool,
 ) -> None:
+    # The gate resolves this region to NCLDV, but publication reports the
+    # taxonomy consensus, so the two must be able to disagree in the column.
     result = _build_result(
         eve_id="EVE_LOW_CONFLICT",
         scaffold="ctg",
@@ -593,6 +600,7 @@ def test_prediction_tsv_writers_append_tier_aware_effective_class(
         status=VerificationStatus.AMBIGUOUS,
         region_classification="PPV",
         likely_family="NCLDV",
+        taxonomy_class="MIRUS",
         hallmark_count=2,
     )
     generator = OutputGenerator(output_dir=tmp_path, extended_output=extended_output)
@@ -617,7 +625,8 @@ def test_prediction_tsv_writers_append_tier_aware_effective_class(
             or column not in DETAILED_PREDICTION_EXTENDED_COLUMNS
         )
     assert reader.fieldnames == list(expected_fields)
-    assert rows[0]["effective_eve_class"] == "NCLDV"
+    assert rows[0]["effective_eve_class"] == "MIRUS"
+    assert evaluate_v2_quality_gate(result).effective_class == "NCLDV"
     if writer_name == "write_predictions_tsv":
         assert rows[0]["region_classification"] == "PPV"
         assert rows[0]["classification"] == "NCLDV"
@@ -646,6 +655,7 @@ def test_canonical_tsv_uses_dot_for_unassigned_ppv_subtype(
         status=VerificationStatus.HIGH_CONFIDENCE,
         region_classification="PPV",
         likely_family="PPV",
+        taxonomy_class="PPV",
         hallmark_count=2,
     )
     result.ppv_subtype = ""

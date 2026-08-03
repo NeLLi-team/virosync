@@ -12,10 +12,41 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   aggregate progress for resources and genome queries.
 - Command-local `--verbose` flags for setup and run diagnostics.
 - CRESS calls and counts in prediction, batch, report, and notebook outputs.
+- Published EVE taxonomy class from a weighted vote over the element's genes:
+  validated marker the all-gene search agrees with 3, validated marker alone 2,
+  gene without a marker 1. A lineage needs strictly more than half the total
+  weight. An MCP marker that cast a vote overrides that vote outright; MCP
+  markers that disagree settle it by weight, 5 each.
+- Per-genome ANI clustering of accepted EVEs at 95% identity and 50% aligned
+  fraction, on by default. Members inherit the lineage class their MCP-decided
+  relatives agree on.
+- `phase3_synthesis/eve_ani_edges.tsv`, and detailed TSV columns
+  `ani_cluster_id`, `ani_cluster_size`, `ani_max_percent`,
+  `taxonomy_class_before_ani`, and `taxonomy_class_propagated_from`.
+- `eve_ani_network.png` in the report notebook: one node per EVE colored by
+  published class, MCP-decided nodes outlined, an edge per clustered pair,
+  laid out with graphviz `sfdp`.
 
 ### Changed
 
 - Output schema v4 groups detailed TSV fields by evidence type.
+- Output schema v4 to v5. `effective_eve_class` is `NCLDV`, `MIRUS`, `PPV`,
+  `CRESS`, `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`. `MIXED` is retired and reads
+  back as `VIRAL_UNKNOWN`. Batch summaries replace the `mixed` column with
+  `viral_unknown` and add `phage`.
+- The v2 quality gate keeps its own class vocabulary and its own resolver, and
+  still decides which candidates it accepts. The published class only labels
+  them.
+- Phase 3 now drops an accepted EVE that carries no validated marker, returned
+  no identity-qualified viral gene hit, and shares no ANI cluster with a
+  marker-bearing EVE. Nothing in such a region is viral. This is the one place
+  the published set is smaller than the gate's own.
+- The report notebook annotates gene-map and marker-heatmap clusters at 95%
+  ANI rather than 90%, which regroups the EVEs in both figures. It reads the
+  clusters from the pipeline instead of running skani itself.
+- `graphviz` and `python-graphviz` are pinned in `pixi.toml`. The locked
+  runtime is part of the run fingerprint, so runs made against the previous
+  `pixi.lock` no longer resume; they restart from Phase 0.
 - Resource setup captures downloader progress in the single ViroSync bar and
   shows redacted network errors when a download fails.
 - Batch summaries report PPV as the parent class instead of separate VP and

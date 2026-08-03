@@ -1620,7 +1620,7 @@ def test_completed_resume_normalizes_legacy_missing_promoted_low_count(
     assert mocked_pipeline.calls == calls_after_fresh
 
 
-@pytest.mark.parametrize("legacy_class", ["VP", "PLV"])
+@pytest.mark.parametrize("legacy_class", ["VP", "PLV", "MIXED"])
 def test_legacy_class_tokens_resume_without_recompute(
     mocked_pipeline: _MockPipeline,
     legacy_class: str,

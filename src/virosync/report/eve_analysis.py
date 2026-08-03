@@ -29,12 +29,16 @@ RESULTS_DIR = "."
 GENOME_ID = ""  # auto-detected from EVE IDs if empty
 TAX_LABELS_PATH = ""
 SHOW_TIERS = ["HIGH", "MEDIUM", "LOW"]
-ANI_THRESHOLD = 90.0
+# The pipeline already clustered the accepted EVEs at 95% ANI and 50% aligned
+# fraction and published the cluster of every EVE, so these two only filter the
+# published edge table for the ANI network figure. Raising ANI_THRESHOLD draws a
+# sparser network; it never re-clusters, and the cluster labels the gene map and
+# marker heatmap use always come from the pipeline.
+ANI_THRESHOLD = 95.0
+MIN_ALIGNED_FRACTION = 50.0
 FLANK_SIZE = 5000
 
 # %%
-import subprocess
-import tempfile
 import pandas as pd
 import numpy as np
 from IPython import get_ipython
@@ -52,13 +56,9 @@ from collections import Counter, defaultdict
 # %%
 # Keep these helpers self-contained: papermill executes this notebook from the
 # result directory, where the ViroSync source package may not be importable.
-import hashlib
 import re
 from pathlib import Path
-from urllib.parse import quote
 
-_PORTABLE_FILENAME_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
-_MAX_FILENAME_COMPONENT_LENGTH = 180
 _REPORT_NCLDV_MCP_MODELS = frozenset({
     "og1352",
     "og484",
@@ -184,66 +184,21 @@ def safe_ratio(numerator, denominator):
     return numerator / denominator if denominator else 0.0
 
 
-def safe_filename_component(value):
-    if not isinstance(value, str):
-        raise TypeError("filename component must be a string")
-    encoded_bytes = value.encode("utf-8", errors="surrogatepass")
-    if (
-        value
-        and value not in {".", ".."}
-        and _PORTABLE_FILENAME_COMPONENT.fullmatch(value) is not None
-        and len(encoded_bytes) <= _MAX_FILENAME_COMPONENT_LENGTH
-    ):
-        return value
-    encoded = quote(value, safe="._-", errors="surrogatepass").replace("~", "%7E")
-    digest = hashlib.sha256(encoded_bytes).hexdigest()[:16]
-    prefix_limit = _MAX_FILENAME_COMPONENT_LENGTH - len(digest) - 3
-    encoded = encoded[:prefix_limit] or "empty"
-    return f"%{encoded}--{digest}"
+def canon_family(profile):
+    """Return one EVE profile's published taxonomy class.
 
-
-def safe_filename_components(values, label="identifier"):
-    raw_values = list(values)
-    indices_by_value = {}
-    for index, value in enumerate(raw_values):
-        indices_by_value.setdefault(value, []).append(index)
-    duplicates = {
-        value: indices
-        for value, indices in indices_by_value.items()
-        if len(indices) > 1
-    }
-    if duplicates:
-        details = "; ".join(
-            f"{value!r} at indices {', '.join(str(index) for index in indices)}"
-            for value, indices in sorted(duplicates.items())
-        )
-        raise ValueError(f"duplicate {label}s: {details}")
-    components = {}
-    raw_value_by_component = {}
-    for value in raw_values:
-        component = safe_filename_component(value)
-        conflicting_value = raw_value_by_component.get(component)
-        if conflicting_value is not None:
-            raise ValueError(
-                f"{label} filename encoding collision: "
-                f"{conflicting_value!r} and {value!r}"
-            )
-        components[value] = component
-        raw_value_by_component[component] = value
-    return components
-
-
-def require_strict_child(root, candidate):
-    resolved_root = Path(root).resolve(strict=False)
-    resolved_candidate = Path(candidate).resolve(strict=False)
-    if (
-        resolved_candidate == resolved_root
-        or resolved_root not in resolved_candidate.parents
-    ):
-        raise ValueError(
-            f"path must be a strict child of {resolved_root}: {resolved_candidate}"
-        )
-    return resolved_candidate
+    Reads `taxonomy_class`, the class published by the marker taxonomy consensus,
+    the MCP override, and ANI propagation. Result files written before that field
+    existed fall back to `likely_family` so they still render. Retired labels fold
+    onto their replacements: VP and PLV onto PPV, MIXED onto VIRAL_UNKNOWN.
+    """
+    value = profile.get('taxonomy_class') or profile.get('likely_family')
+    token = str(value or 'UNKNOWN').strip().upper()
+    if token in ('VP', 'PLV'):
+        return 'PPV'
+    if token == 'MIXED':
+        return 'VIRAL_UNKNOWN'
+    return token
 
 
 # %%
@@ -745,7 +700,7 @@ if _host_model and _level_tokens:
 # %% [markdown]
 # ## EVE Summary
 #
-# Counts and sizes of the canonical EVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by likely viral family and prints the tier total above each bar. Panel B shows the length distribution of each family as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. In both panels a fixed family key colors PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, Mirusviricota, and phage, and draws any other label, including MIXED and UNKNOWN, in gray.
+# Counts and sizes of the canonical EVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by published taxonomy class and prints the tier total above each bar. Panel B shows the length distribution of each class as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. Every figure in this notebook colors EVEs by the same published class: PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, MIRUS (Mirusviricota), CRESS, PHAGE, VIRAL_UNKNOWN in blue for an EVE whose markers are viral but do not agree on a class, and UNKNOWN in gray for an EVE with no viral class evidence. That class comes from the taxonomy consensus over the validated marker genes' own top-10 hits, overridden by a major capsid protein marker where one is present, and inherited from an MCP-bearing relative in the same ANI cluster where the EVE has no MCP of its own.
 
 # %%
 # ---- EVE summary stats ----
@@ -762,28 +717,26 @@ for tier in ['HIGH', 'MEDIUM', 'LOW']:
     label = tier
     print(f'  {label:<12s} {n:>3d}')
 print()
-print('Family classification:')
-def canon_family(value):
-    """Fold legacy VP/PLV labels onto PPV so old and new runs group together."""
-    token = str(value or 'UNKNOWN').strip().upper()
-    return 'PPV' if token in ('VP', 'PLV') else token
-
-all_families = Counter(canon_family(p.get('likely_family')) for p in profiles.values())
+print('Taxonomy classification:')
+all_families = Counter(canon_family(p) for p in profiles.values())
 for fam, n in all_families.most_common():
-    print(f'  {fam:<12s} {n:>3d}')
+    print(f'  {fam:<14s} {n:>3d}')
 
-# Family classification colors (reused in later cells)
+# Published taxonomy class colors (reused in later cells). Legacy VP, PLV and
+# MIXED labels need no entries: canon_family folds them onto PPV and
+# VIRAL_UNKNOWN before any lookup.
 FAMILY_COLORS = {
-    'PPV':     COLORS['PPV'],       # orange -- Preplasmiviricota (PLV + virophages)
-    'NCLDV':   COLORS['NCLDV'],     # teal
-    'MIRUS':   COLORS['MIRUS'],     # dark magenta
-    'CRESS':   COLORS['CRESS'],     # yellow
-    'PHAGE':   '#CC3311',           # red
-    'PLV':     COLORS['PLV'],       # legacy label from pre-PPV result files
-    'VP':      COLORS['VP'],        # legacy label from pre-PPV result files
-    'UNKNOWN': COLORS['UNKNOWN'],   # gray
+    'PPV':           COLORS['PPV'],     # orange -- Preplasmiviricota (PLV + virophages)
+    'NCLDV':         COLORS['NCLDV'],   # teal
+    'MIRUS':         COLORS['MIRUS'],   # dark magenta
+    'CRESS':         COLORS['CRESS'],   # yellow
+    'PHAGE':         '#CC3311',         # red
+    'VIRAL_UNKNOWN': '#4477AA',         # blue -- viral, class unresolved
+    'UNKNOWN':       COLORS['UNKNOWN'], # gray -- no viral class evidence
 }
-family_order = ['PPV', 'NCLDV', 'MIRUS', 'CRESS', 'PHAGE', 'PLV', 'VP', 'UNKNOWN']
+family_order = [
+    'PPV', 'NCLDV', 'MIRUS', 'CRESS', 'PHAGE', 'VIRAL_UNKNOWN', 'UNKNOWN',
+]
 tier_order = ['HIGH', 'MEDIUM', 'LOW']
 
 tier_family_counts = {t: Counter() for t in tier_order}
@@ -791,7 +744,7 @@ for p in profiles.values():
     tier = p.get('confidence_tier', 'UNKNOWN')
     if tier not in tier_order:
         continue
-    family = canon_family(p.get('likely_family'))
+    family = canon_family(p)
     if family not in FAMILY_COLORS:
         family = 'UNKNOWN'
     tier_family_counts[tier][family] += 1
@@ -830,7 +783,7 @@ finalize_axes(ax1)
 # Panel B: boxplot + jittered points -- EVE size by family
 eve_sizes_by_family = {}
 for p in profiles.values():
-    family = canon_family(p.get('likely_family'))
+    family = canon_family(p)
     if family not in FAMILY_COLORS:
         family = 'UNKNOWN'
     eve_sizes_by_family.setdefault(family, []).append(p['length'] / 1000)  # kb
@@ -861,13 +814,14 @@ if box_data:
                     edgecolors='white', linewidths=0.3, zorder=5)
 
     ax2.set_xticks(range(len(families_present)))
-    ax2.set_xticklabels(families_present)
+    # Rotated: VIRAL_UNKNOWN is long enough to collide with its neighbours flat.
+    ax2.set_xticklabels(families_present, rotation=30, ha='right', fontsize=8)
 else:
     ax2.text(0.5, 0.5, 'No canonical EVEs', ha='center', va='center',
              transform=ax2.transAxes)
     ax2.set_xticks([])
 ax2.set_ylabel('EVE length (kb)')
-ax2.set_title('(B) Size Distribution by Family', fontweight='bold')
+ax2.set_title('(B) Size Distribution by Class', fontweight='bold')
 finalize_axes(ax2)
 
 fig.suptitle(f'{GENOME_ID} EVE Overview (n={len(profiles)})', fontsize=13, fontweight='bold')
@@ -881,186 +835,91 @@ FileLink(str(BASE / 'eve_confidence_tiers.png'))
 # %% [markdown]
 # ## ANI Clustering of EVEs
 #
-# Groups canonical EVEs by sequence similarity. skani computes all-versus-all average nucleotide identity. Two EVEs share an edge when they meet the ANI threshold and a minimum 50% aligned fraction; each connected component forms one cluster. Clustering requires at least three EVEs. If skani cannot sketch any sequence from a complete, non-empty filtered EVE set, the report labels all of them as singletons. The gene map and marker heatmap use these cluster labels below.
+# Groups canonical EVEs by sequence similarity so repeated insertions of one element are visible as a group. Phase 3 compares every accepted EVE against every other with skani and joins two EVEs when they reach 95% average nucleotide identity over at least 50% of either sequence; each connected component is one cluster. This notebook reads those clusters from `evidence_profiles.json` instead of recomputing them, so the labels here, the taxonomy classes inherited from MCP-bearing relatives, and the network below all rest on one clustering. Clusters are named by descending size over the EVEs shown at the selected tiers, and an EVE with no clustered relative is a singleton. The gene map and marker heatmap use these labels.
 
 # %%
-if len(profiles) < 3:
-    print(f'Skipping ANI clustering: only {len(profiles)} EVEs (need >= 3)')
-    eve_cluster_map = {eid: 'singleton' for eid in profiles}
+def short_eve_label(eve_id):
+    """Shorten one EVE ID for a plot label by dropping the shared genome prefix."""
+    label = str(eve_id).replace(EVE_PREFIX + '|', '')
+    parts = label.split('_', 1)
+    if len(parts) == 2 and parts[0] == 'contig':
+        num_rest = parts[1].split('_', 1)
+        if len(num_rest) == 2:
+            return f'c{num_rest[0]}:{num_rest[1]}'
+    return label[:25]
+
+
+if not profiles:
+    print('No EVEs to cluster.')
+    eve_cluster_map = {}
     multi_clusters = []
 else:
-    # ---- ANI Clustering: canonical EVEs (skani, 90% ANI) ----
-    import shutil
-    
-    CLUSTER_TIERS = SHOW_TIERS
-    MIN_AF = 50.0
-    
-    # Auto-detect EVE FASTA (*_eves.fna)
-    eve_fastas = sorted(BASE.glob('*_eves.fna'))
-    assert eve_fastas, 'No *_eves.fna file found'
-    FASTA_PATH = eve_fastas[0]
-    
-    SKANI_BIN = shutil.which('skani')
-    if not SKANI_BIN:
-        # Walk up from notebook dir to find virosync pixi env
-        _search = Path('.').resolve()
-        for _ in range(10):
-            _candidate = _search / '.pixi' / 'envs' / 'default' / 'bin' / 'skani'
-            if _candidate.exists():
-                SKANI_BIN = str(_candidate)
-                break
-            if _search.parent == _search:
-                break
-            _search = _search.parent
-    assert SKANI_BIN, 'skani not found on PATH or in virosync pixi env'
-    
-    # 1. Filter canonical sequences from the FASTA
-    filtered_records = {}
-    with open(FASTA_PATH) as f:
-        current_id = None
-        current_header = ""
-        current_seq = []
-        for line in f:
-            line = line.rstrip('\n')
-            if line.startswith('>'):
-                if current_id and current_seq:
-                    filtered_records[current_id] = (current_header, ''.join(current_seq))
-                current_header = line
-                fields = line.split()
-                current_id = fields[0][1:]  # strip '>'
-                tier = ''
-                for field in fields:
-                    if field.startswith('tier='):
-                        tier = field.split('=', 1)[1]
-                if tier not in CLUSTER_TIERS:
-                    current_id = None  # skip this record
-                current_seq = []
-            elif current_id:
-                current_seq.append(line)
-        if current_id and current_seq:
-            filtered_records[current_id] = (current_header, ''.join(current_seq))
-    
-    print(f'Filtered {len(filtered_records)} EVEs from tiers: {", ".join(CLUSTER_TIERS)}')
-    if set(filtered_records) != set(profiles):
-        raise RuntimeError(
-            'EVE FASTA/profile mismatch: '
-            f'{len(filtered_records)} sequences for {len(profiles)} profiles'
-        )
-    
-    # 2. Write individual FASTAs for skani (one per EVE) and run all-vs-all
-    tmpdir = tempfile.mkdtemp(prefix="skani_cluster_")
-    try:
-        tmpdir_path = Path(tmpdir)
-        fasta_list_path = tmpdir_path / "fasta_list.txt"
-        eve_file_map = {}  # file path -> eve_id
-        filename_components = safe_filename_components(filtered_records, label="EVE ID")
+    # ---- ANI clusters, as published by Phase 3 (95% ANI, 50% aligned fraction) ----
+    # cluster_id is -1 for a singleton, and absent from result files written
+    # before Phase 3 clustered by default. Tier filtering can strip a published
+    # cluster down to one visible member, so membership is recounted over the
+    # EVEs actually shown before any cluster is named.
+    _members_by_cluster = defaultdict(list)
+    for eid, profile in profiles.items():
+        cluster_id = int(profile.get('cluster_id', -1))
+        if cluster_id >= 0:
+            _members_by_cluster[cluster_id].append(eid)
 
-        with open(fasta_list_path, "w") as fl:
-            for eve_id, (header, seq) in filtered_records.items():
-                fpath = tmpdir_path / f"{filename_components[eve_id]}.fna"
-                require_strict_child(tmpdir_path, fpath)
-                with open(fpath, "w") as f:
-                    f.write(f"{header}\n{seq}\n")
-                fl.write(f"{fpath}\n")
-                eve_file_map[str(fpath)] = eve_id
-    
-        ani_out = Path(tmpdir) / 'ani.tsv'
-        cmd = [
-            SKANI_BIN, 'triangle',
-            '-l', str(fasta_list_path),
-            '-E',                           # sparse output (row-by-row)
-            '--medium',                     # better accuracy for small sequences
-            '-m', '200',                    # lower marker compression for small genomes
-            '-s', '80',                     # screen threshold
-            '--min-af', str(int(MIN_AF)),   # minimum aligned fraction
-            '-t', '4',
-            '-o', str(ani_out),
-        ]
-    
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            if 'No genomes/sketches found' in result.stderr:
-                print('skani could not sketch any filtered EVE; keeping all as singletons')
-                ani_out.write_text('Ref_file\tQuery_file\tANI\tAlign_fraction_ref\tAlign_fraction_query\n')
-            else:
-                print(f'skani error:\n{result.stderr}')
-                raise RuntimeError('skani triangle failed')
-    
-        # 3. Parse sparse output and cluster via union-find at ANI threshold
-        parent = {eid: eid for eid in filtered_records}
-    
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-    
-        def union(a, b):
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[ra] = rb
-    
-        n_edges = 0
-        with open(ani_out) as f:
-            next(f)  # skip header
-            for line in f:
-                cols = line.rstrip('\n').split('\t')
-                ref_id = eve_file_map.get(cols[0], cols[0])
-                query_id = eve_file_map.get(cols[1], cols[1])
-                ani = float(cols[2])
-                af_ref = float(cols[3])
-                af_query = float(cols[4])
-                if ani >= ANI_THRESHOLD and max(af_ref, af_query) >= MIN_AF:
-                    union(ref_id, query_id)
-                    n_edges += 1
-    finally:
-        # Clean up temp files
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    
-    print(f'skani pairs >= {ANI_THRESHOLD:.0f}% ANI: {n_edges}')
-    
-    # Connected components = clusters
-    clusters_raw = defaultdict(list)
-    for eid in filtered_records:
-        clusters_raw[find(eid)].append(eid)
-    
-    # 4. Assign cluster labels sorted by size desc; singletons get "singleton"
-    eve_cluster_map = {}
+    # Descending size, then lowest member ID: the labels are a function of the
+    # published clusters alone, so rerunning the report reproduces them.
     multi_clusters = sorted(
-        [(rep, members) for rep, members in clusters_raw.items() if len(members) > 1],
-        key=lambda x: -len(x[1]),
+        (
+            (min(members), sorted(members))
+            for members in _members_by_cluster.values()
+            if len(members) > 1
+        ),
+        key=lambda item: (-len(item[1]), item[0]),
     )
-    
+
+    eve_cluster_map = {eid: 'singleton' for eid in profiles}
     for idx, (rep, members) in enumerate(multi_clusters, start=1):
-        label = f'Cluster_{idx}'
         for m in members:
-            eve_cluster_map[m] = label
-    
-    for rep, members in clusters_raw.items():
-        if len(members) == 1:
-            eve_cluster_map[members[0]] = 'singleton'
-    
-    # 5. Print summary
+            eve_cluster_map[m] = f'Cluster_{idx}'
+
+    # Summary
     n_clustered = sum(1 for v in eve_cluster_map.values() if v != 'singleton')
     n_singletons = sum(1 for v in eve_cluster_map.values() if v == 'singleton')
-    print(f'\nClusters: {len(multi_clusters)} multi-member, {n_singletons} singletons')
-    print(f'Clustered EVEs: {n_clustered}/{len(filtered_records)}')
-    
+    print(f'Clusters: {len(multi_clusters)} multi-member, {n_singletons} singletons')
+    print(f'Clustered EVEs: {n_clustered}/{len(eve_cluster_map)}')
+
     print(f'\n{"Cluster":<14} {"Size":>5}  {"Tiers":<20} {"Members"}')
     print('-' * 80)
     for idx, (rep, members) in enumerate(multi_clusters, start=1):
-        tiers = []
-        for m in members:
-            for field in filtered_records[m][0].split():
-                if field.startswith('tier='):
-                    tiers.append(field.split('=')[1])
-        tier_str = ', '.join(sorted(set(tiers)))
-        member_short = [m.split('_', 1)[1] if '_' in m else m for m in members]
-        print(f'Cluster_{idx:<5} {len(members):>5}  {tier_str:<20} {", ".join(member_short)}')
-    
+        tier_str = ', '.join(sorted(
+            {profiles[m].get('confidence_tier', '') for m in members}
+        ))
+        member_short = ', '.join(short_eve_label(m) for m in members)
+        print(f'Cluster_{idx:<5} {len(members):>5}  {tier_str:<20} {member_short}')
+
     print(f'\nCluster map stored in eve_cluster_map ({len(eve_cluster_map)} entries)')
-    
-    # 6. Pie chart: cluster size distribution
+
+    # Which EVEs took their class from an MCP-bearing cluster member. Without
+    # this the override is invisible in the report: the inherited class looks
+    # like every other call.
+    propagated = sorted(
+        (eid, p) for eid, p in profiles.items()
+        if p.get('taxonomy_class_propagated_from')
+    )
+    if propagated:
+        print(f'\nClass inherited from an MCP-bearing cluster member: {len(propagated)}')
+        print(f'{"EVE":<30} {"was":<15} {"now":<15} {"from"}')
+        print('-' * 80)
+        for eid, p in propagated:
+            print(
+                f'{short_eve_label(eid):<30} '
+                f'{p.get("taxonomy_class_before_ani", ""):<15} '
+                f'{canon_family(p):<15} '
+                f'{short_eve_label(p["taxonomy_class_propagated_from"])}'
+            )
+    else:
+        print('\nNo EVE inherited its class from an MCP-bearing cluster member.')
+
+    # Pie chart: cluster size distribution
     labels = []
     sizes = []
     pie_colors = []
@@ -1073,7 +932,7 @@ else:
         labels.append(f'Singletons (n={n_singletons})')
         sizes.append(n_singletons)
         pie_colors.append('#BBBBBB')
-    
+
     fig, ax = plt.subplots(figsize=(3, 3))
     wedges, texts, autotexts = ax.pie(
         sizes, labels=labels, autopct='%1.0f%%',
@@ -1081,13 +940,115 @@ else:
         pctdistance=0.82, textprops={'fontsize': 9})
     for t in autotexts:
         t.set_fontsize(8)
-    ax.set_title(f'ANI Cluster Composition (n={len(eve_cluster_map)} EVEs, {ANI_THRESHOLD:.0f}% ANI)')
+    ax.set_title(f'ANI Cluster Composition (n={len(eve_cluster_map)} EVEs)')
     plt.tight_layout()
     plt.savefig(BASE / 'eve_cluster_composition.png', dpi=300)
     plt.show()
-    
+
     from IPython.display import FileLink
     FileLink(str(BASE / 'eve_cluster_composition.png'))
+
+# %% [markdown]
+# ## ANI Network of EVEs
+#
+# One node per EVE, laid out force-directed with graphviz `sfdp`. An edge means Phase 3's skani comparison of the two EVEs reached `ANI_THRESHOLD` average nucleotide identity over at least `MIN_ALIGNED_FRACTION` of one of the two sequences; the pairs are read from `phase3_synthesis/eve_ani_edges.tsv`. Node fill is the published taxonomy class, the same key every other figure here uses. A thick black border marks an EVE with a validated major capsid protein, the evidence that lets an EVE name the class of its MCP-free relatives. Only EVEs with at least one edge are drawn, because a genome can carry many unrelated EVEs and a field of isolated dots shows nothing; the title states how many were left out. Clusters are not recomputed here: at the default threshold, a connected component of this figure is one of the clusters above.
+
+# %%
+import graphviz
+
+_edges_path = SYNTHESIS / 'eve_ani_edges.tsv'
+network_edges = []
+if _edges_path.exists():
+    with open(_edges_path) as f:
+        next(f)  # header
+        for line in f:
+            cols = line.rstrip('\n').split('\t')
+            if len(cols) < 5:
+                continue
+            eve_a, eve_b = cols[0], cols[1]
+            if eve_a not in profiles or eve_b not in profiles:
+                continue
+            ani, af_a, af_b = float(cols[2]), float(cols[3]), float(cols[4])
+            if ani >= ANI_THRESHOLD and max(af_a, af_b) >= MIN_ALIGNED_FRACTION:
+                network_edges.append((eve_a, eve_b, ani))
+
+if not _edges_path.exists():
+    print(f'No ANI edge table at {_edges_path}; skipping the ANI network')
+elif not network_edges:
+    print(
+        f'No EVE pair reaches {ANI_THRESHOLD:.0f}% ANI over '
+        f'{MIN_ALIGNED_FRACTION:.0f}% aligned fraction; skipping the ANI network'
+    )
+else:
+    # A node with an edge is by definition in a component of two or more, so no
+    # component search is needed to drop the unconnected EVEs.
+    network_eves = sorted({eid for edge in network_edges for eid in edge[:2]})
+    n_omitted = len(profiles) - len(network_eves)
+    classes_present = sorted({canon_family(profiles[eid]) for eid in network_eves})
+
+    # Title and legend go in the graph label as an HTML-like table: sfdp lays
+    # out no clusters, so legend nodes would scatter through the network.
+    _legend_cells = ''.join(
+        f'<TD BGCOLOR="{FAMILY_COLORS.get(cls, "#BBBBBB")}99">{cls}</TD>'
+        for cls in classes_present
+    ) + '<TD BORDER="3" COLOR="black" BGCOLOR="white">class set by MCP</TD>'
+    _caption = (
+        f'{GENOME_ID} EVE ANI network: {len(network_eves)} EVEs, '
+        f'{len(network_edges)} pairs at &gt;={ANI_THRESHOLD:.0f}% ANI and '
+        f'&gt;={MIN_ALIGNED_FRACTION:.0f}% aligned fraction, '
+        f'{n_omitted} unconnected EVE(s) omitted'
+    )
+
+    graph = graphviz.Graph(
+        name='eve_ani_network',
+        engine='sfdp',
+        graph_attr={
+            'overlap': 'false',
+            'splines': 'true',
+            'bgcolor': 'white',
+            'fontname': 'Helvetica',
+            'fontsize': '12',
+            'labelloc': 't',
+            'label': (
+                '<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="4">'
+                f'<TR><TD COLSPAN="{len(classes_present) + 1}">'
+                f'<B>{_caption}</B></TD></TR>'
+                f'<TR>{_legend_cells}</TR>'
+                '</TABLE>>'
+            ),
+        },
+        node_attr={
+            'shape': 'ellipse',
+            'style': 'filled',
+            'fontname': 'Helvetica',
+            'fontsize': '9',
+        },
+        edge_attr={'color': '#888888', 'penwidth': '1.2'},
+    )
+
+    for eid in network_eves:
+        # The border marks EVEs that can hand their class to a cluster-mate,
+        # which is the MCP-marker vote, not the broader has_mcp flag.
+        has_mcp = bool(profiles[eid].get('taxonomy_class_from_mcp'))
+        graph.node(
+            eid,
+            label=short_eve_label(eid),
+            # 60% alpha keeps the black label readable on every class color.
+            fillcolor=FAMILY_COLORS.get(canon_family(profiles[eid]), '#BBBBBB') + '99',
+            color='#000000' if has_mcp else '#CCCCCC',
+            penwidth='3.0' if has_mcp else '0.8',
+        )
+    for eve_a, eve_b, ani in network_edges:
+        graph.edge(eve_a, eve_b)
+
+    (BASE / 'eve_ani_network.png').write_bytes(graph.pipe(format='png'))
+    print(
+        f'ANI network: {len(network_eves)} EVEs, {len(network_edges)} edges, '
+        f'{n_omitted} unconnected EVE(s) omitted'
+    )
+
+    from IPython.display import Image
+    Image(filename=str(BASE / 'eve_ani_network.png'))
 
 # %% [markdown]
 # ## EVE Gene Map with Flanking Context
@@ -1215,7 +1176,7 @@ else:
             'status': profile.get('status', ''),
             'confidence': profile.get('final_confidence', 0),
             'confidence_tier': profile.get('confidence_tier', ''),
-            'likely_family': profile.get('likely_family', ''),
+            'taxonomy_class': canon_family(profile),
             'left_flank_genes': [
                 _make_gene_record(gene, 'left_flank') for gene in left_genes
             ],
@@ -1641,7 +1602,7 @@ else:
             ax.text(
                 1,
                 1.03,
-                f'{eve_info["likely_family"]} | {eve_info["eve_length"] / 1000:.1f} kb '
+                f'{eve_info["taxonomy_class"]} | {eve_info["eve_length"] / 1000:.1f} kb '
                 f'| score {eve_info["confidence"]:.2f}',
                 transform=ax.transAxes,
                 ha='right',
@@ -1769,7 +1730,7 @@ else:
 # %% [markdown]
 # ## Marker and InterProScan Summary
 #
-# Two views of the hallmark and functional content of the EVEs. The heatmap has one row per EVE and one column per marker, colored by copy number, with cells of two or more copies labeled and rows ordered by hierarchical clustering on marker presence and absence. Two annotation strips sit beside the rows, one for the ANI cluster and one for the likely family. Markers absent from every EVE are dropped. The second view summarizes marker, family, and InterProScan keyword composition across the call set. A copy number above one marks a hallmark gene present in multiple copies within a single element.
+# Two views of the hallmark and functional content of the EVEs. The heatmap has one row per EVE and one column per marker, colored by copy number, with cells of two or more copies labeled and rows ordered by hierarchical clustering on marker presence and absence. Two annotation strips sit beside the rows, one for the Phase 3 ANI cluster and one for the published taxonomy class. Markers absent from every EVE are dropped. The second view summarizes marker, family, and InterProScan keyword composition across the call set. A copy number above one marks a hallmark gene present in multiple copies within a single element.
 
 # %%
 if not profiles:
@@ -1878,20 +1839,9 @@ else:
     ax_heat.set_yticks([])
     ax_heat.tick_params(axis='x', top=False, bottom=False)
     
-    # Short row labels
-    short_labels = []
-    for eid in marker_df.index:
-        s = eid.replace(EVE_PREFIX + '|', '')
-        parts = s.split('_', 1)
-        if len(parts) == 2 and parts[0] == 'contig':
-            num_rest = parts[1].split('_', 1)
-            if len(num_rest) == 2:
-                short_labels.append(f'c{num_rest[0]}:{num_rest[1]}')
-            else:
-                short_labels.append(s[:25])
-        else:
-            short_labels.append(s[:25])
-    
+    # Short row labels, the same form the cluster print block and ANI network use
+    short_labels = [short_eve_label(eid) for eid in marker_df.index]
+
     # ANI Cluster annotation strip
     for i, eid in enumerate(marker_df.index):
         cl = eve_cluster_map.get(eid, 'singleton')
@@ -1909,7 +1859,7 @@ else:
     
     # Category annotation strip
     for i, eid in enumerate(marker_df.index):
-        fam = canon_family(profiles[eid].get('likely_family'))
+        fam = canon_family(profiles[eid])
         ax_fam.add_patch(plt.Rectangle((0, i - 0.5), 1, 1,
                         facecolor=FAMILY_COLORS.get(fam, '#BBBBBB'), edgecolor='none'))
     ax_fam.set_xlim(0, 1)
@@ -1940,7 +1890,7 @@ else:
     )
     
     # Legend (tight below the plot)
-    fam_present = sorted(set(canon_family(profiles[e].get('likely_family')) for e in marker_df.index))
+    fam_present = sorted(set(canon_family(profiles[e]) for e in marker_df.index))
     legend_handles = []
     for fam in fam_present:
         legend_handles.append(mpatches.Patch(

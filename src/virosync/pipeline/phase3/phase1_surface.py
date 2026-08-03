@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import MergedSeed
-from virosync.output_contract import canonical_family
+from virosync.output_contract import (
+    canonical_family,
+    normalize_effective_eve_class,
+)
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
@@ -126,6 +129,10 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
         ppv_subtype=infer_ppv_subtype(hallmark_genes),
         likely_family=likely_family,
+        # A1 stops before the gene taxonomy, so there is no weighted vote to
+        # publish. The seed marker family is the only taxonomy this arm has, and
+        # without this the published class would be UNKNOWN for every A1 seed.
+        taxonomy_class=normalize_effective_eve_class(likely_family),
         seed_sources=sorted(set(seed.sources)),
         seed_confidence=seed.confidence,
         seed_hhg_score=seed.hhg_score,

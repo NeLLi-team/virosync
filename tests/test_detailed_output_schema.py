@@ -50,6 +50,7 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
         confidence_tier="HIGH",
         final_confidence=0.95,
         likely_family="VP",
+        taxonomy_class="PPV",
         gene_count=6,
         gene_taxonomy_total=6,
         gene_taxonomy_records=[
@@ -149,6 +150,7 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
     # GVClass unified VP and PLV into Preplasmiviricota; a legacy "VP" label
     # resolves to the PPV lineage in the public class column.
     assert row["likely_family"] == "PPV"
+    # effective_eve_class publishes the taxonomy consensus, not the gate label.
     assert row["effective_eve_class"] == "PPV"
     assert row["ppv_subtype"] == "."
     assert row["likely_group"] == "."  # no capscan group-defining marker -> "."

@@ -71,7 +71,8 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
             "mirus_count": 0,
             "ppv_count": 0,
             "cress_count": 0,
-            "mixed_count": 0,
+            "phage_count": 0,
+            "viral_unknown_count": 0,
             "unknown_count": 0,
             "accepted_bp": 100,
             "total_genes": 5,
@@ -97,7 +98,7 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
         "predictions\taccepted"
     )
     assert summary[0].endswith(
-        "\tncldv\tmirus\tppv\tcress\tmixed\tunknown\t"
+        "\tncldv\tmirus\tppv\tcress\tphage\tviral_unknown\tunknown\t"
         "total_bp\tgenes\thallmarks\telapsed_sec\terror"
     )
     assert summary[1].startswith("b\tsuccess\ttrue\tfalse\t2\t1\t1")
@@ -401,16 +402,16 @@ def test_batch_outputs_fold_legacy_subtypes_and_include_cress(tmp_path: Path) ->
         "success": True,
         "benchmark_eligible": True,
         "legacy_resume": False,
-        "predictions": 7,
-        "accepted": 7,
-        "high_tier": 7,
+        "predictions": 8,
+        "accepted": 8,
+        "high_tier": 8,
         "medium_tier": 0,
         "low_tier": 0,
         "ncldv_count": 1,
         "vp_count": 1,
         "plv_count": 1,
         "mirus_count": 1,
-        "mixed_count": 0,
+        "mixed_count": 1,
         "ppv_count": 1,
         "cress_count": 1,
         "unknown_count": 1,
@@ -430,18 +431,22 @@ def test_batch_outputs_fold_legacy_subtypes_and_include_cress(tmp_path: Path) ->
     assert reader.fieldnames is not None
     assert "vp" not in reader.fieldnames
     assert "plv" not in reader.fieldnames
+    assert "mixed" not in reader.fieldnames
     assert rows[0]["ppv"] == "3"
+    assert rows[0]["viral_unknown"] == "1"
     assert rows[0]["cress"] == rows[0]["unknown"] == "1"
 
     report = report_path.read_text()
     assert "| PPV | 3 |" in report
     assert "| CRESS | 1 |" in report
+    assert "| VIRAL_UNKNOWN | 1 |" in report
     assert "| UNKNOWN | 1 |" in report
     assert "| VP |" not in report
     assert "| PLV |" not in report
-    assert "| **Total** | **7** |" in report
+    assert "| MIXED |" not in report
+    assert "| **Total** | **8** |" in report
     assert (
-        "| synthetic | success | yes | no | 7 | 0 | 0 | 1 | 1 | 3 | 1 | 0 | 1 |"
+        "| synthetic | success | yes | no | 8 | 0 | 0 | 1 | 1 | 3 | 1 | 0 | 1 | 1 |"
         in report
     )
 

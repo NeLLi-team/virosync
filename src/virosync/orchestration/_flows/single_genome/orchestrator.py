@@ -601,6 +601,8 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
         return "canonical-predictions-bed-v1"
     if path.name == "virosync_predictions.gff3":
         return "canonical-predictions-gff3-v1"
+    if path.name == "eve_ani_edges.tsv":
+        return "eve-ani-edges-v1"
     if path.name == "virosync_summary.json":
         return "virosync-summary-v3"
     if path.name == "masking_status.json":
@@ -773,6 +775,7 @@ def _final_artifacts(
             "virosync_predictions.bed",
             "virosync_predictions.gff3",
             "virosync_summary.json",
+            "eve_ani_edges.tsv",
         )
         if (candidate := synthesis / name).is_file()
     )

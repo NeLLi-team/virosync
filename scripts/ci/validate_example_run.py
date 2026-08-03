@@ -26,13 +26,14 @@ from virosync.orchestration._flows.single_genome.run_state import (
 )
 
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 3
 CLASS_FIELDS = {
     "ncldv": "NCLDV",
     "mirus": "MIRUS",
     "ppv": "PPV",
     "cress": "CRESS",
-    "mixed": "MIXED",
+    "phage": "PHAGE",
+    "viral_unknown": "VIRAL_UNKNOWN",
     "unknown": "UNKNOWN",
 }
 TIER_FIELDS = {
@@ -54,7 +55,8 @@ SNAPSHOT_SUMMARY_FIELDS = (
     "mirus",
     "ppv",
     "cress",
-    "mixed",
+    "phage",
+    "viral_unknown",
     "unknown",
     "total_bp",
     "genes",

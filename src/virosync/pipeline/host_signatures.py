@@ -74,6 +74,10 @@ def set_taxonomy_lookup(lookup: Optional[TaxonomyLabelLookup]) -> None:
     _TAXONOMY_LOOKUP = lookup
 
 
+def get_taxonomy_lookup() -> Optional[TaxonomyLabelLookup]:
+    """Return the taxonomy lookup set for this process, if any."""
+    return _TAXONOMY_LOOKUP
+
 
 @dataclass
 class HostSignatureModel:

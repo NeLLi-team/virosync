@@ -24,7 +24,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from virosync.output_contract import canonical_family
+from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family
 from virosync.ablation import AblationID
 from virosync.config import get_config
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
@@ -36,8 +36,10 @@ from virosync.pipeline.phase1.viral_markers import (
 )
 from virosync.pipeline.host_signatures import (
     HostSignatureModel,
+    get_taxonomy_lookup,
     host_signature_density_evalue_weighted,
 )
+from virosync.pipeline.phase3.gene_taxonomy import viral_hit_categories
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
 from .evidence_graph import (
@@ -456,6 +458,183 @@ def infer_ppv_subtype(hallmark_genes: list[str]) -> str:
     return ""
 
 
+_VALIDATED_MARKER_STATUSES = frozenset({"validated", "validated_novel"})
+
+# Vote weights for the published taxonomy class. A marker-bearing gene is
+# searched twice: once against the marker reference in Phase 1, and again in the
+# Phase 2b all-gene search. Its marker call is the better-targeted evidence, so
+# it starts at 2; a second, independent search agreeing with it raises that gene
+# to 3; a second search disagreeing leaves the marker call at 2 and gives the
+# conflicting call 1. A gene with no marker carries a single all-gene vote. An
+# MCP is the strongest diagnostic there is and outweighs any of them.
+_MARKER_VOTE_WEIGHT = 2
+_MARKER_CONFIRMED_WEIGHT = 3
+_GENE_VOTE_WEIGHT = 1
+_MCP_VOTE_WEIGHT = 5
+
+
+def _hit_field(hit: object, name: str) -> object:
+    """Read one field from a hallmark hit, which may be a dict or an object."""
+    if isinstance(hit, dict):
+        return hit.get(name)
+    return getattr(hit, name, None)
+
+
+def marker_taxonomy_category(
+    hit: object,
+    taxonomy_lookup: Optional[dict] = None,
+) -> str:
+    """Return one marker's taxonomy vote, or ``""`` when it has no vote.
+
+    A marker votes with its own top-10 DIAMOND taxonomy. One distinct class
+    across its identity-qualified hits is that class; several classes make the
+    marker VIRAL_UNKNOWN; no qualified viral hit at all is no vote, which is the
+    HMM-only ``validated_novel`` case and is excluded from the denominator.
+    """
+    categories = set(
+        viral_hit_categories(
+            {
+                "top10_prefixes": _hit_field(hit, "top10_prefixes"),
+                "top10_pidents": _hit_field(hit, "top10_pidents"),
+                "top10_targets": _hit_field(hit, "top10_targets"),
+            },
+            taxonomy_lookup,
+        )
+    )
+    if not categories:
+        return ""
+    if len(categories) == 1:
+        return next(iter(categories))
+    return "VIRAL_UNKNOWN"
+
+
+def mcp_vote_classes(
+    hallmark_hits: Optional[list],
+    taxonomy_lookup: Optional[dict] = None,
+) -> set[str]:
+    """Return the distinct classes this EVE's MCP markers vote for."""
+    return {
+        category
+        for hit in (hallmark_hits or [])
+        if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or ""))
+        and (category := marker_taxonomy_category(hit, taxonomy_lookup))
+    }
+
+
+def taxonomy_class_votes(
+    hallmark_hits: Optional[list],
+    *,
+    gene_taxonomy_records: Optional[list] = None,
+    taxonomy_lookup: Optional[dict] = None,
+) -> Counter:
+    """Return the weighted lineage votes for one EVE.
+
+    Genes with a marker hit vote with their marker taxonomy; every other gene
+    votes with its all-gene taxonomy. Weights are described where they are
+    defined above. A gene whose top-10 spans several viral classes votes
+    VIRAL_UNKNOWN, which carries weight but can never win, and a gene with no
+    identity-qualified viral hit does not vote at all.
+    """
+    weights: Counter = Counter()
+    marker_gene_ids: set[str] = set()
+
+    gene_category_by_id: dict[str, str] = {}
+    for record in gene_taxonomy_records or []:
+        if _hit_field(record, "is_flanking"):
+            continue
+        gene_id = base_marker_gene_id(str(_hit_field(record, "porf_id") or ""))
+        if gene_id:
+            gene_category_by_id[gene_id] = marker_taxonomy_category(
+                record, taxonomy_lookup
+            )
+
+    for hit in hallmark_hits or []:
+        gene_id = base_marker_gene_id(
+            str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
+        )
+        if gene_id:
+            marker_gene_ids.add(gene_id)
+        marker_category = marker_taxonomy_category(hit, taxonomy_lookup)
+        gene_category = gene_category_by_id.get(gene_id, "")
+
+        if not marker_category:
+            # The marker search found no viral hit for this gene. Its all-gene
+            # search may still have; that is an ordinary one-vote gene.
+            if gene_category:
+                weights[gene_category] += _GENE_VOTE_WEIGHT
+            continue
+
+        if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or "")):
+            # Flat 5, with no split when its own all-gene search disagrees.
+            # Disagreeing MCP markers must meet at 5 each, or one MCP's second
+            # search would break the tie its capsid call could not.
+            weights[marker_category] += _MCP_VOTE_WEIGHT
+            continue
+        if gene_category == marker_category:
+            weights[marker_category] += _MARKER_CONFIRMED_WEIGHT
+            continue
+        weights[marker_category] += _MARKER_VOTE_WEIGHT
+        if gene_category:
+            weights[gene_category] += _GENE_VOTE_WEIGHT
+
+    for gene_id, category in gene_category_by_id.items():
+        if category and gene_id not in marker_gene_ids:
+            weights[category] += _GENE_VOTE_WEIGHT
+    return weights
+
+
+def consensus_taxonomy_class(
+    hallmark_hits: Optional[list],
+    *,
+    gene_taxonomy_records: Optional[list] = None,
+    taxonomy_lookup: Optional[dict] = None,
+) -> str:
+    """Return the published taxonomy class for one EVE.
+
+    The major capsid protein decides. An MCP marker that cast a vote overrides
+    every other gene, including when its own top-10 spans several lineages and
+    it therefore votes VIRAL_UNKNOWN.
+
+    MCP markers that disagree with each other settle it by the weighted vote,
+    where an MCP carries 5 against a marker gene's 2 or 3 and an ordinary gene's
+    1. That is the only place the weights break an MCP tie.
+
+    Without any MCP vote the weighted vote decides on its own. A lineage needs
+    strictly more than half the total weight. Half exactly is not enough: two
+    genes that disagree are a tie, not a call, and stay VIRAL_UNKNOWN. An EVE
+    with no vote at all is VIRAL_UNKNOWN when it has a validated marker to be
+    viral by, and UNKNOWN when it has none.
+    """
+    mcp_classes = mcp_vote_classes(hallmark_hits, taxonomy_lookup)
+    if len(mcp_classes) == 1:
+        return next(iter(mcp_classes))
+
+    weights = taxonomy_class_votes(
+        hallmark_hits,
+        gene_taxonomy_records=gene_taxonomy_records,
+        taxonomy_lookup=taxonomy_lookup,
+    )
+    total = sum(weights.values())
+    if not total:
+        return (
+            "VIRAL_UNKNOWN"
+            if _has_validated_marker(list(hallmark_hits or []))
+            else "UNKNOWN"
+        )
+    category, weight = weights.most_common(1)[0]
+    if category in LINEAGE_EVE_CLASSES and weight * 2 > total:
+        return category
+    return "VIRAL_UNKNOWN"
+
+
+def _has_validated_marker(hits: list) -> bool:
+    return any(
+        str(_hit_field(hit, "validation_status") or "").strip().lower()
+        in _VALIDATED_MARKER_STATUSES
+        for hit in hits
+    )
+
+
 def infer_likely_family(result: "VerificationResult") -> str:
     classification = result.region_classification or ""
     if canonical_family(classification) in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
@@ -784,6 +963,14 @@ class VerificationResult:
     region_classification_mirus_markers: int = 0
     ppv_subtype: str = ""
     likely_family: str = "UNKNOWN"
+    # Published class: the taxonomy consensus over the validated markers' own
+    # top-10 hits. Additive; likely_family still feeds the acceptance gate.
+    taxonomy_class: str = "UNKNOWN"
+    # True when an MCP marker's own vote decided taxonomy_class. Narrower than
+    # has_mcp, which a capsid annotation, a structural jelly-roll call, or
+    # phylogenetic evidence also raises. Only this entitles an EVE to hand its
+    # class to MCP-free relatives during ANI propagation.
+    taxonomy_class_from_mcp: bool = False
     likely_group: str = ""  # capscan Bellas2026 group (Trimcap/PgVV/...) below the class
     confidence_tier: str = "LOW"  # HIGH, MEDIUM, or LOW
     candidate_start: Optional[int] = None
@@ -798,9 +985,12 @@ class VerificationResult:
     # Within-genome clustering (similar EVEs provide additional evidence)
     cluster_id: int = -1  # -1 means singleton
     cluster_size: int = 1  # Number of similar EVEs in cluster
-    similar_eve_count: int = 0  # Number of EVEs with ANI >= 80%
     max_cluster_ani: float = 0.0  # Maximum ANI to any similar EVE
     clustering_bonus: float = 0.0  # Confidence bonus from clustering
+    # Set only when ANI clustering rewrote taxonomy_class from an MCP-bearing
+    # cluster member, so every propagated class stays attributable.
+    taxonomy_class_before_ani: str = ""
+    taxonomy_class_propagated_from: str = ""
     candidate_length: int = 0
     candidate_reduction_bp: int = 0
     candidate_reduction_reason: str = ""
@@ -973,6 +1163,16 @@ class VerificationResult:
             "gene_taxonomy_dominant_fraction": self.gene_taxonomy_dominant_fraction,
             "ppv_subtype": self.ppv_subtype,
             "likely_family": self.likely_family,
+            # Published class and its ANI provenance. The report notebook reads
+            # its labels and cluster annotations from this file, so the class it
+            # draws is the class the TSVs publish.
+            "taxonomy_class": self.taxonomy_class,
+            "taxonomy_class_from_mcp": self.taxonomy_class_from_mcp,
+            "taxonomy_class_before_ani": self.taxonomy_class_before_ani,
+            "taxonomy_class_propagated_from": self.taxonomy_class_propagated_from,
+            "cluster_id": self.cluster_id,
+            "cluster_size": self.cluster_size,
+            "max_cluster_ani": self.max_cluster_ani,
             "likely_group": self.likely_group,
             "confidence_tier": self.confidence_tier,
             "candidate_start": self.candidate_start,
@@ -2043,11 +2243,42 @@ class EvidenceSynthesizer:
         result.mirus_completeness = completeness["mirus_completeness"]
         result.mirus_completeness_ratio = completeness["mirus_completeness_ratio"]
         result.ppv_subtype = infer_ppv_subtype(hallmark_genes)
+        # taxonomy_class is assigned by _assign_taxonomy_class, after the gene
+        # taxonomy is processed: the weighted vote needs both searches.
         if result.region_classification in {"VP", "PLV", "PPV", "UNKNOWN", ""}:
             if result.ppv_subtype in {"VP", "PLV"}:
                 # The subgroup stays in ppv_subtype; the class token is the
                 # unified Preplasmiviricota lineage.
                 result.region_classification = "PPV"
+
+    def _assign_taxonomy_class(
+        self,
+        result: VerificationResult,
+        hallmark_hits: Optional[list],
+        gene_taxonomy_records: Optional[list],
+    ) -> None:
+        """Assign the published class from the weighted marker-and-gene vote.
+
+        Runs after both evidence steps because the vote needs the marker search
+        and the all-gene search together. An EVE with no marker still gets a
+        class here when its genes carry viral hits.
+        """
+        deduped_hits, _genes, _by_gene = self._deduplicate_hallmark_hits(
+            hallmark_hits or []
+        )
+        taxonomy_lookup = get_taxonomy_lookup()
+        result.taxonomy_class = consensus_taxonomy_class(
+            deduped_hits,
+            gene_taxonomy_records=gene_taxonomy_records,
+            taxonomy_lookup=taxonomy_lookup,
+        )
+        # An EVE may donate its class during ANI propagation only when an MCP
+        # vote decided it, which is the single-MCP-class override path. When
+        # MCP markers disagree the weighted vote settles it, and a class the
+        # weights chose is not one a capsid decided.
+        result.taxonomy_class_from_mcp = (
+            len(mcp_vote_classes(deduped_hits, taxonomy_lookup)) == 1
+        )
 
     def _process_gene_taxonomy(
         self,
@@ -2542,6 +2773,7 @@ class EvidenceSynthesizer:
         self._detect_contig_edge(result, refined_boundary, scaffold_lengths)
         self._process_hallmark_hits(result, hallmark_hits)
         self._process_gene_taxonomy(result, gene_taxonomy_records, gene_taxonomy_summary)
+        self._assign_taxonomy_class(result, hallmark_hits, gene_taxonomy_records)
         self._process_interproscan(result, interproscan_summary)
         self._apply_jelly_roll_summary(result, jelly_roll_summary)
 

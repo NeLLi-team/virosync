@@ -38,7 +38,7 @@ from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 from .evidence_synthesizer import VerificationResult
-from .gene_taxonomy import MIN_VIRAL_HIT_PIDENT
+from .gene_taxonomy import qualified_viral_hits
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,6 @@ logger = logging.getLogger(__name__)
 # its own scoring branch; MIXED is deliberately kept out of this set so a
 # concrete family always wins label resolution, but it is NOT disqualified.
 _V2_EVE_CLASSES = CONCRETE_EVE_CLASSES
-_PUBLIC_VIRAL_TAXONOMY = frozenset(
-    {"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"}
-)
 
 
 def _taxonomy_prefixes(value: object) -> list[str]:
@@ -68,22 +65,13 @@ def _taxonomy_prefixes(value: object) -> list[str]:
 
 
 def _qualified_viral_prefixes(record: dict) -> list[str]:
-    prefixes = _taxonomy_prefixes(record.get("top10_prefixes"))
-    raw_pidents = record.get("top10_pidents") or []
-    if isinstance(raw_pidents, str):
-        raw_pidents = raw_pidents.split(",")
-    pidents: list[float] = []
-    for value in raw_pidents:
-        try:
-            pidents.append(float(value))
-        except (TypeError, ValueError):
-            pidents.append(0.0)
-    return [
-        prefix
-        for prefix, pident in zip(prefixes, pidents)
-        if prefix in _PUBLIC_VIRAL_TAXONOMY
-        and pident >= MIN_VIRAL_HIT_PIDENT
-    ]
+    """Reference namespaces of a record's identity-qualified viral top-10 hits.
+
+    The taxonomy_best_hits partition reports GVMAG and PHAGE as their own
+    buckets, so it uses the raw namespaces rather than the published classes
+    that ``viral_hit_categories`` folds them onto.
+    """
+    return [prefix for prefix, _target in qualified_viral_hits(record)]
 
 
 def _taxonomy_partition_bucket(record: dict) -> str:
@@ -144,6 +132,18 @@ def _resolve_eve_class(result: VerificationResult) -> str:
         region_classification=getattr(result, "region_classification", ""),
         classification=getattr(result, "classification", ""),
         likely_family=getattr(result, "likely_family", ""),
+    )
+
+
+def _published_eve_class(result: VerificationResult) -> str:
+    """Return the PUBLISHED class for one result.
+
+    Publication reports the taxonomy consensus over the validated markers' own
+    top-10 hits, not the gate's acceptance label: the gate's vocabulary still
+    carries MIXED and drives acceptance only.
+    """
+    return normalize_effective_eve_class(
+        getattr(result, "taxonomy_class", "UNKNOWN")
     )
 
 
@@ -1431,8 +1431,7 @@ class OutputGenerator:
                             (
                                 r.ppv_subtype
                                 if (
-                                    evaluate_v2_quality_gate(r).effective_class
-                                    == "PPV"
+                                    _published_eve_class(r) == "PPV"
                                     and r.ppv_subtype in {"VP", "PLV"}
                                 )
                                 else "."
@@ -1456,7 +1455,7 @@ class OutputGenerator:
                     )
                 else:
                     row.append(f"{r.interproscan_score:.4f}")
-                row.append(evaluate_v2_quality_gate(r).effective_class)
+                row.append(_published_eve_class(r))
                 f.write("\t".join(row) + "\n")
 
         logger.info(f"Wrote {len(results)} predictions to {output_path}")
@@ -1624,10 +1623,10 @@ class OutputGenerator:
                         other_markers, r.scaffold, r.start, r.end, use_protein_patterns=True
                     )
 
-                effective_class = evaluate_v2_quality_gate(r).effective_class
+                published_class = _published_eve_class(r)
                 ppv_subtype = (
                     r.ppv_subtype
-                    if effective_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}
+                    if published_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}
                     else "."
                 )
                 row_values = {
@@ -1638,7 +1637,7 @@ class OutputGenerator:
                     "length": str(r.length),
                     "confidence_tier": r.confidence_tier or "UNKNOWN",
                     "final_confidence": f"{r.final_confidence:.4f}",
-                    "effective_eve_class": effective_class,
+                    "effective_eve_class": published_class,
                     "likely_family": normalize_effective_eve_class(
                         r.likely_family
                     ),
@@ -1771,6 +1770,25 @@ class OutputGenerator:
                     "ppv_completeness": r.ppv_completeness,
                     "ncldv_completeness": r.ncldv_completeness,
                     "mirus_completeness": r.mirus_completeness,
+                    "ani_cluster_id": (
+                        str(r.cluster_id) if r.cluster_id >= 0 else "."
+                    ),
+                    "ani_cluster_size": str(r.cluster_size),
+                    "ani_max_percent": (
+                        f"{r.max_cluster_ani:.4f}"
+                        if r.max_cluster_ani > 0
+                        else "."
+                    ),
+                    "taxonomy_class_before_ani": (
+                        normalize_effective_eve_class(
+                            r.taxonomy_class_before_ani
+                        )
+                        if r.taxonomy_class_before_ani
+                        else "."
+                    ),
+                    "taxonomy_class_propagated_from": (
+                        r.taxonomy_class_propagated_from or "."
+                    ),
                 }
                 f.write(
                     "\t".join(str(row_values[column]) for column in columns)
@@ -1810,7 +1828,7 @@ class OutputGenerator:
             for r in results:
                 persisted_confidence = float(f"{r.final_confidence:.4f}")
                 score = int(min(1000, persisted_confidence * 1000))
-                effective_class = evaluate_v2_quality_gate(r).effective_class
+                published_class = _published_eve_class(r)
 
                 # Build attributes
                 attrs = [
@@ -1819,9 +1837,9 @@ class OutputGenerator:
                     f"confidence={r.final_confidence:.4f}",
                     f"status={_gff3_escape(r.status.value)}",
                     f"hallmark_diversity={r.hallmark_diversity}",
-                    f"effective_eve_class={_gff3_escape(effective_class)}",
+                    f"effective_eve_class={_gff3_escape(published_class)}",
                 ]
-                if effective_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}:
+                if published_class == "PPV" and r.ppv_subtype in {"VP", "PLV"}:
                     attrs.append(f"ppv_subtype={_gff3_escape(r.ppv_subtype)}")
 
                 if r.region_classification:

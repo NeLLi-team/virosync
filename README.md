@@ -337,6 +337,7 @@ results/<run_name>/
     │   ├── virosync_predictions.gff3
     │   ├── virosync_summary.json
     │   ├── evidence_profiles.json
+    │   ├── eve_ani_edges.tsv
     │   ├── interproscan_summary.tsv
     │   ├── virosync_tmvec_proteins.tsv
     │   └── virosync_jelly_roll_proteins.tsv
@@ -358,6 +359,7 @@ Key output semantics:
 | `phase3_synthesis/virosync_predictions.bed` | Canonical 0-based half-open coordinates for accepted predictions |
 | `phase3_synthesis/virosync_predictions.gff3` | Canonical GFF3 annotations for accepted predictions |
 | `phase3_synthesis/virosync_predictions_detailed.tsv` | Detailed table of all Phase 3 candidates, including rejected candidates |
+| `phase3_synthesis/eve_ani_edges.tsv` | Every EVE pair skani compared, with ANI and both aligned fractions |
 | `<genome_id>/virosync_predictions_detailed.tsv` | Convenience copy of the detailed table at the run root |
 | `<genome_id>/<genome_id>_eves.fna` | Combined FASTA for accepted predictions only |
 | `<genome_id>/virosync_tsv_invariant_report.tsv` | QA report for detailed TSV invariants |
@@ -366,17 +368,25 @@ Key output semantics:
 | `<genome_id>/phase<N>.complete.json` | Ordered phase record with dependency and artifact identities |
 | `batch_summary.tsv` | Per-genome status and count summary for the batch run |
 
-The output schema version is 4. `effective_eve_class` is one of `NCLDV`,
-`MIRUS`, `PPV`, `CRESS`, `MIXED`, or `UNKNOWN`, and each accepted prediction
-contributes to one class count. `PPV` contains the VP and PLV subtypes. The
-detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
-subtype-specific marker evidence supports one subtype and not the other.
-Ambiguous PPV candidates retain `effective_eve_class=PPV` and use `.` for
-`ppv_subtype`.
+The output schema version is 5. `effective_eve_class` is one of `NCLDV`,
+`MIRUS`, `PPV`, `CRESS`, `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`, and each
+accepted prediction contributes to one class count. `VIRAL_UNKNOWN` marks a
+region whose viral evidence does not settle on one lineage; `UNKNOWN` marks a
+region with no validated marker and no qualified viral gene hit. `PPV` contains
+the VP and PLV subtypes.
+[EVE taxonomy class](#eve-taxonomy-class) gives the assignment rule.
+
+The detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
+subtype-specific HMM marker evidence supports one subtype and not the other,
+and only for regions published as `PPV`. Taxonomy cannot supply the subtype.
+The v1.0.6 database labels these genomes `PPV__` and holds no `VP__` or `PLV__`
+records. Ambiguous PPV candidates retain `effective_eve_class=PPV` and use `.`
+for `ppv_subtype`.
 
 The detailed table groups columns by final call, candidate provenance, marker
 evidence, gene taxonomy, composition and host evidence, InterProScan evidence,
-and marker-set completeness. Its `taxonomy_best_hits` partition is:
+marker-set completeness, and ANI clustering. Its `taxonomy_best_hits`
+partition is:
 
 ```text
 EUK;MITO;PLASTID;BAC;ARC;UNK;NO_HITS;NCLDV;MIRUS;PPV;CRESS;GVMAG;PHAGE
@@ -389,9 +399,10 @@ identity-qualified gene taxonomy can assign CRESS. `vp_completeness` records
 VP-subtype evidence;
 `ppv_completeness` combines the PPV marker sets.
 
-The result reader maps `VP` and `PLV` class aliases to `PPV`. Batch summaries
-report the parent classes only:
-`ncldv`, `mirus`, `ppv`, `cress`, `mixed`, and `unknown`.
+The result reader maps three legacy class tokens onto current ones: `VP` and
+`PLV` to `PPV`, `MIXED` to `VIRAL_UNKNOWN`. Batch summaries report the parent
+classes only: `ncldv`, `mirus`, `ppv`, `cress`, `phage`, `viral_unknown`, and
+`unknown`.
 
 Normal runs validate schema-v3 state before reuse. The run fingerprint binds the input,
 effective output-determining configuration, source code, locked runtime, enabled tools
@@ -404,6 +415,76 @@ attempt; an automatic retry validates and resumes the surviving schema-v3 phase 
 
 Each successful genome run writes the executed analysis notebook `notebooks/jupyter/eve_analysis.ipynb` (rendered from the jupytext source `src/virosync/report/eve_analysis.py`).
 Notebook execution also emits rendered summary figures (for example confidence, marker, and gene-category PNGs) at the genome root.
+`eve_ani_network.png` draws the ANI clusters: a node per EVE colored by
+published class, a heavier border on EVEs whose class an MCP vote decided, and an edge for every
+pair the pipeline clustered. EVEs with no edge are left out, and the title
+states how many.
+
+### EVE taxonomy class
+
+`effective_eve_class` comes from a weighted vote over the region's genes. Every
+gene with an identity-qualified viral hit votes with its top-10 DIAMOND
+taxonomy:
+
+- A hit below 25% amino-acid identity does not qualify.
+- A `GVMAG` hit counts as `NCLDV`. A `PHAGE`-namespace hit counts as `PPV` when
+  its resolved lineage is Preplasmiviricota, and as `PHAGE` otherwise.
+- A gene whose qualified hits give one class votes for that class. A gene whose
+  hits span several classes votes `VIRAL_UNKNOWN`, which carries weight but
+  never wins. A gene with no qualified viral hit does not vote and is left out
+  of the denominator.
+
+A marker-bearing gene is searched twice, against the marker reference in
+Phase 1 and again in the Phase 2b all-gene search. Weights:
+
+| Gene | Weight |
+|------|--------|
+| Validated MCP marker | 5 on the marker call |
+| Validated marker, all-gene search agrees | 3 |
+| Validated marker, all-gene search disagrees | 2 on the marker call, 1 on the conflicting all-gene call |
+| No marker | 1 on the all-gene call |
+
+A lineage class (`NCLDV`, `MIRUS`, `PPV`, `CRESS`, or `PHAGE`) needs strictly
+more than half the total weight. Half is not enough, so two genes that disagree
+leave the region `VIRAL_UNKNOWN`.
+
+The major capsid protein decides ahead of that vote. An MCP marker that cast a
+vote sets the class on its own, however many other genes disagree, and does so
+even when its own top-10 spans several lineages and it therefore votes
+`VIRAL_UNKNOWN`. An MCP with no qualified viral hit casts no vote and decides
+nothing. MCP markers that disagree with each other fall through to the weighted
+vote, where each carries 5. That is the only place the weights break an MCP tie.
+
+A region with no viral vote at all is `VIRAL_UNKNOWN` when it carries a
+validated marker and `UNKNOWN` when it carries none.
+
+An `UNKNOWN` region has no viral evidence of any kind: no validated marker, and
+no gene of its own returned a qualified viral hit. Phase 3 drops it from the
+published set unless it shares an ANI cluster with a marker-bearing EVE, which
+makes it a decayed copy of a real element rather than host sequence the length
+rule admitted. This is the only case where the published set is smaller than the
+set the acceptance gate kept.
+
+Phase 3 then compares every accepted EVE in the genome against every other with
+skani. Two EVEs join when they reach 95% average nucleotide identity over at
+least 50% of either sequence, and each connected component is one cluster.
+A member may donate its class only when an MCP marker's own vote is the class
+that won, which is narrower than carrying an MCP. Where the donors in a cluster
+agree on a single lineage class, the other members take it. Nothing propagates
+when the donors disagree, or when the class they agree on is `VIRAL_UNKNOWN`.
+Every pair skani reports is written to `phase3_synthesis/eve_ani_edges.tsv`,
+and the detailed table records the result per region:
+
+| Column | Meaning |
+|--------|---------|
+| `ani_cluster_id` | Cluster index, `.` for an EVE with no clustered relative |
+| `ani_cluster_size` | Members in the cluster, `1` for a singleton |
+| `ani_max_percent` | Highest ANI to another member, `.` for a singleton |
+| `taxonomy_class_before_ani` | Class the region's own vote gave, filled only where propagation replaced it |
+| `taxonomy_class_propagated_from` | EVE ID the class came from |
+
+Genomes with fewer than two accepted EVEs, and genomes whose accepted regions
+skani cannot sketch, get a header-only edge table and no propagation.
 
 ## Confidence Tiers and Quality Gates
 
@@ -440,12 +521,17 @@ current pipeline: `hhg`, `marker_validation`).
 ### EVE acceptance quality gate (v2)
 
 The pipeline applies the v2 acceptance quality gate when generating the canonical
-EVE set for downstream analysis. The EVE class is resolved from
-`region_classification`, falling back to the family-like column (`likely_family`
-in legacy outputs, `classification` in current outputs) when the region label is
-not a concrete family. A concrete single-family label always takes precedence; a
-region whose seed markers span more than one viral family resolves to `MIXED` and
-is gated as a viral region under the standard rule rather than discarded.
+EVE set for downstream analysis. The gate decides which candidates are accepted.
+It does not set the published class. Its own class vocabulary is `NCLDV`,
+`MIRUS`, `PPV`, `CRESS`, `MIXED`, and `UNKNOWN`, and the `MIXED` in the tables
+below is that internal label, not an output token.
+
+The gate resolves its class from `region_classification`, falling back to the
+family-like column (`likely_family` in legacy outputs, `classification` in
+current outputs) when the region label is not a concrete family. A concrete
+single-family label always takes precedence; a region whose seed markers span
+more than one viral family resolves to `MIXED` and is gated as a viral region
+under the standard rule rather than discarded.
 
 **HIGH & MEDIUM confidence:**
 

@@ -1,25 +1,42 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 4
+OUTPUT_SCHEMA_VERSION = 5
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
+# The PUBLISHED class partition. Every surface that reports an EVE's class to a
+# reader uses these tokens. MIXED was retired here in schema 5: a region whose
+# markers disagree is VIRAL_UNKNOWN, and MIXED survives only as a read alias.
 EFFECTIVE_EVE_CLASSES = (
     "NCLDV",
     "MIRUS",
     "PPV",
     "CRESS",
-    "MIXED",
+    "PHAGE",
+    "VIRAL_UNKNOWN",
     "UNKNOWN",
 )
 CONCRETE_EVE_CLASSES = frozenset({"NCLDV", "MIRUS", "PPV", "CRESS"})
+# Published classes that name a lineage. Distinct from CONCRETE_EVE_CLASSES,
+# which is the acceptance gate's own set and has no PHAGE: the gate never sees
+# a PHAGE label, but taxonomy consensus and ANI propagation both publish one.
+# VIRAL_UNKNOWN and UNKNOWN name the absence of a decision and are excluded.
+LINEAGE_EVE_CLASSES = CONCRETE_EVE_CLASSES | frozenset({"PHAGE"})
 EFFECTIVE_EVE_CLASS_COUNT_KEYS = {
     "NCLDV": "ncldv_count",
     "MIRUS": "mirus_count",
     "PPV": "ppv_count",
     "CRESS": "cress_count",
-    "MIXED": "mixed_count",
+    "PHAGE": "phage_count",
+    "VIRAL_UNKNOWN": "viral_unknown_count",
     "UNKNOWN": "unknown_count",
+}
+# Count keys that are no longer written but must still parse when a persisted
+# summary is read back, each folded onto its current key.
+LEGACY_EVE_CLASS_COUNT_KEYS = {
+    "mixed_count": "viral_unknown_count",
+    "vp_count": "ppv_count",
+    "plv_count": "ppv_count",
 }
 
 DETAILED_TAXONOMY_PARTITION = (
@@ -106,6 +123,13 @@ DETAILED_PREDICTION_COLUMNS = (
     "ppv_completeness",
     "ncldv_completeness",
     "mirus_completeness",
+    # Per-genome ANI clustering of accepted EVEs, and the class an MCP-bearing
+    # cluster member propagated to this region
+    "ani_cluster_id",
+    "ani_cluster_size",
+    "ani_max_percent",
+    "taxonomy_class_before_ani",
+    "taxonomy_class_propagated_from",
 )
 
 DETAILED_PREDICTION_EXTENDED_COLUMNS = frozenset(
@@ -150,13 +174,30 @@ def canonical_family(value: object) -> str:
 
 
 def normalize_effective_eve_class(value: object) -> str:
-    """Normalize a persisted class into the exhaustive public partition.
+    """Normalize a persisted class into the exhaustive published partition.
 
-    Legacy VP/PLV values are folded onto PPV, so reading an old result file
-    yields the same class the current pipeline would emit for that region.
+    Legacy VP/PLV values are folded onto PPV and legacy MIXED onto
+    VIRAL_UNKNOWN, so reading an old result file yields the same class the
+    current pipeline would emit for that region.
     """
     normalized = canonical_family(value)
+    if normalized == "MIXED":
+        return "VIRAL_UNKNOWN"
     return normalized if normalized in EFFECTIVE_EVE_CLASSES else "UNKNOWN"
+
+
+# The v2 acceptance gate has its own class vocabulary, deliberately separate
+# from the published partition: it branches on MIXED, and folding MIXED onto
+# VIRAL_UNKNOWN here would drop every MIXED region out of the gate's accepting
+# branches. PHAGE and VIRAL_UNKNOWN are publication-only tokens and never reach
+# the gate, so they normalize to UNKNOWN.
+_GATE_EVE_CLASSES = frozenset(CONCRETE_EVE_CLASSES | {"MIXED", "UNKNOWN"})
+
+
+def _normalize_gate_eve_class(value: object) -> str:
+    """Normalize a raw label into the v2 acceptance gate's own vocabulary."""
+    normalized = canonical_family(value)
+    return normalized if normalized in _GATE_EVE_CLASSES else "UNKNOWN"
 
 
 def _resolve_non_low_effective_eve_class(
@@ -165,9 +206,9 @@ def _resolve_non_low_effective_eve_class(
     classification: object = "",
     likely_family: object = "",
 ) -> str:
-    region = canonical_family(region_classification)
-    classification_value = canonical_family(classification)
-    likely = canonical_family(likely_family)
+    region = _normalize_gate_eve_class(region_classification)
+    classification_value = _normalize_gate_eve_class(classification)
+    likely = _normalize_gate_eve_class(likely_family)
     if region in CONCRETE_EVE_CLASSES:
         return region
     for value in (classification_value, likely):
@@ -185,7 +226,11 @@ def resolve_effective_eve_class(
     classification: object = "",
     likely_family: object = "",
 ) -> str:
-    """Resolve raw labels with the same tier-aware precedence as the v2 gate."""
+    """Resolve raw labels with the same tier-aware precedence as the v2 gate.
+
+    Returns a GATE class, which can be MIXED. Publication surfaces must pass the
+    result through :func:`normalize_effective_eve_class`.
+    """
     tier = str(confidence_tier or "").strip().upper()
     if tier == "LOW":
         family_value = ""
@@ -194,7 +239,7 @@ def resolve_effective_eve_class(
             if candidate:
                 family_value = candidate
                 break
-        family = normalize_effective_eve_class(family_value)
+        family = _normalize_gate_eve_class(family_value)
         if family != "UNKNOWN":
             return family
         mixed_bridge = _resolve_non_low_effective_eve_class(
@@ -218,9 +263,12 @@ def empty_effective_eve_class_counts() -> dict[str, int]:
 def normalize_effective_eve_class_counts(
     counts: dict[str, int],
 ) -> dict[str, int]:
-    """Fold legacy VP/PLV count keys into the current public partition."""
+    """Fold legacy VP/PLV/MIXED count keys into the current public partition."""
     normalized = {eve_class: 0 for eve_class in EFFECTIVE_EVE_CLASSES}
     current_keys = set(EFFECTIVE_EVE_CLASSES)
+    # Schema 4 published MIXED; the partition before the Preplasmiviricota
+    # migration split VP and PLV and had no CRESS.
+    schema4_keys = {"NCLDV", "MIRUS", "PPV", "CRESS", "MIXED", "UNKNOWN"}
     legacy_keys = {
         "NCLDV",
         "VP",
@@ -230,7 +278,7 @@ def normalize_effective_eve_class_counts(
         "PPV",
         "UNKNOWN",
     }
-    if set(counts) not in (current_keys, legacy_keys):
+    if set(counts) not in (current_keys, schema4_keys, legacy_keys):
         raise ValueError(
             "class_counts must contain the current or legacy complete "
             "effective EVE class partition"
@@ -241,7 +289,7 @@ def normalize_effective_eve_class_counts(
 
 
 def effective_eve_class_count_total(summary: dict) -> int:
-    """Sum the six exclusive public class counts in a result mapping."""
+    """Sum the exclusive published class counts in a result mapping."""
     return sum(int(summary.get(key, 0) or 0) for key in EFFECTIVE_EVE_CLASS_COUNT_KEYS.values())
 
 
