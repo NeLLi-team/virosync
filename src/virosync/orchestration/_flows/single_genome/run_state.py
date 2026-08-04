@@ -150,11 +150,11 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/resume_state.json": "virosync.phase1.resume_state/v1",
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v2",
     "phase2/resume_state.json": "virosync.phase2.resume_state/v1",
-    "virosync_predictions.tsv": "canonical-predictions-v4",
-    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v4",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v4",
+    "virosync_predictions.tsv": "canonical-predictions-v5",
+    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v5",
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v5",
     "phase3_synthesis/virosync_predictions_detailed.tsv": (
-        "detailed-predictions-v4"
+        "detailed-predictions-v5"
     ),
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
     "phase3_synthesis/virosync_predictions.bed": (
@@ -502,8 +502,8 @@ def _observe_artifact(
                 if row_mode == "table":
                     if nonempty_rows == 0:
                         if schema in {
-                            "canonical-predictions-v4",
-                            "detailed-predictions-v4",
+                            "canonical-predictions-v5",
+                            "detailed-predictions-v5",
                         }:
                             raise ValueError(
                                 "final prediction table has no header: "

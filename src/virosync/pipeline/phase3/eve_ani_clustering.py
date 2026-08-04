@@ -54,6 +54,11 @@ def cluster_accepted_eves(
     95% or higher from one source of truth. Returns that path and the pairs, so
     a caller that drops EVEs afterwards can recluster the survivors.
 
+    The table is the raw comparison over the gate-accepted set, written before
+    any later removal, so it can name an EVE that :func:`unsupported_eve_ids`
+    later drops. Readers should intersect it with the published predictions
+    rather than assume every endpoint was published.
+
     Fewer than two accepted EVEs, a missing skani binary, and sequences skani
     cannot sketch all yield a header-only edge table with no class change. Any
     other skani failure raises, because a real error must not be reported as a

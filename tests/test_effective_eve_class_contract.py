@@ -444,3 +444,28 @@ def test_an_mcp_weighs_exactly_five_even_when_its_own_gene_search_disagrees() ->
         consensus_taxonomy_class([ncldv_mcp, ppv_mcp], gene_taxonomy_records=records)
         == "VIRAL_UNKNOWN"
     )
+
+
+def test_an_mcp_profile_is_not_hidden_by_a_higher_scoring_profile() -> None:
+    """One protein, two profiles. The capsid must not lose to a bigger score.
+
+    Whether a gene carries an MCP is a property of every profile that hit it.
+    Ranking by score alone would cost the gene its weight of 5, its override,
+    and its eligibility to donate a class during ANI propagation.
+    """
+    from virosync.pipeline.phase3.evidence_synthesizer import taxonomy_class_votes
+
+    def hit(gene, score):
+        return dict(_marker("PPV", "80", gene=gene, porf_id="p1"), hmm_score=score)
+
+    # Same protein: the MCP wins despite the lower HMM score.
+    assert taxonomy_class_votes([hit("vp_mcp_3", 80.0), hit("gvogm0100", 90.0)]) == {
+        "PPV": 5
+    }
+    # Order must not matter.
+    assert taxonomy_class_votes([hit("gvogm0100", 90.0), hit("vp_mcp_3", 80.0)]) == {
+        "PPV": 5
+    }
+    # Distinct proteins still vote separately: 5 for the MCP, 2 for the marker.
+    other = dict(_marker("PPV", "80", gene="gvogm0100", porf_id="p2"), hmm_score=90.0)
+    assert taxonomy_class_votes([hit("vp_mcp_3", 80.0), other]) == {"PPV": 7}

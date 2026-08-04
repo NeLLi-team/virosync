@@ -911,6 +911,7 @@ def _run_phase3_subflow(
     # Then drop the EVEs with no viral evidence at all that no marker-bearing
     # relative vouches for. This needs the clusters, and it is the one place
     # Phase 3 changes the accepted set after the gate has run.
+    gate_kept = len(accepted_results)
     unsupported = unsupported_eve_ids(accepted_results)
     if unsupported:
         accepted_results = [
@@ -919,7 +920,9 @@ def _run_phase3_subflow(
         # Cluster sizes counted the dropped members; recount over the survivors
         # so no published row claims a relative that is not published.
         recluster_survivors(accepted_results, ani_pairs)
-    quality_gate_dropped = len(verification_results) - len(accepted_results)
+    # Count only what the gate itself rejected. The unsupported-EVE removal is
+    # reported separately; folding it in here would blame the gate for it.
+    quality_gate_dropped = len(verification_results) - gate_kept
     counterfactual_quality_gate_dropped = sum(
         not decision.kept
         for decision in acceptance_selection.normal_gate_decisions

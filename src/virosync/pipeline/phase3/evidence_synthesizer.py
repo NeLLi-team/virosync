@@ -508,6 +508,45 @@ def marker_taxonomy_category(
     return "VIRAL_UNKNOWN"
 
 
+def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
+    """One hit per protein for the taxonomy vote, preferring an MCP profile.
+
+    The gate's deduplication keeps the highest-scoring profile per protein, so a
+    non-MCP profile that outscores an MCP on the same protein hides the capsid.
+    That is harmless for a marker count but wrong for the vote: whether a gene
+    carries an MCP is a property of every profile that hit it, not of the
+    best-scoring one. Hiding it would cost the gene its weight of 5, its
+    override, and its eligibility to donate a class during ANI propagation.
+
+    Both hits on one protein carry that protein's own DIAMOND top-10, so this
+    changes the weight and the override, never the category. The gate keeps its
+    own deduplication, so which EVEs are accepted is unaffected.
+    """
+    by_gene: dict[str, dict] = {}
+    for index, hit in enumerate(hallmark_hits):
+        gene_name = str(_hit_field(hit, "hallmark_gene") or "")
+        if not gene_name:
+            continue
+        porf_id = str(
+            _hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""
+        )
+        # Without a protein ID there is no evidence two hits share a protein, so
+        # they must not be collapsed. Key them apart instead of on profile name.
+        base_gene = base_marker_gene_id(porf_id) if porf_id else f"\0hit{index}"
+        try:
+            score = float(
+                _hit_field(hit, "hmm_score") or _hit_field(hit, "score") or 0.0
+            )
+        except (TypeError, ValueError):
+            score = 0.0
+        # An MCP outranks any score; among equals, the higher score wins.
+        rank = (is_mcp_gene(gene_name), score)
+        current = by_gene.get(base_gene)
+        if current is None or rank > current["rank"]:
+            by_gene[base_gene] = {"hit": hit, "rank": rank}
+    return [info["hit"] for info in by_gene.values()]
+
+
 def mcp_vote_classes(
     hallmark_hits: Optional[list],
     taxonomy_lookup: Optional[dict] = None,
@@ -537,6 +576,10 @@ def taxonomy_class_votes(
     """
     weights: Counter = Counter()
     marker_gene_ids: set[str] = set()
+    # One vote per marker-bearing protein, and an MCP profile on that protein
+    # outranks any higher-scoring non-MCP profile. Done here rather than in the
+    # caller so the function is correct however it is called.
+    hallmark_hits = _deduplicate_preferring_mcp(list(hallmark_hits or []))
 
     gene_category_by_id: dict[str, str] = {}
     for record in gene_taxonomy_records or []:
@@ -2263,12 +2306,11 @@ class EvidenceSynthesizer:
         and the all-gene search together. An EVE with no marker still gets a
         class here when its genes carry viral hits.
         """
-        deduped_hits, _genes, _by_gene = self._deduplicate_hallmark_hits(
-            hallmark_hits or []
-        )
+        # taxonomy_class_votes deduplicates internally, preferring an MCP
+        # profile, so the raw boundary hits go in unchanged.
         taxonomy_lookup = get_taxonomy_lookup()
         result.taxonomy_class = consensus_taxonomy_class(
-            deduped_hits,
+            hallmark_hits,
             gene_taxonomy_records=gene_taxonomy_records,
             taxonomy_lookup=taxonomy_lookup,
         )
@@ -2277,7 +2319,7 @@ class EvidenceSynthesizer:
         # MCP markers disagree the weighted vote settles it, and a class the
         # weights chose is not one a capsid decided.
         result.taxonomy_class_from_mcp = (
-            len(mcp_vote_classes(deduped_hits, taxonomy_lookup)) == 1
+            len(mcp_vote_classes(hallmark_hits, taxonomy_lookup)) == 1
         )
 
     def _process_gene_taxonomy(

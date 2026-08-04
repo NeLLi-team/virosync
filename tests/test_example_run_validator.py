@@ -95,7 +95,7 @@ def valid_example(monkeypatch, tmp_path: Path):
         relative_path="virosync_predictions.tsv",
         size=12,
         sha256="b" * 64,
-        schema="canonical-predictions-v4",
+        schema="canonical-predictions-v5",
         row_count=2,
     )
     state = SimpleNamespace(

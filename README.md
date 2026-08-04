@@ -359,7 +359,7 @@ Key output semantics:
 | `phase3_synthesis/virosync_predictions.bed` | Canonical 0-based half-open coordinates for accepted predictions |
 | `phase3_synthesis/virosync_predictions.gff3` | Canonical GFF3 annotations for accepted predictions |
 | `phase3_synthesis/virosync_predictions_detailed.tsv` | Detailed table of all Phase 3 candidates, including rejected candidates |
-| `phase3_synthesis/eve_ani_edges.tsv` | Every EVE pair skani compared, with ANI and both aligned fractions |
+| `phase3_synthesis/eve_ani_edges.tsv` | Every EVE pair skani compared, with ANI and both aligned fractions. Written over the gate-accepted set before any later removal, so intersect it with the published predictions |
 | `<genome_id>/virosync_predictions_detailed.tsv` | Convenience copy of the detailed table at the run root |
 | `<genome_id>/<genome_id>_eves.fna` | Combined FASTA for accepted predictions only |
 | `<genome_id>/virosync_tsv_invariant_report.tsv` | QA report for detailed TSV invariants |
