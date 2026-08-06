@@ -45,7 +45,20 @@ pixi run python scripts/ci/validate_example_run.py \
   --expect-accepted 1
 pixi run python scripts/ci/check_coordinate_outputs.py \
   results/release_example
+pixi run example-frameshift
+pixi run python scripts/ci/validate_example_run.py \
+  results/example-frameshift \
+  --expect-predictions 6 \
+  --expect-accepted 3
+pixi run python scripts/ci/check_coordinate_outputs.py \
+  results/example-frameshift
 ```
+
+The release checklist uses public schema-v1 v1.0.6. The scheduled
+[`example-smoke` workflow](../.github/workflows/example-smoke.yml) pins its
+exact EVE IDs. The
+[frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
+defines the schema-v2 Pfam contract.
 
 Then complete the repository checks:
 

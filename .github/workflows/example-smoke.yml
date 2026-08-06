@@ -122,7 +122,16 @@ jobs:
           pixi run python scripts/ci/validate_example_run.py \
             results/ci_example_frameshift \
             --expect-predictions 6 \
-            --expect-accepted 3
+            --expect-accepted 3 \
+            --expect-canonical-eve-id EVE_DS113495.1_18305-37386 \
+            --expect-canonical-eve-id EVE_DS113200.1_129184-151689 \
+            --expect-canonical-eve-id EVE_DS113495.1_58468-89417 \
+            --expect-detailed-eve-id EVE_DS113495.1_18305-37386 \
+            --expect-detailed-eve-id EVE_DS113200.1_129184-151689 \
+            --expect-detailed-eve-id EVE_DS113495.1_2-471 \
+            --expect-detailed-eve-id EVE_DS113389.1_48748-50484 \
+            --expect-detailed-eve-id EVE_DS113495.1_58468-89417 \
+            --expect-detailed-eve-id EVE_DS113200.1_26626-27034
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example_frameshift
           test -s results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv
           awk 'END { exit NR < 2 }' results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv

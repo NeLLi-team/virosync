@@ -8,6 +8,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- Pfam arbitration for proteins that hit at least two ViroSync marker models.
+  Schema-v2 runtime bundles carry the authenticated screening HMM. Phase 1 can
+  confirm, reassign, retain as unresolved, or reject an assignment
+  before Tier-1 DIAMOND validation, with decisions recorded in
+  `phase1/pfam_arbitration.tsv`. Schema-v1 resources remain supported without
+  arbitration and emit a warning when ambiguous proteins are present.
 - Opt-in Phase 1 frameshift-sensitive screening of the masked nucleotide
   assembly with BATH and the 808 shipped VS marker HMMs. ViroSync validates
   event-bearing aligned domains against the Tier-1 protein database. Confirmed,
@@ -38,6 +44,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- Pfam-enabled schema-v2 runs assign at most one marker model to each ambiguous
+  protein and remove all assignments when an observed domain contradicts every
+  candidate. The tracked frameshift fixture therefore has a resource-dependent
+  output contract for schema-v1 and Pfam-enabled schema-v2 bundles.
 - Rescue-derived and ordinary candidates remain separate through Phase 2. A
   rescue-only candidate must retain a confirmed rescued marker. Phase 3
   resolves direct ordinary/rescue overlaps without suppressing candidates that

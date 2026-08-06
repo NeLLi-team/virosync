@@ -39,11 +39,18 @@ RUNTIME_RESOURCE_FILES: tuple[str, ...] = (
     "DB_VERSION",
     "DATABASE_README.txt",
     "models/combined.hmm",
+    "models/pfam_virosync_screening.hmm",
     "models/model_annotations_with_interpro.tsv",
     "models/og_marker_name_map.tsv",
     "marker/marker.dmnd",
     "genomes/combined_proteome.dmnd",
     "taxonomy/labels.tsv",
+)
+
+LEGACY_RUNTIME_RESOURCE_FILES: tuple[str, ...] = tuple(
+    path
+    for path in RUNTIME_RESOURCE_FILES
+    if path != "models/pfam_virosync_screening.hmm"
 )
 
 SOURCE_RESOURCE_FILES: tuple[str, ...] = (
@@ -56,6 +63,7 @@ SOURCE_RESOURCE_FILES: tuple[str, ...] = (
 
 SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "hmm_models",
+    "pfam_models",
     "hmm_index_files",
     "model_annotations",
     "og_marker_mappings",
@@ -63,6 +71,10 @@ SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "marker_diamond_sequences",
     "proteome_diamond_sequences",
     "taxonomy_labels",
+)
+
+LEGACY_SEMANTIC_COUNT_KEYS: tuple[str, ...] = tuple(
+    key for key in SEMANTIC_COUNT_KEYS if key != "pfam_models"
 )
 
 REQUIRED_SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
@@ -83,6 +95,7 @@ _CANONICAL_ROLES: Mapping[str, str] = {
     "DB_VERSION": "bundle_version",
     "DATABASE_README.txt": "bundle_documentation",
     "models/combined.hmm": "hmm_models",
+    "models/pfam_virosync_screening.hmm": "pfam_models",
     "models/combined.hmm.h3f": "hmm_index",
     "models/combined.hmm.h3i": "hmm_index",
     "models/combined.hmm.h3m": "hmm_index",
@@ -346,7 +359,9 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
         if schema_version == 2
         else set(REQUIRED_SEMANTIC_COUNT_KEYS)
     )
-    allowed_counts = set(SEMANTIC_COUNT_KEYS)
+    allowed_counts = set(
+        SEMANTIC_COUNT_KEYS if schema_version == 2 else LEGACY_SEMANTIC_COUNT_KEYS
+    )
     present_counts = set(raw_counts)
     if not required_counts.issubset(present_counts) or not present_counts.issubset(
         allowed_counts
@@ -589,6 +604,14 @@ def compute_semantic_counts(
             _payload_at(resource_root, "taxonomy/labels.tsv", overrides)
         ),
     }
+    pfam_relative = "models/pfam_virosync_screening.hmm"
+    pfam_payload = (
+        overrides[pfam_relative]
+        if overrides is not None and pfam_relative in overrides
+        else resource_root / pfam_relative
+    )
+    if isinstance(pfam_payload, bytes) or pfam_payload.is_file():
+        counts["pfam_models"] = _count_prefixed_lines(pfam_payload, b"NAME")
     if include_diamond:
         if diamond_sequence_counter is None:
 
@@ -637,7 +660,11 @@ def _manifest_document(
             }
             for item in files
         ],
-        "semantic_counts": {key: semantic_counts[key] for key in SEMANTIC_COUNT_KEYS},
+        "semantic_counts": {
+            key: semantic_counts[key]
+            for key in SEMANTIC_COUNT_KEYS
+            if key in semantic_counts
+        },
     }
 
 
@@ -690,6 +717,7 @@ def _validated_semantic_counts(
     resource_root: Path,
     overrides: Mapping[str, ResourcePayload] | None,
     diamond_sequence_counter: DiamondSequenceCounter | None,
+    required_keys: tuple[str, ...],
 ) -> dict[str, int]:
     counts = compute_semantic_counts(
         resource_root,
@@ -697,7 +725,7 @@ def _validated_semantic_counts(
         diamond_sequence_counter=diamond_sequence_counter,
         include_diamond=True,
     )
-    for key in SEMANTIC_COUNT_KEYS:
+    for key in required_keys:
         value = counts.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ResourceManifestError(
@@ -729,7 +757,9 @@ def build_resource_manifest(
         resource_root,
         overrides,
         diamond_sequence_counter,
+        LEGACY_SEMANTIC_COUNT_KEYS,
     )
+    counts.pop("pfam_models", None)
 
     document = _manifest_document(normalized_version, immutable_files, counts)
     content = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -762,6 +792,7 @@ def build_split_resource_manifests(
         resource_root,
         overrides,
         diamond_sequence_counter,
+        SEMANTIC_COUNT_KEYS,
     )
 
     runtime_files = _manifest_files(
@@ -980,6 +1011,11 @@ def validate_resource_tree(
             if "models/combined.hmm" in payload_paths:
                 actual_counts["hmm_models"] = _count_prefixed_lines(
                     payload_paths["models/combined.hmm"],
+                    b"NAME",
+                )
+            if "models/pfam_virosync_screening.hmm" in payload_paths:
+                actual_counts["pfam_models"] = _count_prefixed_lines(
+                    payload_paths["models/pfam_virosync_screening.hmm"],
                     b"NAME",
                 )
             hmm_indices = [

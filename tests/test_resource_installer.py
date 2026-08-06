@@ -289,6 +289,9 @@ def _build_schema2_archive(
     bundle_kind: str,
 ) -> tuple[Path, bytes, resource_manifest.ResourceManifest]:
     payloads = _payloads()
+    payloads["models/pfam_virosync_screening.hmm"] = (
+        b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
+    )
     resources = _write_tree(
         tmp_path / "schema2-resources",
         payloads,
@@ -950,7 +953,7 @@ def test_missing_receipt_is_verified_before_metadata_is_rebuilt(
     assert resource_installer.verified_install_receipt(candidate, manifest)
 
 
-def test_schema2_runtime_bundle_installs_and_reuses_an_eight_file_receipt(
+def test_schema2_runtime_bundle_installs_and_reuses_its_full_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

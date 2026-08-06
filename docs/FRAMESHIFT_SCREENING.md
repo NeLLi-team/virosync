@@ -89,12 +89,28 @@ After installing BATH and the v1.0.6 resource bundle, run:
 pixi run example-frameshift
 ```
 
-The command writes `results/example-frameshift/`. The reference run has
-six detailed candidates and three canonical EVEs. Four rescue domains pass
+The command writes `results/example-frameshift/`. Four rescue domains pass
 Tier-1 marker validation, and one accepted EVE FAA contains its confirmed
-`VS000087` rescue domain. The fixture checks this route through the full
-pipeline. It is not a sensitivity benchmark. BATH's raw event count can vary
-across repeated multithreaded runs.
+`VS000087` rescue domain. The expected counts depend on the resource schema:
+
+| Resource | Pfam arbitration | Detailed | Canonical |
+|---|---|---:|---:|
+| Public schema-v1 v1.0.6 | No | 6 | 3 |
+| Schema-v2 with the 937-model Pfam screen | Yes | 5 | 2 |
+
+The schema-v2 canonical EVE IDs are:
+
+- `EVE_DS113200.1_129184-151689`
+- `EVE_DS113495.1_58468-89417`
+
+Its other detailed EVE IDs are `EVE_DS113495.1_2-471`,
+`EVE_DS113389.1_48748-50484`, and `EVE_DS113200.1_26626-27034`.
+`EVE_DS113495.1_18305-37386` is absent from both tables because `ResIII`
+contradicts every `Pox_A32` marker assignment on its only marker protein.
+
+The fixture checks the rescue and Pfam paths through the full pipeline. It is
+not a sensitivity benchmark. BATH's raw event count can vary across repeated
+multithreaded runs.
 
 When enabled, ViroSync:
 

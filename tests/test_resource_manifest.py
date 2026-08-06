@@ -9,6 +9,7 @@ import pytest
 import virosync.utils.resource_manifest as resource_manifest
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
+    LEGACY_SEMANTIC_COUNT_KEYS,
     RUNTIME_RESOURCE_FILES,
     RESOURCE_MANIFEST_NAME,
     SEMANTIC_COUNT_KEYS,
@@ -64,6 +65,11 @@ def _write_tree(root: Path, version: str = "v1.0.6") -> tuple[Path, str]:
     return root, manifest.manifest_sha256
 
 
+def _add_pfam_hmm(root: Path) -> None:
+    path = root / "models/pfam_virosync_screening.hmm"
+    path.write_bytes(b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n")
+
+
 def test_manifest_schema_and_fast_validation_use_no_child_process(
     tmp_path: Path,
 ) -> None:
@@ -89,7 +95,7 @@ def test_manifest_schema_and_fast_validation_use_no_child_process(
     assert result.files_verified == 13
     assert result.full is False
     assert tuple(item.path for item in manifest.files) == CORE_RESOURCE_FILES
-    assert tuple(manifest.semantic_counts) == SEMANTIC_COUNT_KEYS
+    assert tuple(manifest.semantic_counts) == LEGACY_SEMANTIC_COUNT_KEYS
     assert manifest.semantic_counts == {
         "hmm_models": 2,
         "hmm_index_files": 4,
@@ -274,7 +280,7 @@ def test_expected_version_and_manifest_digest_are_enforced(tmp_path: Path) -> No
         load_resource_manifest(root, expected_manifest_sha256="0" * 64)
 
 
-def test_legacy_six_count_manifest_is_accepted_but_unknown_counts_are_not(
+def test_legacy_six_count_manifest_is_accepted_but_new_counts_are_not(
     tmp_path: Path,
 ) -> None:
     root, _ = _write_tree(tmp_path / "virosync")
@@ -294,10 +300,14 @@ def test_legacy_six_count_manifest_is_accepted_but_unknown_counts_are_not(
         "taxonomy_labels",
     }
 
-    document["semantic_counts"]["unknown_count"] = 1
-    manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
-    with pytest.raises(ResourceManifestError, match="unexpected=.*unknown_count"):
-        load_resource_manifest(root)
+    for key in ("pfam_models", "unknown_count"):
+        document["semantic_counts"][key] = 1
+        manifest_path.write_text(
+            json.dumps(document, indent=2, sort_keys=True) + "\n"
+        )
+        with pytest.raises(ResourceManifestError, match=f"unexpected=.*{key}"):
+            load_resource_manifest(root)
+        document["semantic_counts"].pop(key)
 
 
 def test_noncanonical_payload_role_is_rejected(tmp_path: Path) -> None:
@@ -319,6 +329,7 @@ def test_schema_v2_manifests_are_strict_bound_views_of_union(
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
+    _add_pfam_hmm(root)
 
     def diamond_count(payload: Path | bytes) -> int:
         assert isinstance(payload, Path)
@@ -336,11 +347,13 @@ def test_schema_v2_manifests_are_strict_bound_views_of_union(
     assert tuple(item.path for item in runtime.files) == RUNTIME_RESOURCE_FILES
     assert tuple(item.path for item in source.files) == SOURCE_RESOURCE_FILES
     assert set(RUNTIME_RESOURCE_FILES).isdisjoint(SOURCE_RESOURCE_FILES)
-    assert set(RUNTIME_RESOURCE_FILES) | set(SOURCE_RESOURCE_FILES) == set(
-        CORE_RESOURCE_FILES
-    )
+    assert set(RUNTIME_RESOURCE_FILES) | set(SOURCE_RESOURCE_FILES) == {
+        *CORE_RESOURCE_FILES,
+        "models/pfam_virosync_screening.hmm",
+    }
     assert runtime.semantic_counts == source.semantic_counts
     assert tuple(runtime.semantic_counts) == SEMANTIC_COUNT_KEYS
+    assert runtime.semantic_counts["pfam_models"] == 1
     assert source.runtime_manifest_sha256 == runtime.manifest_sha256
 
     runtime_path = tmp_path / "runtime-manifest.json"
@@ -426,6 +439,7 @@ def test_schema_v2_rejects_incomplete_or_unexpected_contract_fields(
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
+    _add_pfam_hmm(root)
 
     def diamond_count(payload: Path | bytes) -> int:
         assert isinstance(payload, Path)

@@ -382,6 +382,7 @@ def _enabled_resource_identities(flat_config: dict) -> list:
             for sibling_name in (
                 "model_annotations_with_interpro.tsv",
                 "og_marker_name_map.tsv",
+                "pfam_virosync_screening.hmm",
             ):
                 sibling = selected.parent / sibling_name
                 if sibling.is_file():
@@ -617,6 +618,8 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
         return "frameshift-rescued-proteins-v1"
     if relative == "phase1/frameshift_screening/confirmed_frameshift_markers.tsv":
         return "frameshift-rescued-markers-v1"
+    if relative == "phase1/pfam_arbitration.tsv":
+        return "pfam-arbitration-v1"
     if relative == "phase1/resume_state.json":
         return PHASE1_STATE_SCHEMA
     if relative == "phase2/resume_state.json":
@@ -675,6 +678,7 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
             "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
             "phase1/frameshift_screening/frameshift_hits.tsv",
+            "phase1/pfam_arbitration.tsv",
             "phase1/resume_state.json",
         ),
         2: (

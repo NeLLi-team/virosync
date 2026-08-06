@@ -91,22 +91,67 @@ def _count_prefixed_lines(path: Path, prefix: bytes) -> int:
         return sum(1 for line in handle if line.startswith(prefix))
 
 
+def _validate_pfam_hmm(path: Path) -> int:
+    """Return the Pfam model count after requiring a GA line for every model."""
+
+    model_count = 0
+    current_name = None
+    has_ga = False
+    with path.open("rt", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("NAME"):
+                if current_name is not None and not has_ga:
+                    raise ResourceManifestError(
+                        f"Pfam model {current_name!r} has no GA cutoff"
+                    )
+                fields = line.split()
+                if len(fields) < 2:
+                    raise ResourceManifestError("Pfam HMM contains an invalid NAME line")
+                current_name = fields[1]
+                has_ga = False
+                model_count += 1
+            elif line.startswith("GA"):
+                has_ga = True
+    if current_name is not None and not has_ga:
+        raise ResourceManifestError(f"Pfam model {current_name!r} has no GA cutoff")
+    if model_count == 0:
+        raise ResourceManifestError("Pfam screening HMM contains no models")
+    return model_count
+
+
+def _validate_pfam_annotations(path: Path) -> None:
+    required = {"model_name", "pfam_signature", "source_scope"}
+    with path.open("rt", encoding="utf-8") as handle:
+        header = set(handle.readline().rstrip("\n").split("\t"))
+    missing = required - header
+    if missing:
+        raise ResourceManifestError(
+            "model_annotations_with_interpro.tsv is missing required Pfam columns: "
+            f"{sorted(missing)}"
+        )
+
+
 def _readme_bytes(
     resources_dir: Path,
     version: str,
     *,
     split_runtime: bool = False,
+    pfam_count: int | None = None,
 ) -> bytes:
     hmm_count = _count_prefixed_lines(resources_dir / "models/combined.hmm", b"NAME")
     marker_count = _count_prefixed_lines(resources_dir / "marker/marker.faa", b">")
     if split_runtime:
+        if pfam_count is None:
+            raise ResourceManifestError("split runtime README requires a Pfam model count")
         content = (
             f"ViroSync core runtime resource bundle {version}\n"
             f"{'=' * 48}\n\n"
             f"HMM profiles (models/combined.hmm): {hmm_count}\n"
+            f"Pfam screening profiles: {pfam_count}\n"
             f"TIER-1 marker proteins (source artifact): {marker_count}\n\n"
             "Runtime payload:\n"
             "  models/combined.hmm                         Phase 1 marker HMM library\n"
+            "  models/pfam_virosync_screening.hmm          Pfam arbitration library\n"
             "  models/model_annotations_with_interpro.tsv  one row per HMM profile\n"
             "  models/og_marker_name_map.tsv               VS<->OG marker name map\n"
             "  marker/marker.dmnd                           TIER-1 validation database\n"
@@ -411,6 +456,12 @@ def build_split_resource_bundles(
         raise ResourceManifestError(
             f"resources directory must be an existing directory: {resources_dir}"
         )
+    pfam_count = _validate_pfam_hmm(
+        resources_dir / "models/pfam_virosync_screening.hmm"
+    )
+    _validate_pfam_annotations(
+        resources_dir / "models/model_annotations_with_interpro.tsv"
+    )
 
     runtime_output = Path(runtime_output).expanduser().resolve(strict=False)
     source_output = Path(source_output).expanduser().resolve(strict=False)
@@ -445,6 +496,7 @@ def build_split_resource_bundles(
             resources_dir,
             version,
             split_runtime=True,
+            pfam_count=pfam_count,
         )
 
         if diamond_sequence_counter is None:

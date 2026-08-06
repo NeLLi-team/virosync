@@ -66,12 +66,26 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         writer.writerow(row)
 
 
+def _write_predictions(run_dir: Path) -> None:
+    synthesis_dir = run_dir / "phase3_synthesis"
+    synthesis_dir.mkdir()
+    for filename, eve_ids in (
+        ("virosync_predictions.tsv", ["EVE_a", "EVE_b"]),
+        ("virosync_predictions_detailed.tsv", ["EVE_a", "EVE_b", "EVE_c"]),
+    ):
+        with (synthesis_dir / filename).open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+            writer.writerow(["eve_id"])
+            writer.writerows([eve_id] for eve_id in eve_ids)
+
+
 @pytest.fixture
 def valid_example(monkeypatch, tmp_path: Path):
     output_root = tmp_path / "out"
     run_dir = output_root / "example"
     run_dir.mkdir(parents=True)
     _write_batch(output_root)
+    _write_predictions(run_dir)
     state_bytes = b'{"schema_version":3}\n'
     (run_dir / validate_example_run.RUN_STATE_FILENAME).write_bytes(state_bytes)
     result = {
@@ -124,6 +138,8 @@ def test_snapshot_is_deterministic_path_free_and_count_bound(valid_example) -> N
     assert run["run_state_sha256"] == hashlib.sha256(state_bytes).hexdigest()
     assert run["result"]["canonical_rows"] == 2
     assert run["artifacts"][0]["sha256"] == "b" * 64
+    assert run["canonical_eve_ids"] == ["EVE_a", "EVE_b"]
+    assert run["detailed_eve_ids"] == ["EVE_a", "EVE_b", "EVE_c"]
 
 
 def test_snapshot_schema_error_names_current_version(tmp_path: Path) -> None:
@@ -206,6 +222,38 @@ def test_validator_enforces_expected_example_totals(valid_example) -> None:
     assert (
         validate_example_run.main(
             [str(output_root), "--expect-accepted", "3"]
+        )
+        == 1
+    )
+
+
+def test_validator_enforces_exact_eve_ids(valid_example) -> None:
+    output_root, _state_bytes = valid_example
+    assert (
+        validate_example_run.main(
+            [
+                str(output_root),
+                "--expect-canonical-eve-id",
+                "EVE_a",
+                "--expect-canonical-eve-id",
+                "EVE_b",
+                "--expect-detailed-eve-id",
+                "EVE_a",
+                "--expect-detailed-eve-id",
+                "EVE_b",
+                "--expect-detailed-eve-id",
+                "EVE_c",
+            ]
+        )
+        == 0
+    )
+    assert (
+        validate_example_run.main(
+            [
+                str(output_root),
+                "--expect-canonical-eve-id",
+                "EVE_a",
+            ]
         )
         == 1
     )

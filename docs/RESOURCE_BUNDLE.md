@@ -29,11 +29,12 @@ must equal the marker DIAMOND sequence count; the builder and installer reject
 a stale marker database.
 
 The builder can also emit two bound schema-v2 artifacts. The runtime artifact
-contains only the eight files needed to run ViroSync:
+contains the nine files needed to run ViroSync with Pfam arbitration:
 
 - `DB_VERSION`
 - `DATABASE_README.txt`
 - `models/combined.hmm`
+- `models/pfam_virosync_screening.hmm`
 - `models/model_annotations_with_interpro.tsv`
 - `models/og_marker_name_map.tsv`
 - `marker/marker.dmnd`
@@ -58,8 +59,16 @@ indices or marker FASTA. The source/repair artifact supports inspection and
 can rebuild the marker database. It cannot rebuild
 `genomes/combined_proteome.dmnd`, so it is not a complete raw-source backup.
 
-Core setup accepts schema-v1 legacy bundles and schema-v2 runtime bundles. It
-rejects a source/repair artifact at both fresh install and repeat setup.
+Core setup accepts schema-v1 legacy bundles and schema-v2 runtime bundles. A
+schema-v1 bundle does not contain the Pfam screening HMM. ViroSync keeps its
+HMM hits unchanged and logs a warning if it encounters ambiguous proteins.
+Schema-v2 runtime manifests require the Pfam HMM and include `pfam_models` in
+their semantic counts. Setup rejects a source/repair artifact at both fresh
+install and repeat setup.
+
+The [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
+defines the resource-dependent output contract for the public schema-v1 bundle
+and Pfam-enabled schema-v2 bundles.
 
 The split builder finishes and hashes both archives before replacing an output
 path. The two replacements are separate filesystem operations, so they are not
@@ -176,6 +185,12 @@ The bundle contains three linked biological resources:
 | `PHAGE` | bacteriophage references | 80,325 |
 | `PLASTID` | plastid references | 160,715 |
 | `MITO` | mitochondrial references | 219,388 |
+
+Schema-v2 runtime bundles add `models/pfam_virosync_screening.hmm`. The
+screening HMM prepared for v1.0.7 contains 937 Pfam 38.0 profiles, each with a
+GA cutoff. The split builder rejects a profile without GA and requires
+`model_name`, `pfam_signature`, and `source_scope` in the model annotation
+table. The manifest authenticates the HMM and records its model count.
 
 `taxonomy/labels.tsv` maps genome/source IDs to pipe-delimited lineage strings
 used by marker validation, host-signature modeling, and gene-level taxonomy
@@ -331,17 +346,18 @@ To build the bound schema-v2 artifacts instead:
 
 ```bash
 pixi run python scripts/build_resource_bundle.py \
-  --version v1.0.6 \
+  --version v1.0.7 \
   --split \
-  --output resources_v1_0_6_runtime.tar.gz \
-  --source-output resources_v1_0_6_source.tar.gz \
+  --output resources_v1_0_7_runtime.tar.gz \
+  --source-output resources_v1_0_7_source.tar.gz \
   --skip-hmmpress \
   --skip-marker-dmnd
 ```
 
-The runtime archive has nine regular-file members: eight manifest-listed
-payloads plus its manifest. The source/repair archive has six: five payloads
-plus its manifest. The builder prepares and authenticates both archives before
-publishing either output. The two `--skip-*` flags reuse the derived files in
-the input tree; omit them when a release build must regenerate the HMMER
-indices and marker DIAMOND database from their sources.
+The input tree must contain `models/pfam_virosync_screening.hmm` and the three
+Pfam annotation columns. The runtime archive has ten regular-file members:
+nine manifest-listed payloads plus its manifest. The source/repair archive has
+six: five payloads plus its manifest. The builder prepares and authenticates
+both archives before publishing either output. The two `--skip-*` flags reuse
+the derived files in the input tree; omit them when a release build must
+regenerate the HMMER indices and marker DIAMOND database from their sources.

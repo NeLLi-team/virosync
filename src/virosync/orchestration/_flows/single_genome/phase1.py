@@ -11,9 +11,11 @@ from virosync.orchestration.tasks import (
     frameshift_screening_task,
     generate_outputs_task,
     hhg_seeding_task,
+    pfam_arbitration_task,
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 from virosync.orchestration._flows.utils import (
@@ -373,6 +375,32 @@ def _run_phase1_subflow(
         output_dir=output_dir / "phase1" / "hmm",
     )
     logger.info(f"HMM hits: {len(hhg_hits)}")
+
+    pfam_query_proteins = ambiguous_proteins(hhg_hits)
+    if pfam_query_proteins:
+        model_dir = Path(hmm_database).parent
+        pfam_hmm_path = model_dir / "pfam_virosync_screening.hmm"
+        if pfam_hmm_path.is_file():
+            hhg_hits = call_task(
+                pfam_arbitration_task,
+                hmm_hits=hhg_hits,
+                proteins=pfam_query_proteins,
+                proteome_path=hmm_query_fasta,
+                pfam_hmm_path=pfam_hmm_path,
+                model_annotations_path=(
+                    model_dir / "model_annotations_with_interpro.tsv"
+                ),
+                output_path=output_dir / "phase1" / "pfam_arbitration.tsv",
+                threads=threads,
+            )
+            logger.info("HMM hits after Pfam arbitration: %d", len(hhg_hits))
+        else:
+            logger.warning(
+                "Pfam arbitration skipped for %d ambiguous proteins: "
+                "the selected resource does not contain %s",
+                len(pfam_query_proteins),
+                pfam_hmm_path,
+            )
 
     if not hhg_hits and not frameshift_hits:
         logger.warning(

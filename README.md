@@ -52,6 +52,7 @@ ViroSync follows a four-phase workflow.
                 ║         EVE Seed Region Prediction            ║
                 ║  ─────────────────────────────────────────── ║
                 ║   • pyhmmer scan of marker HMMs               ║
+                ║   • Pfam arbitration of multi-model hits      ║
                 ║   • marker hit taxonomy validation            ║
                 ║   • infer host signature                      ║
                 ║   • seed region assembly                      ║
@@ -90,7 +91,8 @@ ViroSync follows a four-phase workflow.
 ```
 
 1. Phase 0: optional repeat masking and protein prediction with `prodigal-gv`.
-2. Phase 1: pyhmmer marker discovery plus marker-database validation to assemble seed regions.
+2. Phase 1: pyhmmer marker discovery, Pfam arbitration when the resource
+   supports it, and marker-database validation to assemble seed regions.
 3. Phase 2: gene-anchored boundary refinement using batched gene-taxonomy searches and host-aware trimming.
 4. Phase 3: confidence scoring and report generation using marker, taxonomy, compositional, and optional structural/domain evidence.
 
@@ -150,6 +152,14 @@ Version: v1.0.6
 The public release provisions a pinned prebuilt resource bundle. Building the
 full ViroSync database from raw source inputs is not part of the public setup
 workflow yet.
+
+Schema-v2 runtime bundles include `models/pfam_virosync_screening.hmm` for
+multi-model hit arbitration. ViroSync scans only proteins hit by at least two
+marker models, then writes `phase1/pfam_arbitration.tsv` when arbitration runs.
+The public v1.0.6 schema-v1 bundle does not contain this file. ViroSync supports
+that bundle and logs a warning when it cannot arbitrate ambiguous proteins. See
+[the Methods](docs/METHODS.md#2-pfam-model-arbitration) for the decision rules
+and [the resource reference](docs/RESOURCE_BUNDLE.md) for the schema-v2 payload.
 
 The default resource bundle is configured in [config/orchestration.yaml](config/orchestration.yaml)
 and targets `resources_v1_0_6.tar.gz`. The config pins both the complete archive
@@ -214,6 +224,10 @@ bundle, the `trichomonas-g3` row should report `status=success`,
 `predictions=6`, and `accepted=3`. See the
 [frameshift screening guide](docs/FRAMESHIFT_SCREENING.md) for input
 provenance, output checks, and runtime measurements.
+
+The [frameshift screening guide](docs/FRAMESHIFT_SCREENING.md#run-the-shipped-example)
+lists the exact resource-dependent EVE contracts for public schema-v1 and
+Pfam-enabled schema-v2 bundles.
 
 Run a single genome:
 

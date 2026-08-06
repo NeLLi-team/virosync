@@ -318,6 +318,55 @@ def hhg_seeding_task(
     return result, []
 
 
+@task(
+    name="pfam_arbitration",
+    description="Pfam arbitration of multi-model HMM hits",
+    retries=2,
+    retry_delay_seconds=60,
+    timeout_seconds=3600,
+    persist_result=True,
+)
+def pfam_arbitration_task(
+    hmm_hits: list,
+    proteins: set[str],
+    proteome_path: Path,
+    pfam_hmm_path: Path,
+    model_annotations_path: Path,
+    output_path: Path,
+    threads: int = 8,
+) -> list:
+    """Resolve multi-model HMM hits with the bundled Pfam screening library."""
+
+    from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.pipeline.phase1.pfam_arbitration import run_pfam_arbitration
+
+    logger = get_orchestration_logger(__name__)
+    logger.info(
+        "pfam_arbitration: proteome=%s pfam=%s annotations=%s output=%s",
+        proteome_path,
+        pfam_hmm_path,
+        model_annotations_path,
+        output_path,
+    )
+    with ResourceMonitor(
+        task_name="pfam_arbitration",
+        genome_id=Path(proteome_path).parent.parent.name,
+        phase="phase1",
+        output_dir=Path(output_path).parent,
+        threads=threads,
+        task_id=Path(proteome_path).parent.parent.name,
+    ):
+        return run_pfam_arbitration(
+            hits=hmm_hits,
+            proteins=proteins,
+            proteome_path=Path(proteome_path),
+            pfam_hmm_path=Path(pfam_hmm_path),
+            model_annotations_path=Path(model_annotations_path),
+            output_path=Path(output_path),
+            threads=threads,
+        )
+
+
 # === Phase 1 HMM-Gated Workflow Tasks ===
 
 

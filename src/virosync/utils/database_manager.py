@@ -33,6 +33,7 @@ from virosync.utils.resource_installer import (
     verified_install_receipt,
 )
 from virosync.utils.resource_manifest import (
+    LEGACY_RUNTIME_RESOURCE_FILES,
     RUNTIME_RESOURCE_FILES,
     ResourceManifestError,
     ResourceValidationResult,
@@ -479,7 +480,13 @@ class ViroSyncDatabaseManager:
 
     @classmethod
     def required_files_for_path(cls, db_path: Path) -> list[str]:
-        return list(RUNTIME_RESOURCE_FILES)
+        try:
+            manifest = load_resource_manifest(db_path)
+        except (OSError, ResourceManifestError):
+            manifest = None
+        if manifest is not None and manifest.schema_version == 2:
+            return list(RUNTIME_RESOURCE_FILES)
+        return list(LEGACY_RUNTIME_RESOURCE_FILES)
 
     @classmethod
     def _check_missing_files(cls, db_path: Path) -> list[str]:

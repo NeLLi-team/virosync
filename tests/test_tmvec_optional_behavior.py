@@ -10,7 +10,7 @@ from virosync.pipeline.phase3 import tmvec_predictor
 from virosync.pipeline.phase3.tmvec_database import TMVecDatabaseSearch
 from virosync.pipeline.phase3.tmvec_predictor import TMvecPredictor
 from virosync.utils.database_manager import ViroSyncDatabaseManager
-from virosync.utils.resource_manifest import RUNTIME_RESOURCE_FILES
+from virosync.utils.resource_manifest import LEGACY_RUNTIME_RESOURCE_FILES
 
 
 def _write_tmvec_pair(
@@ -543,7 +543,9 @@ def _write_core_resource_files(root: Path, hmm_name: str) -> None:
         path.write_text("synthetic resource payload\n")
 
 
-def test_core_resource_checks_prefer_combined_hmm(tmp_path: Path) -> None:
+def test_manifestless_core_resource_checks_use_legacy_combined_hmm(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "virosync"
     _write_core_resource_files(root, "combined.hmm")
 
@@ -551,7 +553,7 @@ def test_core_resource_checks_prefer_combined_hmm(tmp_path: Path) -> None:
     assert ViroSyncDatabaseManager.default_paths(root)["marker_faa_db"] == root / "marker" / "marker.faa"
     assert ViroSyncDatabaseManager._check_missing_files(root) == []
     assert ViroSyncDatabaseManager.required_files_for_path(root) == list(
-        RUNTIME_RESOURCE_FILES
+        LEGACY_RUNTIME_RESOURCE_FILES
     )
 
 
@@ -561,7 +563,7 @@ def test_core_resource_checks_reject_combined_ga_only_bundle(tmp_path: Path) -> 
 
     assert ViroSyncDatabaseManager.default_paths(root)["hmm_db"] == root / "models" / "combined.hmm"
     assert ViroSyncDatabaseManager.required_files_for_path(root) == list(
-        RUNTIME_RESOURCE_FILES
+        LEGACY_RUNTIME_RESOURCE_FILES
     )
     assert ViroSyncDatabaseManager._check_missing_files(root) == [
         "models/combined.hmm"

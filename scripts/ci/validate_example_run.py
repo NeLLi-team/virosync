@@ -26,7 +26,11 @@ from virosync.orchestration._flows.single_genome.run_state import (
 )
 
 
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
+PREDICTION_TABLES = {
+    "canonical_eve_ids": Path("phase3_synthesis/virosync_predictions.tsv"),
+    "detailed_eve_ids": Path("phase3_synthesis/virosync_predictions_detailed.tsv"),
+}
 CLASS_FIELDS = {
     "ncldv": "NCLDV",
     "mirus": "MIRUS",
@@ -119,6 +123,21 @@ def _load_batch_rows(output_root: Path) -> list[dict[str, str]]:
             "batch_summary.tsv genome IDs must be nonempty and unique"
         )
     return rows
+
+
+def _load_eve_ids(run_dir: Path, relative_path: Path) -> list[str]:
+    path = run_dir / relative_path
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            if "eve_id" not in (reader.fieldnames or ()):
+                raise ExampleValidationError(f"{relative_path} lacks an eve_id column")
+            eve_ids = [row["eve_id"] for row in reader]
+    except OSError as exc:
+        raise ExampleValidationError(f"cannot read {relative_path}: {exc}") from exc
+    if not all(eve_ids) or len(set(eve_ids)) != len(eve_ids):
+        raise ExampleValidationError(f"{relative_path} EVE IDs must be nonempty and unique")
+    return sorted(eve_ids)
 
 
 def _validated_genome_dir(output_root: Path, genome_id: str) -> Path:
@@ -251,6 +270,10 @@ def build_snapshot(
             "attempt": state.attempt,
             "result": state.result,
             "artifacts": artifacts,
+            **{
+                field: _load_eve_ids(run_dir, relative_path)
+                for field, relative_path in PREDICTION_TABLES.items()
+            },
             "run_state_sha256": _sha256(run_dir / RUN_STATE_FILENAME),
             "batch": {field: row[field] for field in SNAPSHOT_SUMMARY_FIELDS},
         }
@@ -295,6 +318,33 @@ def _require_expected_totals(
             )
 
 
+def _require_expected_eve_ids(
+    snapshot: dict[str, object],
+    *,
+    canonical: list[str],
+    detailed: list[str],
+) -> None:
+    if not canonical and not detailed:
+        return
+    runs = snapshot["runs"]
+    if not isinstance(runs, dict) or len(runs) != 1:
+        raise ExampleValidationError("exact EVE ID checks require an output root with one genome")
+    run = next(iter(runs.values()))
+    if not isinstance(run, dict):
+        raise ExampleValidationError("snapshot run payload must be an object")
+    observed = {field: run.get(field) for field in PREDICTION_TABLES}
+    if not all(isinstance(ids, list) for ids in observed.values()):
+        raise ExampleValidationError("snapshot run lacks EVE ID lists")
+    for label, expected, field in (
+        ("canonical", canonical, "canonical_eve_ids"),
+        ("detailed", detailed, "detailed_eve_ids"),
+    ):
+        if expected and sorted(expected) != observed[field]:
+            raise ExampleValidationError(
+                f"example {label} EVE IDs {observed[field]!r} differ from expected {sorted(expected)!r}"
+            )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_root", type=Path)
@@ -304,6 +354,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--require-resume", action="store_true")
     parser.add_argument("--expect-predictions", type=int)
     parser.add_argument("--expect-accepted", type=int)
+    parser.add_argument("--expect-canonical-eve-id", action="append", default=[])
+    parser.add_argument("--expect-detailed-eve-id", action="append", default=[])
     args = parser.parse_args(argv)
     if args.require_resume and args.compare_snapshot is None:
         parser.error("--require-resume requires --compare-snapshot")
@@ -320,6 +372,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             current,
             predictions=args.expect_predictions,
             accepted=args.expect_accepted,
+        )
+        _require_expected_eve_ids(
+            current,
+            canonical=args.expect_canonical_eve_id,
+            detailed=args.expect_detailed_eve_id,
         )
         if args.write_snapshot is not None:
             args.write_snapshot.parent.mkdir(parents=True, exist_ok=True)

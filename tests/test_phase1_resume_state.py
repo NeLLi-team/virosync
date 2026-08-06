@@ -28,7 +28,7 @@ from virosync.pipeline.phase1.frameshift_screening import (
     FrameshiftHit,
     rescued_protein_id,
 )
-from virosync.pipeline.phase1.hhg_seeding import Anchor
+from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 
@@ -442,6 +442,100 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
     assert events[-1] == "outputs"
 
 
+def test_pfam_contradiction_stops_before_marker_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["resume"] = False
+    kwargs["resume_authorized"] = False
+    hmm_database = tmp_path / "models" / "combined.hmm"
+    hmm_database.parent.mkdir()
+    hmm_database.write_text("HMM\n")
+    (hmm_database.parent / "pfam_virosync_screening.hmm").write_text("PFAM\n")
+    marker_db = tmp_path / "markers.dmnd"
+    marker_db.write_text("DB\n")
+    kwargs["hmm_database"] = hmm_database
+    kwargs["marker_db"] = marker_db
+    hits = [
+        HMMHit("protein-1", "VS000806", 100.0, 1e-20, 90.0, 1, 100),
+        HMMHit("protein-1", "VS000369", 90.0, 1e-18, 80.0, 1, 100),
+    ]
+    events = []
+
+    def fake_call_task(task, **task_kwargs):
+        if task is phase1_module.hhg_seeding_task:
+            events.append("hmm")
+            return [], hits
+        if task is phase1_module.pfam_arbitration_task:
+            events.append("pfam")
+            assert task_kwargs["hmm_hits"] == hits
+            assert task_kwargs["proteins"] == {"protein-1"}
+            return []
+        if task is phase1_module.generate_outputs_task:
+            events.append("outputs")
+            return {}
+        if task.__name__ == "marker_validation_task":
+            raise AssertionError("contradicted hits reached marker validation")
+        raise AssertionError(f"unexpected task: {task}")
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
+    monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
+
+    result = _run_phase1_subflow(**kwargs)
+
+    assert result["success"] is True
+    assert events == ["hmm", "pfam", "outputs"]
+
+
+def test_missing_pfam_resource_skips_arbitration_and_preserves_marker_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["resume"] = False
+    kwargs["resume_authorized"] = False
+    hmm_database = tmp_path / "models" / "combined.hmm"
+    hmm_database.parent.mkdir()
+    hmm_database.write_text("HMM\n")
+    marker_db = tmp_path / "markers.dmnd"
+    marker_db.write_text("DB\n")
+    kwargs["hmm_database"] = hmm_database
+    kwargs["marker_db"] = marker_db
+    hits = [
+        HMMHit("protein-1", "model-a", 100.0, 1e-20, 90.0, 1, 100),
+        HMMHit("protein-1", "model-b", 90.0, 1e-18, 80.0, 1, 100),
+    ]
+    events = []
+
+    def fake_call_task(task, **task_kwargs):
+        if task is phase1_module.hhg_seeding_task:
+            events.append("hmm")
+            return [], hits
+        if task is phase1_module.pfam_arbitration_task:
+            raise AssertionError("missing Pfam resource reached arbitration")
+        if task.__name__ == "marker_validation_task":
+            events.append("marker")
+            assert task_kwargs["hmm_hits"] == hits
+            return []
+        if task is phase1_module.generate_outputs_task:
+            events.append("outputs")
+            return {}
+        raise AssertionError(f"unexpected task: {task}")
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
+    monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
+
+    result = _run_phase1_subflow(**kwargs)
+
+    assert result["success"] is True
+    assert events == ["hmm", "marker", "outputs"]
+
+
 def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -575,7 +669,17 @@ def test_fresh_phase1_writes_exact_state_after_classification(
 
     def fake_call_task(task, **task_kwargs):
         if task is phase1_module.hhg_seeding_task:
-            return [], [object()]
+            return [], [
+                HMMHit(
+                    query_name="scaffold/alpha_17",
+                    target_name="GVOGm0003",
+                    score=123.0,
+                    evalue=1e-40,
+                    domain_score=120.0,
+                    query_start=1,
+                    query_end=100,
+                )
+            ]
         if task.__name__ == "marker_validation_task":
             return [marker]
         if task.__name__ == "region_assembly_task":

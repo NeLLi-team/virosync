@@ -39,8 +39,15 @@ def _resource_tree(root: Path) -> Path:
         "models/combined.hmm.h3i": b"h3i\n",
         "models/combined.hmm.h3m": b"h3m\n",
         "models/combined.hmm.h3p": b"h3p\n",
+        "models/pfam_virosync_screening.hmm": (
+            b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
+        ),
         "models/model_annotations_with_interpro.tsv": (
-            b"model\tannotation\nVS000001\tsynthetic\n"
+            b"model_name\tsource\tdescription\tmajority_annotation\tpfam_signature\t"
+            b"pfam_top_domains\tpfam_n_sampled\tpfam_n_with_pfam\tsource_marker\t"
+            b"source_scope\traw_name\n"
+            b"VS000001\ttest\tsynthetic\tsynthetic\tPfamOne\tPfamOne:1\t1\t1\t"
+            b"VS000001\tTEST\tVS000001\n"
         ),
         "models/og_marker_name_map.tsv": b"model\tmarker\nVS000001\tOG1\n",
         "marker/marker.faa": b">marker-one\nMPEP\n",
@@ -299,6 +306,44 @@ def test_split_builder_is_deterministic_exact_and_bound(tmp_path: Path) -> None:
     assert runtime_manifest["semantic_counts"] == source_manifest["semantic_counts"]
     assert runtime_manifest["semantic_counts"]["marker_proteins"] == 1
     assert runtime_manifest["semantic_counts"]["marker_diamond_sequences"] == 1
+    assert runtime_manifest["semantic_counts"]["pfam_models"] == 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda resources: (
+                resources / "models/pfam_virosync_screening.hmm"
+            ).write_bytes(b"HMMER3/f\nNAME  PfamOne\n//\n"),
+            "has no GA cutoff",
+        ),
+        (
+            lambda resources: (
+                resources / "models/model_annotations_with_interpro.tsv"
+            ).write_bytes(b"model_name\tsource\nVS000001\ttest\n"),
+            "missing required Pfam columns",
+        ),
+    ],
+)
+def test_split_builder_rejects_incomplete_pfam_inputs(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+    mutation(resources)
+
+    with pytest.raises(ResourceManifestError, match=message):
+        build_split_resource_bundles(
+            resources,
+            tmp_path / "runtime.tar.gz",
+            tmp_path / "source.tar.gz",
+            "v1.0.7",
+            skip_hmmpress=True,
+            skip_marker_dmnd=True,
+            diamond_sequence_counter=_diamond_count,
+        )
 
 
 def test_split_prep_failure_publishes_neither_artifact(

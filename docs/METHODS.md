@@ -216,7 +216,62 @@ marker, and 28 rescue-anchored regions did not overlap a disabled seed. These
 28 regions are Phase 1 candidates and must pass the later EVE acceptance
 gates.
 
-### 2) Marker validation with small taxonomy DB
+### 2) Pfam model arbitration
+
+When a protein hits at least two distinct ViroSync models, Phase 1 scans that
+protein against `models/pfam_virosync_screening.hmm` before Tier-1 DIAMOND
+validation. The supplied schema-v2 screening HMM contains 937 Pfam 38.0
+profiles. PyHMMER applies each profile's gathering cutoff. Proteins with one
+ViroSync model hit do not enter the Pfam scan.
+
+For each candidate model, ViroSync reads `pfam_signature` and `source_scope`
+from `models/model_annotations_with_interpro.tsv`. A candidate is compatible
+when the observed Pfam domains intersect its signature. Models with
+`source_scope=CRESS_REP` instead require `Gemini_AL1`, the discriminating HUH
+endonuclease domain. `Gemini_AL1_M`, AAA, and helicase domains alone do not
+confirm a Rep assignment.
+
+The arbitration outcomes are:
+
+- `confirmed`: exactly one candidate is compatible and it is the highest
+  bitscore candidate;
+- `reassigned`: exactly one candidate is compatible and it is not the highest
+  bitscore candidate;
+- `unresolved_no_domain`: no Pfam domain is observed, so the highest bitscore
+  candidate is retained;
+- `unresolved_shared_domain`: more than one candidate is compatible, so the
+  highest bitscore candidate is retained;
+- `contradicted`: a Pfam domain is observed but no candidate is compatible, so
+  all HMM hits for that protein are removed before marker validation.
+
+For equal bitscores, ViroSync selects the lexicographically first model name.
+Arbitration retains at most one ViroSync model hit per ambiguous protein. This
+prevents one protein from contributing several competing marker assignments,
+so downstream marker counts and evidence scores can decrease.
+
+When arbitration runs, ViroSync writes `phase1/pfam_arbitration.tsv`. The table
+records the protein, candidate models and bitscores, original model, observed
+domains, compatible models, final model, and outcome. Phase-1 completion
+authenticates the file when present. Runs without ambiguous proteins do not
+create it.
+
+The public schema-v1 v1.0.6 bundle has no Pfam screening HMM. ViroSync logs a
+warning and sends the unchanged HMM hits to marker validation. Schema-v2
+runtime bundles require and authenticate the Pfam HMM and record its model
+count. Frameshift-rescued pseudo-proteins do not enter Pfam arbitration; they
+retain the independent validation path described above.
+
+In the tracked frameshift fixture, protein
+`DS113495.1_25` matches `ATPase`, `GVOGm0760`, `VS000079`, and `VS000370` at
+20.477, 22.269, 20.635, and 23.284 bits. Each candidate has a `Pox_A32`
+signature, while Pfam detects `ResIII`. Arbitration removes all four marker
+assignments and records `contradicted`, which removes
+`EVE_DS113495.1_18305-37386` from both detailed and canonical output. Its
+Tier-1 list does not override the domain result: the best hit is bacterial at
+55.1% identity and 261 bits, while the qualifying PPV hit ranks fourth at
+28.6% identity and 127 bits.
+
+### 3) Marker validation with small taxonomy DB
 
 Only HMM-hit proteins are searched against the marker validation
 database (small Tier 1 target set). This reduces runtime versus
@@ -235,13 +290,13 @@ Current marker status logic:
 - `unvalidated`: predominantly cellular signal or below validation
   criteria.
 
-### 3) Host signature model
+### 4) Host signature model
 
 From unvalidated host-like marker hits, ViroSync builds a weighted token
 model of host taxonomy. This model is persisted and reused in later
 host-trimming and penalty steps.
 
-### 4) Region assembly from validated markers
+### 5) Region assembly from validated markers
 
 Validated markers are clustered by distance (base pairs and gene count),
 then iteratively extended by configurable flanks until no new markers
@@ -562,10 +617,12 @@ the database source record. Scheduled and release-tag smoke runs additionally
 perform a full resource verification, a clean shipped example, and an unchanged
 resume whose schema-v3 artifact identities and counts must match the clean run.
 The smoke workflow also runs the frameshift fixture once with
-`--frameshift-screening`, checks six detailed and three accepted candidates,
-validates output coordinates, requires nonempty confirmed-marker and rescued
-protein files, and requires an accepted per-EVE FAA record with a `_VSR`
-identifier.
+`--frameshift-screening` against public schema-v1 v1.0.6. It checks six
+detailed and three accepted candidates, pins their EVE IDs, validates output
+coordinates, requires nonempty confirmed-marker and rescued-protein files, and
+requires an accepted per-EVE FAA record with a `_VSR` identifier. Snapshot
+schema v4 records the canonical and detailed EVE ID lists along with artifact
+identities and counts.
 
 Recommended smoke test:
 
@@ -601,6 +658,9 @@ cat results/example-frameshift/batch_summary.tsv
 The `trichomonas-g3` row should report `status=success`, `predictions=6`, and
 `accepted=3` with v1.0.6. Put the pinned BATH commands on `PATH` before
 running it.
+
+The [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
+lists the exact schema-v1 and schema-v2 EVE sets for this fixture.
 
 The Python genome-parallel workflow runner is the benchmarked ViroSync
 runtime. The harness in the sibling `virosync-bench` repository records
