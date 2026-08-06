@@ -1,0 +1,73 @@
+{
+  "bundle_kind": "runtime",
+  "files": [
+    {
+      "path": "DB_VERSION",
+      "role": "bundle_version",
+      "sha256": "cc5e332c7c29133db3c97f81740a55b6ec7e9826d1b856b13a21b71ff37c09fa",
+      "size": 7
+    },
+    {
+      "path": "DATABASE_README.txt",
+      "role": "bundle_documentation",
+      "sha256": "f39c86686c88f2ad522f55eec930fff93ac46763f217d40780458215bc35cdbf",
+      "size": 968
+    },
+    {
+      "path": "models/combined.hmm",
+      "role": "hmm_models",
+      "sha256": "7e6cd1fd06915df7dc62d381bcc9cc261eadaf1716e7ede0387341dcea87b40e",
+      "size": 156735010
+    },
+    {
+      "path": "models/pfam_virosync_screening.hmm",
+      "role": "pfam_models",
+      "sha256": "c3b8ad80d5d2e30f8b239c6a76aca1028959721796a6a4ff7419252ec6a11aa2",
+      "size": 72890481
+    },
+    {
+      "path": "models/model_annotations_with_interpro.tsv",
+      "role": "model_annotations",
+      "sha256": "b343ef0e743ed50bfa32278262571010e48968cdb4f565f730c44c2f82bae638",
+      "size": 241246
+    },
+    {
+      "path": "models/og_marker_name_map.tsv",
+      "role": "og_marker_mappings",
+      "sha256": "82588c34dc7295d7448b5ea32ae44563ca50933b0815764c7f3d33cf380ce199",
+      "size": 114481
+    },
+    {
+      "path": "marker/marker.dmnd",
+      "role": "marker_diamond_database",
+      "sha256": "f9fa4c590ce5f334933aabc69e084dacf863a903555208a73300575a42930e23",
+      "size": 1611178743
+    },
+    {
+      "path": "genomes/combined_proteome.dmnd",
+      "role": "proteome_diamond_database",
+      "sha256": "98f571603b6f71df1deb2a6e06f5b91b33ca1c7e692af3e4636a7b56b8cff2b9",
+      "size": 11269683342
+    },
+    {
+      "path": "taxonomy/labels.tsv",
+      "role": "taxonomy_labels",
+      "sha256": "75f632f2dcc90209f49862a1daf139f7810cbab3058b68bd9c48027c1363bcdb",
+      "size": 26633040
+    }
+  ],
+  "resource_version": "v1.0.7",
+  "schema_version": 2,
+  "semantic_counts": {
+    "hmm_index_files": 4,
+    "hmm_models": 1053,
+    "marker_diamond_sequences": 3864300,
+    "marker_proteins": 3864300,
+    "model_annotations": 1053,
+    "og_marker_mappings": 808,
+    "pfam_models": 937,
+    "proteome_diamond_sequences": 46765751,
+    "taxonomy_labels": 190317
+  },
+  "version": "v1.0.7"
+}

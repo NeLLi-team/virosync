@@ -40,5 +40,14 @@ jobs:
           startsWith(github.ref, 'refs/tags/v')
         run: |
           URL=$(awk '/core_resources_url:/{print $2; exit}' config/orchestration.yaml)
+          EXPECTED_BYTES=5877324818
           echo "Verifying resource URL: $URL"
-          curl --retry 3 --retry-delay 10 --connect-timeout 20 --max-time 60 -fsSI "$URL"
+          actual_bytes="$(
+            curl --retry 3 --retry-delay 10 --connect-timeout 20 --max-time 60 -fsSI "$URL" |
+              tr -d '\r' |
+              awk 'tolower($1) == "content-length:" { size=$2 } END { print size }'
+          )"
+          test "$actual_bytes" = "$EXPECTED_BYTES" || {
+            echo "resource size '$actual_bytes' != expected '$EXPECTED_BYTES'"
+            exit 1
+          }

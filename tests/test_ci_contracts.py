@@ -77,12 +77,13 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "--write-snapshot" in workflow
     assert "--compare-snapshot" in workflow
     assert "--require-resume" in workflow
-    assert workflow.count("--expect-predictions 6") == 3
+    assert workflow.count("--expect-predictions 6") == 2
+    assert workflow.count("--expect-predictions 5") == 1
     assert workflow.count("--expect-accepted 1") == 2
-    assert workflow.count("--expect-accepted 3") == 1
-    assert workflow.count("--expect-canonical-eve-id") == 3
-    assert workflow.count("--expect-detailed-eve-id") == 6
-    assert "EVE_DS113495.1_18305-37386" in workflow
+    assert workflow.count("--expect-accepted 2") == 1
+    assert workflow.count("--expect-canonical-eve-id") == 2
+    assert workflow.count("--expect-detailed-eve-id") == 5
+    assert "EVE_DS113495.1_18305-37386" not in workflow
     assert "EVE_DS113200.1_129184-151689" in workflow
     assert "EVE_DS113495.1_58468-89417" in workflow
     assert workflow.count("check_coordinate_outputs.py") == 3
@@ -95,6 +96,12 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "7842ebd58b96591b4b60863ee5c33e49eb79eccc" in workflow
     assert "0f4e71832d6ba1e4c65039ba4b4663c546a041fa" in workflow
     assert '>> "$GITHUB_PATH"' in workflow
+
+
+def test_production_guard_checks_public_resource_size() -> None:
+    workflow = _text(ROOT / ".github/workflows/production-guards.yml")
+    assert "EXPECTED_BYTES=5877324818" in workflow
+    assert 'test "$actual_bytes" = "$EXPECTED_BYTES"' in workflow
 
 
 def test_frameshift_example_task_is_explicit_opt_in() -> None:

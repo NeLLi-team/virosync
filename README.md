@@ -146,25 +146,26 @@ pixi run virosync orchestrate resources verify \
 Expected:
 
 ```text
-Version: v1.0.6
+Version: v1.0.7
 ```
 
 The public release provisions a pinned prebuilt resource bundle. Building the
 full ViroSync database from raw source inputs is not part of the public setup
 workflow yet.
 
-Schema-v2 runtime bundles include `models/pfam_virosync_screening.hmm` for
+The default schema-v2 runtime bundle includes
+`models/pfam_virosync_screening.hmm` for
 multi-model hit arbitration. ViroSync scans only proteins hit by at least two
 marker models, then writes `phase1/pfam_arbitration.tsv` when arbitration runs.
-The public v1.0.6 schema-v1 bundle does not contain this file. ViroSync supports
-that bundle and logs a warning when it cannot arbitrate ambiguous proteins. See
-[the Methods](docs/METHODS.md#2-pfam-model-arbitration) for the decision rules
-and [the resource reference](docs/RESOURCE_BUNDLE.md) for the schema-v2 payload.
+The legacy v1.0.6 schema-v1 bundle remains supported but cannot arbitrate
+ambiguous proteins. See [the Methods](docs/METHODS.md#2-pfam-model-arbitration)
+for the decision rules and [the resource reference](docs/RESOURCE_BUNDLE.md)
+for the runtime payload.
 
-The default resource bundle is configured in [config/orchestration.yaml](config/orchestration.yaml)
-and targets `resources_v1_0_6.tar.gz`. The config pins both the complete archive
-and its internal manifest by SHA-256. Version 1.0.6 packages the v1.0.5 biological
-resources with authenticated payload metadata and transactional installation.
+[config/orchestration.yaml](config/orchestration.yaml) points to
+`resources_v1_0_7_runtime.tar.gz` by default. It pins both the archive and its
+internal manifest by SHA-256. Version 1.0.7 adds the authenticated Pfam screen
+to the v1.0.6 biological resources and omits files that ViroSync does not read.
 The bundle layout, marker annotation table, and resource release checks are
 documented in [docs/RESOURCE_BUNDLE.md](docs/RESOURCE_BUNDLE.md).
 
@@ -209,7 +210,7 @@ cat results/example_16t/batch_summary.tsv
 ```
 
 The `test-1` row should report `status=success`, `predictions=6`, and
-`accepted=1` with the v1.0.6 resource bundle.
+`accepted=1` with the v1.0.7 resource bundle.
 
 Run the three-contig *Trichomonas vaginalis* G3 frameshift example after
 installing BATH:
@@ -219,9 +220,9 @@ pixi run example-frameshift
 ```
 
 This command enables `--frameshift-screening` and writes
-`results/example-frameshift/batch_summary.tsv`. With the v1.0.6 resource
+`results/example-frameshift/batch_summary.tsv`. With the v1.0.7 resource
 bundle, the `trichomonas-g3` row should report `status=success`,
-`predictions=6`, and `accepted=3`. See the
+`predictions=5`, and `accepted=2`. See the
 [frameshift screening guide](docs/FRAMESHIFT_SCREENING.md) for input
 provenance, output checks, and runtime measurements.
 
@@ -438,7 +439,7 @@ defines each value.
 The detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
 subtype-specific HMM marker evidence supports one subtype and not the other,
 and only for regions published as `PPV`. Taxonomy cannot supply the subtype.
-The v1.0.6 database labels these genomes `PPV__` and holds no `VP__` or `PLV__`
+The v1.0.7 database labels these genomes `PPV__` and holds no `VP__` or `PLV__`
 records. Ambiguous PPV candidates retain `effective_eve_class=PPV` and use `.`
 for `ppv_subtype`.
 
@@ -601,7 +602,7 @@ under the standard rule rather than discarded.
 | NCLDV, MIRUS | <= 5 kb | has MCP |
 
 PPV (Preplasmiviricota) contains Polinton-like viruses (PLV) and virophages
-(VP). The v1.0.6 database uses the parent `PPV__` taxonomy label. ViroSync
+(VP). The v1.0.7 database uses the parent `PPV__` taxonomy label. ViroSync
 assigns a VP or PLV subtype only from unambiguous subtype-specific marker
 evidence.
 
@@ -668,7 +669,7 @@ GitHub Actions run three public-readiness checks:
   used locally, executes pytest and compileall, checks release surfaces, and
   verifies the CLI version.
 - `production-guards`: typed-parses both shipped configurations, cross-checks
-  software and resource identities, authenticates the tracked v1.0.6 manifest,
+  software and resource identities, authenticates the tracked v1.0.7 manifest,
   and checks the public archive URL on schedules, manual runs, and release tags.
 - `example-smoke`: runs weekly, manually from the default branch, and for
   release tags. It fully verifies provisioned resources, runs the standard

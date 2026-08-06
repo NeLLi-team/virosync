@@ -84,14 +84,14 @@ class ViroSyncDatabaseManager:
 
     DATABASE_SOURCES = [
         {
-            "version": "v1.0.6",
-            "source": "https://dl.newlineages.com/virosync/resources_v1_0_6.tar.gz",
-            "filename": "resources_v1_0_6.tar.gz",
+            "version": "v1.0.7",
+            "source": "https://dl.newlineages.com/virosync/resources_v1_0_7_runtime.tar.gz",
+            "filename": "resources_v1_0_7_runtime.tar.gz",
             "archive_sha256": (
-                "1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a"
+                "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
             ),
             "manifest_sha256": (
-                "7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f"
+                "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
             ),
         },
     ]

@@ -5,31 +5,8 @@ and the validation checks used before publishing a new bundle.
 
 ## Artifact layouts
 
-The published v1.0.6 archive uses the schema-v1 legacy layout. It extracts into
-`resources/virosync` and contains:
-
-- `DB_VERSION`
-- `DATABASE_README.txt`
-- `models/combined.hmm` plus `combined.hmm.h3*`
-- `models/model_annotations_with_interpro.tsv`
-- `models/og_marker_name_map.tsv`
-- `marker/marker.faa`
-- `marker/marker.dmnd`
-- `genomes/combined_proteome.dmnd`
-- `taxonomy/labels.tsv`
-- `RESOURCE_MANIFEST.json`
-
-The manifest authenticates the other 13 archive members. Each entry records a
-canonical relative path, positive byte size, SHA-256 digest, and file role. It
-also records HMM, annotation, marker, DIAMOND, and taxonomy counts. The manifest
-does not list itself; its SHA-256 is pinned outside the archive in code and both
-shipped configs. `DB_METADATA.json` is an install receipt written after
-validation, not an archive member or trust root. The marker FASTA record count
-must equal the marker DIAMOND sequence count; the builder and installer reject
-a stale marker database.
-
-The builder can also emit two bound schema-v2 artifacts. The runtime artifact
-contains the nine files needed to run ViroSync with Pfam arbitration:
+The published v1.0.7 archive uses the schema-v2 runtime layout. It extracts into
+`resources/virosync` and contains nine payloads:
 
 - `DB_VERSION`
 - `DATABASE_README.txt`
@@ -41,8 +18,15 @@ contains the nine files needed to run ViroSync with Pfam arbitration:
 - `genomes/combined_proteome.dmnd`
 - `taxonomy/labels.tsv`
 
-The source/repair artifact contains the five files omitted from the runtime
-artifact:
+The archive also contains `RESOURCE_MANIFEST.json`, which authenticates the
+nine payloads. Each entry records a canonical relative path, positive byte
+size, SHA-256 digest, and file role. The manifest also records HMM, annotation,
+marker, DIAMOND, and taxonomy counts. It does not list itself; code and both
+shipped configs pin its SHA-256. Setup writes `DB_METADATA.json` after
+validation as an install receipt, not as an archive member or trust root.
+
+The builder can emit a bound source/repair companion with the five files
+omitted from the runtime artifact:
 
 - `models/combined.hmm.h3f`
 - `models/combined.hmm.h3i`
@@ -53,10 +37,11 @@ artifact:
 Each artifact has its own `RESOURCE_MANIFEST.json`. The source/repair manifest
 records the SHA-256 of the matching runtime manifest, so artifacts from
 different builds cannot be paired. Both manifests carry the semantic counts
-for the complete resource set. The runtime uses the raw HMM library through
-pyhmmer and the prebuilt marker DIAMOND database, so it does not read the HMMER
-indices or marker FASTA. The source/repair artifact supports inspection and
-can rebuild the marker database. It cannot rebuild
+for the complete resource set. The runtime reads the raw HMM library through
+pyhmmer and uses the prebuilt marker DIAMOND database. It does not read the
+HMMER indices or marker FASTA. The v1.0.7 public setup publishes only the
+runtime archive. The source/repair artifact supports inspection and can
+rebuild the marker database. It cannot rebuild
 `genomes/combined_proteome.dmnd`, so it is not a complete raw-source backup.
 
 Core setup accepts schema-v1 legacy bundles and schema-v2 runtime bundles. A
@@ -67,26 +52,26 @@ their semantic counts. Setup rejects a source/repair artifact at both fresh
 install and repeat setup.
 
 The [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
-defines the resource-dependent output contract for the public schema-v1 bundle
-and Pfam-enabled schema-v2 bundles.
+defines the resource-dependent output contract for the current schema-v2
+bundle and the supported legacy schema-v1 bundle.
 
 The split builder finishes and hashes both archives before replacing an output
 path. The two replacements are separate filesystem operations, so they are not
-atomic as a pair. Build each release under new versioned names. Verify both
-returned digests and upload both files before updating the runtime and source
-pins. Do not overwrite a published pair in place.
+atomic as a pair. Build each release under new versioned names and verify the
+returned digests. Publish only the artifact selected for public setup. Do not
+overwrite a published artifact in place.
 
 ## Release identity and installation
 
-The v1.0.6 release archive has these identities:
+The v1.0.7 runtime archive has these identities:
 
-- Archive: `resources_v1_0_6.tar.gz`
-- Archive size: `6723913785` bytes
-- Archive SHA-256: `1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a`
-- `RESOURCE_MANIFEST.json` SHA-256: `7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f`
+- Archive: `resources_v1_0_7_runtime.tar.gz`
+- Archive size: `5877324818` bytes
+- Archive SHA-256: `57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2`
+- `RESOURCE_MANIFEST.json` SHA-256: `f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3`
 
-The exact 2,890-byte manifest is tracked at
-`release-manifests/resources_v1_0_6/RESOURCE_MANIFEST.json`. The production
+The exact 2,204-byte manifest is tracked at
+`release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json`. The production
 guard parses this file with the runtime manifest loader and compares its digest
 with both shipped configurations and the database source record.
 
@@ -147,14 +132,14 @@ Scheduled and release smoke runs use `--full`.
 
 ## Database Contents
 
-The public core bundle is a prebuilt search resource for ViroSync's
-HMM-gated GEVE workflow. It is not a raw-source database build. Version 1.0.6
-retains the v1.0.5 biological payloads and adds authenticated, transactional
-packaging.
+The public core bundle provides prebuilt search data for ViroSync's HMM-gated
+GEVE workflow. It is not a raw-source database build. Version 1.0.7 retains the
+v1.0.6 biological content and adds the authenticated Pfam screen in a
+runtime-only package.
 
 The bundle contains three linked biological resources:
 
-- `models/combined.hmm`: the Phase 1 marker HMM library. In the v1.0.6
+- `models/combined.hmm`: the Phase 1 marker HMM library. In the v1.0.7
   bundle this contains 1,053 profiles, including existing gvclass/geNomad-style
   viral markers, Mirusviricota and Preplasmiviricota (PPV: virophage + PLV) markers,
   mitochondrial control markers, VS-renamed OG-backed markers, CRESS/ssDNA Rep/capsid
@@ -164,9 +149,10 @@ The bundle contains three linked biological resources:
   original source names where applicable. Current code requires
   `models/combined.hmm`; older `models/combined_ga.hmm` bundles are historical
   resources and are no longer accepted by the setup/preflight checks.
-- `marker/marker.faa` and `marker/marker.dmnd`: the small Tier 1 marker
-  validation database used only for proteins that already hit marker HMMs. The
-  v1.0.6 database contains 3,864,300 protein sequences.
+- `marker/marker.dmnd`: the small Tier 1 marker validation database used only
+  for proteins that already hit marker HMMs. It contains 3,864,300 protein
+  sequences. The bound source manifest records the same marker FASTA count,
+  but the public runtime archive does not contain that FASTA.
 - `genomes/combined_proteome.dmnd`: the large Tier 2 gene-taxonomy database
   used during Phase 2 boundary refinement for seed, interior, flanking, and
   sampled control genes. The current public lineage contains 46,765,751 protein
@@ -194,7 +180,7 @@ table. The manifest authenticates the HMM and records its model count.
 
 `taxonomy/labels.tsv` maps genome/source IDs to pipe-delimited lineage strings
 used by marker validation, host-signature modeling, and gene-level taxonomy
-trimming. Version 1.0.6 has 190,317 taxonomy-label rows.
+trimming. Version 1.0.7 has 190,317 taxonomy-label rows.
 
 Do not treat older private paths such as
 `/path/to/legacy-db/virosync/genomes/combined_proteome.dmnd` as the
@@ -226,7 +212,7 @@ Historical public `v1.0.3` release-check values:
 
 The marker annotation table is `models/model_annotations_with_interpro.tsv`.
 It must contain one row per HMM profile name in `models/combined.hmm`; in the
-current v1.0.6 bundle that is 1,053 marker annotation rows plus the header.
+current v1.0.7 bundle that is 1,053 marker annotation rows plus the header.
 `models/og_marker_name_map.tsv` maps each VS marker ID to its original OG model
 where applicable.
 
@@ -304,7 +290,7 @@ Run these from the repository root against the installed resource directory:
 ```bash
 rg -c '^NAME\s+' resources/virosync/models/combined.hmm
 rg -n '^NAME\s+OG[0-9]+$' resources/virosync/models/combined.hmm
-rg -c '^>' resources/virosync/marker/marker.faa
+rg -c '^NAME\s+' resources/virosync/models/pfam_virosync_screening.hmm
 pixi run diamond dbinfo --db resources/virosync/marker/marker.dmnd
 pixi run diamond dbinfo --db resources/virosync/genomes/combined_proteome.dmnd
 wc -l resources/virosync/models/model_annotations_with_interpro.tsv
@@ -312,37 +298,22 @@ wc -l resources/virosync/models/og_marker_name_map.tsv
 wc -l resources/virosync/taxonomy/labels.tsv
 ```
 
-Expected values for the public v1.0.6 resource with MetaVR and capscan
-enrichment:
+Expected values for the public v1.0.7 runtime resource:
 
 - HMM models: `1053`
 - Raw `OG[0-9]+` HMM names: no matches
-- `marker.faa` records: `3864300`
+- Pfam models: `937`
 - DIAMOND marker database sequences: `3864300`
 - DIAMOND combined proteome sequences: `46765751`
 - marker annotation table lines: `1054`
 - OG marker map lines: `809`
 - taxonomy label lines: `190317`
 
-Build the upload archive from the repository root. The builder treats
+Build the bound schema-v2 artifacts from the repository root. The builder treats
 `resources/virosync` as read-only input. It stages regenerated indices when
 requested, synthesizes `DB_VERSION`, `DATABASE_README.txt`, and the manifest,
 and writes a deterministic GNU-format tar stream with fixed gzip and member
 metadata:
-
-```bash
-pixi run python scripts/build_resource_bundle.py \
-  --version v1.0.6 \
-  --skip-hmmpress \
-  --skip-marker-dmnd
-```
-
-The archive has exactly 14 regular-file members under `virosync/`: the 13
-manifest-listed payloads and the manifest itself. Manual `tar` packaging is not
-equivalent because it omits the authenticated manifest and deterministic
-metadata contract.
-
-To build the bound schema-v2 artifacts instead:
 
 ```bash
 pixi run python scripts/build_resource_bundle.py \
@@ -358,6 +329,8 @@ The input tree must contain `models/pfam_virosync_screening.hmm` and the three
 Pfam annotation columns. The runtime archive has ten regular-file members:
 nine manifest-listed payloads plus its manifest. The source/repair archive has
 six: five payloads plus its manifest. The builder prepares and authenticates
-both archives before publishing either output. The two `--skip-*` flags reuse
+both archives before replacing either output. Publish only the runtime archive.
+Manual `tar` packaging is not equivalent because it omits the authenticated
+manifest and deterministic metadata contract. The two `--skip-*` flags reuse
 the derived files in the input tree; omit them when a release build must
 regenerate the HMMER indices and marker DIAMOND database from their sources.

@@ -38,6 +38,7 @@ _REAL_SUBPROCESS_RUN = subprocess.run
 
 VERSION = "v1.0.6"
 PRIOR_VERSION = "v1.0.5"
+SHIPPED_VERSION = ViroSyncDatabaseManager.DATABASE_VERSION
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 CORE_PAYLOADS = (
@@ -483,12 +484,12 @@ def _record_reuse_checks(
     )
 
 
-def _v106_source() -> Mapping[str, object] | None:
+def _shipped_source() -> Mapping[str, object] | None:
     return next(
         (
             candidate
             for candidate in ViroSyncDatabaseManager.DATABASE_SOURCES
-            if candidate.get("version") == VERSION
+            if candidate.get("version") == SHIPPED_VERSION
         ),
         None,
     )
@@ -528,9 +529,9 @@ def test_installer_api_exposes_authentication_and_verification_controls() -> Non
     )
 
 
-def test_v106_source_and_shipped_configs_pin_the_same_two_digests() -> None:
-    record = _v106_source()
-    assert record is not None, "no v1.0.6 source metadata"
+def test_shipped_source_and_configs_pin_the_same_two_digests() -> None:
+    record = _shipped_source()
+    assert record is not None, f"no {SHIPPED_VERSION} source metadata"
     archive_sha = _source_digest(record, "archive_sha256", "sha256")
     manifest_sha = _source_digest(
         record,
@@ -547,7 +548,7 @@ def test_v106_source_and_shipped_configs_pin_the_same_two_digests() -> None:
     ):
         document = yaml.safe_load((repo_root / relative).read_text(encoding="utf-8"))
         orchestration = document["orchestration"]
-        assert "resources_v1_0_6.tar.gz" in orchestration["core_resources_url"]
+        assert orchestration["core_resources_url"].endswith(str(record["filename"]))
         assert orchestration["core_resources_sha256"] == archive_sha
         assert orchestration["core_resources_manifest_sha256"] == manifest_sha
 

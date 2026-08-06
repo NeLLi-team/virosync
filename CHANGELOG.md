@@ -44,6 +44,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- The default core resource is the authenticated v1.0.7 schema-v2 runtime
+  bundle with the 937-model Pfam screen. The public install omits the HMMER
+  indices and marker source FASTA because the pipeline does not read them.
+  The new resource identity prevents resume from v1.0.6 runs. Setup retains
+  the prior versioned resource tree until an operator removes it.
 - Pfam-enabled schema-v2 runs assign at most one marker model to each ambiguous
   protein and remove all assignments when an observed domain contradicts every
   candidate. The tracked frameshift fixture therefore has a resource-dependent

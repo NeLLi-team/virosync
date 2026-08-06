@@ -1,4 +1,4 @@
-# ViroSync Methods (Code-Verified, August 5, 2026)
+# ViroSync Methods (Code-Verified, August 6, 2026)
 
 
 ## Workflow summary
@@ -49,12 +49,11 @@ genome and also supports batch directory input.
 Dependencies and tools are pinned in `pixi.toml` (for example: Python
 3.11.14, pyhmmer 0.11.3, DIAMOND 2.2.1, and prodigal-gv 2.11.0). Core
 resources are configured through `config/orchestration.yaml`; the current
-default points to the SHA-256-pinned `resources_v1_0_6.tar.gz`. It contains
-the v1.0.5 CRESS/ssDNA and MetaVR-derived marker/taxonomy resources plus an
-authenticated schema-v1 manifest. The resource builder can also emit a bound
-schema-v2 runtime artifact and source/repair artifact. The current public pin
-remains schema v1. Tool citations for these components are listed in “Tool
-citation map” below.
+default points to the SHA-256-pinned `resources_v1_0_7_runtime.tar.gz`. Its
+schema-v2 manifest authenticates nine runtime payloads, including the
+937-model Pfam screen. The bundle retains the v1.0.6 marker, proteome, and
+taxonomy content but omits files that the pipeline does not read.
+Tool citations for these components are listed in “Tool citation map” below.
 
 Pixi does not install BATH. The optional frameshift screen requires
 `bathconvert` and `bathsearch` from the source revisions listed in
@@ -146,7 +145,7 @@ Phase 1 narrows search space before expensive full taxonomy steps.
 ### 1) HMM scan
 
 Predicted proteins are screened against the marker HMM database
-(`models/combined.hmm` in the required v1.0.6 resource bundle) using
+(`models/combined.hmm` in the required v1.0.7 resource bundle) using
 pyhmmer.
 
 The HMM search wrapper accepts an optional reporting E-value cutoff.
@@ -255,7 +254,7 @@ domains, compatible models, final model, and outcome. Phase-1 completion
 authenticates the file when present. Runs without ambiguous proteins do not
 create it.
 
-The public schema-v1 v1.0.6 bundle has no Pfam screening HMM. ViroSync logs a
+The legacy schema-v1 v1.0.6 bundle has no Pfam screening HMM. ViroSync logs a
 warning and sends the unchanged HMM hits to marker validation. Schema-v2
 runtime bundles require and authenticate the Pfam HMM and record its model
 count. Frameshift-rescued pseudo-proteins do not enter Pfam arbitration; they
@@ -476,7 +475,7 @@ sequence. The drop runs after clustering, and it is the only step that publishes
 fewer EVEs than the acceptance gate kept.
 
 `ppv_subtype` comes from VP-specific and PLV-specific HMM markers, not from
-taxonomy, and is reported only for regions published as `PPV`. The v1.0.6
+taxonomy, and is reported only for regions published as `PPV`. The v1.0.7
 database labels Preplasmiviricota references `PPV__` and holds no `VP__` or
 `PLV__` records, so the top-10 hits cannot separate the two subtypes.
 
@@ -610,15 +609,15 @@ pixi run virosync --version
 ```
 
 The release manifest at
-`release-manifests/resources_v1_0_6/RESOURCE_MANIFEST.json` is an exact copy of
+`release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json` is an exact copy of
 the manifest inside the pinned archive. Production checks typed-parse both
 shipped configs and compare their resource identities with this manifest and
 the database source record. Scheduled and release-tag smoke runs additionally
 perform a full resource verification, a clean shipped example, and an unchanged
 resume whose schema-v3 artifact identities and counts must match the clean run.
 The smoke workflow also runs the frameshift fixture once with
-`--frameshift-screening` against public schema-v1 v1.0.6. It checks six
-detailed and three accepted candidates, pins their EVE IDs, validates output
+`--frameshift-screening` against the default schema-v2 v1.0.7 bundle. It checks
+five detailed and two accepted candidates, pins their EVE IDs, validates output
 coordinates, requires nonempty confirmed-marker and rescued-protein files, and
 requires an accepted per-EVE FAA record with a `_VSR` identifier. Snapshot
 schema v4 records the canonical and detailed EVE ID lists along with artifact
@@ -645,7 +644,7 @@ cat results/example_16t/batch_summary.tsv
 
 Expected operational targets for current resource pinning:
 
-- core resource DB version: `v1.0.6`
+- core resource DB version: `v1.0.7`
 - example batch status: `success`
 
 Frameshift smoke test:
@@ -655,8 +654,8 @@ pixi run example-frameshift
 cat results/example-frameshift/batch_summary.tsv
 ```
 
-The `trichomonas-g3` row should report `status=success`, `predictions=6`, and
-`accepted=3` with v1.0.6. Put the pinned BATH commands on `PATH` before
+The `trichomonas-g3` row should report `status=success`, `predictions=5`, and
+`accepted=2` with v1.0.7. Put the pinned BATH commands on `PATH` before
 running it.
 
 The [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)

@@ -17,9 +17,9 @@ from virosync.utils.resource_manifest import ResourceValidationResult
 
 
 MANIFEST_SHA256 = (
-    "7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f"
+    "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
 )
-ARCHIVE_SHA256 = "1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a"
+ARCHIVE_SHA256 = "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
 _REAL_RESOLVE_CONFIG_PATHS = ViroSyncDatabaseManager.resolve_config_paths.__func__
 
 
@@ -46,7 +46,7 @@ def test_run_resource_resolution_honors_environment_database_root(
         {
             "database_root": None,
             "core_resources_url": "fixture.tar.gz",
-            "core_resources_version": "v1.0.6",
+            "core_resources_version": "v1.0.7",
             "core_resources_sha256": ARCHIVE_SHA256,
             "core_resources_manifest_sha256": MANIFEST_SHA256,
             "hmm_database": None,
@@ -70,10 +70,10 @@ def test_resource_verify_cli_is_fast_by_default(
     def fake_verify(cls, database_path, **kwargs):
         calls.append({"database_path": Path(database_path), **kwargs})
         return ResourceValidationResult(
-            version="v1.0.6",
+            version="v1.0.7",
             manifest_sha256=MANIFEST_SHA256,
             semantic_counts={},
-            files_verified=13,
+            files_verified=9,
             full=kwargs["full"],
         )
 
@@ -98,13 +98,13 @@ def test_resource_verify_cli_is_fast_by_default(
     assert calls == [
         {
             "database_path": tmp_path / "virosync",
-            "expected_version": "v1.0.6",
+            "expected_version": "v1.0.7",
             "manifest_sha256": MANIFEST_SHA256,
             "full": False,
         }
     ]
     assert "Core resources verified (fast)" in result.output
-    assert "Authenticated payloads: 13" in result.output
+    assert "Authenticated payloads: 9" in result.output
 
 
 def test_resource_verify_cli_full_flag_reaches_verifier(
@@ -116,10 +116,10 @@ def test_resource_verify_cli_full_flag_reaches_verifier(
     def fake_verify(cls, database_path, **kwargs):
         full_values.append(kwargs["full"])
         return ResourceValidationResult(
-            version="v1.0.6",
+            version="v1.0.7",
             manifest_sha256=MANIFEST_SHA256,
             semantic_counts={},
-            files_verified=13,
+            files_verified=9,
             full=True,
         )
 
@@ -363,7 +363,7 @@ def test_setup_writes_null_when_runtime_bundle_has_no_marker_source(
             "--core-resource",
             str(tmp_path / "runtime.tar.gz"),
             "--core-version",
-            "v1.0.6",
+            "v1.0.7",
             "--core-resource-sha256",
             ARCHIVE_SHA256,
             "--core-manifest-sha256",

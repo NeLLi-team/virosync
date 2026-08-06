@@ -83,7 +83,7 @@ NCBI states that it places no restrictions on use of its molecular databases,
 while noting that submitters may retain rights to submitted records. See the
 [NCBI data policy](https://www.ncbi.nlm.nih.gov/home/about/policies/).
 
-After installing BATH and the v1.0.6 resource bundle, run:
+After installing BATH and the v1.0.7 resource bundle, run:
 
 ```bash
 pixi run example-frameshift
@@ -95,8 +95,8 @@ Tier-1 marker validation, and one accepted EVE FAA contains its confirmed
 
 | Resource | Pfam arbitration | Detailed | Canonical |
 |---|---|---:|---:|
-| Public schema-v1 v1.0.6 | No | 6 | 3 |
-| Schema-v2 with the 937-model Pfam screen | Yes | 5 | 2 |
+| Legacy schema-v1 v1.0.6 | No | 6 | 3 |
+| Default schema-v2 v1.0.7 | Yes, 937 models | 5 | 2 |
 
 The schema-v2 canonical EVE IDs are:
 
@@ -171,8 +171,9 @@ anchored 85 seed regions, including 28 that did not overlap a disabled-arm
 seed. These 28 are Phase 1 EVE candidates, not accepted EVEs; they must still
 pass the Phase 2 and Phase 3 gates.
 
-The shipped three-contig fixture also has a matched full-pipeline comparison
-at eight cores. Phase 1 took 33.4 seconds with screening disabled and 137.4
+The shipped three-contig fixture also has a matched schema-v1 v1.0.6
+full-pipeline comparison at eight cores. Phase 1 took 33.4 seconds with
+screening disabled and 137.4
 seconds with screening enabled, a 104.0-second increase and a 4.11-fold Phase
 1 runtime. Whole-command wall time changed from 4:21.07 to 5:06.46. The enabled
 run added one canonical EVE, for three rather than two, and retained one

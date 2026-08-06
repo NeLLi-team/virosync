@@ -48,28 +48,28 @@ pixi run python scripts/ci/check_coordinate_outputs.py \
 pixi run example-frameshift
 pixi run python scripts/ci/validate_example_run.py \
   results/example-frameshift \
-  --expect-predictions 6 \
-  --expect-accepted 3
+  --expect-predictions 5 \
+  --expect-accepted 2
 pixi run python scripts/ci/check_coordinate_outputs.py \
   results/example-frameshift
 ```
 
-The release checklist uses public schema-v1 v1.0.6. The scheduled
-[`example-smoke` workflow](../.github/workflows/example-smoke.yml) pins its
-exact EVE IDs. The
+The release checklist uses the public schema-v2 v1.0.7 runtime bundle. The
+scheduled [`example-smoke` workflow](../.github/workflows/example-smoke.yml)
+pins its exact EVE IDs. The
 [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
 defines the schema-v2 Pfam contract.
 
 Then complete the repository checks:
 
 - [ ] `tests` and `production-guards` pass on the release commit.
-- [ ] `example-smoke` passes on the release commit with DB v1.0.6.
+- [ ] `example-smoke` passes on the release commit with DB v1.0.7.
 - [ ] `pixi run pre-commit run gitleaks --all-files` reports no secret.
 - [ ] The tracked tree contains no private credentials, personal data,
       machine-specific paths, generated results, local resources, or agent
       working files.
 - [ ] The configured resource URL and all pinned archive and manifest digests
-      resolve to the intended v1.0.6 bundle.
+      resolve to the intended v1.0.7 runtime bundle.
 - [ ] A clean install reports `ViroSync 1.0.0`.
 
 ## Deferred release actions

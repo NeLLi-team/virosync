@@ -27,17 +27,17 @@ from virosync.utils.resource_manifest import (
     load_resource_manifest,
 )
 SOFTWARE_VERSION = "1.0.0"
-DATABASE_VERSION = "v1.0.6"
-RESOURCE_ARCHIVE = "resources_v1_0_6.tar.gz"
+DATABASE_VERSION = "v1.0.7"
+RESOURCE_ARCHIVE = "resources_v1_0_7_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
 RESOURCE_ARCHIVE_SHA256 = (
-    "1e513c922fd45f9e46ab672558c136713990082d51ef5875c4d705797c5a035a"
+    "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
 )
 RESOURCE_MANIFEST_SHA256 = (
-    "7c845e29ff44b141b946864291b61eb6eefc0c695b901ad6d7351f62988f226f"
+    "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
 )
 RELEASE_MANIFEST_PATH = Path(
-    "release-manifests/resources_v1_0_6/RESOURCE_MANIFEST.json"
+    "release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json"
 )
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
@@ -219,8 +219,18 @@ def check_resource_version(failures: list[str]) -> None:
         manifest = None
     if manifest is not None:
         require(
-            len(manifest.files) == 13,
-            "tracked release manifest must authenticate 13 payload files",
+            manifest.schema_version == 2,
+            "tracked release manifest schema must be 2",
+            failures,
+        )
+        require(
+            manifest.bundle_kind == "runtime",
+            "tracked release manifest must describe a runtime bundle",
+            failures,
+        )
+        require(
+            len(manifest.files) == 9,
+            "tracked release manifest must authenticate 9 payload files",
             failures,
         )
         require(
@@ -231,6 +241,11 @@ def check_resource_version(failures: list[str]) -> None:
         require(
             manifest.semantic_counts.get("marker_proteins") == 3864300,
             "tracked release manifest marker count must be 3864300",
+            failures,
+        )
+        require(
+            manifest.semantic_counts.get("pfam_models") == 937,
+            "tracked release manifest Pfam count must be 937",
             failures,
         )
         require(
@@ -261,8 +276,11 @@ def check_resource_version(failures: list[str]) -> None:
     # The smoke workflow runs on the self-hosted runner with resources
     # provisioned out-of-band, so it no longer caches by key; it must still pin
     # the expected DB version (asserted at runtime against the provisioned bundle).
-    require_contains(
-        ".github/workflows/example-smoke.yml", DATABASE_VERSION, failures
+    require_regex(
+        ".github/workflows/example-smoke.yml",
+        rf"^\s*EXPECTED_DB_VERSION:\s*{re.escape(DATABASE_VERSION)}\s*$",
+        "example-smoke EXPECTED_DB_VERSION differs from the release pin",
+        failures,
     )
 
 
@@ -270,7 +288,7 @@ def check_resource_documentation(failures: list[str]) -> None:
     bundle_doc = read_text("docs/RESOURCE_BUNDLE.md")
     expected_values = (
         "HMM models: `1053`",
-        "marker.faa` records: `3864300`",
+        "Pfam models: `937`",
         "marker annotation table lines: `1054`",
         "OG marker map lines: `809`",
         "taxonomy label lines: `190317`",

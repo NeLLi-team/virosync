@@ -6,6 +6,7 @@ import py_compile
 import stat
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from types import ModuleType
@@ -34,6 +35,22 @@ def test_resource_release_guard_rejects_database_source_drift(monkeypatch) -> No
     failures: list[str] = []
     check_production_ready.check_resource_version(failures)
     assert any("DATABASE_SOURCES first source differs" in item for item in failures)
+
+
+def test_resource_release_guard_rejects_source_manifest(monkeypatch) -> None:
+    manifest = check_production_ready.load_resource_manifest(
+        check_production_ready.ROOT / check_production_ready.RELEASE_MANIFEST_PATH,
+        expected_version=check_production_ready.DATABASE_VERSION,
+        expected_manifest_sha256=check_production_ready.RESOURCE_MANIFEST_SHA256,
+    )
+    monkeypatch.setattr(
+        check_production_ready,
+        "load_resource_manifest",
+        lambda *_args, **_kwargs: replace(manifest, bundle_kind="source"),
+    )
+    failures: list[str] = []
+    check_production_ready.check_resource_version(failures)
+    assert "tracked release manifest must describe a runtime bundle" in failures
 
 
 def test_complete_production_guard_passes_tracked_release_surface() -> None:
@@ -68,5 +85,4 @@ def test_complete_production_guard_passes_tracked_release_surface() -> None:
 )
 def test_generated_private_and_legacy_benchmark_paths_are_forbidden(path: str) -> None:
     assert check_production_ready.is_forbidden_tracked_path(path) is True
-
 
