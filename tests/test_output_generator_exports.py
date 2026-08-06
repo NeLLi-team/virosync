@@ -196,6 +196,152 @@ def test_write_gvclass_export_uses_coordinate_overlap(tmp_path: Path) -> None:
     assert [record.id for record in protein_records] == ["contig_1_1"]
 
 
+def test_write_gvclass_export_includes_confirmed_frameshift_proteins(
+    tmp_path: Path,
+) -> None:
+    genome_fasta = tmp_path / "genome.fna"
+    proteome_fasta = tmp_path / "proteome.faa"
+    confirmed_faa = (
+        tmp_path
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_proteins.faa"
+    )
+    confirmed_faa.parent.mkdir(parents=True)
+    _write_genome_fasta(genome_fasta)
+    _write_proteome_fasta(proteome_fasta)
+    confirmed_faa.write_text(
+        ">contig_1_VSR0123456789abcdef # 20 # 45 # 1 # "
+        "ID=0_VSR0123456789abcdef;annotation=frameshift_rescued_domain;"
+        "model=VS000001;shifts=1;stops=0;literal_stops=0\n"
+        "MRESCUED\n"
+    )
+    confirmed_faa.with_name("confirmed_frameshift_markers.tsv").write_text(
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
+        "validation_status\n"
+        "contig_1_VSR0123456789abcdef|aa1-8\tcontig_1\t19\t45\t+\t"
+        "VS000001\t80\tvalidated\n"
+    )
+    generator = OutputGenerator(
+        output_dir=tmp_path,
+        genome_fasta=genome_fasta,
+        proteome_fasta=proteome_fasta,
+    )
+    result = _build_result(
+        eve_id="EVE_1",
+        scaffold="contig_1",
+        start=0,
+        end=50,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+
+    export_dir = generator.write_gvclass_export([result], tmp_path / "gvclass")
+    records = list(SeqIO.parse(export_dir / "protein" / "EVE_1.faa", "fasta"))
+
+    assert [record.id for record in records] == [
+        "contig_1_1",
+        "contig_1_VSR0123456789abcdef",
+    ]
+    assert "annotation=frameshift_rescued_domain" in records[1].description
+    assert generator._marker_names_for_region(
+        "contig_1",
+        0,
+        50,
+        status_filter="validated",
+    ) == ["VS000001"]
+
+
+def test_write_gvclass_export_writes_rescue_when_ordinary_proteome_is_empty(
+    tmp_path: Path,
+) -> None:
+    genome_fasta = tmp_path / "genome.fna"
+    proteome_fasta = tmp_path / "proteome.faa"
+    confirmed_faa = (
+        tmp_path
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_proteins.faa"
+    )
+    confirmed_faa.parent.mkdir(parents=True)
+    _write_genome_fasta(genome_fasta)
+    proteome_fasta.write_text("")
+    confirmed_faa.write_text(
+        ">contig_1_VSR0123456789abcdef # 20 # 45 # 1 # "
+        "ID=0_VSR0123456789abcdef;annotation=frameshift_rescued_domain;"
+        "model=VS000001;shifts=1;stops=0;literal_stops=0\n"
+        "MRESCUED\n"
+    )
+    generator = OutputGenerator(
+        output_dir=tmp_path,
+        genome_fasta=genome_fasta,
+        proteome_fasta=proteome_fasta,
+    )
+    result = _build_result(
+        eve_id="EVE_1",
+        scaffold="contig_1",
+        start=0,
+        end=50,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+
+    export_dir = generator.write_gvclass_export([result], tmp_path / "gvclass")
+    records = list(SeqIO.parse(export_dir / "protein" / "EVE_1.faa", "fasta"))
+
+    assert [record.id for record in records] == [
+        "contig_1_VSR0123456789abcdef"
+    ]
+
+
+def test_detailed_tsv_does_not_count_rescue_as_an_ordinary_protein(
+    tmp_path: Path,
+) -> None:
+    genome_fasta = tmp_path / "genome.fna"
+    proteome_fasta = tmp_path / "proteome.faa"
+    confirmed_faa = (
+        tmp_path
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_proteins.faa"
+    )
+    confirmed_faa.parent.mkdir(parents=True)
+    _write_genome_fasta(genome_fasta)
+    _write_proteome_fasta(proteome_fasta)
+    confirmed_faa.write_text(
+        ">contig_1_VSR0123456789abcdef # 20 # 45 # 1 # "
+        "ID=0_VSR0123456789abcdef;annotation=frameshift_rescued_domain\n"
+        "MRESCUED\n"
+    )
+    confirmed_faa.with_name("confirmed_frameshift_markers.tsv").write_text(
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
+        "validation_status\n"
+        "contig_1_VSR0123456789abcdef|aa1-8\tcontig_1\t19\t45\t+\t"
+        "VS000001\t80\tvalidated\n"
+    )
+    generator = OutputGenerator(
+        output_dir=tmp_path,
+        genome_fasta=genome_fasta,
+        proteome_fasta=proteome_fasta,
+        extended_output=True,
+    )
+    result = _build_result(
+        eve_id="EVE_1",
+        scaffold="contig_1",
+        start=0,
+        end=50,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+
+    detailed = generator.write_predictions_detailed_tsv([result])
+
+    with detailed.open(newline="") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["total_proteins"] == "1"
+    assert row["hallmark_total"] == "1"
+
+
 def test_write_eve_sequences_uses_coordinate_overlap(tmp_path: Path) -> None:
     genome_fasta = tmp_path / "genome.fna"
     proteome_fasta = tmp_path / "proteome.faa"
@@ -548,6 +694,34 @@ def test_protein_counts_use_full_half_open_hit_overlap(tmp_path: Path) -> None:
             "VP_Penton": 1,
         }
     }
+
+
+def test_malformed_confirmed_table_does_not_discard_ordinary_marker_hits(
+    tmp_path: Path,
+) -> None:
+    phase3_dir = tmp_path / "phase3"
+    phase3_dir.mkdir()
+    ordinary = tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
+    ordinary.parent.mkdir(parents=True)
+    ordinary.write_text(
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
+        "validation_status\n"
+        "ordinary\tctg\t20\t30\t+\tOG000001\t100\tvalidated\n"
+    )
+    confirmed = (
+        tmp_path
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_markers.tsv"
+    )
+    confirmed.parent.mkdir(parents=True)
+    confirmed.write_text("bad_header\nvalue\n")
+    generator = OutputGenerator(output_dir=phase3_dir)
+
+    hits, protein_models = generator._parse_validated_marker_hits()
+
+    assert hits["ctg"] == [(20, 30, "OG000001", "validated", "ordinary")]
+    assert protein_models == {"ordinary": {"OG000001"}}
 
 
 @pytest.mark.parametrize(

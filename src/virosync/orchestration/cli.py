@@ -475,6 +475,7 @@ def _build_pipeline_config(
     phase1_min_markers_initial: Optional[int] = None,
     phase1_extension_kb: Optional[int] = None,
     phase1_merge_distance: Optional[int] = None,
+    frameshift_screening_enabled: Optional[bool] = None,
     enable_phylogenetic: Optional[bool] = None,
     skip_masking: Optional[bool] = None,
     skip_structural: Optional[bool] = None,
@@ -514,6 +515,7 @@ def _build_pipeline_config(
         "min_markers_initial": phase1_min_markers_initial,
         "extension_kb": phase1_extension_kb,
         "merge_distance": phase1_merge_distance,
+        "frameshift_screening_enabled": frameshift_screening_enabled,
         "skip_masking": skip_masking,
         "skip_structural": skip_structural,
         "high_tier_threshold": high_tier_threshold,
@@ -594,6 +596,18 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     """Fail with all resource/config errors after explicit resolution."""
     errors = config.validate()
     errors.extend(config.validate_database_paths(check_files=True))
+    if config.phase1.frameshift_screening_enabled:
+        missing_bath_tools = [
+            name
+            for name in ("bathconvert", "bathsearch")
+            if shutil.which(name) is None
+        ]
+        if missing_bath_tools:
+            errors.append(
+                "phase1.frameshift_screening_enabled requires commands on PATH: "
+                + ", ".join(missing_bath_tools)
+                + " (see docs/FRAMESHIFT_SCREENING.md)"
+            )
     if config.phase3.run_gvclass:
         if config.phase3.gvclass_path is None:
             errors.append("phase3.run_gvclass requires phase3.gvclass_path")
@@ -1275,6 +1289,12 @@ def verify_resources(config_path: Path, db_root: Optional[Path], full: bool) -> 
     help="Phase 1: max gap to merge overlapping regions (bp, default: config value or 1000)",
 )
 @click.option(
+    "--frameshift-screening/--no-frameshift-screening",
+    "frameshift_screening_enabled",
+    default=None,
+    help="Enable/disable frameshift-sensitive marker rescue (requires BATH)",
+)
+@click.option(
     "--device",
     default=None,
     type=click.Choice(["cuda", "cpu"]),
@@ -1368,6 +1388,7 @@ def run(
     phase1_min_markers_initial: Optional[int],
     phase1_extension_kb: Optional[int],
     phase1_merge_distance: Optional[int],
+    frameshift_screening_enabled: Optional[bool],
     device: Optional[str],
     search_backend: Optional[str],
     gpu_id: Optional[int],
@@ -1460,6 +1481,9 @@ def run(
         ),
         phase1_extension_kb=explicit("phase1_extension_kb", phase1_extension_kb),
         phase1_merge_distance=explicit("phase1_merge_distance", phase1_merge_distance),
+        frameshift_screening_enabled=explicit(
+            "frameshift_screening_enabled", frameshift_screening_enabled
+        ),
         enable_phylogenetic=explicit("enable_phylogenetic", enable_phylogenetic),
         skip_masking=explicit("skip_masking", skip_masking),
         skip_structural=explicit("skip_structural", skip_structural),

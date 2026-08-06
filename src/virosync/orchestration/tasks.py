@@ -204,6 +204,31 @@ def generate_proteome_task(
 
 
 @task(
+    name="frameshift_screening",
+    description="Run frameshift-sensitive VS marker rescue screening",
+    persist_result=True,
+)
+def frameshift_screening_task(
+    masked_fasta: Path,
+    hmm_database: Path,
+    output_dir: Path,
+    threads: int = 8,
+) -> list:
+    """Run the optional BATH rescue screen against the masked assembly."""
+
+    from virosync.pipeline.phase1.frameshift_screening import (
+        run_frameshift_screening,
+    )
+
+    return run_frameshift_screening(
+        masked_fasta=Path(masked_fasta),
+        hmm_database=Path(hmm_database),
+        output_dir=Path(output_dir),
+        threads=threads,
+    )
+
+
+@task(
     name="hhg_seeding",
     description="HMM hallmark gene seeding",
     retries=2,

@@ -86,6 +86,7 @@ resources/
 
 # Exception: allow example genome files
 !example/test-1.fna
+!example/frameshift/trichomonas-g3.fna
 
 # Model checkpoints (large)
 *.pt

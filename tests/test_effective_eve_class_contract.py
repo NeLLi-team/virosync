@@ -39,7 +39,7 @@ def test_effective_class_partition_and_output_schema_are_versioned() -> None:
     )
     assert tuple(EFFECTIVE_EVE_CLASS_COUNT_KEYS) == EFFECTIVE_EVE_CLASSES
     assert "MIXED" not in EFFECTIVE_EVE_CLASSES
-    assert OUTPUT_SCHEMA_VERSION == 5
+    assert OUTPUT_SCHEMA_VERSION == 6
 
 
 def test_persisted_effective_class_normalization_is_exhaustive() -> None:

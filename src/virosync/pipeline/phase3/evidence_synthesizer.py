@@ -993,6 +993,7 @@ class VerificationResult:
     mcp_gene_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_models: list[str] = field(default_factory=list)
+    frameshift_rescue_marker_ids: list[str] = field(default_factory=list)
     is_chimeric: bool = False
 
     # Taxonomy (if determinable)
@@ -1073,6 +1074,7 @@ class VerificationResult:
     seed_hhg_score: float = 0.0
     seed_novelty_score: float = 0.0
     seed_compositional_score: float = 0.0
+    canonical_selection_outcome: str = ""
 
     # Composition evidence features
     kfd: float = 0.0
@@ -1185,6 +1187,7 @@ class VerificationResult:
             "mcp_gene_ids": self.mcp_gene_ids,
             "tier1_bypassed_marker_ids": self.tier1_bypassed_marker_ids,
             "tier1_bypassed_marker_models": self.tier1_bypassed_marker_models,
+            "frameshift_rescue_marker_ids": self.frameshift_rescue_marker_ids,
             "is_chimeric": self.is_chimeric,
             "predicted_taxonomy": self.predicted_taxonomy,
             "taxonomy_confidence": self.taxonomy_confidence,
@@ -1233,6 +1236,7 @@ class VerificationResult:
             "seed_hhg_score": self.seed_hhg_score,
             "seed_novelty_score": self.seed_novelty_score,
             "seed_compositional_score": self.seed_compositional_score,
+            "canonical_selection_outcome": self.canonical_selection_outcome,
             # Composition features
             "kfd": self.kfd,
             "gc_deviation": self.gc_deviation,
@@ -2241,6 +2245,18 @@ class EvidenceSynthesizer:
         ]
         result.tier1_bypassed_marker_models = [
             info["hallmark_gene"] for info in bypassed
+        ]
+        from virosync.pipeline.phase1.frameshift_screening import (
+            is_rescued_protein_id,
+        )
+
+        rescued = [
+            info
+            for info in by_gene.values()
+            if is_rescued_protein_id(info["base_gene"])
+        ]
+        result.frameshift_rescue_marker_ids = [
+            info["base_gene"] for info in rescued
         ]
         marker_summary = summarize_marker_hits(
             hallmark_genes,

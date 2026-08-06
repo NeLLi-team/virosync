@@ -39,6 +39,7 @@ def _application() -> ApplicationConfig:
                 "assembly_mode": "relaxed",
                 "initial_window_bp": 12000,
                 "extension_kb": 9,
+                "frameshift_screening_enabled": True,
             },
             "phase3": {
                 "high_tier_threshold": 0.8,
@@ -108,6 +109,7 @@ def test_build_pipeline_config_preserves_yaml_when_cli_values_absent(
     assert config.phase1.assembly_mode.value == "relaxed"
     assert config.phase1.initial_window_bp == 12000
     assert config.phase1.extension_kb == 9
+    assert config.phase1.frameshift_screening_enabled is True
     assert config.phase3.high_tier_threshold == 0.8
     assert config.phase3.export_all_eve_sequences is True
     assert config.execution.resume is True
@@ -148,6 +150,7 @@ def test_build_pipeline_config_applies_explicit_cli_values_once() -> None:
         assembly_mode="strict",
         phase1_initial_window_bp=10000,
         phase1_extension_kb=0,
+        frameshift_screening_enabled=False,
         high_tier_threshold=0.7,
         low_tier_threshold=0.2,
         tmvec=False,
@@ -158,6 +161,7 @@ def test_build_pipeline_config_applies_explicit_cli_values_once() -> None:
     assert config.phase1.assembly_mode.value == "strict"
     assert config.phase1.initial_window_bp == 10000
     assert config.phase1.extension_kb == 0
+    assert config.phase1.frameshift_screening_enabled is False
     assert config.phase3.high_tier_threshold == 0.7
     assert config.phase3.low_tier_threshold == 0.2
     assert config.phase3.use_tmvec_database is False
@@ -187,7 +191,10 @@ def test_paired_boolean_overrides_work_in_both_directions() -> None:
         {
             "schema_version": 1,
             "compute": {"device": "cuda"},
-            "phase1": {"rebuild_db": True},
+            "phase1": {
+                "rebuild_db": True,
+                "frameshift_screening_enabled": True,
+            },
             "phase3": {
                 "enable_phylogenetic": True,
                 "use_tmvec_database": True,
@@ -201,6 +208,7 @@ def test_paired_boolean_overrides_work_in_both_directions() -> None:
         yaml_config=enabled,
         clean_run=False,
         rebuild_db=False,
+        frameshift_screening_enabled=False,
         enable_phylogenetic=False,
         tmvec=False,
         tmvec_gpu=False,
@@ -210,6 +218,7 @@ def test_paired_boolean_overrides_work_in_both_directions() -> None:
         yaml_config=ApplicationConfig.from_dict({"schema_version": 1}),
         clean_run=False,
         rebuild_db=True,
+        frameshift_screening_enabled=True,
         enable_phylogenetic=True,
         tmvec=True,
         tmvec_gpu=True,
@@ -217,11 +226,13 @@ def test_paired_boolean_overrides_work_in_both_directions() -> None:
     )
 
     assert disabled.phase1.rebuild_db is False
+    assert disabled.phase1.frameshift_screening_enabled is False
     assert disabled.phase3.enable_phylogenetic is False
     assert disabled.phase3.use_tmvec_database is False
     assert disabled.phase3.tmvec_require_gpu is False
     assert disabled.phase3.interproscan_enabled is False
     assert reenabled.phase1.rebuild_db is True
+    assert reenabled.phase1.frameshift_screening_enabled is True
     assert reenabled.phase3.enable_phylogenetic is True
     assert reenabled.phase3.use_tmvec_database is True
     assert reenabled.phase3.tmvec_require_gpu is True
@@ -497,7 +508,10 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
         {
             "schema_version": 1,
             "compute": {"device": "cuda" if not enable else "cpu"},
-            "phase1": {"rebuild_db": not enable},
+            "phase1": {
+                "rebuild_db": not enable,
+                "frameshift_screening_enabled": not enable,
+            },
             "phase3": {
                 "enable_phylogenetic": not enable,
                 "use_tmvec_database": not enable,
@@ -510,6 +524,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
     if enable:
         flags = [
             "--rebuild-db",
+            "--frameshift-screening",
             "--enable-phylogenetic",
             "--tmvec",
             "--tmvec-gpu",
@@ -518,6 +533,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
     else:
         flags = [
             "--no-rebuild-db",
+            "--no-frameshift-screening",
             "--disable-phylogenetic",
             "--no-tmvec",
             "--no-tmvec-gpu",
@@ -539,6 +555,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
     assert result.exit_code == 0, result.output
     config = received["config"]
     assert config.phase1.rebuild_db is enable
+    assert config.phase1.frameshift_screening_enabled is enable
     assert config.phase3.enable_phylogenetic is enable
     assert config.phase3.use_tmvec_database is enable
     assert config.phase3.tmvec_require_gpu is enable
@@ -723,7 +740,13 @@ def test_selected_configured_resource_paths_fail_before_run(
         "diamond_db": str(diamond),
         **database_updates,
     }
-    config = PipelineConfig.from_dict({"databases": databases, "phase3": phase3})
+    config = PipelineConfig.from_dict(
+        {
+            "databases": databases,
+            "phase1": {"frameshift_screening_enabled": False},
+            "phase3": phase3,
+        }
+    )
 
     with pytest.raises(click.ClickException, match=message):
         _validate_runtime_config(config)
@@ -743,7 +766,8 @@ def test_unused_marker_build_inputs_are_not_broadly_existence_checked(
                 "marker_db": str(marker),
                 "marker_faa_db": str(tmp_path / "unused-missing.faa"),
                 "faa_dir": str(tmp_path / "unused-missing-dir"),
-            }
+            },
+            "phase1": {"frameshift_screening_enabled": False},
         }
     )
 
@@ -761,11 +785,42 @@ def test_selected_marker_build_inputs_are_existence_checked(tmp_path: Path) -> N
                 "hmm_database": str(hmm),
                 "marker_faa_db": str(tmp_path / "missing-marker.faa"),
                 "faa_dir": str(faa_dir),
-            }
+            },
+            "phase1": {"frameshift_screening_enabled": False},
         }
     )
 
     with pytest.raises(click.ClickException, match="Marker FAA database"):
+        _validate_runtime_config(config)
+
+
+def test_enabled_frameshift_screening_requires_bath_tools_before_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hmm = tmp_path / "markers.hmm"
+    marker = tmp_path / "marker.dmnd"
+    hmm.write_bytes(b"hmm")
+    marker.write_bytes(b"db")
+    config = PipelineConfig.from_dict(
+        {
+            "databases": {
+                "hmm_database": str(hmm),
+                "marker_db": str(marker),
+            },
+            "phase1": {"frameshift_screening_enabled": True},
+        }
+    )
+    monkeypatch.setattr(
+        orchestration_cli.shutil,
+        "which",
+        lambda name: "/mock/bin/bathconvert" if name == "bathconvert" else None,
+    )
+
+    with pytest.raises(
+        click.ClickException,
+        match="requires commands on PATH: bathsearch",
+    ):
         _validate_runtime_config(config)
 
 
@@ -890,6 +945,7 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
 # different regions with no warning. The defaults were aligned to the YAML; this
 # test fails if they drift apart again.
 RESULT_AFFECTING_DEFAULTS = (
+    ("phase1", "frameshift_screening_enabled"),
     ("phase1", "min_markers_initial"),
     ("phase2", "host_trim_enabled"),
     ("phase3", "skip_structural"),
@@ -920,6 +976,7 @@ def test_result_affecting_defaults_match_the_shipped_config():
 # exported Python API on the old values. Flow argument names differ from the config
 # field names, hence the explicit mapping.
 FLOW_ARG_FOR_FIELD = {
+    ("phase1", "frameshift_screening_enabled"): "frameshift_screening_enabled",
     ("phase1", "min_markers_initial"): "min_markers_initial",
     ("phase2", "host_trim_enabled"): "boundary_host_trim_enabled",
     ("phase3", "skip_structural"): "skip_structural",

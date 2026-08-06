@@ -23,6 +23,11 @@ from virosync.orchestration._flows.single_genome.phase1_state import (
     write_phase1_state,
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
+from virosync.pipeline.phase1.frameshift_screening import (
+    ANNOTATION_CLASS,
+    FrameshiftHit,
+    rescued_protein_id,
+)
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import MergedSeed
@@ -159,6 +164,7 @@ def _phase1_kwargs(tmp_path: Path, output_dir: Path) -> dict[str, object]:
         "hmm_database": None,
         "hmm_allowlist": None,
         "hmm_chunk_size": None,
+        "frameshift_screening_enabled": False,
         "marker_faa_db": None,
         "marker_faa_dir": None,
         "marker_db": None,
@@ -355,6 +361,200 @@ def test_authenticated_phase1_resume_loads_only_exact_state(
     assert result["host_deviation_summary"] == _complete_deviation_summary()
     assert not (output_dir / "phase1" / "marker_validation").exists()
     assert not (output_dir / "phase1" / "region_assembly").exists()
+
+
+def test_enabled_phase1_resume_requires_confirmed_frameshift_faa(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    state_path = output_dir / "phase1" / PHASE1_STATE_FILENAME
+    _write_complete_state(state_path)
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["frameshift_screening_enabled"] = True
+
+    with pytest.raises(ValueError, match="confirmed frameshift protein FAA"):
+        _run_phase1_subflow(**kwargs)
+
+    confirmed_faa = (
+        output_dir
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_proteins.faa"
+    )
+    confirmed_faa.parent.mkdir(parents=True)
+    confirmed_faa.write_text("")
+    with pytest.raises(ValueError, match="confirmed frameshift marker table"):
+        _run_phase1_subflow(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "expected_prefix"),
+    [
+        (False, ["hmm"]),
+        (True, ["frameshift", "hmm"]),
+    ],
+)
+def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    expected_prefix: list[str],
+) -> None:
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["resume"] = False
+    kwargs["resume_authorized"] = False
+    kwargs["frameshift_screening_enabled"] = enabled
+    hmm_database = tmp_path / "markers.hmm"
+    marker_db = tmp_path / "markers.dmnd"
+    hmm_database.write_text("HMM\n")
+    marker_db.write_text("DB\n")
+    kwargs["hmm_database"] = hmm_database
+    kwargs["marker_db"] = marker_db
+    events: list[str] = []
+
+    def fake_call_task(task, **task_kwargs):
+        if task is phase1_module.frameshift_screening_task:
+            assert task_kwargs == {
+                "masked_fasta": kwargs["masked_path"],
+                "hmm_database": hmm_database,
+                "output_dir": output_dir / "phase1" / "frameshift_screening",
+                "threads": kwargs["threads"],
+            }
+            events.append("frameshift")
+            return []
+        if task is phase1_module.hhg_seeding_task:
+            events.append("hmm")
+            return [], []
+        if task is phase1_module.generate_outputs_task:
+            events.append("outputs")
+            return {}
+        raise AssertionError(f"unexpected task: {task}")
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
+    monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
+
+    result = _run_phase1_subflow(**kwargs)
+
+    assert result["success"] is True
+    assert events[: len(expected_prefix)] == expected_prefix
+    assert events[-1] == "outputs"
+
+
+def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["resume"] = False
+    kwargs["resume_authorized"] = False
+    kwargs["frameshift_screening_enabled"] = True
+    kwargs["masked_path"].write_text(">contig_1\n" + "A" * 500 + "\n")
+    kwargs["proteome_path"].write_text("")
+    hmm_database = tmp_path / "markers.hmm"
+    marker_db = tmp_path / "markers.dmnd"
+    hmm_database.write_text("HMM\n")
+    marker_db.write_text("DB\n")
+    kwargs["hmm_database"] = hmm_database
+    kwargs["marker_db"] = marker_db
+    hit = FrameshiftHit(
+        annotation_class=ANNOTATION_CLASS,
+        hit_id="1",
+        target_name="contig_1",
+        target_accession="-",
+        query_name="VS000001",
+        query_accession="-",
+        hmm_len=100,
+        hmm_from=10,
+        hmm_to=90,
+        seq_len=500,
+        ali_start=100,
+        ali_end=300,
+        strand="+",
+        evalue=1e-20,
+        score=90.0,
+        bias=0.0,
+        pid=40.0,
+        shifts=1,
+        stops=0,
+        description="synthetic rescue",
+    )
+    protein_id = rescued_protein_id(hit)
+    marker = ValidatedMarkerHit(
+        query_porf=f"{protein_id}|aa1-80",
+        scaffold="contig_1",
+        start=100,
+        end=300,
+        strand="+",
+        hmm_target="VS000001",
+        hmm_score=90.0,
+        hmm_evalue=1e-20,
+        validation_status="validated",
+        top10_prefixes="NCLDV__",
+        best_hit_target="NCLDV__reference",
+        best_hit_pident=35.0,
+        best_hit_bits=80.0,
+        has_ncldv=1,
+        has_mirus=0,
+        has_plv=0,
+        has_vp=0,
+        has_viral=1,
+    )
+
+    def fake_call_task(task, **task_kwargs):
+        if task is phase1_module.frameshift_screening_task:
+            frameshift_dir = task_kwargs["output_dir"]
+            frameshift_dir.mkdir(parents=True)
+            (frameshift_dir / "frameshift_candidates.faa").write_text(
+                f">{protein_id} # 101 # 300 # 1 # "
+                f"ID=0_{protein_id.rsplit('_', 1)[1]};"
+                "annotation=frameshift_rescued_domain\n"
+                + "M" * 80
+                + "\n"
+            )
+            return [hit]
+        if task is phase1_module.hhg_seeding_task:
+            return [], []
+        if task.__name__ == "marker_validation_task":
+            if task_kwargs["output_dir"].name == "marker_validation":
+                return []
+            task_kwargs["output_dir"].mkdir(parents=True)
+            (task_kwargs["output_dir"] / "diamond_top10.tsv").write_text(
+                f"{protein_id}\tNCLDV__reference\t1e-20\t80\t35\t75\n"
+            )
+            return [marker]
+        if task.__name__ == "region_assembly_task":
+            assert task_kwargs["validated_markers"] == [marker]
+            return [
+                SimpleNamespace(
+                    scaffold="contig_1",
+                    start=50,
+                    end=350,
+                    length=300,
+                    marker_count=1,
+                    markers=[marker],
+                    predicted_family="NCLDV",
+                )
+            ]
+        raise AssertionError(f"unexpected task: {task}")
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
+
+    result = _run_phase1_subflow(**kwargs)
+
+    assert result["validated_markers"] == [marker]
+    assert len(result["merged_seeds"]) == 1
+    assert result["merged_seeds"][0].anchors[0].porf_id == marker.query_porf
+    assert result["merged_seeds"][0].sources == ["frameshift_rescue"]
+    confirmed_faa = (
+        output_dir
+        / "phase1"
+        / "frameshift_screening"
+        / "confirmed_frameshift_proteins.faa"
+    )
+    assert protein_id in confirmed_faa.read_text()
 
 
 def test_fresh_phase1_writes_exact_state_after_classification(

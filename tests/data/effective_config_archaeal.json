@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "24b21404c106c990780d8b64a6848bf83fb1b4bbf38d23a1ed4a2109a6ce3d31",
+  "effective_config_sha256": "68399aec7c0f167a24e9e30ead7cf3f54828f5a631724cd1363418a3c4bf2472",
   "execution": {
     "masking": {
       "backend": "off",
@@ -128,6 +128,7 @@
   "phase1": {
     "assembly_mode": "default",
     "extension_kb": 5,
+    "frameshift_screening_enabled": false,
     "hmm_chunk_size": null,
     "host_taxonomy_deviation_allow_seeds": true,
     "host_taxonomy_deviation_enabled": true,

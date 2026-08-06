@@ -50,6 +50,11 @@ def test_pipeline_default_round_trip_covers_every_flow_field() -> None:
     assert set(kwargs) == {spec.flat for spec in FIELD_SPECS if spec.emit}
     assert kwargs["device"] == "cpu"
     assert kwargs["marker_validation_top_k"] == 10
+    assert kwargs["frameshift_screening_enabled"] is False
+    enabled = PipelineConfig.from_dict(
+        {"phase1": {"frameshift_screening_enabled": True}}
+    )
+    assert enabled.phase1.frameshift_screening_enabled is True
     assert "max_concurrent_genomes" not in kwargs
     assert "use_structural_homology" not in kwargs
 

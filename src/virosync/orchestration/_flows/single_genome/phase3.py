@@ -41,6 +41,15 @@ from .loaders import (
 )
 
 
+def _is_marker_floor_recovery_candidate(result) -> bool:
+    """Return whether selection excluded a candidate for a recoverable reason."""
+
+    return result.canonical_selection_outcome in {
+        "normal_gate_rejected",
+        "rescue_marker_excluded",
+    }
+
+
 def _resolve_tmvec_device(device: str) -> str:
     """Honor the configured TMVec device without implicit promotion/demotion."""
     if device == "cpu":
@@ -764,19 +773,18 @@ def _run_phase3_subflow(
     # rejected), and (d) does not overlap any accepted region. No boundary already
     # accepted is modified, and the alternatives only ever ADD candidates, so the
     # accepted set cannot shrink. The selector is re-run afterwards over the
-    # extended list; it evaluates each candidate independently, so the originals
-    # receive the same decisions they got in the first pass.
+    # extended list. Direct-overlap arbitration prevents a non-overlapping
+    # alternative from changing an original winner through a transitive bridge.
     #
     READMIT_MIN_VIRAL_FRACTION = 0.10
-    accepted_ids = {id(r) for r in acceptance_selection.canonical_results}
     # Regions accepted so far, seeded from the first pass and extended as
     # alternatives qualify, so no two re-admits can overlap each other.
     readmit_accepted = list(acceptance_selection.canonical_results)
     boundary_by_region = {(b.scaffold, b.start, b.end): b for b in refined_boundaries}
     readmit_boundaries = []
     for r in verification_results:
-        if id(r) in accepted_ids:
-            continue  # never touch / re-evaluate an accepted region
+        if not _is_marker_floor_recovery_candidate(r):
+            continue
         boundary = boundary_by_region.get((r.scaffold, r.start, r.end))
         if boundary is None:
             continue
@@ -858,13 +866,9 @@ def _run_phase3_subflow(
             ):
                 continue
             readmit_accepted.append(alt)
-            # Also surface the alternative as a verified candidate so it flows
-            # through the canonical output path (generate_outputs_task re-applies
-            # the v2 gate to verification_results; only gate-passers are written to
-            # virosync_predictions.* / gene_taxonomy/). Only fully-qualified alts
-            # (gate-pass AND non-ATPase hallmark AND no overlap with an accepted
-            # region) reach this point, so the re-gated output set still equals the
-            # de-duplicated accepted set.
+            # Also surface the alternative as a verified candidate. The second
+            # selection pass below produces the explicit canonical subset used
+            # by output generation. Only fully qualified alternatives reach it.
             verification_results.append(alt)
             n_readmitted += 1
         if n_readmitted:
@@ -873,7 +877,7 @@ def _run_phase3_subflow(
             # recomputed from the second selection, so no manual bookkeeping.
             logger.info(
                 "Phase 3 marker-floor re-admit: recovered %d marker-dense EVE(s) "
-                "rejected by the v2 gate after host-trim boundary collapse",
+                "excluded after host-trim boundary collapse",
                 n_readmitted,
             )
 
@@ -914,6 +918,11 @@ def _run_phase3_subflow(
     gate_kept = len(accepted_results)
     unsupported = unsupported_eve_ids(accepted_results)
     if unsupported:
+        for result in accepted_results:
+            if result.eve_id in unsupported:
+                result.canonical_selection_outcome = (
+                    "unsupported_no_viral_evidence"
+                )
         accepted_results = [
             result for result in accepted_results if result.eve_id not in unsupported
         ]
@@ -980,7 +989,7 @@ def _run_phase3_subflow(
         )
         logger.info(
             "  %s kept %d/%d predictions "
-            "(HIGH=%d, MEDIUM=%d, LOW=%d; gate-dropped=%d; "
+            "(HIGH=%d, MEDIUM=%d, LOW=%d; selection-dropped=%d; "
             "no-viral-evidence-dropped=%d; normal-gate-rejected=%d)",
             "A6 acceptance bypass" if ablation_id is AblationID.A6 else "Canonical v2 gate",
             accepted,
@@ -988,7 +997,7 @@ def _run_phase3_subflow(
             tier_counts["HIGH"],
             tier_counts["MEDIUM"],
             tier_counts["LOW"],
-            quality_gate_dropped - len(unsupported),
+            quality_gate_dropped,
             len(unsupported),
             counterfactual_quality_gate_dropped,
         )

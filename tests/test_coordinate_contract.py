@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from Bio.Seq import Seq
@@ -295,7 +296,7 @@ def test_coordinate_convention_is_versioned_in_output_contract() -> None:
     contract = importlib.import_module("virosync.output_contract")
 
     assert contract.COORDINATE_SCHEMA_VERSION == 2
-    assert contract.OUTPUT_SCHEMA_VERSION == 5
+    assert contract.OUTPUT_SCHEMA_VERSION == 6
     assert "0-based" in contract.COORDINATE_CONVENTION.lower()
     assert "half-open" in contract.COORDINATE_CONVENTION.lower()
 
@@ -317,6 +318,34 @@ def test_touching_extended_seeds_remain_distinct() -> None:
     assert [(seed.start, seed.end) for seed in observed] == [(0, 10), (10, 20)]
 
 
+def test_gene_extension_does_not_merge_mixed_rescue_and_ordinary_seeds() -> None:
+    seeds = [
+        MergedSeed(
+            scaffold="scaffold",
+            start=0,
+            end=20,
+            sources=["hhg", "marker_validation"],
+        ),
+        MergedSeed(
+            scaffold="scaffold",
+            start=10,
+            end=30,
+            sources=["hhg", "marker_validation", "frameshift_rescue"],
+        ),
+    ]
+    proteome_index = {
+        "scaffold": [
+            pORF(id="gene_left", scaffold="scaffold", start=0, end=20),
+            pORF(id="gene_right", scaffold="scaffold", start=10, end=30),
+        ]
+    }
+
+    observed = extend_seeds_by_genes(seeds, proteome_index, extension_genes=0)
+
+    assert [(seed.start, seed.end) for seed in observed] == [(0, 30), (0, 30)]
+    assert ["frameshift_rescue" in seed.sources for seed in observed] == [False, True]
+
+
 def test_touching_refined_boundaries_are_not_unconditional_overlaps() -> None:
     boundaries = [
         RefinedBoundary(scaffold="scaffold", start=0, end=10),
@@ -328,4 +357,61 @@ def test_touching_refined_boundaries_are_not_unconditional_overlaps() -> None:
     assert [(boundary.start, boundary.end) for boundary in observed] == [
         (0, 10),
         (10, 20),
+    ]
+
+
+def test_post_taxonomy_merge_keeps_overlapping_mixed_rescue_boundaries_separate() -> None:
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=0,
+            end=20,
+            seed_sources=["hhg", "marker_validation"],
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=10,
+            end=30,
+            seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+        ),
+    ]
+
+    observed = merge_adjacent_viral_boundaries(boundaries, taxonomy_map={})
+
+    assert [(boundary.start, boundary.end) for boundary in observed] == [
+        (0, 20),
+        (10, 30),
+    ]
+
+
+def test_post_taxonomy_merge_keeps_viral_gap_mixed_rescue_boundaries_separate() -> None:
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=0,
+            end=100,
+            seed_sources=["hhg", "marker_validation"],
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=200,
+            end=300,
+            seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+        ),
+    ]
+    taxonomy_map = {
+        "gap_gene": SimpleNamespace(
+            scaffold="scaffold",
+            start=120,
+            end=180,
+            has_ncldv_mirus=True,
+            has_vp_plv=False,
+        )
+    }
+
+    observed = merge_adjacent_viral_boundaries(boundaries, taxonomy_map)
+
+    assert [(boundary.start, boundary.end) for boundary in observed] == [
+        (0, 100),
+        (200, 300),
     ]

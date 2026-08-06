@@ -212,17 +212,18 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     )
     phase1_ablation = output_dir / "phase1" / "ablation_events.json"
     phase1_ablation.write_bytes(ablation_content)
-    phase1_artifacts = (
-        build_artifact_identity(
-            phase1_ablation,
-            root=output_dir,
-            schema="virosync.ablation_events/v1",
-        ),
-        build_artifact_identity(
-            phase1_state,
-            root=output_dir,
-            schema=PHASE1_STATE_SCHEMA,
-        ),
+    frameshift_hits = (
+        output_dir / "phase1" / "frameshift_screening" / "frameshift_hits.tsv"
+    )
+    frameshift_hits.parent.mkdir(parents=True, exist_ok=True)
+    frameshift_hits.write_text("annotation_class\n")
+    phase1_artifacts = tuple(
+        build_artifact_identity(path, root=output_dir, schema=schema)
+        for path, schema in (
+            (phase1_ablation, "virosync.ablation_events/v1"),
+            (frameshift_hits, "frameshift-hits-v1"),
+            (phase1_state, PHASE1_STATE_SCHEMA),
+        )
     )
     publish_phase_completion(
         output_dir,
@@ -344,8 +345,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
             (ablation_events, "virosync.ablation_events/v1"),
-            (canonical, "canonical-predictions-v5"),
-            (detailed, "detailed-predictions-v5"),
+            (canonical, "canonical-predictions-v6"),
+            (detailed, "detailed-predictions-v6"),
             (bed, "canonical-predictions-bed-v1"),
             (gff, "canonical-predictions-gff3-v1"),
             (summary, "virosync-summary-v3"),

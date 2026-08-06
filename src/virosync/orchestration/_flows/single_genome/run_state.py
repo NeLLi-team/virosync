@@ -148,13 +148,20 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase3/ablation_events.json": "virosync.ablation_events/v1",
     "phase0/masking/masking_status.json": "masking-status-v1",
     "phase1/resume_state.json": "virosync.phase1.resume_state/v1",
+    "phase1/frameshift_screening/frameshift_hits.tsv": "frameshift-hits-v1",
+    "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": (
+        "frameshift-rescued-proteins-v1"
+    ),
+    "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": (
+        "frameshift-rescued-markers-v1"
+    ),
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v2",
     "phase2/resume_state.json": "virosync.phase2.resume_state/v1",
-    "virosync_predictions.tsv": "canonical-predictions-v5",
-    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v5",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v5",
+    "virosync_predictions.tsv": "canonical-predictions-v6",
+    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v6",
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v6",
     "phase3_synthesis/virosync_predictions_detailed.tsv": (
-        "detailed-predictions-v5"
+        "detailed-predictions-v6"
     ),
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
     "phase3_synthesis/virosync_predictions.bed": (
@@ -502,8 +509,8 @@ def _observe_artifact(
                 if row_mode == "table":
                     if nonempty_rows == 0:
                         if schema in {
-                            "canonical-predictions-v5",
-                            "detailed-predictions-v5",
+                            "canonical-predictions-v6",
+                            "detailed-predictions-v6",
                         }:
                             raise ValueError(
                                 "final prediction table has no header: "

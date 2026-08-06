@@ -8,7 +8,7 @@ ViroSync detects candidate endogenous viral elements (EVEs) in assembled eukaryo
 ## Repository scope
 
 The tracked tree contains the ViroSync software, tests, setup files,
-documentation, and one example genome. The `virosync-bench` repository
+documentation, and two example genomes. The `virosync-bench` repository
 contains benchmark code, results, analysis notebooks, figures, and manuscript
 files.
 
@@ -17,7 +17,7 @@ virosync/
 ├── .github/                CI and release checks
 ├── config/                 runtime configuration
 ├── docs/                   methods, release, and resource reference
-├── example/                shipped example genome
+├── example/                standard and frameshift-screening examples
 ├── release-manifests/      resource checksums and metadata
 ├── scripts/                setup, validation, and maintenance commands
 ├── src/virosync/           Python package
@@ -109,6 +109,25 @@ Install the project environment from the repository root:
 pixi install --locked
 ```
 
+The optional Phase 1 frameshift screen requires `bathconvert` and `bathsearch`.
+Pixi does not install BATH. To use the screen, build the pinned revisions from
+source as described in
+[the frameshift screening guide](docs/FRAMESHIFT_SCREENING.md). Add both commands
+to `PATH`, then verify them:
+
+```bash
+bathconvert -h
+bathsearch -h
+```
+
+Enable the screen with `--frameshift-screening` or set
+`phase1.frameshift_screening_enabled: true` in the run config. Only
+event-bearing domains confirmed by Tier-1 DIAMOND validation can seed regions.
+An accepted rescue-only EVE must retain a confirmed rescued marker, and its FAA
+includes that marker domain. A rescue-seeded region can remain on retained
+ordinary marker support. `total_proteins` counts ordinary predicted proteins,
+so an EVE FAA can contain additional rescued domains.
+
 Provision the pinned core resources:
 
 ```bash
@@ -159,7 +178,9 @@ retains the previous working resource tree for recovery.
 
 ## Quick Start
 
-Run the shipped example:
+Run the standard example. The directory scan is non-recursive, so this command
+processes the top-level `example/test-1.fna` file and not the frameshift fixture
+in `example/frameshift/`:
 
 ```bash
 pixi run virosync \
@@ -179,6 +200,20 @@ cat results/example_16t/batch_summary.tsv
 
 The `test-1` row should report `status=success`, `predictions=6`, and
 `accepted=1` with the v1.0.6 resource bundle.
+
+Run the three-contig *Trichomonas vaginalis* G3 frameshift example after
+installing BATH:
+
+```bash
+pixi run example-frameshift
+```
+
+This command enables `--frameshift-screening` and writes
+`results/example-frameshift/batch_summary.tsv`. With the v1.0.6 resource
+bundle, the `trichomonas-g3` row should report `status=success`,
+`predictions=6`, and `accepted=3`. See the
+[frameshift screening guide](docs/FRAMESHIFT_SCREENING.md) for input
+provenance, output checks, and runtime measurements.
 
 Run a single genome:
 
@@ -202,7 +237,9 @@ pixi run virosync \
   --threads-per-worker 8
 ```
 
-`pixi run example` remains available as a convenience wrapper around the shipped example input and repository defaults.
+`pixi run example` runs the standard example.
+`pixi run example-frameshift` runs only the nested G3 fixture with the screen
+enabled.
 
 ### Console output
 
@@ -368,13 +405,21 @@ Key output semantics:
 | `<genome_id>/phase<N>.complete.json` | Ordered phase record with dependency and artifact identities |
 | `batch_summary.tsv` | Per-genome status and count summary for the batch run |
 
-The output schema version is 5. `effective_eve_class` is one of `NCLDV`,
+The output schema version is 6. `effective_eve_class` is one of `NCLDV`,
 `MIRUS`, `PPV`, `CRESS`, `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`, and each
 accepted prediction contributes to one class count. `VIRAL_UNKNOWN` marks a
 region whose viral evidence does not settle on one lineage; `UNKNOWN` marks a
 region with no validated marker and no qualified viral gene hit. `PPV` contains
 the VP and PLV subtypes.
 [EVE taxonomy class](#eve-taxonomy-class) gives the assignment rule.
+
+The detailed table records direct ordinary/rescue arbitration in
+`canonical_selection_outcome`. Values are `kept`, `normal_gate_rejected`,
+`rescue_marker_excluded`, `overlap_selected`,
+`overlap_suppressed_by:<candidate_id>`, and
+`unsupported_no_viral_evidence`. The
+[frameshift screening guide](docs/FRAMESHIFT_SCREENING.md#read-the-output)
+defines each value.
 
 The detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
 subtype-specific HMM marker evidence supports one subtype and not the other,
@@ -504,19 +549,19 @@ specificity.
 
 ### Non-HHG seeding quality gate (defensive)
 
-The active pipeline seeds candidates via the HMM-gated hallmark discovery (HHG)
-path only; the legacy k-mer compositional and taxonomic novelty seeding paths
-have been removed. A defensive quality gate remains in Phase 3 so that any
-future candidate reaching scoring without an `hhg` entry in `seed_sources` is
-demoted to LOW unless it meets at least one of:
+The standard pipeline seeds candidates through HMM-gated hallmark discovery
+(HHG). The opt-in frameshift screen can add a rescue-only seed without an
+`hhg` source. The legacy k-mer compositional and taxonomic novelty paths have
+been removed. A defensive quality gate in Phase 3 demotes a candidate without
+an `hhg` source to LOW unless it meets at least one of:
 
 - `hallmark_count >= 3`: three or more Phase-3-validated hallmark genes
 - `hallmark_count >= 1 AND has_mcp`: at least one hallmark and it is an MCP
 - `non-host gene count >= 5`: five or more interior genes without host-like taxonomy
 
-The seeding provenance for each candidate is recorded in the `seed_sources`
-column of `virosync_predictions_detailed.tsv` (typical values under the
-current pipeline: `hhg`, `marker_validation`).
+The `seed_sources` column records provenance. Ordinary seeds carry `hhg` and
+`marker_validation`, rescue-only seeds carry `frameshift_rescue`, and a region
+with both marker types carries all three.
 
 ### EVE acceptance quality gate (v2)
 
@@ -582,6 +627,7 @@ accumulation around the viral core.
 |------|---------|
 | [README.md](README.md) | Operator guide and run instructions |
 | [docs/METHODS.md](docs/METHODS.md) | Code-verified workflow and output specification |
+| [docs/FRAMESHIFT_SCREENING.md](docs/FRAMESHIFT_SCREENING.md) | Run and interpret frameshift-sensitive VS marker screening |
 | [config/orchestration.yaml](config/orchestration.yaml) | Repository-default orchestration and resource configuration |
 | [CHANGELOG.md](CHANGELOG.md) | Release and unreleased change log |
 
@@ -611,9 +657,10 @@ GitHub Actions run three public-readiness checks:
   software and resource identities, authenticates the tracked v1.0.6 manifest,
   and checks the public archive URL on schedules, manual runs, and release tags.
 - `example-smoke`: runs weekly, manually from the default branch, and for
-  release tags. It fully verifies provisioned resources, runs a clean example
-  and unchanged resume, checks all authenticated completion artifacts and
-  coordinates, and uploads path-safe summaries.
+  release tags. It fully verifies provisioned resources, runs the standard
+  example clean and resumed, then runs the frameshift example clean. It checks
+  authenticated completion artifacts, coordinates, confirmed rescue markers,
+  and accepted rescued-marker FAA output before uploading path-safe summaries.
 
 ## Reproducibility Notes
 

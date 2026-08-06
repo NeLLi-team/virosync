@@ -127,7 +127,16 @@ def extend_seeds_by_genes(
                 current.predicted_family == "CRESS"
                 or next_seed.predicted_family == "CRESS"
             )
-            if next_seed.start < current.end and not cress_in_pair:
+            mixed_rescue_pair = (
+                "frameshift_rescue" in current.sources
+            ) != (
+                "frameshift_rescue" in next_seed.sources
+            )
+            if (
+                next_seed.start < current.end
+                and not cress_in_pair
+                and not mixed_rescue_pair
+            ):
                 # Overlapping — merge
                 combined_sources = sorted(set(current.sources) | set(next_seed.sources))
                 combined_anchors = current.anchors + [
@@ -213,11 +222,11 @@ class RefinedBoundary:
 
     # Validated-marker floor (Phase-3 re-admit METADATA -- never applied to
     # start/end). When this boundary's own seed span carried >=2 validated viral
-    # markers, this records the min..max coordinates of those markers as a
-    # recovery-only alternative span. The Phase-3 re-admit pass (which fires only
-    # on REJECTED boundaries) may synthesize and gate this floored alternative,
-    # so a marker-dense NCLDV seed that host-trimming collapsed below 5 kb can be
-    # recovered without ever mutating an accepted boundary.
+    # proteins, or one confirmed frameshift-rescued protein on a rescue-derived
+    # boundary, this records their min..max coordinates as a recovery-only
+    # alternative span. The Phase-3 re-admit pass (which fires only on REJECTED
+    # boundaries) may synthesize and gate this floored alternative without ever
+    # mutating an accepted boundary.
     marker_floor_start: Optional[int] = None
     marker_floor_end: Optional[int] = None
 
@@ -396,7 +405,10 @@ def annotate_boundaries_with_marker_floor(
     metadata on REJECTED boundaries only, so an accepted boundary is never
     modified and the accepted set structurally cannot regress.
 
-    Specificity guard: markers are scoped to each boundary's own seed span
+    Specificity guard: ordinary markers still require two distinct proteins.
+    One marker suffices only when both the seed provenance and generated protein
+    ID identify a confirmed frameshift rescue. Markers are scoped to the
+    boundary's own seed span
     (``original_start`` / ``original_end``) so the floor never pulls in validated
     markers from a different region on the same scaffold, and only validated
     markers (``validation_status`` in ``{validated, validated_novel}``) count --
@@ -410,6 +422,10 @@ def annotate_boundaries_with_marker_floor(
         return 0
 
     n_annotated = 0
+    from virosync.pipeline.phase1.frameshift_screening import (
+        is_rescued_protein_id,
+    )
+
     for boundary in boundaries:
         span_markers = [
             m for m in validated_markers
@@ -417,10 +433,18 @@ def annotate_boundaries_with_marker_floor(
             and m.validation_status in ("validated", "validated_novel")
             and boundary.original_start <= (m.start + m.end) // 2 <= boundary.original_end
         ]
-        # Count distinct marker-bearing proteins. One pORF can produce several
-        # HMM hits, and counting raw hits would let a single gene satisfy the
-        # marker-dense requirement and widen the floor on its own.
-        if len({m.query_porf for m in span_markers}) < 2:
+        # Count distinct marker-bearing proteins. One ordinary pORF can produce
+        # several HMM hits, so raw hit count must not satisfy the floor.
+        rescue_boundary = "frameshift_rescue" in (
+            getattr(boundary, "seed_sources", []) or []
+        )
+        has_rescue_marker = any(
+            is_rescued_protein_id(m.query_porf) for m in span_markers
+        )
+        if (
+            len({m.query_porf for m in span_markers}) < 2
+            and not (rescue_boundary and has_rescue_marker)
+        ):
             continue
         marker_lo = min(m.start for m in span_markers)
         marker_hi = max(m.end for m in span_markers)
@@ -491,10 +515,21 @@ def merge_adjacent_viral_boundaries(
                 getattr(current, "predicted_family", "") == "CRESS"
                 or getattr(next_boundary, "predicted_family", "") == "CRESS"
             )
+            current_sources = getattr(current, "seed_sources", []) or []
+            next_sources = getattr(next_boundary, "seed_sources", []) or []
+            mixed_rescue_pair = (
+                "frameshift_rescue" in current_sources
+            ) != (
+                "frameshift_rescue" in next_sources
+            )
 
-            # Strictly overlapping boundaries: merge unconditionally. Touching
+            # Strictly overlapping same-provenance boundaries merge. Touching
             # half-open intervals continue through the evidence-aware gap path.
-            if gap_end < gap_start and not cress_in_pair:
+            if (
+                gap_end < gap_start
+                and not cress_in_pair
+                and not mixed_rescue_pair
+            ):
                 from dataclasses import replace
 
                 combined_ncldv = (
@@ -509,8 +544,6 @@ def merge_adjacent_viral_boundaries(
                     getattr(current, "region_classification_mirus_markers", 0)
                     + getattr(next_boundary, "region_classification_mirus_markers", 0)
                 )
-                current_sources = getattr(current, "seed_sources", []) or []
-                next_sources = getattr(next_boundary, "seed_sources", []) or []
                 combined_sources = sorted(set(current_sources) | set(next_sources))
 
                 logger.info(
@@ -539,7 +572,11 @@ def merge_adjacent_viral_boundaries(
                 continue
 
             # Check if gap is within merge distance
-            if not cress_in_pair and gap_end - gap_start <= max_gap_bp:
+            if (
+                not cress_in_pair
+                and not mixed_rescue_pair
+                and gap_end - gap_start <= max_gap_bp
+            ):
                 # Find genes in the gap and check their taxonomy
                 gap_genes = []
                 for porf_id, tax in taxonomy_map.items():
@@ -636,8 +673,6 @@ def merge_adjacent_viral_boundaries(
                         getattr(current, "region_classification_mirus_markers", 0)
                         + getattr(next_boundary, "region_classification_mirus_markers", 0)
                     )
-                    current_sources = getattr(current, "seed_sources", []) or []
-                    next_sources = getattr(next_boundary, "seed_sources", []) or []
                     combined_sources = sorted(set(current_sources) | set(next_sources))
 
                     current = replace(

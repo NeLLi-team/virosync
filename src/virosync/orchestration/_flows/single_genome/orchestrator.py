@@ -467,6 +467,8 @@ def _enabled_executable_identities(
         names.add("foldseek")
     if bool(flat_config.get("enable_phylogenetic")):
         names.add("gvclass")
+    if bool(flat_config.get("frameshift_screening_enabled")):
+        names.update({"bathconvert", "bathsearch"})
     identities = [
         identity
         for name in sorted(names)
@@ -594,9 +596,9 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "ablation_events.json":
         return "virosync.ablation_events/v1"
     if path.name == "virosync_predictions.tsv":
-        return "canonical-predictions-v5"
+        return "canonical-predictions-v6"
     if path.name == "virosync_predictions_detailed.tsv":
-        return "detailed-predictions-v5"
+        return "detailed-predictions-v6"
     if path.name == "virosync_predictions.bed":
         return "canonical-predictions-bed-v1"
     if path.name == "virosync_predictions.gff3":
@@ -609,6 +611,12 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
         return "masking-status-v1"
     if path.name == "refined_state.json":
         return PHASE2_STATE_SCHEMA
+    if relative == "phase1/frameshift_screening/frameshift_hits.tsv":
+        return "frameshift-hits-v1"
+    if relative == "phase1/frameshift_screening/confirmed_frameshift_proteins.faa":
+        return "frameshift-rescued-proteins-v1"
+    if relative == "phase1/frameshift_screening/confirmed_frameshift_markers.tsv":
+        return "frameshift-rescued-markers-v1"
     if relative == "phase1/resume_state.json":
         return PHASE1_STATE_SCHEMA
     if relative == "phase2/resume_state.json":
@@ -664,6 +672,9 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
         ),
         1: (
             "phase1/ablation_events.json",
+            "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
+            "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
+            "phase1/frameshift_screening/frameshift_hits.tsv",
             "phase1/resume_state.json",
         ),
         2: (
@@ -1413,6 +1424,7 @@ def _single_genome_flow_impl(
     marker_family_bonus_per_family: float,
     marker_multi_family_bonus: float,
     hmm_chunk_size: Optional[int],
+    frameshift_screening_enabled: bool,
     gene_taxonomy_threads: Optional[int],
     interproscan_enabled: bool,
     interproscan_dir: Optional[Path],
@@ -1772,6 +1784,7 @@ def _single_genome_flow_impl(
         hmm_database=hmm_database,
         hmm_allowlist=hmm_allowlist,
         hmm_chunk_size=hmm_chunk_size,
+        frameshift_screening_enabled=frameshift_screening_enabled,
         marker_faa_db=marker_faa_db,
         marker_faa_dir=marker_faa_dir,
         marker_db=marker_db,
@@ -2595,6 +2608,7 @@ def single_genome_flow(
     marker_family_bonus_per_family: float = 0.06,
     marker_multi_family_bonus: float = 0.08,
     hmm_chunk_size: Optional[int] = None,
+    frameshift_screening_enabled: bool = False,
     gene_taxonomy_threads: Optional[int] = None,
     interproscan_enabled: bool = False,
     interproscan_dir: Optional[Path] = None,
@@ -2739,6 +2753,7 @@ def single_genome_flow(
             marker_family_bonus_per_family=marker_family_bonus_per_family,
             marker_multi_family_bonus=marker_multi_family_bonus,
             hmm_chunk_size=hmm_chunk_size,
+            frameshift_screening_enabled=frameshift_screening_enabled,
             gene_taxonomy_threads=gene_taxonomy_threads,
             interproscan_enabled=interproscan_enabled,
             interproscan_dir=interproscan_dir,

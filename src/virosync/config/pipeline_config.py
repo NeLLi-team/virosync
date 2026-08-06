@@ -279,6 +279,7 @@ class Phase1Config:
     # HMM settings
     assembly_mode: AssemblyMode = AssemblyMode.DEFAULT
     hmm_chunk_size: Optional[int] = None
+    frameshift_screening_enabled: bool = False
 
     # Region assembly
     initial_window_bp: int = 10000
@@ -596,6 +597,12 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("rebuild_db", "phase1", "rebuild_db", ff_block="phase1"),
     _spec("assembly_mode", "phase1", "assembly_mode", enum=AssemblyMode, ff_block="phase1"),
     _spec("hmm_chunk_size", "phase1", "hmm_chunk_size", ff_block="phase1"),
+    _spec(
+        "frameshift_screening_enabled",
+        "phase1",
+        "frameshift_screening_enabled",
+        ff_block="phase1",
+    ),
     _spec("initial_window_bp", "phase1", "initial_window_bp", ff_block="phase1"),
     _spec("initial_window_genes", "phase1", "initial_window_genes", ff_block="phase1"),
     _spec("min_markers_initial", "phase1", "min_markers_initial", ff_block="phase1"),

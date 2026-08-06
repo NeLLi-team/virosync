@@ -8,6 +8,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- Opt-in Phase 1 frameshift-sensitive screening of the masked nucleotide
+  assembly with BATH and the 808 shipped VS marker HMMs. ViroSync validates
+  event-bearing aligned domains against the Tier-1 protein database. Confirmed,
+  coverage-filtered loci can seed regions and appear in an accepted EVE FAA
+  without entering the ordinary proteome. Enable the screen with
+  `--frameshift-screening` or the run config.
+- A tracked three-contig *Trichomonas vaginalis* G3 frameshift example, a Pixi
+  task that runs it through the full pipeline, and CI checks for confirmed
+  rescue markers and accepted rescued-marker FAA output.
 - Compact setup and run output with software and database versions plus
   aggregate progress for resources and genome queries.
 - Command-local `--verbose` flags for setup and run diagnostics.
@@ -29,6 +38,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- Rescue-derived and ordinary candidates remain separate through Phase 2. A
+  rescue-only candidate must retain a confirmed rescued marker. Phase 3
+  resolves direct ordinary/rescue overlaps without suppressing candidates that
+  overlap only through another branch.
+- Output schema v6 adds `canonical_selection_outcome` to the detailed TSV and
+  uses v6 artifact identities for both prediction tables. The new output and
+  run-fingerprint identities invalidate resume from older runs.
+- Phase 3 reports the quality-gate drop count without subtracting the later
+  unsupported-viral-evidence filter twice.
 - Output schema v4 groups detailed TSV fields by evidence type.
 - Output schema v4 to v5. `effective_eve_class` is `NCLDV`, `MIRUS`, `PPV`,
   `CRESS`, `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`. `MIXED` is retired and reads

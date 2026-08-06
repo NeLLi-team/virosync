@@ -88,6 +88,47 @@ jobs:
             --expect-accepted 1
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
 
+      - name: Build pinned BATH runtime
+        run: |
+          bath_root="$(mktemp -d "$RUNNER_TEMP/virosync-bath.XXXXXX")"
+          git clone https://github.com/TravisWheelerLab/BATH.git "$bath_root/BATH"
+          git -C "$bath_root/BATH" checkout 7842ebd58b96591b4b60863ee5c33e49eb79eccc
+          git clone https://github.com/EddyRivasLab/easel.git "$bath_root/BATH/easel"
+          git -C "$bath_root/BATH/easel" checkout 0f4e71832d6ba1e4c65039ba4b4663c546a041fa
+          cd "$bath_root/BATH"
+          autoconf
+          ./configure --prefix="$bath_root/runtime"
+          make -j 4
+          make check
+          make install
+          export PATH="$bath_root/runtime/bin:$PATH"
+          bathconvert -h >/dev/null
+          bathsearch -h >/dev/null
+          printf '%s\n' "$bath_root/runtime/bin" >> "$GITHUB_PATH"
+
+      - name: Run clean frameshift example
+        run: |
+          pixi run virosync \
+            -i example/frameshift/trichomonas-g3.fna \
+            -o results/ci_example_frameshift \
+            --config config/orchestration.yaml \
+            -w 1 \
+            --threads-per-worker 8 \
+            --frameshift-screening \
+            --clean-run
+
+      - name: Validate frameshift completion artifacts
+        run: |
+          pixi run python scripts/ci/validate_example_run.py \
+            results/ci_example_frameshift \
+            --expect-predictions 6 \
+            --expect-accepted 3
+          pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example_frameshift
+          test -s results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv
+          awk 'END { exit NR < 2 }' results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv
+          test -s results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_proteins.faa
+          grep -h -q '^>.*_VSR' results/ci_example_frameshift/*/phase3_synthesis/gvclass_input/protein/*.faa
+
       - name: Upload smoke outputs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -97,3 +138,6 @@ jobs:
             results/ci_example/batch_summary.tsv
             results/ci_example/batch_report.md
             results/ci_example/*/phase3_synthesis/virosync_summary.json
+            results/ci_example_frameshift/batch_summary.tsv
+            results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv
+            results/ci_example_frameshift/*/phase3_synthesis/virosync_summary.json

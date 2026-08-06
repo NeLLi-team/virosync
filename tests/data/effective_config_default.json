@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "ad7b345cb16cc32aeca228dd5013b300cd3db4d2bec278bf8f6402e2468c82c1",
+  "effective_config_sha256": "fc430174de04b14f3847452bad7c03f0e5885a9c7512408a8cd9b47cb45b1ff6",
   "execution": {
     "masking": {
       "backend": "off",
@@ -83,6 +83,7 @@
   "phase1": {
     "assembly_mode": "default",
     "extension_kb": 5,
+    "frameshift_screening_enabled": false,
     "hmm_chunk_size": null,
     "host_taxonomy_deviation_allow_seeds": false,
     "host_taxonomy_deviation_enabled": false,

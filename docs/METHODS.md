@@ -1,4 +1,4 @@
-# ViroSync Methods (Code-Verified, July 29, 2026)
+# ViroSync Methods (Code-Verified, August 5, 2026)
 
 
 ## Workflow summary
@@ -55,6 +55,10 @@ authenticated schema-v1 manifest. The resource builder can also emit a bound
 schema-v2 runtime artifact and source/repair artifact. The current public pin
 remains schema v1. Tool citations for these components are listed in “Tool
 citation map” below.
+
+Pixi does not install BATH. The optional frameshift screen requires
+`bathconvert` and `bathsearch` from the source revisions listed in
+[the frameshift screening guide](FRAMESHIFT_SCREENING.md).
 
 Resource setup:
 
@@ -151,6 +155,66 @@ infinite pyhmmer reporting thresholds and records all reported HMM hits
 for downstream validation. The June 2026 Python workflow-runner
 benchmark rerun used this no-HMM-reporting-cutoff mode, followed by the
 same marker-validation, boundary-refinement, and canonical output gates.
+
+Phase 1 can also run an opt-in nucleotide-level marker rescue screen. ViroSync
+streams the raw combined HMM file, selects profiles whose names match
+`VS[0-9]{6}`, converts the fresh text
+HMM with BATH, and searches the Phase 0 masked assembly with `bathsearch --fs`.
+Reporting and inclusion E-value thresholds are fixed at `1e-5`. The normalized
+table retains only hits with at least one BATH frameshift or stop event and uses
+0-based, half-open assembly coordinates. ViroSync extracts BATH's
+model-conditioned aligned amino-acid domain, removes alignment gaps, replaces
+literal stop codons with `X`, and searches the domain against the Tier-1 marker
+database with DIAMOND `blastp --sensitive`, E-value `1e-5`, and ten targets per
+query. A candidate must have a validated viral reference at 25% or greater
+identity, at least 50% VS-model coverage, and at least 50% DIAMOND query
+coverage. Overlapping same-strand candidates collapse to the highest-scoring
+HMM hit. Confirmed markers join the Phase 1 seed set before region assembly.
+Their amino-acid domains remain separate from the ordinary proteome and enter
+the FAA only for accepted overlapping EVEs. Phase 2 keeps rescue-derived and
+ordinary regions separate. The one-marker boundary floor applies to a
+rescue-derived region only when its confirmed rescued marker remains within
+the refined span. Phase 3 excludes a rescue-only candidate that loses all
+confirmed rescued markers. A rescue-seeded candidate can remain on retained
+ordinary marker support. Phase 3 compares each active rescue branch with every
+ordinary branch it directly overlaps. Rescue replaces the ordinary branches
+only when it beats all of them by confidence tier, or by final score when the
+tiers match.
+
+Set `phase1.frameshift_screening_enabled` to `true` or pass
+`--frameshift-screening` to enable the screen.
+ViroSync stops the run if a required BATH command is missing or the search
+fails. Setup and output details are in
+[the frameshift screening guide](FRAMESHIFT_SCREENING.md).
+
+The screen selects 808 VS HMMs: 576 renamed OG models, 215 added OG-backed
+models, and 17 CRESS models. The separate Bellas et al. 72-profile HMM set is
+not searched.
+
+The tracked frameshift smoke fixture contains 488,008 bp from three
+*Trichomonas vaginalis* G3 contigs: `DS113389.1` (116,627 bp), `DS113495.1`
+(92,297 bp), and `DS113200.1` (279,084 bp). These records belong to BioProject
+PRJNA16084 and assembly GCA_000002825.3. The fixture is stored at
+`example/frameshift/trichomonas-g3.fna` and runs through the full pipeline with
+`pixi run example-frameshift`.
+
+BATH event counts vary with its worker scheduling. Retained eight-thread G3
+runs returned 427, 428, and 433 event-bearing hits. Viral validation, coverage
+filters, and overlap deduplication retained 98-100 loci, with 97-98 same-model
+overlapping loci in each run pair. Three runs with seed 42 and a 2 Mb target
+block returned 428, 438, and 441 candidates. The same gates retained 99, 99,
+and 100 loci, with 97-99 same-model overlaps. The fixed target block did not
+remove BATH's worker-scheduling variation.
+
+A matched G3 Phase 1 benchmark used two eight-core array tasks on the same
+Dori node. The disabled arm took 683.97 seconds (11:23.97), while the enabled
+arm took 1,384.50 seconds (23:04.50). Frameshift rescue added 700.53 seconds
+(11:40.53), so enabled Phase 1 was 2.02 times as long. The enabled arm retained
+97 confirmed rescue markers from 18 VS models. It produced 8,730 seed regions
+versus 8,704 when disabled. Eighty-five enabled seeds contained a rescue
+marker, and 28 rescue-anchored regions did not overlap a disabled seed. These
+28 regions are Phase 1 candidates and must pass the later EVE acceptance
+gates.
 
 ### 2) Marker validation with small taxonomy DB
 
@@ -418,11 +482,18 @@ Top-level run files:
 - `run.log` (timing and run summary)
 - optional: `gvclass_results.tsv`
 
-The output schema version is 5. Both prediction TSVs contain
+The output schema version is 6. Both prediction TSVs contain
 `effective_eve_class`, with exactly one of `NCLDV`, `MIRUS`, `PPV`, `CRESS`,
 `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`. Canonical rows contribute to exactly
 one class total. Result parsing maps the `VP` and `PLV` aliases to the parent
 `PPV` class, and the `MIXED` alias to `VIRAL_UNKNOWN`.
+
+The detailed TSV field `canonical_selection_outcome` is `kept`,
+`normal_gate_rejected`, `rescue_marker_excluded`, `overlap_selected`,
+`overlap_suppressed_by:<candidate_id>`, or
+`unsupported_no_viral_evidence`. These values distinguish standard gate
+outcomes, lost rescue markers, direct overlap arbitration, and the post-ANI
+viral-evidence filter. The frameshift screening guide defines each value.
 
 The detailed TSV groups columns in this order:
 
@@ -490,6 +561,11 @@ shipped configs and compare their resource identities with this manifest and
 the database source record. Scheduled and release-tag smoke runs additionally
 perform a full resource verification, a clean shipped example, and an unchanged
 resume whose schema-v3 artifact identities and counts must match the clean run.
+The smoke workflow also runs the frameshift fixture once with
+`--frameshift-screening`, checks six detailed and three accepted candidates,
+validates output coordinates, requires nonempty confirmed-marker and rescued
+protein files, and requires an accepted per-EVE FAA record with a `_VSR`
+identifier.
 
 Recommended smoke test:
 
@@ -514,6 +590,17 @@ Expected operational targets for current resource pinning:
 
 - core resource DB version: `v1.0.6`
 - example batch status: `success`
+
+Frameshift smoke test:
+
+``` bash
+pixi run example-frameshift
+cat results/example-frameshift/batch_summary.tsv
+```
+
+The `trichomonas-g3` row should report `status=success`, `predictions=6`, and
+`accepted=3` with v1.0.6. Put the pinned BATH commands on `PATH` before
+running it.
 
 The Python genome-parallel workflow runner is the benchmarked ViroSync
 runtime. The harness in the sibling `virosync-bench` repository records

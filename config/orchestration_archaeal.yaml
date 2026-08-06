@@ -94,6 +94,8 @@ phase1:
   rebuild_db: false
   assembly_mode: default
   hmm_chunk_size: null
+  # Requires BATH; see docs/FRAMESHIFT_SCREENING.md.
+  frameshift_screening_enabled: false
   initial_window_bp: 10000
   initial_window_genes: 5
   min_markers_initial: 1

@@ -7,7 +7,11 @@ from typing import Optional
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.orchestration.runtime import call_task
-from virosync.orchestration.tasks import generate_outputs_task, hhg_seeding_task
+from virosync.orchestration.tasks import (
+    frameshift_screening_task,
+    generate_outputs_task,
+    hhg_seeding_task,
+)
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
@@ -62,6 +66,7 @@ def _run_phase1_subflow(
     hmm_database: Optional[Path],
     hmm_allowlist: Optional[Path],
     hmm_chunk_size: Optional[int],
+    frameshift_screening_enabled: bool,
     marker_faa_db: Optional[Path],
     marker_faa_dir: Optional[Path],
     marker_db: Optional[Path],
@@ -168,6 +173,7 @@ def _run_phase1_subflow(
     gene_data = None
     host_deviation_summary: dict | None = None
     merged_seeds = []
+    frameshift_hits = []
 
     phase1_state_path = output_dir / "phase1" / PHASE1_STATE_FILENAME
 
@@ -185,6 +191,23 @@ def _run_phase1_subflow(
         if not phase1_state_path.is_file():
             raise ValueError(
                 "authenticated Phase 1 is missing phase1/resume_state.json"
+            )
+        confirmed_frameshift_faa = (
+            output_dir
+            / "phase1"
+            / "frameshift_screening"
+            / "confirmed_frameshift_proteins.faa"
+        )
+        if frameshift_screening_enabled and not confirmed_frameshift_faa.is_file():
+            raise ValueError(
+                "authenticated Phase 1 is missing the confirmed frameshift protein FAA"
+            )
+        confirmed_frameshift_tsv = confirmed_frameshift_faa.with_name(
+            "confirmed_frameshift_markers.tsv"
+        )
+        if frameshift_screening_enabled and not confirmed_frameshift_tsv.is_file():
+            raise ValueError(
+                "authenticated Phase 1 is missing the confirmed frameshift marker table"
             )
         logger.info("Phase 1 resume: loading exact cached Phase-1 state")
         phase1_state = load_phase1_state(phase1_state_path)
@@ -305,6 +328,33 @@ def _run_phase1_subflow(
             "output_files": {},
         }
 
+    if frameshift_screening_enabled:
+        from virosync.pipeline.phase1.frameshift_screening import (
+            write_confirmed_frameshift_markers,
+        )
+
+        frameshift_hits = call_task(
+            frameshift_screening_task,
+            masked_fasta=masked_path,
+            hmm_database=Path(hmm_database),
+            output_dir=output_dir / "phase1" / "frameshift_screening",
+            threads=threads,
+        )
+        logger.info("Frameshift screening event-bearing hits: %d", len(frameshift_hits))
+        confirmed_frameshift_faa = (
+            output_dir
+            / "phase1"
+            / "frameshift_screening"
+            / "confirmed_frameshift_proteins.faa"
+        )
+        confirmed_frameshift_faa.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_write_context(confirmed_frameshift_faa, "w"):
+            pass
+        write_confirmed_frameshift_markers(
+            [],
+            confirmed_frameshift_faa.with_name("confirmed_frameshift_markers.tsv"),
+        )
+
     # Step 1: HMM search (raw hits only)
     logger.info("Step 1: Running HMM search...")
     hhg_seeds, hhg_hits = call_task(
@@ -324,8 +374,10 @@ def _run_phase1_subflow(
     )
     logger.info(f"HMM hits: {len(hhg_hits)}")
 
-    if not hhg_hits:
-        logger.warning("No HMM hits found - pipeline complete with 0 predictions")
+    if not hhg_hits and not frameshift_hits:
+        logger.warning(
+            "No protein HMM or frameshift hits found - pipeline complete with 0 predictions"
+        )
         elapsed_sec = time.time() - phase1_start
         output_files_empty = call_task(
             generate_outputs_task,
@@ -349,7 +401,7 @@ def _run_phase1_subflow(
             output_dir=output_dir,
             genome_id=genome_id,
             input_path=masked_path,
-            reason="no HMM hits",
+            reason="no protein HMM or frameshift hits",
             elapsed_sec=elapsed_sec,
             output_files=output_files,
             fingerprint=config_fingerprint,
@@ -370,6 +422,8 @@ def _run_phase1_subflow(
     )
     from virosync.pipeline.phase1.marker_validation import (
         NovelMarkerCriteria,
+        VALIDATED_PREFIXES,
+        VALIDATION_MIN_PIDENT,
         collect_host_signatures,
     )
     from virosync.pipeline.host_signatures import (
@@ -411,6 +465,86 @@ def _run_phase1_subflow(
             require_cluster=novel_marker_require_cluster,
         ),
     )
+    if frameshift_hits:
+        from Bio import SeqIO
+
+        from virosync.pipeline.phase1.frameshift_screening import (
+            rescued_protein_id,
+            select_confirmed_frameshift_markers,
+            write_confirmed_frameshift_faa,
+            write_confirmed_frameshift_markers,
+        )
+        from virosync.pipeline.phase1.hhg_seeding import HMMHit
+
+        frameshift_dir = output_dir / "phase1" / "frameshift_screening"
+        candidate_faa = frameshift_dir / "frameshift_candidates.faa"
+        candidate_lengths = {
+            record.id: len(record.seq) for record in SeqIO.parse(candidate_faa, "fasta")
+        }
+        frameshift_by_protein_id = {
+            rescued_protein_id(hit): hit for hit in frameshift_hits
+        }
+        rescue_hmm_hits = [
+            HMMHit(
+                query_name=protein_id,
+                target_name=hit.query_name,
+                score=hit.score,
+                evalue=hit.evalue,
+                domain_score=hit.score,
+                query_start=1,
+                query_end=candidate_lengths[protein_id],
+            )
+            for protein_id, hit in frameshift_by_protein_id.items()
+        ]
+        frameshift_validation_dir = frameshift_dir / "validation"
+        rescue_validation = call_task(
+            marker_validation_task,
+            hmm_hits=rescue_hmm_hits,
+            proteome_path=candidate_faa,
+            marker_db=combined_faa,
+            output_dir=frameshift_validation_dir,
+            genome_path=masked_path,
+            threads=threads,
+            taxonomy_labels_file=(
+                Path(taxonomy_labels_file) if taxonomy_labels_file else None
+            ),
+            taxonomy_weight_mode=taxonomy_weight_mode,
+            search_backend=search_backend,
+            max_seqs=marker_validation_top_k,
+            novel_criteria=NovelMarkerCriteria(
+                min_hmm_score=novel_marker_min_score,
+                min_hmm_coverage=novel_marker_min_coverage,
+                require_cluster=novel_marker_require_cluster,
+            ),
+        )
+        confirmed_frameshift_markers = select_confirmed_frameshift_markers(
+            rescue_validation,
+            frameshift_by_protein_id,
+            frameshift_validation_dir / "diamond_top10.tsv",
+            validated_prefixes=VALIDATED_PREFIXES,
+            min_pident=VALIDATION_MIN_PIDENT,
+        )
+        confirmed_faa = frameshift_dir / "confirmed_frameshift_proteins.faa"
+        confirmed_proteins = write_confirmed_frameshift_faa(
+            candidate_faa,
+            confirmed_frameshift_markers,
+            confirmed_faa,
+        )
+        write_confirmed_frameshift_markers(
+            confirmed_frameshift_markers,
+            frameshift_dir / "confirmed_frameshift_markers.tsv",
+        )
+        validated_markers.extend(confirmed_frameshift_markers)
+        logger.info(
+            "Frameshift rescue validation: candidates=%d diamond_validated=%d confirmed_loci=%d faa_records=%d",
+            len(frameshift_hits),
+            sum(
+                marker.validation_status == "validated"
+                for marker in rescue_validation
+            ),
+            len(confirmed_frameshift_markers),
+            confirmed_proteins,
+        )
     validated_counts = {
         "validated": 0,
         "validated_novel": 0,
@@ -686,6 +820,9 @@ def _run_phase1_subflow(
 
     # Simply convert candidate_regions to MergedSeed format for Phase 2
     # Boundary refinement will handle boundaries (no composition expansion needed)
+    from virosync.pipeline.phase1.frameshift_screening import (
+        is_rescued_protein_id,
+    )
     from virosync.pipeline.phase1.seed_merger import MergedSeed
 
     logger.info("Converting %d marker-based regions to seeds",
@@ -722,11 +859,20 @@ def _run_phase1_subflow(
                     evalue=getattr(marker, "hmm_evalue", 0.0),
                 )
             )
+        has_rescued_marker = any(
+            is_rescued_protein_id(marker.query_porf) for marker in region.markers
+        )
+        has_ordinary_marker = any(
+            not is_rescued_protein_id(marker.query_porf) for marker in region.markers
+        )
+        sources = ["hhg", "marker_validation"] if has_ordinary_marker else []
+        if has_rescued_marker:
+            sources.append("frameshift_rescue")
         merged_seeds.append(MergedSeed(
             scaffold=region.scaffold,
             start=region.start,
             end=region.end,
-            sources=["hhg", "marker_validation"],
+            sources=sources,
             confidence="high" if any(
                 is_mcp_gene(a.hallmark_gene) for a in anchors
             ) else "medium",

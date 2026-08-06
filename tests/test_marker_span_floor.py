@@ -15,6 +15,10 @@ from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     annotate_boundaries_with_marker_floor,
 )
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _is_marker_floor_recovery_candidate,
+)
+from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 
 
 def _marker(scaffold, start, end, status="validated", porf=None):
@@ -29,7 +33,15 @@ def _marker(scaffold, start, end, status="validated", porf=None):
     )
 
 
-def _boundary(scaffold, start, end, orig_start, orig_end, seed_id="seed"):
+def _boundary(
+    scaffold,
+    start,
+    end,
+    orig_start,
+    orig_end,
+    seed_id="seed",
+    seed_sources=None,
+):
     return RefinedBoundary(
         scaffold=scaffold,
         start=start,
@@ -37,6 +49,7 @@ def _boundary(scaffold, start, end, orig_start, orig_end, seed_id="seed"):
         seed_id=seed_id,
         original_start=orig_start,
         original_end=orig_end,
+        seed_sources=seed_sources or [],
     )
 
 
@@ -65,6 +78,61 @@ def test_floor_requires_two_validated_markers():
     assert n == 0
     assert b.marker_floor_start is None and b.marker_floor_end is None
     assert (b.start, b.end) == (3682, 10647)
+
+
+def test_rescue_boundary_allows_one_generated_rescue_marker_floor():
+    b = _boundary(
+        "S1",
+        3682,
+        10647,
+        orig_start=0,
+        orig_end=21500,
+        seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+    )
+    marker = _marker(
+        "S1",
+        600,
+        1200,
+        porf="S1_VSR0123456789abcdef|aa1-100",
+    )
+
+    n = annotate_boundaries_with_marker_floor([b], [marker])
+
+    assert n == 1
+    assert (b.start, b.end) == (3682, 10647)
+    assert (b.marker_floor_start, b.marker_floor_end) == (600, 10647)
+
+
+def test_ordinary_boundary_still_rejects_one_generated_rescue_marker_floor():
+    b = _boundary("S1", 3682, 10647, orig_start=0, orig_end=21500)
+    marker = _marker(
+        "S1",
+        600,
+        1200,
+        porf="S1_VSR0123456789abcdef|aa1-100",
+    )
+
+    assert annotate_boundaries_with_marker_floor([b], [marker]) == 0
+    assert b.marker_floor_start is None
+    assert b.marker_floor_end is None
+
+
+def test_floor_recovery_skips_overlap_loser_but_keeps_rescue_exclusion():
+    result = VerificationResult(
+        eve_id="candidate",
+        scaffold="S1",
+        start=0,
+        end=1_000,
+    )
+
+    result.canonical_selection_outcome = "overlap_suppressed_by:winner"
+    assert _is_marker_floor_recovery_candidate(result) is False
+
+    result.canonical_selection_outcome = "rescue_marker_excluded"
+    assert _is_marker_floor_recovery_candidate(result) is True
+
+    result.canonical_selection_outcome = "normal_gate_rejected"
+    assert _is_marker_floor_recovery_candidate(result) is True
 
 
 def test_floor_ignores_unvalidated_markers():

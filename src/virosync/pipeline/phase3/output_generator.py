@@ -302,6 +302,8 @@ class OutputGenerator:
         self._protein_counts_cache = None
         self._protein_to_models_cache = None  # NEW: Cache for protein-to-models mapping
         self._porfs_by_scaffold = None
+        self._rescued_protein_sequences = None
+        self._rescued_protein_descriptions = None
 
     @staticmethod
     def _eve_filename_components(
@@ -609,65 +611,60 @@ class OutputGenerator:
         if self._protein_counts_cache is not None:
             return self._protein_counts_cache
 
-        # Try to find validated_marker_hits.tsv
-        validated_hits_path = self._find_file(
-            [
-                Path("../phase1/marker_validation/validated_marker_hits.tsv"),
-                Path("../../phase1/marker_validation/validated_marker_hits.tsv"),
-                Path("phase1/marker_validation/validated_marker_hits.tsv"),
-            ]
-        )
-
-        if not validated_hits_path or not validated_hits_path.exists():
-            logger.warning("Phase 1 validated_marker_hits.tsv not found - marker display will show hit counts instead of protein counts")
+        validated_hits_paths = self._validated_marker_hit_paths()
+        if not validated_hits_paths:
+            logger.warning(
+                "Phase 1 marker-hit tables not found - marker display will "
+                "show hit counts instead of protein counts"
+            )
             self._protein_counts_cache = {}
             return self._protein_counts_cache
 
         # First collect all hits by interval
         hits_by_interval = []  # [(scaffold, start, end, base_protein, marker_group)]
 
-        try:
-            with open(validated_hits_path) as f:
-                # Skip header
-                next(f)
-                for line in f:
-                    fields = line.strip().split("\t")
-                    if len(fields) < 6:
-                        continue
+        for validated_hits_path in validated_hits_paths:
+            try:
+                with open(validated_hits_path) as f:
+                    # Skip header
+                    next(f)
+                    for line in f:
+                        fields = line.strip().split("\t")
+                        if len(fields) < 6:
+                            continue
 
-                    query_porf = fields[0]  # e.g., stena|contig_553_18|aa18-325
-                    scaffold = fields[1]     # e.g., stena|contig_553
-                    start = int(fields[2])
-                    end = int(fields[3])
-                    marker = fields[5]       # e.g., PLV_MCP_1
+                        query_porf = fields[0]
+                        scaffold = fields[1]
+                        start = int(fields[2])
+                        end = int(fields[3])
+                        marker = fields[5]
 
-                    # Extract base protein ID (remove |aa coordinates)
-                    if "|aa" in query_porf:
-                        base_protein = query_porf.rsplit("|aa", 1)[0]
-                    else:
-                        base_protein = query_porf
+                        if "|aa" in query_porf:
+                            base_protein = query_porf.rsplit("|aa", 1)[0]
+                        else:
+                            base_protein = query_porf
 
-                    # Determine marker group
-                    marker_lower = marker.lower()
-                    if marker_lower.startswith("plv_mcp"):
-                        marker_group = "PLV_MCP"
-                    elif marker_lower.startswith("vp_mcp"):
-                        marker_group = "VP_MCP"
-                    elif marker_lower.startswith("vp_atpase"):
-                        marker_group = "VP_ATPase"
-                    elif marker_lower.startswith("vp_penton"):
-                        marker_group = "VP_Penton"
-                    else:
-                        continue  # Skip other markers
+                        marker_lower = marker.lower()
+                        if marker_lower.startswith("plv_mcp"):
+                            marker_group = "PLV_MCP"
+                        elif marker_lower.startswith("vp_mcp"):
+                            marker_group = "VP_MCP"
+                        elif marker_lower.startswith("vp_atpase"):
+                            marker_group = "VP_ATPase"
+                        elif marker_lower.startswith("vp_penton"):
+                            marker_group = "VP_Penton"
+                        else:
+                            continue
 
-                    hits_by_interval.append(
-                        (scaffold, start, end, base_protein, marker_group)
-                    )
-
-        except Exception as e:
-            logger.warning(f"Error loading protein counts from Phase 1 data: {e}")
-            self._protein_counts_cache = {}
-            return self._protein_counts_cache
+                        hits_by_interval.append(
+                            (scaffold, start, end, base_protein, marker_group)
+                        )
+            except (OSError, StopIteration, ValueError) as error:
+                logger.warning(
+                    "Error loading protein counts from %s: %s",
+                    validated_hits_path,
+                    error,
+                )
 
         # Now assign hits to EVE regions
         protein_counts = {}
@@ -712,53 +709,66 @@ class OutputGenerator:
         import csv
         from collections import defaultdict
 
-        validated_hits_path = self._find_file([
-            Path("../phase1/marker_validation/validated_marker_hits.tsv"),
-            Path("../../phase1/marker_validation/validated_marker_hits.tsv"),
-            Path("phase1/marker_validation/validated_marker_hits.tsv"),
-        ])
-
-        if not validated_hits_path or not validated_hits_path.exists():
+        validated_hits_paths = self._validated_marker_hit_paths()
+        if not validated_hits_paths:
             logger.warning("validated_marker_hits.tsv not found - protein-pattern grouping unavailable")
             return {}, {}
 
         hits_by_scaffold = defaultdict(list)
         protein_to_models = defaultdict(set)
 
-        try:
-            with open(validated_hits_path) as f:
-                reader = csv.DictReader(f, delimiter='\t')
-                for row in reader:
-                    query_porf = row['query_porf']
-                    scaffold = row['scaffold']
-                    start = int(row['start'])
-                    end = int(row['end'])
-                    marker = row['hmm_target']
-                    status = row.get('validation_status', '')
+        for validated_hits_path in validated_hits_paths:
+            file_hits = defaultdict(list)
+            file_models = defaultdict(set)
+            try:
+                with open(validated_hits_path) as f:
+                    reader = csv.DictReader(f, delimiter='\t')
+                    for row in reader:
+                        query_porf = row['query_porf']
+                        scaffold = row['scaffold']
+                        start = int(row['start'])
+                        end = int(row['end'])
+                        marker = row['hmm_target']
+                        status = row.get('validation_status', '')
 
-                    # Only include validated markers
-                    if status not in ('validated', 'validated_novel'):
-                        continue
+                        # Only include validated markers
+                        if status not in ('validated', 'validated_novel'):
+                            continue
 
-                    # Extract base protein ID
-                    base_protein = query_porf.rsplit('|aa', 1)[0] if '|aa' in query_porf else query_porf
+                        # Extract base protein ID
+                        base_protein = query_porf.rsplit('|aa', 1)[0] if '|aa' in query_porf else query_porf
 
-                    # Index by scaffold for fast lookup
-                    hits_by_scaffold[scaffold].append((start, end, marker, status, base_protein))
+                        # Index by scaffold for fast lookup
+                        file_hits[scaffold].append(
+                            (start, end, marker, status, base_protein)
+                        )
 
-                    # Build protein-to-models mapping
-                    protein_to_models[base_protein].add(self._normalize_model_name(marker))
+                        # Build protein-to-models mapping
+                        file_models[base_protein].add(
+                            self._normalize_model_name(marker)
+                        )
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                logger.error(
+                    "Error parsing marker hits from %s: %s",
+                    validated_hits_path,
+                    error,
+                )
+                continue
+            for scaffold, hits in file_hits.items():
+                hits_by_scaffold[scaffold].extend(hits)
+            for protein, models in file_models.items():
+                protein_to_models[protein].update(models)
 
-            # Sort hits by start position for efficient overlap checking
-            for scaffold in hits_by_scaffold:
-                hits_by_scaffold[scaffold].sort(key=lambda x: x[0])
+        # Sort hits by start position for efficient overlap checking
+        for scaffold in hits_by_scaffold:
+            hits_by_scaffold[scaffold].sort(key=lambda x: x[0])
 
-            logger.info(f"Parsed {sum(len(v) for v in hits_by_scaffold.values())} validated marker hits from {validated_hits_path.name}")
-            return dict(hits_by_scaffold), dict(protein_to_models)
-
-        except Exception as e:
-            logger.error(f"Error parsing {validated_hits_path}: {e}")
-            return {}, {}
+        logger.info(
+            "Parsed %d validated marker hits from %d files",
+            sum(len(v) for v in hits_by_scaffold.values()),
+            len(validated_hits_paths),
+        )
+        return dict(hits_by_scaffold), dict(protein_to_models)
 
     def _build_region_protein_mapping(
         self,
@@ -820,39 +830,68 @@ class OutputGenerator:
             ]
         )
 
+    def _find_confirmed_frameshift_marker_hits(self) -> Optional[Path]:
+        return self._find_file(
+            [
+                Path("phase1/frameshift_screening/confirmed_frameshift_markers.tsv"),
+                Path("../phase1/frameshift_screening/confirmed_frameshift_markers.tsv"),
+                Path("../../phase1/frameshift_screening/confirmed_frameshift_markers.tsv"),
+            ]
+        )
+
+    def _validated_marker_hit_paths(self) -> list[Path]:
+        return [
+            path
+            for path in (
+                self._find_validated_marker_hits(),
+                self._find_confirmed_frameshift_marker_hits(),
+            )
+            if path is not None
+        ]
+
+    def _find_confirmed_frameshift_proteins(self) -> Optional[Path]:
+        return self._find_file(
+            [
+                Path("phase1/frameshift_screening/confirmed_frameshift_proteins.faa"),
+                Path("../phase1/frameshift_screening/confirmed_frameshift_proteins.faa"),
+                Path("../../phase1/frameshift_screening/confirmed_frameshift_proteins.faa"),
+            ]
+        )
+
     def _load_marker_hits(self) -> dict[str, list[tuple[int, int, str, str, str, float]]]:
         if self._marker_hits is not None:
             return self._marker_hits
 
         hits_by_scaffold: dict[str, list[tuple[int, int, str, str, str, float]]] = {}
-        hits_path = self._find_validated_marker_hits()
-        if not hits_path or not hits_path.exists():
+        hits_paths = self._validated_marker_hit_paths()
+        if not hits_paths:
             self._marker_hits = hits_by_scaffold
             return hits_by_scaffold
 
-        with open(hits_path) as handle:
-            header = handle.readline().rstrip("\n").split("\t")
-            idx = {name: i for i, name in enumerate(header)}
-            for line in handle:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 7:
-                    continue
-                scaffold = parts[idx.get("scaffold", 1)]
-                try:
-                    start = int(parts[idx.get("start", 2)])
-                    end = int(parts[idx.get("end", 3)])
-                except ValueError:
-                    continue
-                target = parts[idx.get("hmm_target", 5)]
-                status = parts[idx.get("validation_status", 7)]
-                porf_id = parts[idx.get("query_porf", 0)]
-                try:
-                    hmm_score = float(parts[idx.get("hmm_score", 6)])
-                except (ValueError, IndexError):
-                    hmm_score = 0.0
-                hits_by_scaffold.setdefault(scaffold, []).append(
-                    (start, end, target, status, porf_id, hmm_score)
-                )
+        for hits_path in hits_paths:
+            with open(hits_path) as handle:
+                header = handle.readline().rstrip("\n").split("\t")
+                idx = {name: i for i, name in enumerate(header)}
+                for line in handle:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 7:
+                        continue
+                    scaffold = parts[idx.get("scaffold", 1)]
+                    try:
+                        start = int(parts[idx.get("start", 2)])
+                        end = int(parts[idx.get("end", 3)])
+                    except ValueError:
+                        continue
+                    target = parts[idx.get("hmm_target", 5)]
+                    status = parts[idx.get("validation_status", 7)]
+                    porf_id = parts[idx.get("query_porf", 0)]
+                    try:
+                        hmm_score = float(parts[idx.get("hmm_score", 6)])
+                    except (ValueError, IndexError):
+                        hmm_score = 0.0
+                    hits_by_scaffold.setdefault(scaffold, []).append(
+                        (start, end, target, status, porf_id, hmm_score)
+                    )
 
         for scaffold in hits_by_scaffold:
             hits_by_scaffold[scaffold].sort(key=lambda x: x[0])
@@ -893,17 +932,29 @@ class OutputGenerator:
             return self._porfs_by_scaffold
 
         porfs: dict[str, list[tuple[int, int, str]]] = {}
-        if not self.proteome_fasta:
-            return porfs
-        for record in SeqIO.parse(self.proteome_fasta, "fasta"):
-            parsed = parse_prodigal_header(record.description, record.id)
-            if not parsed:
-                continue
-            scaffold, start, end, _strand = parsed
-            porfs.setdefault(scaffold, []).append((start, end, record.id))
+        rescued_sequences: dict[str, str] = {}
+        rescued_descriptions: dict[str, str] = {}
+        sources: list[tuple[Path, bool]] = []
+        if self.proteome_fasta:
+            sources.append((Path(self.proteome_fasta), False))
+        rescued_fasta = self._find_confirmed_frameshift_proteins()
+        if rescued_fasta:
+            sources.append((rescued_fasta, True))
+        for source, is_rescued in sources:
+            for record in SeqIO.parse(source, "fasta"):
+                parsed = parse_prodigal_header(record.description, record.id)
+                if not parsed:
+                    continue
+                scaffold, start, end, _strand = parsed
+                porfs.setdefault(scaffold, []).append((start, end, record.id))
+                if is_rescued:
+                    rescued_sequences[record.id] = str(record.seq)
+                    rescued_descriptions[record.id] = record.description[len(record.id) :].strip()
         for scaffold in porfs:
             porfs[scaffold].sort()
         self._porfs_by_scaffold = porfs
+        self._rescued_protein_sequences = rescued_sequences
+        self._rescued_protein_descriptions = rescued_descriptions
         return porfs
 
     def _protein_records_for_region(
@@ -919,13 +970,20 @@ class OutputGenerator:
             if porf_start >= end or porf_end <= start:
                 continue
             seq = self.proteome_sequences.get(porf_id)
+            description = ""
+            if not seq and self._rescued_protein_sequences:
+                seq = self._rescued_protein_sequences.get(porf_id)
+                description = (self._rescued_protein_descriptions or {}).get(
+                    porf_id,
+                    "frameshift_rescued_domain",
+                )
             if not seq:
                 continue
             eve_proteins.append(
                 SeqRecord(
                     Seq(seq),
                     id=porf_id,
-                    description="",
+                    description=description,
                 )
             )
         return eve_proteins
@@ -1472,6 +1530,7 @@ class OutputGenerator:
             reverse=True,
         )
         porfs_by_scaffold = self._load_porfs_by_scaffold()
+        rescued_protein_ids = set(self._rescued_protein_sequences or {})
         diamond_flags = self._load_diamond_top10_flags()
         hmm_targets = self._load_hmm_targets()
         marker_hits_by_scaffold = self._load_marker_hits()
@@ -1494,7 +1553,11 @@ class OutputGenerator:
             for r in results:
                 porfs = []
                 for p_start, p_end, porf_id in porfs_by_scaffold.get(r.scaffold, []):
-                    if p_start < r.end and p_end > r.start:
+                    if (
+                        porf_id not in rescued_protein_ids
+                        and p_start < r.end
+                        and p_end > r.start
+                    ):
                         porfs.append(porf_id)
 
                 region_key = (r.scaffold, r.start, r.end)
@@ -1660,6 +1723,9 @@ class OutputGenerator:
                     ),
                     "seed_sources": (
                         "|".join(sorted(r.seed_sources)) if r.seed_sources else "."
+                    ),
+                    "canonical_selection_outcome": (
+                        r.canonical_selection_outcome or "."
                     ),
                     "hallmark_total": str(
                         hallmark_total if hallmark_total else r.hallmark_count
@@ -2236,8 +2302,8 @@ class OutputGenerator:
                 require_strict_child(nuc_dir, output_path)
                 SeqIO.write([record], output_path, "fasta")
 
-        # Write protein sequences (if proteome available)
-        if self.proteome_sequences:
+        # Write ordinary proteins and any confirmed frameshift-rescued domains.
+        if self.proteome_sequences or self._find_confirmed_frameshift_proteins():
             prot_dir = output_dir / "protein"
             prot_dir.mkdir(exist_ok=True)
 
@@ -2303,8 +2369,8 @@ class OutputGenerator:
                 require_strict_child(nuc_dir, output_path)
                 SeqIO.write([record], output_path, "fasta")
 
-        # Write protein sequences (if proteome available)
-        if self.proteome_sequences:
+        # Write ordinary proteins and any confirmed frameshift-rescued domains.
+        if self.proteome_sequences or self._find_confirmed_frameshift_proteins():
             prot_dir = output_dir / "protein"
             prot_dir.mkdir(exist_ok=True)
 

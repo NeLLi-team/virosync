@@ -1262,7 +1262,7 @@ def test_duplicate_final_outputs_must_agree(
         content = (
             mocked_pipeline.output_dir / source_relative
         ).read_text().replace("0.91", "0.92")
-        schema = "canonical-predictions-v5"
+        schema = "canonical-predictions-v6"
         expected_error = "duplicate canonical prediction tables disagree"
     else:
         source_relative = next(

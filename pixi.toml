@@ -84,8 +84,9 @@ virosync = "PYTHONPATH=src python -m virosync.cli.main"
 run = { cmd = "PYTHONPATH=src python -m virosync.cli.main run", depends-on = ["setup-databases"] }
 
 # === Example / Quick Start ===
-# Minimal example genome shipped in example/
+# Example genomes shipped in example/
 example = { cmd = "PYTHONPATH=src python -m virosync.cli.main run -i example/ -o results/example/ --config config/orchestration.yaml -w 1 --threads-per-worker 8 --clean-run", depends-on = ["setup-databases"] }
+example-frameshift = { cmd = "PYTHONPATH=src python -m virosync.cli.main run -i example/frameshift/trichomonas-g3.fna -o results/example-frameshift/ --config config/orchestration.yaml -w 1 --threads-per-worker 8 --frameshift-screening --clean-run", depends-on = ["setup-databases"] }
 
 # === Database Setup ===
 # Provision resources (downloads + config path updates) and then validate DB files.

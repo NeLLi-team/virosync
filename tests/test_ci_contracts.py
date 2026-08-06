@@ -72,12 +72,35 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "schedule:" in workflow and "workflow_dispatch:" in workflow
     assert "tags:" in workflow and '"v*"' in workflow
     assert "resources verify" in workflow and "--full" in workflow
-    assert workflow.count("pixi run virosync") >= 3
-    assert workflow.count("--clean-run") == 1
+    assert workflow.count("pixi run virosync") >= 4
+    assert workflow.count("--clean-run") == 2
     assert "--write-snapshot" in workflow
     assert "--compare-snapshot" in workflow
     assert "--require-resume" in workflow
-    assert workflow.count("--expect-predictions 6") == 2
+    assert workflow.count("--expect-predictions 6") == 3
     assert workflow.count("--expect-accepted 1") == 2
-    assert workflow.count("check_coordinate_outputs.py") == 2
+    assert workflow.count("--expect-accepted 3") == 1
+    assert workflow.count("check_coordinate_outputs.py") == 3
     assert "results/ci_example/*/run.log" not in workflow
+    assert "example/frameshift/trichomonas-g3.fna" in workflow
+    assert "--frameshift-screening" in workflow
+    assert workflow.count("--threads-per-worker 8") == 1
+    assert "awk 'END { exit NR < 2 }'" in workflow
+    assert "'^>.*_VSR'" in workflow
+    assert "7842ebd58b96591b4b60863ee5c33e49eb79eccc" in workflow
+    assert "0f4e71832d6ba1e4c65039ba4b4663c546a041fa" in workflow
+    assert '>> "$GITHUB_PATH"' in workflow
+
+
+def test_frameshift_example_task_is_explicit_opt_in() -> None:
+    pixi = _text(ROOT / "pixi.toml")
+    task = next(
+        line
+        for line in pixi.splitlines()
+        if line.startswith("example-frameshift = ")
+    )
+    assert "example/frameshift/trichomonas-g3.fna" in task
+    assert "results/example-frameshift/" in task
+    assert "--frameshift-screening" in task
+    assert "--clean-run" in task
+    assert 'depends-on = ["setup-databases"]' in task

@@ -159,6 +159,7 @@ _FINGERPRINT_SCALAR_FIELDS = (
     "rebuild_db",
     "assembly_mode",
     "hmm_chunk_size",
+    "frameshift_screening_enabled",
     "initial_window_bp",
     "initial_window_genes",
     "min_markers_initial",
