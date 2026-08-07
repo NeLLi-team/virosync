@@ -32,63 +32,9 @@ are ignored local agent state. These paths are not part of the distribution.
 
 ## Workflow
 
-ViroSync follows a four-phase workflow.
+ViroSync processes each genome in four phases.
 
-```text
-                         ┌──────────────────────────────┐
-                         │   Eukaryotic genome (FASTA)  │
-                         └──────────────┬───────────────┘
-                                        │
-                ╔═══════════════════════▼═══════════════════════╗
-                ║                   PHASE 0                     ║
-                ║                Pre-processing                 ║
-                ║  ─────────────────────────────────────────── ║
-                ║   • optional repeat masking                   ║
-                ║   • protein prediction with prodigal-gv       ║
-                ╚═══════════════════════╤═══════════════════════╝
-                                        │ proteins + contigs
-                ╔═══════════════════════▼═══════════════════════╗
-                ║                   PHASE 1                     ║
-                ║         EVE Seed Region Prediction            ║
-                ║  ─────────────────────────────────────────── ║
-                ║   • pyhmmer scan of marker HMMs               ║
-                ║   • Pfam arbitration of multi-model hits      ║
-                ║   • marker hit taxonomy validation            ║
-                ║   • infer host signature                      ║
-                ║   • seed region assembly                      ║
-                ╚═══════════════════════╤═══════════════════════╝
-                                        │ seed regions
-                ╔═══════════════════════▼═══════════════════════╗
-                ║                   PHASE 2                     ║
-                ║            Boundary Refinement                ║
-                ║  ─────────────────────────────────────────── ║
-                ║   • batched gene-taxonomy search              ║
-                ║   • host-aware boundary trimming              ║
-                ║   • gene-anchored extension/contraction       ║
-                ╚═══════════════════════╤═══════════════════════╝
-                                        │ refined candidates
-                ╔═══════════════════════▼═══════════════════════╗
-                ║                   PHASE 3                     ║
-                ║      Evidence Synthesis & Scoring             ║
-                ║  ─────────────────────────────────────────── ║
-                ║   marker · taxonomy · compositional evidence  ║
-                ║   ┌─────────────────────────────────────┐    ║
-                ║   │  Optional annotation layers         │    ║
-                ║   │   ◦ TMVec  (structural similarity)  │    ║
-                ║   │   ◦ InterProScan  (domains)         │    ║
-                ║   │   ◦ Boltz / Foldseek                │    ║
-                ║   └─────────────────────────────────────┘    ║
-                ║   • confidence tiering (HIGH/MEDIUM/LOW)      ║
-                ║   • v2 acceptance quality gate                ║
-                ╚═══════════════════════╤═══════════════════════╝
-                                        │
-              ┌─────────────────────────┼─────────────────────────┐
-              ▼                         ▼                         ▼
-   ┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐
-   │ predictions.tsv    │    │   eves.fna (FASTA) │    │ summary.json /     │
-   │ predictions.gff3   │    │   bed / detailed   │    │ batch_summary.tsv  │
-   └────────────────────┘    └────────────────────┘    └────────────────────┘
-```
+![ViroSync workflow with Pfam marker validation and optional frameshift-sensitive marker rescue](docs/virosync_workflow.png)
 
 1. Phase 0: optional repeat masking and protein prediction with `prodigal-gv`.
 2. Phase 1: pyhmmer marker discovery, Pfam arbitration when the resource
