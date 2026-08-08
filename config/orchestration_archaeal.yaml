@@ -101,7 +101,11 @@ phase1:
   min_markers_initial: 1
   extension_kb: 5
   merge_distance: 1000
-  host_taxonomy_deviation_enabled: true
+  # Disabled: identify_host_deviation_markers and filter_deviation_seed_markers
+  # were never implemented, so enabling this raises ImportError at the start of
+  # Phase 1 and the run processes nothing. The tuned keys below are kept as the
+  # record of the intended design.
+  host_taxonomy_deviation_enabled: false
   host_taxonomy_deviation_allow_seeds: true
   host_taxonomy_deviation_min_token_len: 6
   host_taxonomy_deviation_min_tokens: 3

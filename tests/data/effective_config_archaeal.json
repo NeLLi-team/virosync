@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "6cac479de79df4ea402da482da398c106ce2bd7c268370436df6b62f4f5477ca",
+  "effective_config_sha256": "6d608bf7bee3fceb4a022c8142095797d35a073c601c816b5e969c699a71155a",
   "execution": {
     "masking": {
       "backend": "off",
@@ -131,7 +131,7 @@
     "frameshift_screening_enabled": false,
     "hmm_chunk_size": null,
     "host_taxonomy_deviation_allow_seeds": true,
-    "host_taxonomy_deviation_enabled": true,
+    "host_taxonomy_deviation_enabled": false,
     "host_taxonomy_deviation_max_hits": 5,
     "host_taxonomy_deviation_max_pident": 70.0,
     "host_taxonomy_deviation_min_token_len": 6,
