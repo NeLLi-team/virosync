@@ -15,27 +15,50 @@ gene-taxonomy searches.
 ## Install BATH
 
 BATH is not available from ViroSync's configured conda-forge and bioconda
-channels. Build the tested revisions from source in a compute environment:
+channels, so it cannot be a pixi dependency. Build it with:
+
+```bash
+pixi run setup-bath
+```
+
+This builds the tested revisions into `.bath/` and is idempotent, so it
+returns immediately once installed. Pass `--force` to rebuild:
+`bash scripts/install_bath.sh --force`. `pixi.toml` puts `.bath/bin` on `PATH`
+for every task, so no manual export is needed and `pixi run example-frameshift`
+works straight afterwards.
+
+Run it once before the frameshift example. It is deliberately not a dependency
+of `example-frameshift`, which stays an explicit opt-in pinned by
+`tests/test_ci_contracts.py::test_frameshift_example_task_is_explicit_opt_in`.
+
+Check both entrypoints:
+
+```bash
+pixi run bathconvert -h
+pixi run bathsearch -h
+```
+
+### Building by hand
+
+`scripts/install_bath.sh` runs the steps below. Two of them differ from the
+upstream instructions. A plain clone of easel does not contain the pinned
+commit, so it must be fetched by SHA or `git checkout` fails with
+`unable to read tree`. And the repository ships only `configure.ac`, so
+`configure` has to be generated; `autoconf` is not a project dependency, and
+`pixi exec` supplies it for that one command without changing the manifest.
 
 ```bash
 git clone https://github.com/TravisWheelerLab/BATH.git
 git -C BATH checkout 7842ebd58b96591b4b60863ee5c33e49eb79eccc
 git clone https://github.com/EddyRivasLab/easel.git BATH/easel
+git -C BATH/easel fetch origin 0f4e71832d6ba1e4c65039ba4b4663c546a041fa
 git -C BATH/easel checkout 0f4e71832d6ba1e4c65039ba4b4663c546a041fa
 cd BATH
-autoconf
-./configure --prefix=/absolute/path/to/bath-2.0.0-rc4
+pixi exec --spec autoconf --spec m4 --spec perl -- autoconf
+./configure --prefix=/absolute/path/to/bath
 make -j 16
-make check
 make install
-```
-
-Put the installed commands on `PATH` and check both entrypoints:
-
-```bash
-export PATH=/absolute/path/to/bath-2.0.0-rc4/bin:$PATH
-bathconvert -h
-bathsearch -h
+export PATH=/absolute/path/to/bath/bin:$PATH
 ```
 
 The ViroSync CLI checks both commands before Phase 0 and stops if either is

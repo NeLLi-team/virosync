@@ -185,3 +185,6 @@ EXPERIENCES.md
 
 # Local working data and scratch (not part of the distribution)
 del/
+
+# BATH build for the optional frameshift screen (pixi run setup-bath)
+.bath/

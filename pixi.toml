@@ -71,6 +71,12 @@ papermill = ">=2.6"
 nbformat = ">=5.9"
 jupytext = ">=1.16"
 
+[activation.env]
+# BATH is not in conda-forge or bioconda, so `pixi run setup-bath` builds it
+# into .bath/. Putting it on PATH here is what makes the frameshift screen
+# usable from every task. Harmless when .bath/ does not exist.
+PATH = "$PIXI_PROJECT_ROOT/.bath/bin:$PATH"
+
 [tasks]
 # Unified CLI entrypoint.  Bare `-i/-o` invocations are auto-forwarded to
 # `run` by the CLI, so all subcommands work through this single task:
@@ -95,6 +101,11 @@ example-frameshift = { cmd = "PYTHONPATH=src python -m virosync.cli.main run -i 
 setup-virosync-resources = "PYTHONPATH=src python -m virosync.cli.main orchestrate setup --config config/orchestration.yaml --no-interactive-optional --no-write-config"
 setup-databases = { cmd = "echo 'ViroSync resource setup complete.'", depends-on = ["setup-virosync-resources"] }
 check-structural-runtime = "PYTHONPATH=src python scripts/check_structural_runtime.py --config config/orchestration.yaml"
+
+# === Frameshift screening (optional) ===
+# Builds BATH from the revisions pinned in docs/FRAMESHIFT_SCREENING.md into
+# .bath/. Required by `example-frameshift` and any --frameshift-screening run.
+setup-bath = "bash scripts/install_bath.sh"
 
 # === Development ===
 lint = "ruff check src tests scripts"

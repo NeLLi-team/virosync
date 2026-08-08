@@ -94,6 +94,9 @@ jobs:
           git clone https://github.com/TravisWheelerLab/BATH.git "$bath_root/BATH"
           git -C "$bath_root/BATH" checkout 7842ebd58b96591b4b60863ee5c33e49eb79eccc
           git clone https://github.com/EddyRivasLab/easel.git "$bath_root/BATH/easel"
+          # The pinned commit is not reachable from any branch, so a plain clone
+          # does not contain it and checkout fails with "unable to read tree".
+          git -C "$bath_root/BATH/easel" fetch origin 0f4e71832d6ba1e4c65039ba4b4663c546a041fa
           git -C "$bath_root/BATH/easel" checkout 0f4e71832d6ba1e4c65039ba4b4663c546a041fa
           cd "$bath_root/BATH"
           autoconf
