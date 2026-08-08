@@ -139,24 +139,6 @@ class GVClassValidation:
             # Very low score but leave room for override by other evidence
             return 0.1
 
-    def to_dict(self) -> dict:
-        is_viral_val = self.is_viral
-        return {
-            "eve_id": self.eve_id,
-            "domain": self.domain,
-            "domain_percent": self.domain_percent,
-            "all_domains": {k: {"count": v[0], "percent": v[1]} for k, v in self.all_domains.items()},
-            "mcp_count": self.mcp_count,
-            "mirus_count": self.mirus_count,
-            "gvog_count": self.gvog_count,
-            "total_markers": self.total_markers,
-            "is_viral": is_viral_val if is_viral_val is not None else "uncertain",
-            "is_non_viral": self.is_non_viral,
-            "is_uncertain": self.is_uncertain,
-            "has_viral_in_neighbors": self.has_viral_in_neighbors,
-            "confidence_score": self.confidence_score,
-        }
-
 
 @dataclass
 class DiamondValidation:
@@ -211,12 +193,10 @@ class DiamondValidation:
         if self.proteins_with_hits == 0:
             return 0.0
 
-        # Calculate entropy of domain distribution
-        total = sum(self.domain_counts.values())
-        if total == 0:
+        if sum(self.domain_counts.values()) == 0:
             return 0.0
 
-        # Simple metric: fraction of minority domains
+        # Coarse banding on the dominant domain's share; not an entropy.
         if self.best_domain_percent >= 90:
             return 0.1  # Very clean
         elif self.best_domain_percent >= 70:
@@ -244,22 +224,6 @@ class DiamondValidation:
             return False
         # Fall back to domain_counts
         return any(dom in viral_domains for dom in self.domain_counts.keys())
-
-    def to_dict(self) -> dict:
-        return {
-            "eve_id": self.eve_id,
-            "total_proteins": self.total_proteins,
-            "proteins_with_hits": self.proteins_with_hits,
-            "domain_counts": self.domain_counts,
-            "best_domain": self.best_domain,
-            "best_domain_percent": self.best_domain_percent,
-            "viral_protein_count": self.viral_protein_count,
-            "non_viral_protein_count": self.non_viral_protein_count,
-            "is_viral": self.is_viral,
-            "has_viral_in_neighbors": self.has_viral_in_neighbors,
-            "confidence_score": self.confidence_score,
-            "contamination_score": self.contamination_score,
-        }
 
 
 @dataclass
@@ -380,24 +344,6 @@ class PhylogeneticValidationResult:
         return self.verdict in {
             PhylogeneticVerdict.CONFIRMED_NON_VIRAL,
             PhylogeneticVerdict.LIKELY_NON_VIRAL,
-        }
-
-    def to_dict(self) -> dict:
-        return {
-            "eve_id": self.eve_id,
-            "scaffold": self.scaffold,
-            "start": self.start,
-            "end": self.end,
-            "verdict": self.verdict.value,
-            "combined_score": self.combined_score,
-            "has_mcp": self.has_mcp,
-            "has_viral_markers": self.has_viral_markers,
-            "is_chimeric": self.is_chimeric,
-            "supports_viral": self.supports_viral,
-            "rejects_viral": self.rejects_viral,
-            "has_viral_in_any_neighbor": self.has_viral_in_any_neighbor,
-            "gvclass": self.gvclass.to_dict() if self.gvclass else None,
-            "diamond": self.diamond.to_dict() if self.diamond else None,
         }
 
 
@@ -595,7 +541,7 @@ class PhylogeneticValidator:
     ) -> Optional[GVClassValidation]:
         """Parse GVClass summary file, capturing ALL domains from nearest neighbors."""
         with open(summary_path) as f:
-            header = f.readline()  # Skip header
+            f.readline()  # Skip header
             for line in f:
                 if not line.strip():
                     continue
@@ -810,98 +756,3 @@ class PhylogeneticValidator:
             non_viral_protein_count=non_viral_count,
             all_hits_per_query=all_hits_per_query,
         )
-
-    def validate_batch(
-        self,
-        regions: list[tuple[str, str, int, int]],  # (eve_id, scaffold, start, end)
-        run_gvclass: bool = True,
-        run_diamond: bool = True,
-    ) -> list[PhylogeneticValidationResult]:
-        """
-        Validate multiple EVE regions.
-
-        Args:
-            regions: List of (eve_id, scaffold, start, end) tuples
-            run_gvclass: Whether to run GVClass
-            run_diamond: Whether to run Diamond
-
-        Returns:
-            List of PhylogeneticValidationResult objects
-        """
-        results = []
-
-        for eve_id, scaffold, start, end in regions:
-            logger.info(f"Validating {eve_id} ({scaffold}:{start}-{end})")
-            result = self.validate_eve(
-                eve_id, scaffold, start, end,
-                run_gvclass=run_gvclass,
-                run_diamond=run_diamond,
-            )
-            results.append(result)
-
-            logger.info(
-                f"  Verdict: {result.verdict.value} "
-                f"(score={result.combined_score:.3f}, MCP={result.has_mcp})"
-            )
-
-        return results
-
-
-def validate_eve_regions(
-    regions: list[tuple[str, str, int, int]],
-    genome_path: Path,
-    work_dir: Path,
-    gvclass_db: Optional[Path] = None,
-    diamond_db: Optional[Path] = None,
-    threads: int = 16,
-) -> list[PhylogeneticValidationResult]:
-    """
-    Main entry point for Phase 3 phylogenetic validation.
-
-    Args:
-        regions: List of (eve_id, scaffold, start, end) tuples
-        genome_path: Path to input genome FASTA
-        work_dir: Working directory
-        gvclass_db: Optional GVClass database
-        diamond_db: Optional Diamond database
-        threads: Number of threads
-
-    Returns:
-        List of validation results
-    """
-    logger.info("=" * 60)
-    logger.info("Phase 3: Phylogenetic Validation")
-    logger.info("=" * 60)
-
-    if not regions:
-        logger.info("No regions to validate")
-        return []
-
-    validator = PhylogeneticValidator(
-        genome_path=genome_path,
-        work_dir=work_dir,
-        gvclass_db=gvclass_db,
-        diamond_db=diamond_db,
-        threads=threads,
-    )
-
-    results = validator.validate_batch(
-        regions,
-        run_gvclass=True,
-        run_diamond=diamond_db is not None,
-    )
-
-    # Summary
-    confirmed = sum(1 for r in results if r.verdict == PhylogeneticVerdict.CONFIRMED_VIRAL)
-    likely = sum(1 for r in results if r.verdict == PhylogeneticVerdict.LIKELY_VIRAL)
-    ambiguous = sum(1 for r in results if r.verdict == PhylogeneticVerdict.AMBIGUOUS)
-    rejected = sum(1 for r in results if r.rejects_viral)
-
-    logger.info("Phylogenetic validation complete:")
-    logger.info(f"  Total regions: {len(results)}")
-    logger.info(f"  Confirmed viral: {confirmed}")
-    logger.info(f"  Likely viral: {likely}")
-    logger.info(f"  Ambiguous: {ambiguous}")
-    logger.info(f"  Likely/confirmed non-viral: {rejected}")
-
-    return results

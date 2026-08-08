@@ -190,11 +190,6 @@ def test_ablation_configuration_is_closed_and_digest_bound() -> None:
         )
 
 
-def test_retired_flat_parser_is_targeted_error() -> None:
-    with pytest.raises(ConfigError, match="Flat pipeline configuration"):
-        PipelineConfig._from_flat_dict({"threads": 4})
-
-
 @pytest.mark.parametrize(
     ("data", "message"),
     [

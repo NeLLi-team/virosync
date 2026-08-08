@@ -37,44 +37,6 @@ def _write_proteome(path: Path) -> None:
     path.write_text(">contig_1_1 # 1 # 90 # + # ID=1_1;\nMPEPTIDE\n")
 
 
-def test_single_gene_taxonomy_encodes_raw_eve_paths(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    raw_id = "../EVE_NODE/1"
-    component = safe_filename_component(raw_id)
-    proteome = tmp_path / "proteome.faa"
-    _write_proteome(proteome)
-    output_dir = tmp_path / "taxonomy"
-    parent_sentinel = tmp_path / "sentinel.txt"
-    parent_sentinel.write_bytes(b"parent sentinel\n")
-    diamond_paths: list[Path] = []
-
-    def _fake_diamond(**kwargs) -> None:
-        output_file = Path(kwargs["output_file"])
-        diamond_paths.append(output_file)
-        output_file.write_text("")
-
-    monkeypatch.setattr(gene_taxonomy, "run_diamond_blastp", _fake_diamond)
-
-    taxonomies, summary = gene_taxonomy.run_gene_taxonomy_diamond(
-        eve_id=raw_id,
-        scaffold="contig_1",
-        start=0,
-        end=100,
-        proteome_fasta=proteome,
-        combined_faa_db=tmp_path / "database.dmnd",
-        output_dir=output_dir,
-    )
-
-    assert len(taxonomies) == 1
-    assert summary["total"] == 1
-    assert diamond_paths == [output_dir / f"{component}_diamond.tsv"]
-    assert (output_dir / f"{component}.tsv").is_file()
-    assert not (tmp_path / "EVE_NODE").exists()
-    assert parent_sentinel.read_bytes() == b"parent sentinel\n"
-
-
 def test_batch_gene_taxonomy_encodes_paths_but_preserves_raw_result_key(
     tmp_path: Path,
     monkeypatch,

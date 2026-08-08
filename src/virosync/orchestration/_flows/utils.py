@@ -4,7 +4,6 @@ Shared utilities for ViroSync orchestration functions.
 Internal module - import from virosync.orchestration.flows instead.
 """
 
-import fnmatch
 import inspect
 from pathlib import Path
 from typing import Any, Optional
@@ -131,19 +130,6 @@ def _merge_config_with_kwargs(
             merged[key] = value
 
     return merged
-
-
-def _matches_allowlist(name: str, allowlist: Optional[list[str]]) -> bool:
-    """Check if a name matches an allowlist of patterns."""
-    if not allowlist:
-        return True
-    for pattern in allowlist:
-        if "*" in pattern or "?" in pattern:
-            if fnmatch.fnmatchcase(name, pattern):
-                return True
-        elif name == pattern:
-            return True
-    return False
 
 
 def log_region_statistics(

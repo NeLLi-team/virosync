@@ -2455,38 +2455,3 @@ class OutputGenerator:
             logger.warning(f"No EVE sequences to write to {output_path}")
 
         return output_path
-
-
-def generate_outputs(
-    results: list[VerificationResult],
-    output_dir: Path,
-    genome_fasta: Optional[Path] = None,
-    proteome_fasta: Optional[Path] = None,
-    extended_output: bool = True,
-    seed_marker_allowlist: Optional[list[str]] = None,
-    export_all_eve_sequences: bool = False,
-    accepted_only: bool = False,
-) -> dict[str, Path]:
-    """
-    Main entry point for output generation.
-
-    Args:
-        results: VerificationResult objects from Phase 3
-        output_dir: Output directory
-        genome_fasta: Path to genome FASTA
-        proteome_fasta: Path to proteome FASTA
-        accepted_only: Only output accepted predictions
-
-    Returns:
-        Dictionary mapping output type to file path
-    """
-    generator = OutputGenerator(
-        output_dir=output_dir,
-        genome_fasta=genome_fasta,
-        proteome_fasta=proteome_fasta,
-        extended_output=extended_output,
-        seed_marker_allowlist=seed_marker_allowlist,
-        export_all_eve_sequences=export_all_eve_sequences,
-    )
-
-    return generator.generate_all(results, accepted_only=accepted_only)

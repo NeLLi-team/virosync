@@ -57,7 +57,6 @@ logger = logging.getLogger(__name__)
 # Legacy definitions for backward compatibility
 # These are now superseded by viral_markers.py
 VIRUS_SPECIFIC_MARKERS = {"mcp", "a32", "d5", "vltf3", "mrnac", "sfii"}
-UNIVERSAL_MARKERS = {"polb", "rnapl", "rnaps", "rnr"}
 
 
 @dataclass

@@ -119,13 +119,6 @@ class HostSignatureModel:
         )
 
 
-# Placeholder filter set (case-insensitive)
-_PLACEHOLDER_TOKENS = {
-    '_x', 'unclassified', 'uncultured', 'environmental',
-    'sp', 'sp.', 'unknown', 'unidentified'
-}
-
-
 def _is_host_marker(hmm_target: str) -> bool:
     if not hmm_target:
         return False

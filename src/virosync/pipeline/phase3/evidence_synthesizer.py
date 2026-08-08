@@ -834,7 +834,6 @@ class VerificationStatus(Enum):
     HIGH_CONFIDENCE = "high_confidence"
     MEDIUM_CONFIDENCE = "medium_confidence"
     AMBIGUOUS = "ambiguous"
-    LOW_CONFIDENCE_INITIAL = "low_confidence_initial"
     LOW_CONFIDENCE_TIEBREAKER = "low_confidence_tiebreaker"
 
 
@@ -1063,10 +1062,6 @@ class VerificationResult:
     gene_taxonomy_flanking_count: int = 0  # Number of flanking genes analyzed
     gene_taxonomy_viral_interior: int = 0  # Viral genes inside boundary
     gene_taxonomy_viral_flanking: int = 0  # Viral genes in flanking regions
-    gene_taxonomy_ncldv_mirus_interior: int = 0  # NCLDV/MIRUS inside boundary
-    gene_taxonomy_ncldv_mirus_flanking: int = 0  # NCLDV/MIRUS in flanking
-    gene_taxonomy_vp_plv_interior: int = 0  # VP/PLV inside boundary
-    gene_taxonomy_vp_plv_flanking: int = 0  # VP/PLV in flanking
 
     # Seed metadata (passed through from Phase 1 via Phase 2)
     seed_sources: list[str] = field(default_factory=list)
@@ -1307,16 +1302,6 @@ class EvidenceSynthesizerConfig:
     marker_floor_priority_multi_family: float = 0.80
     marker_family_bonus_per_family: float = 0.06
     marker_multi_family_bonus: float = 0.08
-
-    # Tie-breaker weights (normalized based on available evidence)
-    # These weights are used when all tie-breakers are enabled
-    crf_weight: float = 0.25
-    coherence_weight: float = 0.25
-    structural_weight: float = 0.20
-    phylogenetic_weight: float = 0.30  # GVClass + Diamond carry significant weight
-    interproscan_weight: float = 0.10
-    marker_weight: float = 0.10
-    family_consistency_weight: float = 0.05
 
     # Optional host signature strings for host-like penalty
     euk_host_signatures: Optional[set[str]] = None
@@ -2370,14 +2355,6 @@ class EvidenceSynthesizer:
             result.gene_taxonomy_flanking_count = gene_taxonomy_summary.get("flanking_genes", 0)
             result.gene_taxonomy_viral_interior = gene_taxonomy_summary.get("viral_interior", 0)
             result.gene_taxonomy_viral_flanking = gene_taxonomy_summary.get("viral_flanking", 0)
-            result.gene_taxonomy_ncldv_mirus_interior = gene_taxonomy_summary.get(
-                "ncldv_mirus_interior", 0
-            )
-            result.gene_taxonomy_ncldv_mirus_flanking = gene_taxonomy_summary.get(
-                "ncldv_mirus_flanking", 0
-            )
-            result.gene_taxonomy_vp_plv_interior = gene_taxonomy_summary.get("vp_plv_interior", 0)
-            result.gene_taxonomy_vp_plv_flanking = gene_taxonomy_summary.get("vp_plv_flanking", 0)
 
             # Taxonomy distribution analysis fields
             result.taxonomy_distribution_viral_score = gene_taxonomy_summary.get(
@@ -3022,186 +2999,3 @@ class EvidenceSynthesizer:
 
         except Exception as e:
             logger.warning(f"Phylogenetic validation failed for {result.eve_id}: {e}")
-
-    def verify_batch(
-        self,
-        refined_boundaries: list[RefinedBoundary],
-        all_window_features: list[list],
-        all_hallmark_hits: Optional[list[list]] = None,
-        all_novelty_scores: Optional[list[dict]] = None,
-        all_porf_sequences: Optional[list[list[tuple[str, str]]]] = None,
-    ) -> list[VerificationResult]:
-        """
-        Verify multiple EVE candidates.
-
-        This method performs batch TMVec processing ONCE for all proteins across
-        all EVEs, then distributes the results to individual EVE verification.
-        This is much more efficient than running TMVec per-EVE because:
-        1. Model is loaded only once
-        2. All proteins are embedded in batches
-        3. Database searches are performed sequentially
-
-        Args:
-            refined_boundaries: List of RefinedBoundary from Phase 2
-            all_window_features: Window features for each EVE
-            all_hallmark_hits: Hallmark hits for each EVE
-            all_novelty_scores: Novelty scores for each EVE
-            all_porf_sequences: pORF sequences for each EVE
-
-        Returns:
-            List of VerificationResult objects
-        """
-        # Run batch TMVec search for all proteins across all EVEs
-        precomputed_tmvec: Optional[dict[str, dict]] = None
-        if self.config.use_tmvec_database and all_porf_sequences:
-            # Collect proteins and deduplicate by pORF ID.
-            raw_protein_count = 0
-            conflicting_ids = 0
-            protein_by_id: dict[str, str] = {}
-            for porf_sequences in all_porf_sequences:
-                if porf_sequences:
-                    raw_protein_count += len(porf_sequences)
-                    for porf_id, sequence in porf_sequences:
-                        prior = protein_by_id.get(porf_id)
-                        if prior is None:
-                            protein_by_id[porf_id] = sequence
-                        elif prior != sequence:
-                            conflicting_ids += 1
-
-            all_proteins = list(protein_by_id.items())
-
-            if all_proteins:
-                logger.info(
-                    f"TMVec batch: Processing {raw_protein_count} proteins from "
-                    f"{len(refined_boundaries)} EVEs"
-                )
-                if conflicting_ids:
-                    logger.warning(
-                        "TMVec batch: %d duplicate pORF IDs had conflicting sequences; using first occurrence",
-                        conflicting_ids,
-                    )
-                searcher = self.tmvec_searcher
-                if searcher:
-                    precomputed_tmvec = searcher.search_batch(all_proteins)
-                    logger.info(
-                        f"TMVec batch: Completed {len(precomputed_tmvec)} protein searches"
-                    )
-
-        results = []
-
-        for i, boundary in enumerate(refined_boundaries):
-            window_features = all_window_features[i] if i < len(all_window_features) else []
-            hallmark_hits = all_hallmark_hits[i] if all_hallmark_hits and i < len(all_hallmark_hits) else None
-            novelty_scores = all_novelty_scores[i] if all_novelty_scores and i < len(all_novelty_scores) else None
-            porf_sequences = all_porf_sequences[i] if all_porf_sequences and i < len(all_porf_sequences) else None
-
-            result = self.verify_eve(
-                refined_boundary=boundary,
-                window_features=window_features,
-                hallmark_hits=hallmark_hits,
-                novelty_scores=novelty_scores,
-                porf_sequences=porf_sequences,
-                precomputed_tmvec=precomputed_tmvec,
-            )
-            results.append(result)
-
-        return results
-
-
-def synthesize_evidence(
-    refined_boundaries: list[RefinedBoundary],
-    window_features_list: list[list],
-    genome_path: Optional[Path] = None,
-    hallmark_hits_list: Optional[list[list]] = None,
-    work_dir: Optional[Path] = None,
-    viral_structure_db: Optional[Path] = None,
-    gvclass_db: Optional[Path] = None,
-    diamond_db: Optional[Path] = None,
-    enable_phylogenetic: bool = False,
-    use_gpu: bool = True,
-    threads: int = 8,
-    ablation_id: AblationID = AblationID.A0,
-) -> list[VerificationResult]:
-    """
-    Main entry point for Phase 3 evidence synthesis.
-
-    This function runs full evidence synthesis for each Phase 2 boundary,
-    including evidence coherence, optional structural homology, and optional
-    phylogenetic validation.
-
-    Args:
-        refined_boundaries: RefinedBoundary objects from Phase 2
-        window_features_list: Window features for each boundary
-        genome_path: Path to input genome FASTA (needed for phylogenetic validation)
-        hallmark_hits_list: Hallmark hits for each boundary
-        work_dir: Working directory
-        viral_structure_db: Path to viral structure DB for FoldSeek
-        gvclass_db: Path to GVClass database (optional)
-        diamond_db: Path to Diamond database for BLASTp validation
-        use_gpu: Whether to use GPU for structural analysis
-        threads: Number of threads
-        ablation_id: Mutually exclusive benchmark ablation arm
-
-    Returns:
-        List of VerificationResult objects with final verdicts
-    """
-    logger.info("=" * 60)
-    logger.info("Phase 3: Evidence Synthesis")
-    logger.info("=" * 60)
-
-    if not refined_boundaries:
-        logger.info("No boundaries to verify")
-        return []
-
-    # Configure synthesizer
-    config = EvidenceSynthesizerConfig(
-        use_boltz=viral_structure_db is not None,
-        use_phylogenetic_validation=enable_phylogenetic,
-        gvclass_db=gvclass_db,
-        diamond_db=diamond_db,
-        device="cuda" if use_gpu else "cpu",
-        threads=threads,
-        ablation_id=ablation_id,
-    )
-
-    synthesizer = EvidenceSynthesizer(
-        config=config,
-        viral_structure_db=viral_structure_db,
-        genome_path=genome_path,
-        work_dir=work_dir,
-    )
-
-    # Run verification
-    results = synthesizer.verify_batch(
-        refined_boundaries=refined_boundaries,
-        all_window_features=window_features_list,
-        all_hallmark_hits=hallmark_hits_list,
-    )
-
-    # Summary
-    accepted = sum(1 for r in results if r.is_accepted)
-    high_conf = sum(
-        1 for r in results
-        if r.status == VerificationStatus.HIGH_CONFIDENCE
-    )
-    medium_conf = sum(
-        1 for r in results
-        if r.status == VerificationStatus.MEDIUM_CONFIDENCE
-    )
-    low_conf = len(results) - accepted
-
-    # Phylogenetic summary
-    with_phylo = sum(1 for r in results if r.phylogenetic_result is not None)
-    phylo_support = sum(1 for r in results if r.has_phylogenetic_support)
-
-    logger.info("Evidence synthesis complete:")
-    logger.info(f"  Total candidates: {len(results)}")
-    logger.info(f"  High/Medium confidence: {accepted}")
-    logger.info(f"    - High confidence: {high_conf}")
-    logger.info(f"    - Medium confidence: {medium_conf}")
-    logger.info(f"  Low confidence: {low_conf}")
-    logger.info("  Phylogenetic validation:")
-    logger.info(f"    - Regions validated: {with_phylo}")
-    logger.info(f"    - With phylo support: {phylo_support}")
-
-    return results

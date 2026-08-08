@@ -24,11 +24,7 @@ from .phase3 import _run_phase3_subflow
 from .loaders import (
     _build_merged_seeds_from_regions,
     _count_fasta_records,
-    _load_control_stats_from_json,
     _load_interproscan_summary,
-    _load_marker_seed_regions,
-    _load_refined_boundaries_from_bed,
-    _load_taxonomy_map_from_tsv,
     _load_tmvec_cache,
     _safe_int,
     _serialize_tmvec_cache,

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from virosync.pipeline.phase3.eve_ani_clustering import (
-    MIN_CLUSTER_ALIGNED_FRACTION,
     MIN_CLUSTER_ANI,
     cluster_accepted_eves,
     recluster_survivors,

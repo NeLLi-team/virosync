@@ -7,7 +7,6 @@ then summarizes viral/hallmark-related annotations to boost confidence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import subprocess
 import tempfile

@@ -26,7 +26,6 @@ from virosync.orchestration.tasks import (
 
 from virosync.orchestration.flows import (
     single_genome_flow,
-    batch_genome_flow,
 )
 
 __all__ = [
@@ -39,5 +38,4 @@ __all__ = [
     "generate_outputs_task",
     # Flows
     "single_genome_flow",
-    "batch_genome_flow",
 ]

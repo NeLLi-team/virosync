@@ -15,29 +15,6 @@ class TaxonomyFingerprint:
     weighted_tokens: dict[str, float] = field(default_factory=dict)
     raw_tokens: dict[str, int] = field(default_factory=dict)
 
-    @classmethod
-    def from_string(cls, weighted_str: str, raw_str: str) -> "TaxonomyFingerprint":
-        """Parse from comma-separated format."""
-        weighted = {}
-        for entry in weighted_str.split(",") if weighted_str else []:
-            if ":" in entry:
-                token, weight_str = entry.split(":", 1)
-                try:
-                    weighted[token.strip()] = float(weight_str)
-                except ValueError:
-                    continue
-
-        raw = {}
-        for entry in raw_str.split(",") if raw_str else []:
-            if ":" in entry:
-                token, count_str = entry.split(":", 1)
-                try:
-                    raw[token.strip()] = int(count_str)
-                except ValueError:
-                    continue
-
-        return cls(weighted_tokens=weighted, raw_tokens=raw)
-
     def to_string(self) -> tuple[str, str]:
         """Serialize to comma-separated format."""
         sorted_weighted = sorted(

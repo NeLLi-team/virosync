@@ -21,7 +21,6 @@ from virosync.pipeline.phase2.host_signature_trim import (
 from virosync.pipeline.phase2.taxonomy_seed_refiner import (
     A4HostAwareTaxonomyMLError,
     evaluate_taxonomy_seed_refinement,
-    refine_seeds_by_taxonomy,
     validate_taxonomy_refinement_mode,
 )
 
@@ -153,13 +152,6 @@ def test_a4_taxonomy_refinement_ignores_host_barrier_but_keeps_viral_expansion()
         interventions=1,
         changed=1,
     )
-    assert refine_seeds_by_taxonomy(
-        [seed],
-        taxonomy_map,
-        {seed.seed_id: mapping},
-        expansion_kb=0,
-        ablation_id=AblationID.A4,
-    ) == list(result.selected_seeds)
 
 
 def test_a4_taxonomy_refinement_suppresses_host_edge_contraction() -> None:
@@ -289,7 +281,7 @@ def test_phase2f_a4_retains_boundary_and_records_normal_trim_counterfactual() ->
             _host_model(),
             ablation_id="A4",  # type: ignore[arg-type]
         ),
-        lambda: refine_seeds_by_taxonomy(
+        lambda: evaluate_taxonomy_seed_refinement(
             [],
             {},
             {},

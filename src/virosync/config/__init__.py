@@ -28,12 +28,9 @@ from .application_config import (
 from .thresholds import (
     StructuralThresholds,
     EvidenceThresholds,
-    EvidenceGraphThresholds,
     DatabaseConfig,
     ViroSyncConfig,
     get_config,
-    set_config,
-    reset_config,
 )
 
 __all__ = [
@@ -59,10 +56,7 @@ __all__ = [
     # Legacy threshold config
     "StructuralThresholds",
     "EvidenceThresholds",
-    "EvidenceGraphThresholds",
     "DatabaseConfig",
     "ViroSyncConfig",
     "get_config",
-    "set_config",
-    "reset_config",
 ]

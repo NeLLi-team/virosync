@@ -1,11 +1,10 @@
 """Regression test for GPU memory release between genomes.
 
-``release_gpu_memory()`` documents itself as freeing the TMVec models, the
-largest GPU consumer, and the orchestrator calls it between genomes. It used to
-clear only the module cache written by ``get_cached_tmvec_predictor()``, which
-nothing calls, so the cache was always ``None`` and the release freed nothing.
-The predictor actually in use comes from ``get_tmvec_predictor()`` and is held
-by ``TMVecDatabaseSearch``, so a batch run kept every model resident.
+``release_gpu_memory()`` frees the TMVec models, the largest GPU consumer, and
+the orchestrator calls it between genomes. The predictor in use comes from
+``get_tmvec_predictor()`` and is held by ``TMVecDatabaseSearch``; every
+predictor that factory hands out must be released, or a batch run keeps every
+model resident.
 """
 
 from __future__ import annotations
@@ -29,8 +28,6 @@ def test_release_frees_predictors_from_the_live_factory(monkeypatch) -> None:
 
     predictor = tmvec.get_tmvec_predictor(device="cpu")
     assert predictor in tmvec._live_predictors
-    # The old module cache stays empty: nothing populates it.
-    assert tmvec._cached_predictor is None
 
     tmvec.release_tmvec_predictor()
     assert predictor.released, "the predictor actually in use must be released"

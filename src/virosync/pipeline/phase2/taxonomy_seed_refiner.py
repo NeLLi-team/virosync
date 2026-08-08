@@ -351,31 +351,3 @@ def evaluate_taxonomy_seed_refinement(
         counterfactual_seeds=tuple(counterfactual),
         intervention_counts=counts,
     )
-
-
-def refine_seeds_by_taxonomy(
-    merged_seeds: list[MergedSeed],
-    taxonomy_map: dict,
-    seed_gene_mappings: dict,
-    host_prefix: str = "EUK__",
-    expansion_kb: int = 5,
-    host_signature_model: Optional[HostSignatureModel] = None,
-    host_signature_threshold: float = 0.5,
-    *,
-    ablation_id: AblationID = AblationID.A0,
-    taxonomy_ml_enabled: bool = False,
-) -> list[MergedSeed]:
-    """Return the selected arm's seed coordinates with production-compatible API."""
-
-    result = evaluate_taxonomy_seed_refinement(
-        merged_seeds=merged_seeds,
-        taxonomy_map=taxonomy_map,
-        seed_gene_mappings=seed_gene_mappings,
-        host_prefix=host_prefix,
-        expansion_kb=expansion_kb,
-        host_signature_model=host_signature_model,
-        host_signature_threshold=host_signature_threshold,
-        ablation_id=ablation_id,
-        taxonomy_ml_enabled=taxonomy_ml_enabled,
-    )
-    return list(result.selected_seeds)

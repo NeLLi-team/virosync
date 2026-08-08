@@ -26,8 +26,6 @@ from .hhg_seeding import (
 
 from .seed_merger import (
     MergedSeed,
-    filter_seeds_by_priority,
-    write_seeds_bed,
 )
 
 from .marker_validation import (
@@ -61,8 +59,6 @@ __all__ = [
     "hhg_seeding_pipeline",
     # Seed Merger (MergedSeed dataclass — used by Phase 2)
     "MergedSeed",
-    "filter_seeds_by_priority",
-    "write_seeds_bed",
     # Marker Validation (Pipeline Rewrite)
     "ValidationStatus",
     "NovelMarkerCriteria",

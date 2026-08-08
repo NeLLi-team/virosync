@@ -1,6 +1,5 @@
 """Phase B: runtime-contract bug fixes.
 
-B1  _resolve_extension_kb returns the real default (5) instead of None
 B2  threads-per-genome is capped by max_threads // max_concurrent_genomes
 B3  resource download uses bounded retries + timeouts (curl -f fails on 4xx/5xx)
 """
@@ -12,32 +11,12 @@ import subprocess
 
 import pytest
 
-from virosync.orchestration.cli import _cap_threads_per_worker, _resolve_extension_kb
+from virosync.orchestration.cli import _cap_threads_per_worker
 from virosync.utils import database_manager as dm
 from virosync.utils.resource_installer import (
     _download_error_detail,
     copy_or_download_archive,
 )
-
-
-# --- B1: extension_kb None-default -------------------------------------------
-
-@pytest.mark.parametrize(
-    "cli_value,phase1_config,expected",
-    [
-        (None, {}, 5),  # the bug: returned None -> TypeError on later multiply
-        (None, {"extension_bp": 8000}, 8),
-        (None, {"extension_kb": 12}, 12),
-        (None, {"extension_bp": 3000, "extension_kb": 99}, 3),  # extension_bp wins
-        (7, {}, 7),  # explicit CLI value wins
-        (7, {"extension_kb": 12}, 7),
-        (None, {"extension_kb": None}, 5),  # explicit null -> default, not None
-        (None, {"extension_bp": None}, 5),  # explicit null -> default, not TypeError
-        (None, {"extension_bp": None, "extension_kb": 12}, 12),  # null bp falls through
-    ],
-)
-def test_resolve_extension_kb(cli_value, phase1_config, expected) -> None:
-    assert _resolve_extension_kb(cli_value, phase1_config) == expected
 
 
 # --- B2: thread cap by max_concurrent_genomes --------------------------------

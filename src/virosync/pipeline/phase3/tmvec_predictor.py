@@ -184,7 +184,7 @@ class TMvecPredictor:
 
     Example:
         predictor = TMvecPredictor(device="cuda")
-        tm_score = predictor.predict_tm_score(seq1, seq2)
+        embedding = predictor.embed(sequence)
     """
 
     # Model download locations
@@ -799,38 +799,6 @@ class TMvecPredictor:
 
         return results
 
-    def predict_tm_score(self, seq1: str, seq2: str) -> float:
-        """
-        Predict TM-score between two sequences.
-
-        Args:
-            seq1: First amino acid sequence
-            seq2: Second amino acid sequence
-
-        Returns:
-            Predicted TM-score (0-1)
-        """
-        self._lazy_init()
-
-        # Clean sequences
-        seq1 = "".join(c for c in seq1.upper() if c in "ACDEFGHIKLMNPQRSTVWY")
-        seq2 = "".join(c for c in seq2.upper() if c in "ACDEFGHIKLMNPQRSTVWY")
-
-        if len(seq1) < 5 or len(seq2) < 5:
-            return 0.0
-
-        # Get embeddings
-        emb1 = self.embed(seq1)
-        emb2 = self.embed(seq2)
-
-        # Cosine similarity = TM-score prediction
-        emb1_norm = emb1 / (np.linalg.norm(emb1) + 1e-8)
-        emb2_norm = emb2 / (np.linalg.norm(emb2) + 1e-8)
-        tm_score = np.dot(emb1_norm, emb2_norm)
-
-        # TM-score is [0, 1]
-        return float(np.clip(tm_score, 0.0, 1.0))
-
     def search_database(
         self,
         query_sequence: str,
@@ -886,149 +854,6 @@ class TMvecPredictor:
         return hits
 
 
-class TMvecProxyPredictor:
-    """
-    Fallback predictor using ProtTrans embeddings directly.
-
-    This is a simplified version that uses raw ProtT5 embeddings
-    with mean pooling and cosine similarity. Less accurate than
-    proper TMvec but works without the TMvec model weights.
-
-    Use this when TMvec models are unavailable.
-    """
-
-    def __init__(self, device: str = "cuda"):
-        self.device = device if torch.cuda.is_available() else "cpu"
-        self._model = None
-        self._tokenizer = None
-        self._initialized = False
-
-    @property
-    def available(self) -> bool:
-        try:
-            # Direct imports avoid transformers' lazy import issues in forked processes
-            from transformers.models.t5.modeling_t5 import T5EncoderModel
-            return True
-        except ImportError:
-            return False
-
-    def _lazy_init(self) -> None:
-        """Lazy initialization of ProtTrans model.
-
-        Uses a global lock to prevent concurrent model loading which can
-        cause meta tensor issues when multiple workers load simultaneously.
-        Uses direct submodule imports to avoid lazy import issues in forked processes.
-        """
-        if self._initialized:
-            return
-
-        # Use lock to prevent concurrent model loading
-        with _model_loading_lock:
-            # Double-check after acquiring lock
-            if self._initialized:
-                return
-
-            # Direct imports avoid transformers' lazy import mechanism
-            from transformers.models.t5.modeling_t5 import T5EncoderModel
-            from transformers.models.t5.tokenization_t5 import T5Tokenizer
-
-            logger.info("Loading ProtTrans T5 for similarity estimation...")
-            self._tokenizer = T5Tokenizer.from_pretrained(
-                PROTTRANS_PROXY_MODEL_ID,
-                revision=PROTTRANS_PROXY_MODEL_REVISION,
-                do_lower_case=False,
-            )
-            # Disable low_cpu_mem_usage to avoid meta tensor issues with .to()
-            self._model = T5EncoderModel.from_pretrained(
-                PROTTRANS_PROXY_MODEL_ID,
-                revision=PROTTRANS_PROXY_MODEL_REVISION,
-                low_cpu_mem_usage=False,
-            )
-            self._model = self._model.to(self.device)
-            self._model.eval()
-            self._initialized = True
-
-    def embed(self, sequence: str) -> np.ndarray:
-        """Get mean-pooled ProtTrans embedding."""
-        self._lazy_init()
-
-        sequence = "".join(c for c in sequence.upper() if c in "ACDEFGHIKLMNPQRSTVWY")
-        seq_spaced = " ".join(list(sequence))
-        seq_spaced = re.sub(r"[UZOB]", "X", seq_spaced)
-
-        ids = self._tokenizer.batch_encode_plus(
-            [seq_spaced], add_special_tokens=True, padding=True
-        )
-        input_ids = torch.tensor(ids["input_ids"]).to(self.device)
-        attention_mask = torch.tensor(ids["attention_mask"]).to(self.device)
-
-        with torch.no_grad():
-            outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
-
-        seq_len = (attention_mask[0] == 1).sum()
-        embedding = outputs.last_hidden_state[0, :seq_len - 1]
-        mean_emb = embedding.mean(dim=0)
-
-        return mean_emb.cpu().numpy()
-
-    def predict_tm_score(self, seq1: str, seq2: str) -> float:
-        """Predict TM-score using cosine similarity of ProtTrans embeddings."""
-        emb1 = self.embed(seq1)
-        emb2 = self.embed(seq2)
-
-        emb1_norm = emb1 / (np.linalg.norm(emb1) + 1e-8)
-        emb2_norm = emb2 / (np.linalg.norm(emb2) + 1e-8)
-
-        return float(max(0.0, np.dot(emb1_norm, emb2_norm)))
-
-    def search_database(
-        self,
-        query_sequence: str,
-        database_embeddings: np.ndarray,
-        database_ids: list[str],
-        top_k: int = 10,
-        min_tm: float = 0.3,
-    ) -> list[tuple[str, float]]:
-        """
-        Search for structurally similar proteins in a database.
-
-        Uses cosine similarity of ProtTrans embeddings as a proxy for TM-score.
-        Less accurate than proper TMvec but provides interface compatibility.
-
-        Args:
-            query_sequence: Query amino acid sequence
-            database_embeddings: Pre-computed embeddings [n, out_dim]
-            database_ids: IDs corresponding to embeddings
-            top_k: Number of top hits to return
-            min_tm: Minimum similarity threshold
-
-        Returns:
-            List of (id, similarity_score) tuples sorted by score
-        """
-        query_emb = self.embed(query_sequence)
-
-        # Normalize for cosine similarity
-        query_norm = query_emb / (np.linalg.norm(query_emb) + 1e-8)
-        db_norms = database_embeddings / (
-            np.linalg.norm(database_embeddings, axis=1, keepdims=True) + 1e-8
-        )
-
-        # Compute all similarities
-        similarities = db_norms @ query_norm
-
-        # Filter and sort
-        hits = []
-        for idx in np.argsort(similarities)[::-1]:
-            score = float(similarities[idx])
-            if score < min_tm:
-                break
-            if len(hits) >= top_k:
-                break
-            hits.append((database_ids[idx], score))
-
-        return hits
-
-
 # Every predictor handed out by get_tmvec_predictor() is tracked here so
 # release_tmvec_predictor() can free GPU memory for the instances actually in
 # use. Callers keep their own references (TMVecDatabaseSearch._predictor holds
@@ -1039,17 +864,15 @@ _live_predictors: "weakref.WeakSet" = weakref.WeakSet()
 def get_tmvec_predictor(
     device: str = "cuda",
     model_name: str = "tmvec_swiss_model_large",
-    fallback_to_proxy: bool = False,
     require_gpu: bool = False,
     fail_on_unavailable: bool = False,
-) -> TMvecPredictor | TMvecProxyPredictor:
+) -> TMvecPredictor:
     """
     Get the best available TMvec predictor.
 
     Args:
         device: Torch device
         model_name: TMvec model variant
-        fallback_to_proxy: If True, fall back to proxy if TMvec unavailable
         require_gpu: If True, forward to TMvecPredictor so that a missing
             CUDA device or meta-tensor fallback raises instead of silently
             demoting to CPU.
@@ -1074,42 +897,7 @@ def get_tmvec_predictor(
         if require_gpu or fail_on_unavailable:
             raise
 
-    if fallback_to_proxy:
-        logger.info("Using ProtTrans proxy for structural similarity")
-        proxy = TMvecProxyPredictor(device=device)
-        _live_predictors.add(proxy)
-        return proxy
-
     raise RuntimeError("No TMvec predictor available")
-
-
-# Module-level predictor cache for reuse across calls within a worker.
-_cached_predictor: TMvecPredictor | TMvecProxyPredictor | None = None
-
-
-def get_cached_tmvec_predictor(
-    device: str = "cuda",
-    model_name: str = "tmvec_swiss_model_large",
-    fallback_to_proxy: bool = False,
-    require_gpu: bool = False,
-    fail_on_unavailable: bool = False,
-) -> TMvecPredictor | TMvecProxyPredictor:
-    """Get or create a cached TMvec predictor.
-
-    Identical to :func:`get_tmvec_predictor` but reuses a module-level
-    singleton so that repeated calls within the same worker do not
-    reload models.
-    """
-    global _cached_predictor
-    if _cached_predictor is None:
-        _cached_predictor = get_tmvec_predictor(
-            device,
-            model_name,
-            fallback_to_proxy,
-            require_gpu=require_gpu,
-            fail_on_unavailable=fail_on_unavailable,
-        )
-    return _cached_predictor
 
 
 def release_tmvec_predictor() -> None:
@@ -1119,25 +907,12 @@ def release_tmvec_predictor() -> None:
     models (~45 GiB on GPU) are freed before other phases run on the same
     worker.
 
-    This used to clear only the module cache written by
-    get_cached_tmvec_predictor(), which nothing calls, so it freed nothing:
-    the predictor actually in use is created through get_tmvec_predictor()
-    and held by TMVecDatabaseSearch. Every predictor that factory hands out
-    is now released here.
+    The predictor in use is created through get_tmvec_predictor() and held by
+    TMVecDatabaseSearch. Every predictor that factory hands out is released here.
     """
     for predictor in list(_live_predictors):
-        release = getattr(predictor, "release", None)
-        if release is None:
-            continue
         try:
-            release()
+            predictor.release()
         except Exception as exc:  # a stuck predictor must not block the rest
             logger.debug("TMVec predictor release failed: %s", exc)
     _live_predictors.clear()
-
-    global _cached_predictor
-    if _cached_predictor is not None:
-        if hasattr(_cached_predictor, "release"):
-            _cached_predictor.release()
-        _cached_predictor = None
-        logger.info("Cached TMvec predictor released")

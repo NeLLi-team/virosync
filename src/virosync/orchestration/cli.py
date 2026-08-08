@@ -132,33 +132,6 @@ def _apply_gpu_id_env(
     return f"gpu-id={requested}, CUDA_VISIBLE_DEVICES={selector}"
 
 
-def _effective_config_payload(
-    application_config: ApplicationConfig,
-    optional_features: dict[str, FeatureResolution],
-) -> dict:
-    """Build the sole effective configuration artifact representation."""
-    return application_config.effective_payload(optional_features)
-
-
-def _resolve_extension_kb(cli_value: Optional[int], phase1_config: dict) -> int:
-    """Resolve extension parameter from config, supporting both extension_bp and extension_kb.
-
-    Priority: CLI value > extension_bp (converted) > extension_kb > default (5)
-    """
-    if cli_value is not None:
-        return cli_value
-    # Use is-not-None checks (not just key presence): a config with an explicit
-    # ``extension_bp: null`` / ``extension_kb: null`` must fall through to the default,
-    # not return None (which crashes the downstream region-extension multiply).
-    extension_bp = phase1_config.get("extension_bp")
-    if extension_bp is not None:
-        return extension_bp // 1000  # convert bp -> kb
-    extension_kb = phase1_config.get("extension_kb")
-    if extension_kb is not None:
-        return extension_kb
-    return 5  # Phase1Config.extension_kb default
-
-
 def _cap_threads_per_worker(
     threads_per_worker: int,
     max_threads: Optional[int],
@@ -1559,10 +1532,7 @@ def run(
         application_config,
         pipeline=pipeline_config,
     )
-    effective_payload = _effective_config_payload(
-        application_config,
-        optional_features,
-    )
+    effective_payload = application_config.effective_payload(optional_features)
 
     if not quiet:
         _print_banner(

@@ -211,7 +211,10 @@ def _run_phase3_subflow(
         if model_path.exists():
             with model_path.open() as handle:
                 host_signature_model_payload = json.load(handle)
-                host_signature_model = HostSignatureModel.from_dict(host_signature_model_payload)
+                # Parse eagerly and discard: the payload is consumed downstream
+                # as a raw dict, so this is the only place a resumed run rejects
+                # a well-formed but wrongly-typed model file before Phase 3 work.
+                HostSignatureModel.from_dict(host_signature_model_payload)
         logger.info("Resume: loaded %d validated marker hits", len(validated_markers))
 
     # NOTE: Phase 3 gene taxonomy is ALWAYS pre-computed in Phase 2b
@@ -537,7 +540,6 @@ def _run_phase3_subflow(
                 # Core confidence/classification fields below use interior genes only.
                 n_viral_total = n_viral_interior + n_viral_flanking
                 n_ncldv_mirus_total = n_ncldv_mirus_interior + n_ncldv_mirus_flanking
-                n_vp_plv_total = n_vp_plv_interior + n_vp_plv_flanking
 
                 # Calculate the dominant public viral family from top-10 hits.
                 # Use interior genes only to avoid flanking contamination.

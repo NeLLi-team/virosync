@@ -21,22 +21,12 @@ from virosync.pipeline.phase0.masking import (
     mask_genome_pipeline,
     quick_mask as _quick_mask,
 )
-from virosync.pipeline.phase1.taxonomy_expansion import filter_regions_by_taxonomy_expansion
 from virosync.orchestration.runtime import get_orchestration_logger
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 # Kept as a public module attribute for callers/tests; it is no longer an automatic
 # failure fallback.
 quick_mask = _quick_mask
-
-
-def task(*_args, **_kwargs):
-    """No-op decorator preserving the historical task declaration style."""
-
-    def _decorate(func):
-        return func
-
-    return _decorate
 
 
 def _boundary_run_id(boundary) -> str:
@@ -69,13 +59,6 @@ def _preflight_boundary_work_dirs(
 # === Phase 0 Tasks ===
 
 
-@task(
-    name="mask_genome",
-    description="Mask repeats in genome using TRF + RepeatMasker",
-    retries=2,
-    retry_delay_seconds=30,
-    persist_result=True,
-)
 def mask_genome_task(
     genome_path: Path,
     output_dir: Path,
@@ -148,12 +131,6 @@ def mask_genome_task(
         return result
 
 
-@task(
-    name="generate_proteome",
-    description="Run prodigal-gv to generate genome-wide gene predictions",
-    retries=1,
-    persist_result=True,
-)
 def generate_proteome_task(
     genome_path: Path,
     output_dir: Path,
@@ -203,11 +180,6 @@ def generate_proteome_task(
 # === Phase 1 Tasks (Parallel Seeding Strategies) ===
 
 
-@task(
-    name="frameshift_screening",
-    description="Run frameshift-sensitive VS marker rescue screening",
-    persist_result=True,
-)
 def frameshift_screening_task(
     masked_fasta: Path,
     hmm_database: Path,
@@ -228,14 +200,6 @@ def frameshift_screening_task(
     )
 
 
-@task(
-    name="hhg_seeding",
-    description="HMM hallmark gene seeding",
-    retries=2,
-    retry_delay_seconds=60,
-    timeout_seconds=3600,  # 1 hour max
-    persist_result=True,
-)
 def hhg_seeding_task(
     proteome_path: Path,
     hmm_database: Path,
@@ -318,14 +282,6 @@ def hhg_seeding_task(
     return result, []
 
 
-@task(
-    name="pfam_arbitration",
-    description="Pfam arbitration of multi-model HMM hits",
-    retries=2,
-    retry_delay_seconds=60,
-    timeout_seconds=3600,
-    persist_result=True,
-)
 def pfam_arbitration_task(
     hmm_hits: list,
     proteins: set[str],
@@ -370,13 +326,6 @@ def pfam_arbitration_task(
 # === Phase 1 HMM-Gated Workflow Tasks ===
 
 
-@task(
-    name="marker_validation",
-    description="HMM-gated Diamond marker validation",
-    retries=2,
-    retry_delay_seconds=60,
-    persist_result=True,
-)
 def marker_validation_task(
     hmm_hits: list,
     proteome_path: Path,
@@ -495,12 +444,6 @@ def marker_validation_task(
         return validated_markers
 
 
-@task(
-    name="region_assembly",
-    description="Iterative marker-driven region assembly",
-    retries=1,
-    persist_result=True,
-)
 def region_assembly_task(
     validated_markers: list,
     genome_path: Path,
@@ -576,144 +519,6 @@ def region_assembly_task(
         return candidate_regions
 
 
-@task(
-    name="taxonomy_expansion",
-    description="Validate low-marker regions via flanking gene taxonomy",
-    retries=1,
-    timeout_seconds=3600,  # 60 min max for large genomes
-    persist_result=True,
-)
-def taxonomy_expansion_task(
-    candidate_regions: list,
-    proteome_path: Path,
-    gene_taxonomy_faa_db: Path,
-    marker_count_threshold: int = 1,
-    flank_genes: int = 5,
-    min_viral_genes_total: int = 3,
-    min_viral_genes_non_marker: int = 2,
-    short_scaffold_min_fraction: float = 0.20,
-    require_multi_family: bool = False,
-    batch_diamond: bool = False,
-    threads: int = 4,
-    output_dir: Optional[Path] = None,
-    search_backend: str = "diamond",
-) -> list:
-    """
-    Filter low-marker regions using taxonomy expansion (Step 4.5).
-
-    Extracts ±N genes around validated markers and runs Diamond BLASTP vs
-    combined_proteome.dmnd to validate regions with viral flanking gene taxonomy.
-
-    EVE-specific approach:
-    - Gene-level: one viral top-10 hit at >=25% identity → viral-positive
-    - Region-level: ≥3 viral-positive genes (≥2 non-marker) → MEDIUM/HIGH confidence
-    - MCP boost: MCP marker presence increases confidence
-
-    Args:
-        candidate_regions: Regions from region_assembly_task
-        proteome_path: Path to proteome FASTA
-        gene_taxonomy_faa_db: Path to combined_proteome.dmnd (40GB full database)
-        marker_count_threshold: Regions with ≤N markers undergo expansion (default 1)
-        flank_genes: Number of genes to check on each side (default 5 = 11 total)
-        min_viral_genes_total: Min total viral genes (default 3, including marker)
-        min_viral_genes_non_marker: Min non-marker viral genes (default 2)
-        short_scaffold_min_fraction: Viral fraction for short scaffolds (default 0.20 = 20%)
-        require_multi_family: Require ≥2 distinct viral families (default False)
-        batch_diamond: Deprecated no-op, retained for signature compatibility.
-            The chunked batch implementation was removed as unreachable; DIAMOND
-            robustness now comes from search_backend's watchdog and
-            reduced-thread retry.
-        threads: Number of threads
-        output_dir: Output directory for expansion results
-
-    Returns:
-        List of filtered CandidateRegion objects (only accepted regions)
-    """
-    from virosync.pipeline.phase0.prodigal import load_gene_predictions
-    from virosync.orchestration.resource_monitor import ResourceMonitor
-
-    logger = get_orchestration_logger(__name__)
-
-    # Fail-fast validation: missing database is a systemic error
-    if not gene_taxonomy_faa_db:
-        raise ValueError(
-            "Gene taxonomy database path not provided. "
-            "Cannot perform taxonomy expansion without combined_proteome.dmnd database."
-        )
-
-    if not Path(gene_taxonomy_faa_db).exists():
-        raise FileNotFoundError(
-            f"Gene taxonomy database not found: {gene_taxonomy_faa_db}. "
-            "Cannot perform taxonomy expansion without combined_proteome.dmnd database."
-        )
-
-    if not candidate_regions:
-        logger.info("taxonomy_expansion: skipped (no candidate regions)")
-        return []
-
-    if output_dir is None:
-        output_dir = Path(proteome_path).parents[1] / "phase1" / "taxonomy_expansion"
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info(
-        "taxonomy_expansion: regions=%s db=%s flank_genes=%s threshold=%s/%s",
-        len(candidate_regions),
-        gene_taxonomy_faa_db,
-        flank_genes,
-        min_viral_genes_total,
-        min_viral_genes_non_marker,
-    )
-
-    # Load gene predictions for flanking gene extraction
-    gene_data = load_gene_predictions(Path(proteome_path))
-
-    with ResourceMonitor(
-        task_name="taxonomy_expansion",
-        genome_id=Path(proteome_path).parent.parent.name,
-        phase="phase1",
-        output_dir=output_dir.parent,
-        threads=threads,
-        task_id=Path(proteome_path).parent.parent.name,
-    ):
-        filtered_regions, expansion_results = filter_regions_by_taxonomy_expansion(
-            candidate_regions=candidate_regions,
-            proteome_path=Path(proteome_path),
-            gene_taxonomy_db=Path(gene_taxonomy_faa_db),
-            gene_data=gene_data,
-            marker_count_threshold=marker_count_threshold,
-            flank_genes=flank_genes,
-            min_viral_genes_total=min_viral_genes_total,
-            min_viral_genes_non_marker=min_viral_genes_non_marker,
-            short_scaffold_min_fraction=short_scaffold_min_fraction,
-            batch_diamond=batch_diamond,
-            threads=threads,
-            output_dir=output_dir,
-            search_backend=search_backend,
-        )
-
-        # Log statistics by confidence level
-        high_conf = sum(1 for r in expansion_results if r.accepted and r.expansion_confidence == "HIGH")
-        medium_conf = sum(1 for r in expansion_results if r.accepted and r.expansion_confidence == "MEDIUM")
-        low_conf = sum(1 for r in expansion_results if r.accepted and r.expansion_confidence == "LOW")
-
-        logger.info(
-            "taxonomy_expansion: %s total → %s kept (HIGH=%s, MEDIUM=%s, LOW=%s)",
-            len(candidate_regions),
-            len(filtered_regions),
-            high_conf,
-            medium_conf,
-            low_conf,
-        )
-
-        return filtered_regions
-
-
-@task(
-    name="gene_taxonomy_batch",
-    description="Batch Diamond taxonomy for all EVE candidates",
-)
 def gene_taxonomy_batch_task(
     regions: list[dict],
     proteome_path: Path,
@@ -748,10 +553,6 @@ def gene_taxonomy_batch_task(
     )
 
 
-@task(
-    name="interproscan_batch",
-    description="Batch InterProScan annotation for all EVE candidates",
-)
 def interproscan_batch_task(
     regions: list[dict],
     proteome_path: Path,
@@ -784,13 +585,6 @@ def interproscan_batch_task(
 # === Phase 3 Tasks (Parallel Evidence Synthesis) ===
 
 
-@task(
-    name="verify_eve_candidate",
-    description="Evidence synthesis for single EVE candidate",
-    retries=1,
-    timeout_seconds=600,  # 10 min per candidate
-    persist_result=True,
-)
 def verify_eve_task(
     boundary,
     genome_path: Path,
@@ -852,8 +646,8 @@ def verify_eve_task(
         novelty_scores: Legacy compatibility payload; unused by the active seeding path
         host_prefixes: Prefixes used to label host taxa in gene taxonomy
         host_label: Host label string (EUK/ARC)
-        high_tier_threshold: Threshold for HIGH confidence tier (default 0.8)
-        low_tier_threshold: Threshold for LOW confidence tier (default 0.4)
+        high_tier_threshold: Threshold for HIGH confidence tier (default 0.7)
+        low_tier_threshold: Threshold for LOW confidence tier (default 0.2)
         skip_structural: Skip slow structural prediction (Boltz)
         use_boltz: Enable Boltz + FoldSeek structural homology (disabled by default)
         boltz_mcp_only: Only run Boltz on MCP candidates (DJR/SJR)
@@ -1101,12 +895,6 @@ def _build_jelly_roll_summary_for_boundary(
     }
 
 
-@task(
-    name="verify_eve_candidates_batched",
-    description="Batch evidence synthesis for all EVE candidates using ThreadPoolExecutor",
-    retries=1,
-    persist_result=True,
-)
 def verify_eve_candidates_batched_task(
     boundaries: list,
     genome_path: Path,
@@ -1370,7 +1158,6 @@ def verify_eve_candidates_batched_task(
 
         # Collect results as they complete
         for future in as_completed(future_to_boundary):
-            boundary = future_to_boundary[future]
             result = future.result()
             if result is not None:
                 results.append(result)
@@ -1400,11 +1187,6 @@ def verify_eve_candidates_batched_task(
     return results
 
 
-@task(
-    name="classify_jelly_roll",
-    description="Classify MCP proteins as DJR/SJR using multi-signal approach",
-    persist_result=True,
-)
 def classify_jelly_roll_task(
     marker_hits_path: Path,
     sequences_path: Path,
@@ -1525,11 +1307,6 @@ def classify_jelly_roll_task(
         return output_path
 
 
-@task(
-    name="generate_outputs",
-    description="Generate final output files (BED, GFF3, TSV)",
-    persist_result=True,
-)
 def generate_outputs_task(
     verification_results: list,
     output_dir: Path,
@@ -1594,11 +1371,6 @@ def generate_outputs_task(
 # === Artifact Generation Tasks ===
 
 
-@task(
-    name="create_summary_artifact",
-    description="Create markdown summary artifact",
-    persist_result=False,
-)
 def create_summary_artifact_task(
     genome_id: str,
     n_seeds: int,

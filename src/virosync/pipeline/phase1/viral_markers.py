@@ -23,12 +23,6 @@ from typing import Optional
 CRESS_MARKER_MODELS = frozenset(
     f"VS{model_number:06d}" for model_number in range(792, 809)
 )
-CRESS_CAPSID_MARKER_MODELS = frozenset(
-    f"VS{model_number:06d}" for model_number in range(792, 803)
-)
-CRESS_REP_MARKER_MODELS = frozenset(
-    f"VS{model_number:06d}" for model_number in range(803, 809)
-)
 CRESS_MIN_PIDENT = 25.0
 
 
@@ -113,7 +107,6 @@ class ViralFamilyProfile:
     """Defines marker profile for a viral family/lineage."""
 
     name: str  # Full name
-    short_name: str  # Code name
 
     # Markers highly specific to this lineage (rarely in host genomes)
     diagnostic_markers: set[str] = field(default_factory=set)
@@ -122,19 +115,10 @@ class ViralFamilyProfile:
     supporting_markers: set[str] = field(default_factory=set)
 
     # Minimum markers required for seed acceptance
-    min_markers_default: int = 2  # For assembled genomes
     min_markers_fragmented: int = 1  # For fragmented assemblies/MAGs
 
     # Minimum bit score to accept single diagnostic marker
     single_marker_min_score: float = 100.0
-
-    # Description
-    description: str = ""
-
-    @property
-    def all_markers(self) -> set[str]:
-        """All markers for this family."""
-        return self.diagnostic_markers | self.supporting_markers
 
 
 
@@ -144,7 +128,6 @@ class ViralFamilyProfile:
 
 NCLDV_PROFILE = ViralFamilyProfile(
     name="Nucleocytoviricota (NCLDVs)",
-    short_name="ncldv",
     diagnostic_markers={
         "mcp",      # Major Capsid Protein - most diagnostic
         "a32",      # ATPase A32
@@ -159,15 +142,12 @@ NCLDV_PROFILE = ViralFamilyProfile(
         "rnr",      # Ribonucleotide reductase - also in eukaryotes
         "sfii",     # Superfamily II helicase - widespread
     },
-    min_markers_default=2,
     min_markers_fragmented=1,
     single_marker_min_score=80.0,  # MCP at 80+ is quite diagnostic
-    description="Giant viruses including Mimivirus, Marseillevirus, Pandoravirus, Pithovirus, Mollivirus"
 )
 
 MRIYAVIRUS_PROFILE = ViralFamilyProfile(
     name="Mriyaviricetes (Mriyaviruses)",
-    short_name="mriyavirus",
     diagnostic_markers={
         "mcp",          # Major Capsid Protein (double jelly-roll)
         "vltf2",        # Virus late transcription factor 2 - very diagnostic
@@ -188,15 +168,12 @@ MRIYAVIRUS_PROFILE = ViralFamilyProfile(
     # and raise the single-marker bit-score floor so any future config
     # override that re-enables min_markers=1 still rejects low-confidence
     # hits.
-    min_markers_default=2,
     min_markers_fragmented=2,
     single_marker_min_score=100.0,
-    description="Small relatives of NCLDVs including Yaravirus and Gamadviruses (35-45kb genomes)"
 )
 
 MIRUSVIRUS_PROFILE = ViralFamilyProfile(
     name="Mirusviricota (Mirusviruses)",
-    short_name="mirusvirus",
     diagnostic_markers={
         "mcp_mirus",    # Mirusvirus MCP (distinct from NCLDV)
         "polb_mirus",   # Mirusvirus-specific PolB
@@ -206,15 +183,12 @@ MIRUSVIRUS_PROFILE = ViralFamilyProfile(
         "polb",         # Generic DNA polymerase B
         "sfii",         # SF2 helicase
     },
-    min_markers_default=1,  # Less characterized, accept single markers
     min_markers_fragmented=1,
     single_marker_min_score=80.0,
-    description="Plankton-associated giant viruses discovered 2022, distinct from NCLDVs"
 )
 
 POLINTOVIRUS_PROFILE = ViralFamilyProfile(
     name="Polintoviruses",
-    short_name="polintovirus",
     diagnostic_markers={
         "mcp_poli",     # Polintovirus MCP
         "ppolb",        # Protein-primed PolB
@@ -224,15 +198,12 @@ POLINTOVIRUS_PROFILE = ViralFamilyProfile(
         "atpase",       # Packaging ATPase
         "int_tyr",      # Tyrosine integrase
     },
-    min_markers_default=1,
     min_markers_fragmented=1,
     single_marker_min_score=70.0,
-    description="DNA transposon-derived viruses, related to virophages"
 )
 
 VP_PLV_PROFILE = ViralFamilyProfile(
     name="Virophages and Polinton-like Viruses",
-    short_name="vp_plv",
     diagnostic_markers={
         # VP MCP markers (>95% VP/PLV purity)
         "vp_mcp_1", "vp_mcp_2", "vp_mcp_3", "vp_mcp_4",
@@ -250,10 +221,8 @@ VP_PLV_PROFILE = ViralFamilyProfile(
     supporting_markers={
         "vp_penton_5",  # Lower purity penton marker
     },
-    min_markers_default=1,  # Often fragmented or sparse
     min_markers_fragmented=1,
     single_marker_min_score=60.0,
-    description="Virophages (VP) and Polinton-like Viruses (PLV) - small dsDNA viruses parasitizing giant viruses"
 )
 
 # Registry of all viral families
@@ -317,7 +286,6 @@ class AssemblyMode:
 
     # Diversity requirements
     min_marker_types: int = 2
-    require_diagnostic: bool = True
 
     # Score thresholds
     single_marker_min_score: float = 100.0
@@ -333,7 +301,6 @@ class AssemblyMode:
         return cls(
             mode="default",
             min_marker_types=2,
-            require_diagnostic=True,
             single_marker_min_score=100.0,
             neighbor_score_threshold=5.0,
             accept_isolated_anchors=True,
@@ -353,7 +320,6 @@ class AssemblyMode:
         return cls(
             mode="fragmented",
             min_marker_types=1,
-            require_diagnostic=False,  # Any marker accepted
             single_marker_min_score=70.0,  # Lower threshold
             neighbor_score_threshold=0.0,  # Don't require clustering
             accept_isolated_anchors=True,
@@ -370,7 +336,6 @@ class AssemblyMode:
         return cls(
             mode="relaxed",
             min_marker_types=1,
-            require_diagnostic=False,
             single_marker_min_score=50.0,
             neighbor_score_threshold=0.0,
             accept_isolated_anchors=True,
@@ -387,7 +352,6 @@ class AssemblyMode:
         return cls(
             mode="strict",
             min_marker_types=3,
-            require_diagnostic=True,
             single_marker_min_score=150.0,
             neighbor_score_threshold=10.0,
             accept_isolated_anchors=False,

@@ -26,7 +26,7 @@ EXPECTED_DIRECT_CONSUMERS = {
     "pipeline/phase1/hhg_seeding.py": 1,
     "pipeline/phase1/marker_validation.py": 1,
     "pipeline/phase2/boundary_diamond.py": 1,
-    "pipeline/phase3/gene_taxonomy.py": 4,
+    "pipeline/phase3/gene_taxonomy.py": 3,
     "pipeline/phase3/interproscan.py": 1,
     "pipeline/phase3/output_generator.py": 1,
 }

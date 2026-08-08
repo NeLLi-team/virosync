@@ -274,22 +274,6 @@ class RefinedBoundary:
     def length(self) -> int:
         return self.end - self.start
 
-    @property
-    def core_viral_length(self) -> int:
-        if self.core_viral_start is not None and self.core_viral_end is not None:
-            return self.core_viral_end - self.core_viral_start
-        return 0
-
-    @property
-    def boundary_shift_5(self) -> int:
-        """How much the 5' boundary shifted from original."""
-        return self.start - self.original_start
-
-    @property
-    def boundary_shift_3(self) -> int:
-        """How much the 3' boundary shifted from original."""
-        return self.end - self.original_end
-
     def to_bed_line(self) -> str:
         """Format as BED line."""
         score = int(min(1000, self.confidence * 1000))

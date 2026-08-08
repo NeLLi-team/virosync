@@ -9,7 +9,6 @@ from virosync.orchestration.tasks import (
     marker_validation_task,
     mask_genome_task,
     region_assembly_task,
-    taxonomy_expansion_task,
     verify_eve_candidates_batched_task,
     verify_eve_task,
 )
@@ -22,7 +21,6 @@ def test_orchestration_tasks_are_plain_python_callables() -> None:
         hhg_seeding_task,
         marker_validation_task,
         region_assembly_task,
-        taxonomy_expansion_task,
         gene_taxonomy_batch_task,
         interproscan_batch_task,
         verify_eve_task,

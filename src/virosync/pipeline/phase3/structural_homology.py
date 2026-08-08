@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import torch
 
 from virosync.config import get_config
 from virosync.utils.executables import resolve_boltz_executable
@@ -92,37 +91,6 @@ class FoldSeekHit:
     # Issue #4 fix: Flag indicating source of hit
     is_from_alignment: bool = True  # True if from FoldSeek, False if from TMvec
 
-    @property
-    def is_significant(self) -> bool:
-        """Significant structural match (uses config.structural thresholds).
-
-        For alignment-based hits, uses both e-value and TM-score.
-        For TMvec-based hits, uses only TM-score.
-        """
-        cfg = get_config().structural
-        if self.is_from_alignment and self.evalue is not None:
-            return self.evalue < cfg.evalue_significant and self.tm_score > cfg.tm_score_significant
-        # TMvec or missing e-value: use TM-score only
-        return self.tm_score > cfg.tm_score_significant
-
-    @property
-    def is_highly_significant(self) -> bool:
-        """Highly significant match (uses config.structural thresholds).
-
-        For alignment-based hits, uses both e-value and TM-score.
-        For TMvec-based hits, uses only TM-score.
-        """
-        cfg = get_config().structural
-        if self.is_from_alignment and self.evalue is not None:
-            return self.evalue < cfg.evalue_highly_significant and self.tm_score > cfg.tm_score_highly_significant
-        # TMvec or missing e-value: use TM-score only
-        return self.tm_score > cfg.tm_score_highly_significant
-
-    @property
-    def has_alignment_stats(self) -> bool:
-        """Whether this hit has real alignment statistics."""
-        return self.is_from_alignment and self.evalue is not None
-
 
 @dataclass
 class StructuralHomologyResult:
@@ -144,140 +112,6 @@ class StructuralHomologyResult:
     def supports_viral_origin(self) -> bool:
         """Structure supports viral origin."""
         return self.has_viral_hit and self.structural_evidence_score > 0.5
-
-
-@dataclass
-class TMvecHit:
-    """Result from TMVec structural similarity prediction."""
-
-    query_id: str
-    target_id: str
-    tm_score: float
-    target_sequence: str = ""
-    target_description: str = ""
-
-    @property
-    def is_significant(self) -> bool:
-        """Significant structural similarity (uses config.structural.tm_score_significant)."""
-        return self.tm_score > get_config().structural.tm_score_significant
-
-    @property
-    def is_highly_significant(self) -> bool:
-        """Highly significant similarity (uses config.structural.tm_score_highly_significant)."""
-        return self.tm_score > get_config().structural.tm_score_highly_significant
-
-
-# Import the proper TMvec predictor from dedicated module
-from .tmvec_predictor import (
-    TMvecPredictor,
-    # Re-exported for backward compatibility; not used in this module.
-    TMvecProxyPredictor,  # noqa: F401
-    get_tmvec_predictor,  # noqa: F401
-    TMvecConfig,  # noqa: F401
-    TMvecModel,  # noqa: F401
-)
-
-# Backward compatibility alias
-TMvec2Predictor = TMvecPredictor
-
-
-class ESM2Embedder:
-    """
-    GPU-accelerated protein embeddings using ESM-2.
-
-    ESM-2 provides high-quality protein embeddings that can be used
-    for similarity searches when full structure prediction isn't available.
-    This is a lighter-weight alternative to full structure prediction.
-    """
-
-    def __init__(
-        self,
-        device: str = "cuda",
-        model_name: str = "esm2_t33_650M_UR50D",
-    ):
-        """
-        Initialize ESM-2 embedder.
-
-        Args:
-            device: torch device
-            model_name: ESM-2 model to use (smaller = faster)
-        """
-        self.device = device
-        self.model_name = model_name
-        self.model = None
-        self.alphabet = None
-        self.batch_converter = None
-        self._initialized = False
-        self._disabled_reason = None
-
-    def _lazy_init(self) -> None:
-        """Lazy initialization of ESM-2 model."""
-        if self._initialized:
-            return
-
-        logger.info(f"Loading ESM-2 model ({self.model_name})...")
-
-        try:
-            import esm
-
-            self.model, self.alphabet = esm.pretrained.load_model_and_alphabet(
-                self.model_name
-            )
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            self.batch_converter = self.alphabet.get_batch_converter()
-
-            self._initialized = True
-            logger.info(f"ESM-2 loaded on {self.device}")
-
-        except ImportError:
-            self._disabled_reason = (
-                "ESM not installed; ESM-2 embeddings unavailable. "
-                "Install with: pip install fair-esm"
-            )
-            logger.warning(self._disabled_reason)
-            self._initialized = True
-            return
-        except Exception as e:
-            logger.error(f"Failed to load ESM-2: {e}")
-            raise
-
-    def embed(self, sequence: str, porf_id: str = "query") -> np.ndarray:
-        """
-        Get ESM-2 embedding for a sequence.
-
-        Args:
-            sequence: Amino acid sequence
-            porf_id: Identifier
-
-        Returns:
-            Embedding vector (mean-pooled over sequence length)
-        """
-        self._lazy_init()
-        if self._disabled_reason is not None:
-            raise RuntimeError(self._disabled_reason)
-
-        # Clean sequence
-        sequence = "".join(c for c in sequence.upper() if c in "ACDEFGHIKLMNPQRSTVWY")
-
-        if len(sequence) < 5:
-            raise ValueError(f"Sequence too short: {len(sequence)}")
-
-        # Truncate if needed
-        if len(sequence) > 1022:  # ESM-2 limit
-            sequence = sequence[:1022]
-
-        data = [(porf_id, sequence)]
-        _, _, batch_tokens = self.batch_converter(data)
-        batch_tokens = batch_tokens.to(self.device)
-
-        with torch.no_grad():
-            results = self.model(batch_tokens, repr_layers=[33], return_contacts=False)
-
-        # Get embedding (mean pool over sequence)
-        embedding = results["representations"][33][0, 1:-1].mean(0).cpu().numpy()
-
-        return embedding
 
 
 class FoldSeekSearcher:
@@ -318,37 +152,6 @@ class FoldSeekSearcher:
         except FileNotFoundError:
             logger.error("FoldSeek not found. Install via: pixi install")
             raise
-
-    def create_database(
-        self,
-        pdb_dir: Path,
-        db_name: str = "viral_structures",
-    ) -> Path:
-        """
-        Create FoldSeek database from PDB files.
-
-        Args:
-            pdb_dir: Directory containing PDB files
-            db_name: Name for the database
-
-        Returns:
-            Path to created database
-        """
-        db_path = pdb_dir.parent / db_name
-
-        cmd = [
-            "foldseek",
-            "createdb",
-            str(pdb_dir),
-            str(db_path),
-            "--threads",
-            str(self.threads),
-        ]
-
-        logger.info(f"Creating FoldSeek database: {db_path}")
-        subprocess.run(cmd, check=True, capture_output=True)
-
-        return db_path
 
     def search(
         self,

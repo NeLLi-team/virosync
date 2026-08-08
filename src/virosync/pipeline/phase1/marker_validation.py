@@ -165,66 +165,6 @@ class ValidatedMarkerHit:
     taxonomy_substring_counts: str = ""
     taxonomy_raw_counts: str = ""
 
-    @property
-    def is_validated(self) -> bool:
-        """Check if marker is validated by top-10 viral support or validated_novel (HMM-only)."""
-        return self.validation_status in ("validated", "validated_novel")
-
-    @property
-    def is_mcp(self) -> bool:
-        """Check if marker is a Major Capsid Protein (MCP) marker.
-
-        MCP markers include:
-        - GVOGm0003 (NCLDV MCP)
-        - VS000086/OG1352, VS000309/OG484 (NCLDV MCP PFAM - Group II dsDNA virus capsid)
-        - gamadvirusMCP (Gamadnavirus MCP)
-        - PLV_MCP (Polinton-like virus MCP)
-        - VP_MCP (Virophage MCP)
-        - Mirus_MCP (Mirus virus MCP)
-        - Any marker with "mcp" substring in name
-
-        Returns:
-            True if marker is an MCP marker
-        """
-        from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
-        return is_mcp_gene(self.hmm_target)
-
-    @property
-    def is_valid_seed_marker(self) -> bool:
-        """Check if marker is a valid seed for region assembly.
-
-        UPDATED (Jan 2026): Expanded to allow ALL validated markers to seed regions,
-        with taxonomy-based expansion filtering false positives in Step 4.5.
-
-        Seeding rules:
-        1. validation_status="validated" (NCLDV/MIRUS/PLV/VP/CRESS Diamond hit >=25% identity) → CAN SEED
-        2. validation_status="validated_novel" (HMM-only, no Diamond hits) → CAN SEED ONLY IF MCP
-
-        Rationale:
-        - All HMM hits are validated via marker_validation.py (Diamond top-10 taxonomy)
-        - validated_novel has InterProScan/TMVec support but no Diamond hits
-        - MCP markers are highly specific for viral detection
-        - Low-marker regions undergo taxonomy expansion validation (Step 4.5)
-
-        Returns:
-            True if marker can seed an EVE region
-        """
-        # Validated markers with Diamond top-10 viral taxonomy → auto-seed
-        if self.validation_status == "validated":
-            return True
-
-        # validated_novel (HMM-only, no Diamond hits) → ONLY MCP can seed
-        if self.validation_status == "validated_novel":
-            return self.is_mcp  # Use expanded MCP detection
-
-        # unvalidated or supported → cannot seed
-        return False
-
-    @property
-    def is_gvogm(self) -> bool:
-        """Check if marker is GVOGm."""
-        return self.hmm_target.lower().startswith("gvogm")
-
 
 def validate_hmm_hit(
     hmm_score: float,

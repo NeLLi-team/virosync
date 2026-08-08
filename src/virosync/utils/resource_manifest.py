@@ -86,11 +86,6 @@ REQUIRED_SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "taxonomy_labels",
 )
 
-OPTIONAL_SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
-    "hmm_index_files",
-    "og_marker_mappings",
-)
-
 _CANONICAL_ROLES: Mapping[str, str] = {
     "DB_VERSION": "bundle_version",
     "DATABASE_README.txt": "bundle_documentation",

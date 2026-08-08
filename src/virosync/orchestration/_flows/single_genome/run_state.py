@@ -983,16 +983,6 @@ def validate_artifact_identity(
         return False
 
 
-def validate_artifacts(
-    artifacts: Sequence[ArtifactIdentity | Mapping[str, object]],
-    *,
-    root: str | Path,
-) -> bool:
-    """Return whether every recorded artifact is still exact and path-safe."""
-
-    return all(validate_artifact_identity(artifact, root=root) for artifact in artifacts)
-
-
 def build_input_identity(path: str | Path) -> InputIdentity:
     """Build the whole-file input identity used by the run fingerprint."""
 
@@ -2215,7 +2205,7 @@ def _validated_result(result: Mapping[str, object]) -> dict[str, object]:
     detailed_rows = _require_nonnegative_int(
         normalized["detailed_rows"], "detailed_rows"
     )
-    accepted_bp = _require_nonnegative_int(normalized["accepted_bp"], "accepted_bp")
+    _require_nonnegative_int(normalized["accepted_bp"], "accepted_bp")
     if detailed_rows < canonical_rows:
         raise ValueError("detailed_rows cannot be smaller than canonical_rows")
     for field in ("class_counts", "tier_counts"):

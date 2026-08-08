@@ -519,19 +519,14 @@ class ExecutionConfig:
         """Derived compatibility view; canonical state lives in ``masking``."""
         return self.masking.backend is MaskingBackend.OFF
 
-_UNSET = object()
-
 
 @dataclass(frozen=True)
 class FieldSpec:
     """Single source of truth mapping one flat flow-kwarg to its nested config field.
 
-    Drives all three config maps:
+    Drives both config maps:
     - ``with_overrides`` (flat kwarg -> nested field), incl. enum/Path coercion + aliases
     - ``to_flow_kwargs`` (nested field -> flat kwarg), incl. enum ``.value`` emission
-    - ``_from_flat_dict`` (YAML/flat dict -> nested field) for the table-driven sections;
-      genuinely special parsing (databases legacy aliases, host block, high_pident
-      coupling, use_boltz cascade) stays explicit in that method.
     """
 
     flat: str                       # canonical flat name (with_overrides key + to_flow_kwargs output key)
@@ -542,11 +537,6 @@ class FieldSpec:
     overridable: bool = True        # appears in with_overrides
     emit: bool = True               # appears in to_flow_kwargs
     wo_aliases: tuple = ()          # extra override-only flat names accepted by with_overrides
-    ff_block: Optional[str] = None  # _from_flat_dict source block: None|phase1|phase2|phase3|boundary_diamond
-    ff_section_key: Optional[str] = None  # key within ff_block (defaults to field)
-    ff_flat_aliases: tuple = ()     # extra flat keys tried (after `flat`) in _from_flat_dict
-    ff_default: object = _UNSET     # _from_flat_dict default override (else dataclass default)
-    ff_skip: bool = False           # not table-driven in _from_flat_dict (handled explicitly)
 
 
 def _spec(flat, section, field, **kw):
@@ -558,31 +548,20 @@ _HTD = "host_taxonomy_deviation_"
 FIELD_SPECS: list[FieldSpec] = [
     # --- ablation (mutually exclusive benchmark arm) ---
     _spec("ablation_id", "ablation", "id", enum=AblationID),
-    _spec(
-        "ablation_contract_sha256",
-        "ablation",
-        "contract_sha256",
-        overridable=False,
-    ),
-    # --- databases (legacy 'or' aliases handled explicitly in _from_flat_dict) ---
-    _spec("hmm_database", "databases", "hmm_database", path=True, ff_skip=True),
-    _spec("hmm_allowlist", "databases", "hmm_allowlist", path=True, ff_skip=True),
-    _spec("marker_faa_dir", "databases", "marker_faa_dir", path=True, ff_skip=True),
-    _spec("marker_faa_db", "databases", "marker_faa_db", path=True, ff_skip=True),
-    _spec("marker_db", "databases", "marker_db", path=True, ff_skip=True),
-    _spec("gene_taxonomy_faa_db", "databases", "gene_taxonomy_faa_db", path=True, ff_skip=True),
-    _spec("seed_marker_allowlist", "databases", "seed_marker_allowlist", ff_skip=True),
-    _spec("faa_dir", "databases", "faa_dir", path=True, ff_skip=True),
-    _spec("gvclass_db", "databases", "gvclass_db", path=True, ff_skip=True),
-    _spec("diamond_db", "databases", "diamond_db", path=True, ff_skip=True),
-    _spec(
-        "taxonomy_labels_file",
-        "databases",
-        "taxonomy_labels_file",
-        path=True,
-        ff_skip=True,
-    ),
-    # --- compute (flat-only in _from_flat_dict) ---
+    _spec("ablation_contract_sha256", "ablation", "contract_sha256", overridable=False),
+    # --- databases ---
+    _spec("hmm_database", "databases", "hmm_database", path=True),
+    _spec("hmm_allowlist", "databases", "hmm_allowlist", path=True),
+    _spec("marker_faa_dir", "databases", "marker_faa_dir", path=True),
+    _spec("marker_faa_db", "databases", "marker_faa_db", path=True),
+    _spec("marker_db", "databases", "marker_db", path=True),
+    _spec("gene_taxonomy_faa_db", "databases", "gene_taxonomy_faa_db", path=True),
+    _spec("seed_marker_allowlist", "databases", "seed_marker_allowlist"),
+    _spec("faa_dir", "databases", "faa_dir", path=True),
+    _spec("gvclass_db", "databases", "gvclass_db", path=True),
+    _spec("diamond_db", "databases", "diamond_db", path=True),
+    _spec("taxonomy_labels_file", "databases", "taxonomy_labels_file", path=True),
+    # --- compute ---
     _spec("threads", "compute", "threads"),
     _spec("max_threads", "compute", "max_threads"),
     _spec("device", "compute", "device", enum=Device),
@@ -590,187 +569,102 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("gene_taxonomy_threads", "compute", "gene_taxonomy_threads"),
     _spec("interproscan_threads", "compute", "interproscan_threads"),
     # --- host (legacy aliases + high_pident coupling handled explicitly) ---
-    _spec("host_prefixes", "host", "prefixes", ff_skip=True),
-    _spec("host_label", "host", "label", ff_skip=True),
-    _spec("high_pident_host_threshold", "host", "high_pident_threshold", ff_skip=True),
+    _spec("host_prefixes", "host", "prefixes"),
+    _spec("host_label", "host", "label"),
+    _spec("high_pident_host_threshold", "host", "high_pident_threshold"),
     # --- phase1 (flat names == field names) ---
-    _spec("rebuild_db", "phase1", "rebuild_db", ff_block="phase1"),
-    _spec("assembly_mode", "phase1", "assembly_mode", enum=AssemblyMode, ff_block="phase1"),
-    _spec("hmm_chunk_size", "phase1", "hmm_chunk_size", ff_block="phase1"),
-    _spec(
-        "frameshift_screening_enabled",
-        "phase1",
-        "frameshift_screening_enabled",
-        ff_block="phase1",
-    ),
-    _spec("initial_window_bp", "phase1", "initial_window_bp", ff_block="phase1"),
-    _spec("initial_window_genes", "phase1", "initial_window_genes", ff_block="phase1"),
-    _spec("min_markers_initial", "phase1", "min_markers_initial", ff_block="phase1"),
-    _spec("extension_kb", "phase1", "extension_kb", ff_block="phase1"),
-    _spec("merge_distance", "phase1", "merge_distance", ff_block="phase1"),
-    _spec(_HTD + "enabled", "phase1", _HTD + "enabled", ff_block="phase1"),
-    _spec(_HTD + "allow_seeds", "phase1", _HTD + "allow_seeds", ff_block="phase1"),
-    _spec(_HTD + "min_token_len", "phase1", _HTD + "min_token_len", ff_block="phase1"),
-    _spec(_HTD + "min_tokens", "phase1", _HTD + "min_tokens", ff_block="phase1"),
-    _spec(_HTD + "overlap_threshold", "phase1", _HTD + "overlap_threshold", ff_block="phase1"),
-    _spec(_HTD + "max_pident", "phase1", _HTD + "max_pident", ff_block="phase1"),
-    _spec(_HTD + "max_hits", "phase1", _HTD + "max_hits", ff_block="phase1"),
-    _spec(_HTD + "window_bp", "phase1", _HTD + "window_bp", ff_block="phase1"),
-    _spec(_HTD + "window_count", "phase1", _HTD + "window_count", ff_block="phase1"),
-    _spec(_HTD + "window_seed", "phase1", _HTD + "window_seed", ff_block="phase1"),
-    _spec(
-        _HTD + "window_min_markers",
-        "phase1",
-        _HTD + "window_min_markers",
-        ff_block="phase1",
-    ),
-    _spec(
-        _HTD + "seed_window_bp", "phase1", _HTD + "seed_window_bp", ff_block="phase1"
-    ),
-    _spec(
-        _HTD + "seed_min_markers",
-        "phase1",
-        _HTD + "seed_min_markers",
-        ff_block="phase1",
-    ),
-    _spec(
-        "marker_validation_top_k",
-        "phase1",
-        "marker_validation_top_k",
-        ff_block="phase1",
-    ),
-    _spec(
-        "novel_marker_min_score", "phase1", "novel_marker_min_score", ff_block="phase1"
-    ),
-    _spec(
-        "novel_marker_min_coverage",
-        "phase1",
-        "novel_marker_min_coverage",
-        ff_block="phase1",
-    ),
-    _spec(
-        "novel_marker_require_cluster",
-        "phase1",
-        "novel_marker_require_cluster",
-        ff_block="phase1",
-    ),
+    _spec("rebuild_db", "phase1", "rebuild_db"),
+    _spec("assembly_mode", "phase1", "assembly_mode", enum=AssemblyMode),
+    _spec("hmm_chunk_size", "phase1", "hmm_chunk_size"),
+    _spec("frameshift_screening_enabled", "phase1", "frameshift_screening_enabled"),
+    _spec("initial_window_bp", "phase1", "initial_window_bp"),
+    _spec("initial_window_genes", "phase1", "initial_window_genes"),
+    _spec("min_markers_initial", "phase1", "min_markers_initial"),
+    _spec("extension_kb", "phase1", "extension_kb"),
+    _spec("merge_distance", "phase1", "merge_distance"),
+    _spec(_HTD + "enabled", "phase1", _HTD + "enabled"),
+    _spec(_HTD + "allow_seeds", "phase1", _HTD + "allow_seeds"),
+    _spec(_HTD + "min_token_len", "phase1", _HTD + "min_token_len"),
+    _spec(_HTD + "min_tokens", "phase1", _HTD + "min_tokens"),
+    _spec(_HTD + "overlap_threshold", "phase1", _HTD + "overlap_threshold"),
+    _spec(_HTD + "max_pident", "phase1", _HTD + "max_pident"),
+    _spec(_HTD + "max_hits", "phase1", _HTD + "max_hits"),
+    _spec(_HTD + "window_bp", "phase1", _HTD + "window_bp"),
+    _spec(_HTD + "window_count", "phase1", _HTD + "window_count"),
+    _spec(_HTD + "window_seed", "phase1", _HTD + "window_seed"),
+    _spec(_HTD + "window_min_markers", "phase1", _HTD + "window_min_markers"),
+    _spec(_HTD + "seed_window_bp", "phase1", _HTD + "seed_window_bp"),
+    _spec(_HTD + "seed_min_markers", "phase1", _HTD + "seed_min_markers"),
+    _spec("marker_validation_top_k", "phase1", "marker_validation_top_k"),
+    _spec("novel_marker_min_score", "phase1", "novel_marker_min_score"),
+    _spec("novel_marker_min_coverage", "phase1", "novel_marker_min_coverage"),
+    _spec("novel_marker_require_cluster", "phase1", "novel_marker_require_cluster"),
     # --- phase2 (flat names are boundary_-prefixed; section keys are the bare field names) ---
-    _spec("taxonomy_weight_mode", "phase2", "taxonomy_weight_mode", ff_block="phase2"),
-    _spec("boundary_taxonomy_ml_enabled", "phase2", "taxonomy_ml_enabled",
-          wo_aliases=("taxonomy_ml_enabled",), ff_block="phase2", ff_flat_aliases=("taxonomy_ml_enabled",)),
-    _spec("boundary_taxonomy_ml_model", "phase2", "taxonomy_ml_model",
-          wo_aliases=("taxonomy_ml_model",), ff_block="phase2", ff_flat_aliases=("taxonomy_ml_model",)),
-    _spec("boundary_taxonomy_ml_threshold", "phase2", "taxonomy_ml_threshold",
-          wo_aliases=("taxonomy_ml_threshold",), ff_block="phase2", ff_flat_aliases=("taxonomy_ml_threshold",)),
-    _spec("boundary_taxonomy_ml_neighbor_window", "phase2", "taxonomy_ml_neighbor_window",
-          wo_aliases=("taxonomy_ml_neighbor_window",), ff_block="phase2",
-          ff_flat_aliases=("taxonomy_ml_neighbor_window",)),
-    _spec("boundary_host_trim_enabled", "phase2", "host_trim_enabled", ff_block="phase2"),
-    _spec("boundary_host_trim_window_bp", "phase2", "host_trim_window_bp", ff_block="phase2"),
-    _spec("boundary_host_trim_step_bp", "phase2", "host_trim_step_bp", ff_block="phase2"),
-    _spec("boundary_host_trim_max_host_fraction", "phase2", "host_trim_max_host_fraction", ff_block="phase2"),
-    _spec("boundary_host_trim_min_viral_fraction", "phase2", "host_trim_min_viral_fraction", ff_block="phase2"),
-    _spec("boundary_host_trim_score_threshold", "phase2", "host_trim_score_threshold", ff_block="phase2"),
-    _spec("boundary_host_trim_buffer_kb", "phase2", "host_trim_buffer_kb", ff_block="phase2"),
-    _spec("boundary_host_trim_min_overlap_score", "phase2", "host_trim_min_overlap_score", ff_block="phase2"),
-    # NOTE _from_flat_dict default for this is 6, diverging from the dataclass default (3).
-    _spec("boundary_host_signature_min_token_len", "phase2", "host_signature_min_token_len",
-          ff_block="phase2", ff_default=6),
+    _spec("taxonomy_weight_mode", "phase2", "taxonomy_weight_mode"),
+    _spec("boundary_taxonomy_ml_enabled", "phase2", "taxonomy_ml_enabled", wo_aliases=("taxonomy_ml_enabled",)),
+    _spec("boundary_taxonomy_ml_model", "phase2", "taxonomy_ml_model", wo_aliases=("taxonomy_ml_model",)),
+    _spec("boundary_taxonomy_ml_threshold", "phase2", "taxonomy_ml_threshold", wo_aliases=("taxonomy_ml_threshold",)),
+    _spec(
+        "boundary_taxonomy_ml_neighbor_window",
+        "phase2",
+        "taxonomy_ml_neighbor_window",
+        wo_aliases=("taxonomy_ml_neighbor_window",),
+    ),
+    _spec("boundary_host_trim_enabled", "phase2", "host_trim_enabled"),
+    _spec("boundary_host_trim_window_bp", "phase2", "host_trim_window_bp"),
+    _spec("boundary_host_trim_step_bp", "phase2", "host_trim_step_bp"),
+    _spec("boundary_host_trim_max_host_fraction", "phase2", "host_trim_max_host_fraction"),
+    _spec("boundary_host_trim_min_viral_fraction", "phase2", "host_trim_min_viral_fraction"),
+    _spec("boundary_host_trim_score_threshold", "phase2", "host_trim_score_threshold"),
+    _spec("boundary_host_trim_buffer_kb", "phase2", "host_trim_buffer_kb"),
+    _spec("boundary_host_trim_min_overlap_score", "phase2", "host_trim_min_overlap_score"),
+    _spec("boundary_host_signature_min_token_len", "phase2", "host_signature_min_token_len"),
     # phase2b Diamond + ANI: emitted but NOT overridable; parsed from the nested boundary_diamond block.
-    _spec(
-        "boundary_diamond_flank_genes",
-        "phase2",
-        "diamond_flank_genes",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="flank_genes",
-    ),
-    _spec(
-        "boundary_diamond_control_sample_size",
-        "phase2",
-        "diamond_control_sample_size",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="control_sample_size",
-    ),
-    _spec(
-        "boundary_diamond_control_min_distance",
-        "phase2",
-        "diamond_control_min_distance",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="control_min_distance",
-    ),
-    _spec(
-        "boundary_diamond_top_k",
-        "phase2",
-        "diamond_top_k",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="top_k",
-    ),
-    _spec(
-        "boundary_diamond_chunk_size",
-        "phase2",
-        "diamond_chunk_size",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="chunk_size",
-    ),
-    _spec(
-        "boundary_diamond_random_seed",
-        "phase2",
-        "diamond_random_seed",
-        overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="random_seed",
-    ),
+    _spec("boundary_diamond_flank_genes", "phase2", "diamond_flank_genes", overridable=False),
+    _spec("boundary_diamond_control_sample_size", "phase2", "diamond_control_sample_size", overridable=False),
+    _spec("boundary_diamond_control_min_distance", "phase2", "diamond_control_min_distance", overridable=False),
+    _spec("boundary_diamond_top_k", "phase2", "diamond_top_k", overridable=False),
+    _spec("boundary_diamond_chunk_size", "phase2", "diamond_chunk_size", overridable=False),
+    _spec("boundary_diamond_random_seed", "phase2", "diamond_random_seed", overridable=False),
     _spec(
         "boundary_diamond_superset_prototype_enabled",
         "phase2",
         "diamond_superset_prototype_enabled",
         overridable=False,
-        ff_block="boundary_diamond",
-        ff_section_key="superset_prototype_enabled",
     ),
     # --- phase3 (flat names == field names) ---
-    _spec(
-        "host_signature_evidence_threshold",
-        "phase3",
-        "host_signature_evidence_threshold",
-        ff_block="phase3",
-    ),
-    _spec("high_tier_threshold", "phase3", "high_tier_threshold", ff_block="phase3"),
-    _spec("low_tier_threshold", "phase3", "low_tier_threshold", ff_block="phase3"),
-    _spec("use_crf_in_final_score", "phase3", "use_crf_in_final_score", ff_block="phase3"),
-    _spec("priority_marker_list", "phase3", "priority_marker_list", ff_block="phase3"),
-    _spec("marker_floor_priority_only", "phase3", "marker_floor_priority_only", ff_block="phase3"),
-    _spec("marker_floor_priority_plus_family", "phase3", "marker_floor_priority_plus_family", ff_block="phase3"),
-    _spec("marker_floor_priority_multi_family", "phase3", "marker_floor_priority_multi_family", ff_block="phase3"),
-    _spec("marker_family_bonus_per_family", "phase3", "marker_family_bonus_per_family", ff_block="phase3"),
-    _spec("marker_multi_family_bonus", "phase3", "marker_multi_family_bonus", ff_block="phase3"),
-    _spec("enable_phylogenetic", "phase3", "enable_phylogenetic", ff_block="phase3"),
-    _spec("skip_structural", "phase3", "skip_structural", ff_block="phase3"),
-    _spec("use_boltz", "phase3", "use_boltz", ff_skip=True),
-    _spec("boltz_mcp_only", "phase3", "boltz_mcp_only", ff_block="phase3"),
-    _spec("boltz_use_msa_server", "phase3", "boltz_use_msa_server", ff_block="phase3"),
-    _spec("boltz_min_seq_len", "phase3", "boltz_min_seq_len", ff_block="phase3"),
-    _spec("boltz_max_seq_len", "phase3", "boltz_max_seq_len", ff_block="phase3"),
-    _spec("boltz_no_kernels", "phase3", "boltz_no_kernels", ff_block="phase3"),
-    _spec("use_tmvec_database", "phase3", "use_tmvec_database", ff_block="phase3"),
-    _spec("tmvec_require_gpu", "phase3", "tmvec_require_gpu", ff_block="phase3"),
-    _spec("tmvec_databases", "phase3", "tmvec_databases", ff_block="phase3"),
-    _spec("tmvec_database_dir", "phase3", "tmvec_database_dir", path=True, ff_block="phase3"),
-    _spec("tmvec_min_score", "phase3", "tmvec_min_score", ff_block="phase3"),
-    _spec("viral_structure_db", "phase3", "viral_structure_db", path=True, ff_block="phase3"),
-    _spec("extended_output", "phase3", "extended_output", ff_block="phase3"),
-    _spec("export_all_eve_sequences", "phase3", "export_all_eve_sequences", ff_block="phase3"),
-    _spec("interproscan_enabled", "phase3", "interproscan_enabled", ff_block="phase3"),
-    _spec("interproscan_dir", "phase3", "interproscan_dir", path=True, ff_block="phase3"),
-    _spec("interproscan_keywords", "phase3", "interproscan_keywords", ff_block="phase3"),
-    _spec("interproscan_applications", "phase3", "interproscan_applications", ff_block="phase3"),
-    _spec("run_gvclass", "phase3", "run_gvclass", ff_block="phase3"),
-    _spec("gvclass_path", "phase3", "gvclass_path", path=True, ff_block="phase3"),
+    _spec("host_signature_evidence_threshold", "phase3", "host_signature_evidence_threshold"),
+    _spec("high_tier_threshold", "phase3", "high_tier_threshold"),
+    _spec("low_tier_threshold", "phase3", "low_tier_threshold"),
+    _spec("use_crf_in_final_score", "phase3", "use_crf_in_final_score"),
+    _spec("priority_marker_list", "phase3", "priority_marker_list"),
+    _spec("marker_floor_priority_only", "phase3", "marker_floor_priority_only"),
+    _spec("marker_floor_priority_plus_family", "phase3", "marker_floor_priority_plus_family"),
+    _spec("marker_floor_priority_multi_family", "phase3", "marker_floor_priority_multi_family"),
+    _spec("marker_family_bonus_per_family", "phase3", "marker_family_bonus_per_family"),
+    _spec("marker_multi_family_bonus", "phase3", "marker_multi_family_bonus"),
+    _spec("enable_phylogenetic", "phase3", "enable_phylogenetic"),
+    _spec("skip_structural", "phase3", "skip_structural"),
+    _spec("use_boltz", "phase3", "use_boltz"),
+    _spec("boltz_mcp_only", "phase3", "boltz_mcp_only"),
+    _spec("boltz_use_msa_server", "phase3", "boltz_use_msa_server"),
+    _spec("boltz_min_seq_len", "phase3", "boltz_min_seq_len"),
+    _spec("boltz_max_seq_len", "phase3", "boltz_max_seq_len"),
+    _spec("boltz_no_kernels", "phase3", "boltz_no_kernels"),
+    _spec("use_tmvec_database", "phase3", "use_tmvec_database"),
+    _spec("tmvec_require_gpu", "phase3", "tmvec_require_gpu"),
+    _spec("tmvec_databases", "phase3", "tmvec_databases"),
+    _spec("tmvec_database_dir", "phase3", "tmvec_database_dir", path=True),
+    _spec("tmvec_min_score", "phase3", "tmvec_min_score"),
+    _spec("viral_structure_db", "phase3", "viral_structure_db", path=True),
+    _spec("extended_output", "phase3", "extended_output"),
+    _spec("export_all_eve_sequences", "phase3", "export_all_eve_sequences"),
+    _spec("interproscan_enabled", "phase3", "interproscan_enabled"),
+    _spec("interproscan_dir", "phase3", "interproscan_dir", path=True),
+    _spec("interproscan_keywords", "phase3", "interproscan_keywords"),
+    _spec("interproscan_applications", "phase3", "interproscan_applications"),
+    _spec("run_gvclass", "phase3", "run_gvclass"),
+    _spec("gvclass_path", "phase3", "gvclass_path", path=True),
     # --- execution (flat-only) ---
     _spec("masking", "execution", "masking"),
     _spec("resume", "execution", "resume"),
@@ -1250,14 +1144,6 @@ class PipelineConfig:
         if errors:
             raise ConfigError("Invalid pipeline configuration: " + "; ".join(errors))
         return config
-
-    @classmethod
-    def _from_flat_dict(cls, data: dict) -> "PipelineConfig":
-        """Reject the retired ambiguous flat parser with a migration pointer."""
-        raise ConfigError(
-            "Flat pipeline configuration is no longer accepted. Use canonical "
-            "ablation/databases/compute/host/phase1/phase2/phase3/execution sections."
-        )
 
     def to_yaml(self, path: Path) -> None:
         """Write a complete v1 application file that ``from_yaml`` can read."""

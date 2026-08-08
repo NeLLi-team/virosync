@@ -22,11 +22,6 @@ class PORF:
     frame: int  # 1, 2, or 3
     sequence: str  # Amino acid sequence
 
-    @property
-    def header(self) -> str:
-        """Generate FASTA header encoding coordinates."""
-        return f"{self.porf_id}|{self.scaffold}:{self.start}-{self.end}_strand:{self.strand}_frame:{self.frame}"
-
     @classmethod
     def parse_header(cls, header: str) -> Optional["PORF"]:
         """

@@ -6,7 +6,7 @@ import copy
 import hashlib
 import json
 import re
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -483,10 +483,6 @@ class ApplicationConfig:
             orchestration=orchestration,
             pipeline=pipeline,
         )
-
-    def with_pipeline(self, pipeline: PipelineConfig) -> "ApplicationConfig":
-        """Return this application configuration with a resolved pipeline."""
-        return replace(self, pipeline=pipeline)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical, JSON/YAML-safe representation including nulls."""

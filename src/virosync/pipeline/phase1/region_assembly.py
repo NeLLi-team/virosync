@@ -180,19 +180,6 @@ class CandidateRegion:
         self.has_mcp = any(m.is_mcp for m in self.markers)
 
 
-def load_gene_order(proteome_fasta: Path) -> dict[str, list[GenePrediction]]:
-    """
-    Load gene predictions per scaffold for gene-based distance calculation.
-
-    Args:
-        proteome_fasta: Path to prodigal-gv proteins FASTA
-
-    Returns:
-        Dictionary mapping scaffold to list of GenePrediction objects, sorted by position
-    """
-    return load_gene_predictions(proteome_fasta)
-
-
 def count_genes_between(
     marker1: ValidatedMarkerHit,
     marker2: ValidatedMarkerHit,
@@ -204,7 +191,7 @@ def count_genes_between(
     Args:
         marker1: First marker hit
         marker2: Second marker hit
-        gene_order: Gene order by scaffold from load_gene_order()
+        gene_order: Gene order by scaffold from load_gene_predictions()
 
     Returns:
         Number of genes between markers (0 if adjacent or on different scaffolds)
@@ -644,7 +631,7 @@ def assemble_candidate_regions(
 
     # Load gene order for gene-based distances
     logger.info("Loading gene genomic order...")
-    gene_order = load_gene_order(proteome_fasta)
+    gene_order = load_gene_predictions(proteome_fasta)
     logger.info(f"  Loaded gene order for {len(gene_order)} scaffolds")
 
     # Normalize validated hits (supports marker_validation.ValidatedMarkerHit)

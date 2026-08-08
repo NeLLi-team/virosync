@@ -269,17 +269,12 @@ BOUNDARY_TAXONOMY = (
 )
 
 
-def _resolve_taxonomy_target(target):
-    return _report_resolve_taxonomy_target(target, tax_labels)
-
-
 def _target_lineage(target):
     return _report_target_lineage(target, tax_labels)
 
 
 HOST_GENUS = ''
 HOST_TAXA = set()
-_LINEAGE_LEVELS = ['Domain', 'Supergroup', 'Order', 'Suborder', 'Family', 'Genus', 'Species']
 if _host_model_path.exists() and tax_labels:
     with open(_host_model_path) as _f:
         _host_weights = json.load(_f).get('token_weights', {})

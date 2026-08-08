@@ -51,7 +51,6 @@ TMVEC_EMBEDDING_WIDTH = 512
 class ViroSyncDatabaseManager:
     """Manages ViroSync reference databases."""
 
-    HMM_REQUIRED_FILES = ["models/combined.hmm"]
     REQUIRED_FILES = [
         "DB_VERSION",
         "DATABASE_README.txt",
@@ -266,11 +265,6 @@ class ViroSyncDatabaseManager:
 
     @staticmethod
     def _safe_extract_archive(archive_path: Path, target_dir: Path) -> None:
-        safe_extract_archive(archive_path, target_dir)
-
-    @staticmethod
-    def _extract_archive(archive_path: Path, target_dir: Path) -> None:
-        """Compatibility alias for the strict core-resource extractor."""
         safe_extract_archive(archive_path, target_dir)
 
     @staticmethod
@@ -850,8 +844,8 @@ class ViroSyncDatabaseManager:
                 if not resolved.get(key) or not Path(str(resolved[key])).exists():
                     resolved[key] = str(value) if value is not None else None
 
-            # Propagate defaults into nested phase3 dict so that
-            # _from_flat_dict picks up resolved paths instead of None.
+            # Propagate defaults into the nested phase3 dict so config loading
+            # picks up resolved paths instead of None.
             if isinstance(resolved.get("phase3"), dict):
                 phase3_cfg = resolved["phase3"]
                 for key in ("tmvec_database_dir", "interproscan_dir"):
