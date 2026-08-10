@@ -21,6 +21,10 @@ from virosync.pipeline.phase1.hhg_seeding import (
     HMMHit,
     validate_hmm_hits_with_combined_db,
 )
+from virosync.pipeline.phase1.marker_validation import (
+    NovelMarkerCriteria,
+    filter_validated_markers,
+)
 
 
 def _fake_extract(hits, proteome_fasta, output_fasta):
@@ -128,3 +132,62 @@ def test_validate_hmm_hits_forwards_optional_genome_fasta(tmp_path: Path) -> Non
         )
 
     assert seen_kwargs.get("genome_fasta") == genome
+
+
+def test_filter_uses_prodigal_coordinates_without_reading_genome(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+        ">contig_1_2 # 301 # 600 # + # ID=1_2;partial=00\n"
+        f"{'M' * 100}\n"
+        ">contig_2_1 # 1 # 300 # + # ID=2_1;partial=00\n"
+        f"{'M' * 100}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("")
+    missing_genome = tmp_path / "not-read.fna"
+    hits = [
+        HMMHit(query, "mcp", 120.0, 1e-40, 120.0, 1, 100)
+        for query in ("contig_1_1", "contig_1_2", "contig_2_1")
+    ]
+
+    markers = filter_validated_markers(
+        hits,
+        diamond,
+        proteome,
+        genome_fasta=missing_genome,
+        novel_criteria=NovelMarkerCriteria(min_hmm_coverage=0.3),
+    )
+
+    assert [marker.validation_status for marker in markers] == [
+        "validated_novel",
+        "validated_novel",
+        "unvalidated",
+    ]
+
+
+def test_filter_reads_genome_for_frame_coordinates(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">contig_1_frame=1\nMMMMMMMMMM\n")
+    genome = tmp_path / "genome.fna"
+    genome.write_text(f">contig_1\n{'A' * 300}\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("")
+    hit = HMMHit("contig_1_frame=1", "mcp", 120.0, 1e-40, 120.0, 1, 10)
+
+    markers = filter_validated_markers(
+        [hit],
+        diamond,
+        proteome,
+        genome_fasta=genome,
+        novel_criteria=NovelMarkerCriteria(require_cluster=False),
+    )
+
+    assert len(markers) == 1
+    assert (markers[0].scaffold, markers[0].start, markers[0].end, markers[0].strand) == (
+        "contig_1",
+        0,
+        30,
+        "+",
+    )

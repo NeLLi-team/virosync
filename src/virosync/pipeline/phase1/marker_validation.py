@@ -51,6 +51,7 @@ Validation rules in the production filter:
 """
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -458,13 +459,7 @@ def filter_validated_markers(
             scaffold, start, end, strand = prodigal_parsed
             porf_coords[name] = (scaffold, start, end, strand)
 
-    contig_lengths = {}
-    if genome_fasta:
-        with SequenceFile(genome_fasta) as seq_handle:
-            for record in seq_handle:
-                name = record.name.decode() if isinstance(record.name, bytes) else record.name
-                seq = record.sequence.decode() if isinstance(record.sequence, bytes) else str(record.sequence)
-                contig_lengths[name] = len(seq)
+    contig_lengths: Optional[dict[str, int]] = None
 
     # Parse Diamond results
     diamond_hits = {}  # query -> list of (rank, target, bits, pident, evalue)
@@ -512,6 +507,11 @@ def filter_validated_markers(
                 hit.query_end,
             )
 
+    hmm_hits_by_scaffold = Counter(
+        query_porf.split("|aa", 1)[0].rsplit("_", 1)[0]
+        for query_porf in hmm_hit_lookup
+    )
+
     hmm_group_counts = {"GVOGm": 0, "OG": 0, "OTHER": 0}
     for hmm_target, _score, _evalue, _qstart, _qend in hmm_hit_lookup.values():
         hmm_group_counts[_marker_group(hmm_target)] += 1
@@ -540,7 +540,14 @@ def filter_validated_markers(
             base_query = base_query[2:-1]
         if not coords:
             coords = porf_coords.get(base_query)
-        if not coords and contig_lengths:
+        if not coords and genome_fasta:
+            if contig_lengths is None:
+                contig_lengths = {}
+                with SequenceFile(genome_fasta) as seq_handle:
+                    for record in seq_handle:
+                        name = record.name.decode() if isinstance(record.name, bytes) else record.name
+                        seq = record.sequence.decode() if isinstance(record.sequence, bytes) else str(record.sequence)
+                        contig_lengths[name] = len(seq)
             contig, frame, offset = parse_frame_id(base_query)
             contig_len = contig_lengths.get(contig)
             if frame and contig_len:
@@ -571,11 +578,9 @@ def filter_validated_markers(
 
             # Check for nearby markers on same scaffold (simplified check)
             # A marker is "nearby" if another HMM hit exists on the same scaffold
-            has_nearby_markers = sum(
-                1 for other_porf, (_, _, _, _, _) in hmm_hit_lookup.items()
-                if other_porf != query_porf
-                and other_porf.split("|aa", 1)[0].rsplit("_", 1)[0] == scaffold
-            ) > 0
+            query_scaffold = query_porf.split("|aa", 1)[0].rsplit("_", 1)[0]
+            own_hit_count = int(query_scaffold == scaffold)
+            has_nearby_markers = hmm_hits_by_scaffold[scaffold] > own_hit_count
 
             # Use validate_hmm_hit to determine status
             validation_result = validate_hmm_hit(
