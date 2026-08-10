@@ -998,8 +998,10 @@ else:
         name='eve_ani_network',
         engine='sfdp',
         graph_attr={
-            'overlap': 'false',
-            'splines': 'true',
+            'overlap': 'scale',
+            'splines': 'line',
+            'size': '40,40',
+            'dpi': '96',
             'bgcolor': 'white',
             'fontname': 'Helvetica',
             'fontsize': '12',

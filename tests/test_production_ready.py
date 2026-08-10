@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.ci import check_production_ready
+from virosync.report import graphviz_runtime
 
 
 def test_resource_release_surfaces_parse_and_cross_check() -> None:
@@ -50,6 +53,82 @@ def test_complete_production_guard_passes_tracked_release_surface() -> None:
     assert check_production_ready.main() == 0
 
 
+def test_production_guard_reports_graphviz_render_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        check_production_ready,
+        "graphviz_runtime_error",
+        lambda: "Graphviz cannot render the required sfdp PNG report: missing PNG plugin",
+    )
+    failures: list[str] = []
+
+    check_production_ready.check_graphviz_runtime(failures)
+
+    assert failures == [
+        "Graphviz cannot render the required sfdp PNG report: missing PNG plugin"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            subprocess.CompletedProcess(
+                ["dot"], 1, stdout=b"", stderr=b"missing PNG plugin"
+            ),
+            "Graphviz cannot render the required sfdp PNG report: missing PNG plugin",
+        ),
+        (
+            subprocess.CompletedProcess(
+                ["dot"], 0, stdout=b"not a PNG", stderr=b""
+            ),
+            "Graphviz cannot render the required sfdp PNG report",
+        ),
+    ],
+)
+def test_graphviz_runtime_reports_bad_process_results(
+    monkeypatch,
+    result: subprocess.CompletedProcess,
+    expected: str,
+) -> None:
+    stub = SimpleNamespace(
+        run=lambda *args, **kwargs: result,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    monkeypatch.setattr(graphviz_runtime, "subprocess", stub)
+
+    assert graphviz_runtime.graphviz_runtime_error() == expected
+
+
+def test_graphviz_runtime_reports_missing_executable(monkeypatch) -> None:
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("dot is missing")
+
+    stub = SimpleNamespace(
+        run=missing,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    monkeypatch.setattr(graphviz_runtime, "subprocess", stub)
+
+    assert graphviz_runtime.graphviz_runtime_error() == (
+        "Graphviz runtime is unavailable: dot is missing"
+    )
+
+
+def test_graphviz_runtime_times_out(monkeypatch) -> None:
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    stub = SimpleNamespace(
+        run=timeout,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+    monkeypatch.setattr(graphviz_runtime, "subprocess", stub)
+
+    assert graphviz_runtime.graphviz_runtime_error(timeout_seconds=2) == (
+        "Graphviz sfdp PNG render timed out after 2 seconds"
+    )
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -76,4 +155,3 @@ def test_complete_production_guard_passes_tracked_release_surface() -> None:
 )
 def test_generated_private_and_legacy_benchmark_paths_are_forbidden(path: str) -> None:
     assert check_production_ready.is_forbidden_tracked_path(path) is True
-

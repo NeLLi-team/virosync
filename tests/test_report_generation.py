@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,10 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
 )
 from virosync.report import generate as report_generate
 from virosync.report.generate import generate_eve_report
+from virosync.report.graphviz_runtime import (
+    ANI_NETWORK_ENGINE,
+    ANI_NETWORK_RENDER_ATTR,
+)
 
 
 def test_generate_eve_report_writes_jupyter_notebook(
@@ -46,6 +51,7 @@ def test_generate_eve_report_writes_jupyter_notebook(
         "papermill",
         SimpleNamespace(execute_notebook=_execute_notebook),
     )
+    monkeypatch.setattr(report_generate.logger, "isEnabledFor", lambda _level: False)
 
     report_paths = generate_eve_report(
         output_dir=tmp_path,
@@ -284,6 +290,44 @@ def test_notebook_network_filters_edges_at_95_ani_and_50_aligned_fraction(
     ]
     assert namespace["n_omitted"] == 2
     assert (tmp_path / "eve_ani_network.png").is_file()
+
+
+def test_notebook_dense_network_renders_with_bounded_dimensions(tmp_path: Path) -> None:
+    namespace = _ani_namespace(tmp_path)
+    node_ids = [f"EVE_demo|contig_{index}_10-90" for index in range(48)]
+    namespace["profiles"] = {
+        eve_id: {
+            "taxonomy_class": "NCLDV" if index % 2 else "PPV",
+            "cluster_id": 0,
+            "cluster_size": len(node_ids),
+            "confidence_tier": "HIGH",
+        }
+        for index, eve_id in enumerate(node_ids)
+    }
+    exec(_notebook_cell("eve_cluster_map = {eid:"), namespace)
+    _write_edges(
+        tmp_path,
+        [
+            (node_ids[index], node_ids[(index + offset) % len(node_ids)], 99.0, 90.0, 90.0)
+            for index in range(len(node_ids))
+            for offset in (1, 5)
+        ],
+    )
+
+    exec(_notebook_cell("import graphviz"), namespace)
+
+    png = (tmp_path / "eve_ani_network.png").read_bytes()
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    width, height = struct.unpack(">II", png[16:24])
+    assert width <= 3_840
+    assert height <= 3_840
+    assert namespace["graph"].engine == ANI_NETWORK_ENGINE
+    assert {
+        name: namespace["graph"].graph_attr[name]
+        for name in ANI_NETWORK_RENDER_ATTR
+    } == ANI_NETWORK_RENDER_ATTR
+    assert len(namespace["network_eves"]) == len(node_ids)
+    assert len(namespace["network_edges"]) == 96
 
 
 @pytest.mark.parametrize("rows", [None, []])

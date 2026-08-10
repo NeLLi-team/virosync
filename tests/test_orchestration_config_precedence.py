@@ -774,6 +774,33 @@ def test_unused_marker_build_inputs_are_not_broadly_existence_checked(
     _validate_runtime_config(config)
 
 
+def test_runtime_config_rejects_graphviz_render_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hmm = tmp_path / "markers.hmm"
+    marker = tmp_path / "marker.dmnd"
+    hmm.write_bytes(b"hmm")
+    marker.write_bytes(b"db")
+    config = PipelineConfig.from_dict(
+        {
+            "databases": {
+                "hmm_database": str(hmm),
+                "marker_db": str(marker),
+            },
+            "phase1": {"frameshift_screening_enabled": False},
+        }
+    )
+    monkeypatch.setattr(
+        orchestration_cli,
+        "graphviz_runtime_error",
+        lambda: "Graphviz cannot render the required sfdp PNG report",
+    )
+
+    with pytest.raises(click.ClickException, match="Graphviz cannot render"):
+        _validate_runtime_config(config)
+
+
 def test_selected_marker_build_inputs_are_existence_checked(tmp_path: Path) -> None:
     hmm = tmp_path / "markers.hmm"
     faa_dir = tmp_path / "faa"

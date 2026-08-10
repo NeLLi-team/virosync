@@ -17,6 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from virosync.config.application_config import ApplicationConfig
 from virosync.config.pipeline_config import ConfigError
+from virosync.report.graphviz_runtime import graphviz_runtime_error
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.resource_manifest import (
     ResourceManifestError,
@@ -372,6 +373,14 @@ def check_github_tag(failures: list[str]) -> None:
     )
 
 
+def check_graphviz_runtime(failures: list[str]) -> None:
+    """Require the locked environment to render the report's PNG format."""
+
+    error = graphviz_runtime_error()
+    if error is not None:
+        failures.append(error)
+
+
 def main() -> int:
     failures: list[str] = []
     check_software_version(failures)
@@ -379,6 +388,7 @@ def main() -> int:
     check_resource_documentation(failures)
     check_artifact_exclusion(failures)
     check_github_tag(failures)
+    check_graphviz_runtime(failures)
 
     if failures:
         print("Production readiness checks failed:", file=sys.stderr)

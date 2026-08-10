@@ -29,6 +29,7 @@ from virosync.config import (
     FeatureResolution,
     PipelineConfig,
 )
+from virosync.report.graphviz_runtime import graphviz_runtime_error
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.executables import resolve_boltz_executable
 
@@ -569,6 +570,9 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     """Fail with all resource/config errors after explicit resolution."""
     errors = config.validate()
     errors.extend(config.validate_database_paths(check_files=True))
+    graphviz_error = graphviz_runtime_error()
+    if graphviz_error is not None:
+        errors.append(graphviz_error)
     if config.phase1.frameshift_screening_enabled:
         missing_bath_tools = [
             name
