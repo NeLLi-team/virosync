@@ -22,7 +22,7 @@ CODING_DNA = "ATG" + ("GCT" * 143)
 EXPECTED_PROTEIN = "M" + ("A" * 143)
 EXPECTED_DIRECT_CONSUMERS = {
     "orchestration/utils.py": 1,
-    "pipeline/phase0/prodigal.py": 6,
+    "pipeline/phase0/prodigal.py": 7,
     "pipeline/phase1/hhg_seeding.py": 1,
     "pipeline/phase1/marker_validation.py": 1,
     "pipeline/phase2/boundary_diamond.py": 1,

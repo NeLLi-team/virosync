@@ -33,6 +33,7 @@ _TILE_ID_PREFIX = "__virosync_tile_"
 _SEQUENCE_DATA_RE = re.compile(
     r'^# Sequence Data: seqnum=\d+;seqlen=(\d+);seqhdr="(.*)"\s*$'
 )
+_TRANSL_TABLE_RE = re.compile(r"(?:^|;)transl_table=(\d+)(?:;|$)")
 _KNOWN_CLEANUP_ERRORS = (
     "double free or corruption",
     "free(): invalid pointer",
@@ -55,6 +56,7 @@ class _ProdigalValidation:
     gff_count: int
     faa_count: int
     discarded_coordinates: tuple[tuple[str, int, int, str], ...] = ()
+    reconstructed_coordinates: tuple[tuple[str, int, int, str], ...] = ()
 
 
 def parse_prodigal_header(header: str, record_id: str) -> Optional[tuple[str, int, int, str]]:
@@ -159,7 +161,7 @@ def _validate_tiled_prodigal_output(
     proteins_faa: Path,
     genes_gff: Path,
     tile_cores: Optional[dict[str, tuple[int, int]]] = None,
-    allow_unowned_gff_only: bool = False,
+    allow_cleanup_recovery: bool = False,
 ) -> _ProdigalValidation:
     """Require complete input metadata and matching FAA/GFF CDS coordinates."""
     if not proteins_faa.exists():
@@ -171,6 +173,11 @@ def _validate_tiled_prodigal_output(
         with proteins_faa.open("rb") as handle:
             handle.seek(-1, 2)
             has_final_newline = handle.read(1) == b"\n"
+    gff_has_final_newline = True
+    if genes_gff.stat().st_size:
+        with genes_gff.open("rb") as handle:
+            handle.seek(-1, 2)
+            gff_has_final_newline = handle.read(1) == b"\n"
 
     expected_sequences: Counter[tuple[str, int]] = Counter()
     input_ids: list[str] = []
@@ -231,7 +238,7 @@ def _validate_tiled_prodigal_output(
         try:
             parsed = parse_prodigal_header(record.description, record.id)
         except ValueError as exc:
-            if allow_unowned_gff_only and index == len(faa_records) - 1:
+            if allow_cleanup_recovery and index == len(faa_records) - 1:
                 malformed_final_header = True
                 continue
             raise RuntimeError(
@@ -239,7 +246,7 @@ def _validate_tiled_prodigal_output(
             ) from exc
         if (
             parsed is None
-            and allow_unowned_gff_only
+            and allow_cleanup_recovery
             and index == len(faa_records) - 1
         ):
             malformed_final_header = True
@@ -265,7 +272,7 @@ def _validate_tiled_prodigal_output(
                 (coordinate, f"internal stop codon in Prodigal protein: {record.id}")
             )
 
-    if not allow_unowned_gff_only:
+    if not allow_cleanup_recovery:
         if not has_final_newline:
             raise RuntimeError(f"protein FASTA lacks a final newline: {proteins_faa}")
         if invalid_proteins:
@@ -323,22 +330,46 @@ def _validate_tiled_prodigal_output(
         raise RuntimeError("cleanup-abort output loss is not a contiguous GFF suffix")
 
     core_start, core_end = core
+    reconstructed = set()
+    discarded = set()
     for scaffold, start, end, strand in affected:
         if scaffold != record_id:
             raise RuntimeError(
                 f"cleanup-abort coordinate maps to unexpected record: {scaffold}"
             )
         if _owns_midpoint(start, end, core_start, core_end):
+            reconstructed.add((scaffold, start, end, strand))
+        else:
+            discarded.add((scaffold, start, end, strand))
+
+    if reconstructed:
+        if not gff_has_final_newline:
+            raise RuntimeError(f"Prodigal GFF lacks a final newline: {genes_gff}")
+        order_keys = [(start, end) for _, start, end, _ in gff_order]
+        if any(left >= right for left, right in zip(order_keys, order_keys[1:])):
             raise RuntimeError(
-                "cleanup-abort output is incomplete inside the owned core: "
-                f"{scaffold}:{start}-{end}({strand})"
+                "cleanup-abort GFF is not strictly coordinate ordered"
+            )
+        if not gff_order or gff_order[-1][1] < core_end:
+            raise RuntimeError(
+                "cleanup-abort GFF does not cover the owned core: "
+                f"last_start={gff_order[-1][1] if gff_order else 0}, "
+                f"core_end={core_end}"
             )
 
-    discarded = tuple(gff_order[affected_indices[0] :])
     return _ProdigalValidation(
         gff_count=sum(gff_coordinates.values()),
         faa_count=sum(faa_coordinates.values()),
-        discarded_coordinates=discarded,
+        discarded_coordinates=tuple(
+            coordinate
+            for coordinate in gff_order[affected_indices[0] :]
+            if coordinate in discarded
+        ),
+        reconstructed_coordinates=tuple(
+            coordinate
+            for coordinate in gff_order[affected_indices[0] :]
+            if coordinate in reconstructed
+        ),
     )
 
 
@@ -368,6 +399,7 @@ def _write_cleanup_abort_audit(
     returncode: int,
     stderr_path: Path,
     validation: _ProdigalValidation,
+    survivor_check_count: int = 0,
 ) -> Path:
     """Record every accepted partial-output cleanup abort."""
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -378,6 +410,7 @@ def _write_cleanup_abort_audit(
         "stderr": stderr,
         "gff_count": validation.gff_count,
         "faa_count": validation.faa_count,
+        "survivor_check_count": survivor_check_count,
         "discarded_coordinates": [
             {
                 "scaffold": scaffold,
@@ -386,6 +419,15 @@ def _write_cleanup_abort_audit(
                 "strand": strand,
             }
             for scaffold, start, end, strand in validation.discarded_coordinates
+        ],
+        "reconstructed_coordinates": [
+            {
+                "scaffold": scaffold,
+                "start_0based": start,
+                "end_exclusive": end,
+                "strand": strand,
+            }
+            for scaffold, start, end, strand in validation.reconstructed_coordinates
         ],
     }
     audit_path = audit_dir / f"{record_id}.json"
@@ -422,6 +464,198 @@ def _remove_discarded_proteins(
     temporary_path = proteins_faa.with_suffix(".clean.faa")
     SeqIO.write(retained, temporary_path, "fasta")
     temporary_path.replace(proteins_faa)
+
+
+def _parse_gff_attributes(text: str) -> list[str]:
+    """Return nonempty GFF attributes in their source order."""
+    return [item for item in text.rstrip(";").split(";") if item]
+
+
+def _translate_gff_feature(
+    sequence,
+    coordinate: tuple[str, int, int, str],
+    attributes: list[str],
+    translation_table: int,
+) -> str:
+    """Translate one Prodigal GFF feature using Prodigal's FASTA convention."""
+    _, start, end, strand = coordinate
+    coding = sequence[start:end]
+    if strand == "-":
+        coding = coding.reverse_complement()
+    if len(coding) % 3:
+        raise RuntimeError(
+            "Prodigal GFF CDS span is not divisible by three: "
+            f"{coordinate}"
+        )
+    values = {
+        key: value
+        for item in attributes
+        if "=" in item
+        for key, value in [item.split("=", 1)]
+    }
+    required = {"ID", "partial", "start_type", "genetic_code", "gc_cont"}
+    missing = sorted(required - set(values))
+    if missing:
+        raise RuntimeError(
+            "Prodigal GFF feature lacks required attributes: "
+            + ", ".join(missing)
+        )
+    feature_table = int(values["genetic_code"])
+    if feature_table != translation_table:
+        raise RuntimeError(
+            "Prodigal GFF feature translation table differs from Model Data"
+        )
+    if any(base not in "ACGTacgt" for base in str(coding)):
+        raise RuntimeError(
+            f"reconstructed Prodigal CDS contains an ambiguous base: {coordinate}"
+        )
+    protein = str(coding.translate(table=translation_table))
+    if protein and values["start_type"] != "Edge":
+        protein = "M" + protein[1:]
+    if "*" in protein[:-1]:
+        raise RuntimeError(
+            f"reconstructed Prodigal protein has an internal stop: {coordinate}"
+        )
+    return protein
+
+
+def _repair_cleanup_abort_proteins(
+    input_fasta: Path,
+    proteins_faa: Path,
+    genes_gff: Path,
+    validation: _ProdigalValidation,
+) -> int:
+    """Repair a proven buffered FAA suffix from complete Prodigal GFF calls."""
+    if not validation.reconstructed_coordinates:
+        _remove_discarded_proteins(
+            proteins_faa,
+            validation.discarded_coordinates,
+        )
+        return 0
+
+    inputs = list(SeqIO.parse(input_fasta, "fasta"))
+    if len(inputs) != 1:
+        raise RuntimeError("cleanup-abort reconstruction requires one input record")
+    input_record = inputs[0]
+
+    translation_table = None
+    gff_order = []
+    gff_attributes: dict[tuple[str, int, int, str], list[str]] = {}
+    with genes_gff.open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if line.startswith("# Model Data:"):
+                match = _TRANSL_TABLE_RE.search(line.strip())
+                if not match:
+                    raise RuntimeError(
+                        f"missing translation table at {genes_gff}:{line_number}"
+                    )
+                translation_table = int(match.group(1))
+                continue
+            if line.startswith("#") or not line.strip():
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != 9 or fields[2] != "CDS":
+                continue
+            coordinate = (
+                fields[0],
+                int(fields[3]) - 1,
+                int(fields[4]),
+                fields[6],
+            )
+            gff_order.append(coordinate)
+            gff_attributes[coordinate] = _parse_gff_attributes(fields[8])
+    if translation_table is None:
+        raise RuntimeError("cleanup-abort GFF lacks Prodigal Model Data")
+
+    affected = set(validation.discarded_coordinates)
+    affected.update(validation.reconstructed_coordinates)
+    survivor_records = {}
+    records = list(SeqIO.parse(proteins_faa, "fasta"))
+    for index, record in enumerate(records):
+        try:
+            parsed = parse_prodigal_header(record.description, record.id)
+        except ValueError:
+            if index == len(records) - 1:
+                continue
+            raise
+        if parsed is None and index == len(records) - 1:
+            continue
+        if parsed is None:
+            raise RuntimeError(f"unparseable Prodigal protein header: {record.id}")
+        if parsed not in affected:
+            survivor_records[parsed] = record
+
+    expected_survivors = [
+        coordinate for coordinate in gff_order if coordinate not in affected
+    ]
+    if not expected_survivors:
+        raise RuntimeError("cleanup-abort reconstruction has no intact survivors")
+    if set(survivor_records) != set(expected_survivors):
+        raise RuntimeError("cleanup-abort survivor coordinates differ from the GFF")
+    for coordinate in expected_survivors:
+        reconstructed = _translate_gff_feature(
+            input_record.seq,
+            coordinate,
+            gff_attributes[coordinate],
+            translation_table,
+        )
+        if reconstructed != str(survivor_records[coordinate].seq):
+            raise RuntimeError(
+                "cleanup-abort survivor protein does not round-trip from GFF: "
+                f"{coordinate}"
+            )
+
+    temporary_path = proteins_faa.with_suffix(".repaired.faa")
+    reconstructed_set = set(validation.reconstructed_coordinates)
+    discarded_set = set(validation.discarded_coordinates)
+    with temporary_path.open("w") as handle:
+        for coordinate in gff_order:
+            if coordinate in discarded_set:
+                continue
+            if coordinate in survivor_records:
+                record = survivor_records[coordinate]
+                header = f">{record.description}\n"
+                protein = str(record.seq)
+            elif coordinate in reconstructed_set:
+                attributes = gff_attributes[coordinate]
+                metadata = []
+                for attribute in attributes:
+                    metadata.append(attribute)
+                    if attribute.startswith("gc_cont="):
+                        break
+                values = {
+                    key: value
+                    for item in metadata
+                    if "=" in item
+                    for key, value in [item.split("=", 1)]
+                }
+                try:
+                    gene_index = values["ID"].split("_")[-1]
+                except KeyError as exc:
+                    raise RuntimeError("reconstructed GFF feature lacks ID") from exc
+                scaffold, start, end, strand = coordinate
+                header = _format_prodigal_header(
+                    f"{scaffold}_{gene_index}",
+                    start,
+                    end,
+                    strand,
+                    metadata,
+                )
+                protein = _translate_gff_feature(
+                    input_record.seq,
+                    coordinate,
+                    attributes,
+                    translation_table,
+                )
+            else:
+                raise RuntimeError(
+                    f"cleanup-abort repair cannot resolve GFF feature: {coordinate}"
+                )
+            handle.write(header)
+            for offset in range(0, len(protein), 60):
+                handle.write(protein[offset : offset + 60] + "\n")
+    temporary_path.replace(proteins_faa)
+    return len(expected_survivors)
 
 
 def _run_prodigal_on_chunk(
@@ -525,13 +759,19 @@ def _run_prodigal_on_chunk(
                         retry_output,
                         retry_gff,
                         tile_cores=tile_cores,
-                        allow_unowned_gff_only=known_cleanup,
+                        allow_cleanup_recovery=known_cleanup,
                     )
                     if known_cleanup:
                         if retry_output.stat().st_size == 0:
                             raise RuntimeError(
                                 "nonzero Prodigal-GV exit produced no proteins"
                             )
+                        survivor_check_count = _repair_cleanup_abort_proteins(
+                            retry_input,
+                            retry_output,
+                            retry_gff,
+                            validation,
+                        )
                         audit_path = _write_cleanup_abort_audit(
                             Path(chunk_out).parent.parent
                             / "accepted_cleanup_aborts",
@@ -539,10 +779,7 @@ def _run_prodigal_on_chunk(
                             retry_completed.returncode,
                             retry_stderr,
                             validation,
-                        )
-                        _remove_discarded_proteins(
-                            retry_output,
-                            validation.discarded_coordinates,
+                            survivor_check_count,
                         )
                         logger.warning(
                             "Accepted owned-core-complete output after known "
