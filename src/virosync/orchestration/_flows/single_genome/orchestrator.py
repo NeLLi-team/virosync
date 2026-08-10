@@ -111,10 +111,6 @@ logger = logging.getLogger(__name__)
 
 _RUN_SUMMARY_SCHEMA_VERSION = 3
 _VERIFIED_CORE_INVENTORIES: dict[Path, tuple[object, ...]] = {}
-_EXECUTABLE_IDENTITY_CACHE: dict[
-    tuple[str, Path],
-    tuple[tuple[int, int, int, int, int], object],
-] = {}
 
 _FINAL_ROOT_NAMES = frozenset(
     {
@@ -424,25 +420,11 @@ def _enabled_resource_identities(flat_config: dict) -> list:
 
 def _executable_path_identity(name: str, executable: str | Path):
     path = Path(executable).resolve(strict=True)
-    metadata = path.stat()
-    signature = (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
-    cache_key = (name, path)
-    cached = _EXECUTABLE_IDENTITY_CACHE.get(cache_key)
-    if cached is not None and cached[0] == signature:
-        return cached[1]
-    identity = build_resource_set_identity(
+    return build_resource_set_identity(
         f"executable:{name}",
         "resolved-binary",
         {path.name: path},
     )
-    _EXECUTABLE_IDENTITY_CACHE[cache_key] = (signature, identity)
-    return identity
 
 
 def _executable_resource_identity(name: str):

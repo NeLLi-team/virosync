@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 import csv
 from dataclasses import dataclass, fields, is_dataclass
 import fcntl
+from functools import wraps
 import hashlib
 import io
 import json
@@ -45,23 +47,14 @@ _TERMINAL_PHASE_OUTCOMES = frozenset({"terminal_zero", "terminal_ablation"})
 
 _SHA256_LENGTH = 64
 _MAX_STATE_BYTES = 16 * 1024 * 1024
-_MAX_CHECKPOINT_BYTES = 512 * 1024 * 1024
-_ARTIFACT_OBSERVATION_CACHE: dict[
-    tuple[str, str, str],
-    tuple[tuple[int, int, int, int, int], tuple[int, str, int | None]],
-] = {}
-_INPUT_SCAFFOLD_CACHE: dict[
-    tuple[str, int, str],
-    tuple[tuple[int, int, int, int, int], dict[str, int]],
-] = {}
-_CODE_IDENTITY_CACHE: dict[
-    tuple[str, str],
-    tuple[tuple[object, ...], CodeIdentity],
-] = {}
-_RESOURCE_INVENTORY_CACHE: dict[
-    str,
-    tuple[tuple[object, ...], list[dict[str, object]]],
-] = {}
+# The largest measured Phase-1 state is 597,742,200 bytes; 1 GiB gives 1.80x room.
+_MAX_CHECKPOINT_BYTES = 1024 * 1024 * 1024
+_ARTIFACT_OBSERVATION_CACHE: ContextVar[
+    dict[tuple[str, str, str], tuple[int, str, int | None]] | None
+] = ContextVar("artifact_observation_cache", default=None)
+_INPUT_SCAFFOLD_CACHE: ContextVar[
+    dict[tuple[str, int, str], dict[str, int]] | None
+] = ContextVar("input_scaffold_cache", default=None)
 _RUNTIME_ENVIRONMENT_SHA256: str | None = None
 _PHASE_DIRECTORIES = {
     0: ("phase0",),
@@ -82,6 +75,31 @@ _FINAL_OUTPUTS = (
     "gvclass_results.tsv",
     "host_signature_model.png",
 )
+
+
+@contextmanager
+def _validation_cache_scope() -> Iterator[None]:
+    """Read each authenticated path once within one public decision.
+
+    A cache hit is the decision's existing snapshot and does not re-stat the path.
+    """
+
+    artifact_token = _ARTIFACT_OBSERVATION_CACHE.set({})
+    scaffold_token = _INPUT_SCAFFOLD_CACHE.set({})
+    try:
+        yield
+    finally:
+        _INPUT_SCAFFOLD_CACHE.reset(scaffold_token)
+        _ARTIFACT_OBSERVATION_CACHE.reset(artifact_token)
+
+
+def _scoped_validation_cache(function: Any) -> Any:
+    @wraps(function)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with _validation_cache_scope():
+            return function(*args, **kwargs)
+
+    return wrapper
 
 # These are the minimum reloadable artifacts for a non-terminal phase.  A phase
 # marker may record additional diagnostics, but it cannot make an empty or
@@ -460,6 +478,10 @@ def _observe_artifact(
     relative_path: str,
     schema: str,
 ) -> tuple[int, str, int | None]:
+    cache_key = (str(root.absolute()), relative_path, schema)
+    cache = _ARTIFACT_OBSERVATION_CACHE.get()
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     descriptor, metadata = _open_artifact_no_follow(root, relative_path)
     signature = (
         metadata.st_dev,
@@ -468,11 +490,6 @@ def _observe_artifact(
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
-    cache_key = (str(root.absolute()), relative_path, schema)
-    cached = _ARTIFACT_OBSERVATION_CACHE.get(cache_key)
-    if cached is not None and cached[0] == signature:
-        os.close(descriptor)
-        return cached[1]
     digest = hashlib.sha256()
     suffix = PurePosixPath(relative_path).suffix.lower()
     lowered = schema.lower()
@@ -541,7 +558,8 @@ def _observe_artifact(
     if after_identity != signature:
         raise ValueError(f"artifact changed while hashing: {relative_path}")
     observation = (metadata.st_size, digest.hexdigest(), row_count)
-    _ARTIFACT_OBSERVATION_CACHE[cache_key] = (signature, observation)
+    if cache is not None:
+        cache[cache_key] = observation
     return observation
 
 
@@ -549,7 +567,10 @@ def _read_artifact_json(root: Path, relative_path: str) -> dict[str, object]:
     descriptor, metadata = _open_artifact_no_follow(root, relative_path)
     if metadata.st_size <= 0 or metadata.st_size > _MAX_CHECKPOINT_BYTES:
         os.close(descriptor)
-        raise ValueError(f"artifact JSON has invalid size: {relative_path}")
+        raise ValueError(
+            f"artifact JSON has invalid size: {relative_path} "
+            f"(observed={metadata.st_size}, allowed=1-{_MAX_CHECKPOINT_BYTES})"
+        )
     with os.fdopen(descriptor, "rb", closefd=True) as handle:
         content = handle.read()
         after = os.fstat(handle.fileno())
@@ -1014,6 +1035,10 @@ def _authenticated_scaffold_lengths(
         input_identity.get("sha256"),
         "input sha256",
     )
+    cache_key = (input_path, expected_size, expected_sha256)
+    cache = _INPUT_SCAFFOLD_CACHE.get()
+    if cache is not None and cache_key in cache:
+        return dict(cache[cache_key])
     descriptor, metadata = _open_regular_no_follow(Path(input_path))
     signature = (
         metadata.st_dev,
@@ -1022,11 +1047,6 @@ def _authenticated_scaffold_lengths(
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
-    cache_key = (input_path, expected_size, expected_sha256)
-    cached = _INPUT_SCAFFOLD_CACHE.get(cache_key)
-    if cached is not None and cached[0] == signature:
-        os.close(descriptor)
-        return dict(cached[1])
     digest = hashlib.sha256()
     lengths: dict[str, int] = {}
     current: str | None = None
@@ -1073,11 +1093,8 @@ def _authenticated_scaffold_lengths(
         raise ValueError("input FASTA contains no scaffold records")
     if metadata.st_size != expected_size or digest.hexdigest() != expected_sha256:
         raise ValueError("input FASTA differs from the run identity")
-    _bounded_cache_put(
-        _INPUT_SCAFFOLD_CACHE,
-        cache_key,
-        (signature, dict(lengths)),
-    )
+    if cache is not None:
+        cache[cache_key] = dict(lengths)
     return lengths
 
 
@@ -1170,22 +1187,12 @@ def _hash_relative_file(root: Path, relative_path: str) -> tuple[int, str]:
     return metadata.st_size, digest.hexdigest()
 
 
-def _bounded_cache_put(cache: dict, key: object, value: object) -> None:
-    cache[key] = value
-    while len(cache) > 16:
-        cache.pop(next(iter(cache)))
-
-
 def _synthetic_resource_inventory(root: Path) -> list[dict[str, object]]:
     root = _require_directory_no_follow(root, "resource root")
     relative_paths, signature = _scan_regular_tree(
         root,
         label="resource tree",
     )
-    cache_key = str(root.absolute())
-    cached = _RESOURCE_INVENTORY_CACHE.get(cache_key)
-    if cached is not None and cached[0] == signature:
-        return [dict(item) for item in cached[1]]
     if not relative_paths:
         raise ValueError(f"resource tree contains no files: {root}")
     inventory = [
@@ -1199,13 +1206,7 @@ def _synthetic_resource_inventory(root: Path) -> list[dict[str, object]]:
     )
     if after_paths != relative_paths or after_signature != signature:
         raise ValueError("resource tree changed while hashing")
-    normalized = sorted(inventory, key=lambda item: str(item["path"]))
-    _bounded_cache_put(
-        _RESOURCE_INVENTORY_CACHE,
-        cache_key,
-        (signature, normalized),
-    )
-    return [dict(item) for item in normalized]
+    return sorted(inventory, key=lambda item: str(item["path"]))
 
 
 def build_resource_identity(
@@ -1361,10 +1362,6 @@ def build_code_identity(
         label="source tree",
         python_only=True,
     )
-    cache_key = (str(root.absolute()), version)
-    cached = _CODE_IDENTITY_CACHE.get(cache_key)
-    if cached is not None and cached[0] == signature:
-        return cached[1]
     if not relative_paths:
         raise ValueError(f"source root contains no Python files: {root}")
     inventory = [
@@ -1379,18 +1376,12 @@ def build_code_identity(
     )
     if after_paths != relative_paths or after_signature != signature:
         raise ValueError("source tree changed while hashing")
-    identity = CodeIdentity(
+    return CodeIdentity(
         version=version,
         source_sha256=canonical_sha256(
             {"schema_version": 1, "files": inventory}
         ),
     )
-    _bounded_cache_put(
-        _CODE_IDENTITY_CACHE,
-        cache_key,
-        (signature, identity),
-    )
-    return identity
 
 
 def build_environment_identity(
@@ -1917,6 +1908,7 @@ def _fsync_artifact(root: Path, artifact: ArtifactIdentity) -> None:
             os.close(directory_fd)
 
 
+@_scoped_validation_cache
 def publish_phase_completion(
     output_dir: str | Path,
     record: PhaseRecord | None = None,
@@ -2068,6 +2060,7 @@ def _entry_exists(path: Path) -> bool:
     return True
 
 
+@_scoped_validation_cache
 def publish_run_started(
     output_dir: str | Path,
     run_fingerprint: str | None = None,
@@ -2077,10 +2070,6 @@ def publish_run_started(
 ) -> RunState:
     """Publish ``running`` before Phase 0 and advance the attempt counter."""
 
-    # Observation reuse is scoped to one attempt. A later attempt must read
-    # every artifact again even when metadata appears unchanged.
-    _ARTIFACT_OBSERVATION_CACHE.clear()
-    _INPUT_SCAFFOLD_CACHE.clear()
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     root = _require_directory_no_follow(root, "output directory")
@@ -2958,6 +2947,7 @@ def _success_artifacts_match_terminal_record(
     return all(recorded.get(artifact.relative_path) == artifact for artifact in artifacts)
 
 
+@_scoped_validation_cache
 def publish_run_success(
     output_dir: str | Path,
     *,
@@ -3050,6 +3040,7 @@ def publish_run_success(
     return success
 
 
+@_scoped_validation_cache
 def plan_resume(
     output_dir: str | Path,
     *,
@@ -3057,10 +3048,6 @@ def plan_resume(
 ) -> ResumePlan:
     """Validate state and return only the reusable sequential phase prefix."""
 
-    # Reuse observations inside this decision, never across independent resume
-    # decisions (including storage changes that preserve visible metadata).
-    _ARTIFACT_OBSERVATION_CACHE.clear()
-    _INPUT_SCAFFOLD_CACHE.clear()
     _require_sha256(expected_run_fingerprint, "expected_run_fingerprint")
     root = Path(output_dir)
     try:

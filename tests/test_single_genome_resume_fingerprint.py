@@ -24,6 +24,7 @@ from virosync.pipeline.phase0.masking import mask_genome_pipeline
 from virosync.orchestration._flows.single_genome import (
     orchestrator as orchestrator_module,
 )
+from virosync.orchestration._flows.single_genome import run_state as run_state_module
 from virosync.orchestration._flows.single_genome.manifest import (
     _FINGERPRINT_CONFIG_FIELDS,
     _FINGERPRINT_ENVIRONMENT_FIELDS,
@@ -432,6 +433,80 @@ def test_same_size_installed_source_mutation_changes_full_run_fingerprint(
     assert compute_run_fingerprint(before_identity) != compute_run_fingerprint(
         after_identity
     )
+
+
+def test_code_identity_reads_source_on_each_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "virosync"
+    source_root.mkdir()
+    (source_root / "module.py").write_text("VALUE = 1\n")
+    original_hash = run_state_module._hash_relative_file
+    calls = 0
+
+    def tracked_hash(root: Path, relative_path: str) -> tuple[int, str]:
+        nonlocal calls
+        calls += 1
+        return original_hash(root, relative_path)
+
+    monkeypatch.setattr(run_state_module, "_hash_relative_file", tracked_hash)
+    build_code_identity(source_root, version="test")
+    build_code_identity(source_root, version="test")
+
+    assert calls == 2
+
+
+def test_manifestless_resource_identity_reads_members_on_each_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource_root = tmp_path / "optional-resource"
+    resource_root.mkdir()
+    (resource_root / "payload.tsv").write_text("id\tvalue\n1\tA\n")
+    original_hash = run_state_module._hash_relative_file
+    calls = 0
+
+    def tracked_hash(root: Path, relative_path: str) -> tuple[int, str]:
+        nonlocal calls
+        calls += 1
+        return original_hash(root, relative_path)
+
+    monkeypatch.setattr(run_state_module, "_hash_relative_file", tracked_hash)
+    for _ in range(2):
+        run_state_module.build_resource_identity(
+            "optional",
+            "test",
+            resource_root,
+            kind="optional",
+        )
+
+    assert calls == 2
+
+
+def test_executable_identity_reads_binary_on_each_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / "tool"
+    binary.write_bytes(b"TOOL0001")
+    original_builder = orchestrator_module.build_resource_set_identity
+    calls = 0
+
+    def tracked_builder(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_resource_set_identity",
+        tracked_builder,
+    )
+    orchestrator_module._executable_path_identity("tool", binary)
+    orchestrator_module._executable_path_identity("tool", binary)
+
+    assert calls == 2
 
 
 def test_db_version_bump_changes_full_run_fingerprint_at_identical_size(

@@ -1186,6 +1186,88 @@ def test_dynamic_masked_fasta_is_recorded_and_content_authenticated(
         )
 
 
+def test_artifact_observations_are_reused_only_within_one_validation_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "result"
+    artifact = root / "phase0" / "proteome.fasta"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(">gene\nMMMM\n")
+    identity = build_artifact_identity(
+        artifact,
+        root=root,
+        schema="virosync-fasta-v1:phase0/proteome.fasta",
+    )
+    original_sha256 = run_state_module.hashlib.sha256
+    calls = 0
+
+    def tracked_sha256(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_sha256(*args, **kwargs)
+
+    monkeypatch.setattr(run_state_module.hashlib, "sha256", tracked_sha256)
+    with run_state_module._validation_cache_scope():
+        assert run_state_module.validate_artifact_identity(identity, root=root)
+        assert run_state_module.validate_artifact_identity(identity, root=root)
+    assert calls == 1
+
+    assert run_state_module.validate_artifact_identity(identity, root=root)
+    assert run_state_module.validate_artifact_identity(identity, root=root)
+    assert calls == 3
+
+
+def test_scaffold_lengths_are_reused_only_within_one_validation_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">contig\nACGT\n")
+    identities = {
+        "input_path": str(genome),
+        "input": asdict(build_input_identity(genome)),
+    }
+    original_sha256 = run_state_module.hashlib.sha256
+    calls = 0
+
+    def tracked_sha256(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_sha256(*args, **kwargs)
+
+    monkeypatch.setattr(run_state_module.hashlib, "sha256", tracked_sha256)
+    with run_state_module._validation_cache_scope():
+        assert run_state_module._authenticated_scaffold_lengths(identities) == {
+            "contig": 4
+        }
+        assert run_state_module._authenticated_scaffold_lengths(identities) == {
+            "contig": 4
+        }
+    assert calls == 1
+
+    assert run_state_module._authenticated_scaffold_lengths(identities) == {
+        "contig": 4
+    }
+    assert run_state_module._authenticated_scaffold_lengths(identities) == {
+        "contig": 4
+    }
+    assert calls == 3
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        run_state_module.publish_phase_completion,
+        run_state_module.publish_run_started,
+        run_state_module.publish_run_success,
+        run_state_module.plan_resume,
+    ],
+)
+def test_public_validation_decisions_open_a_fresh_cache_scope(decision) -> None:
+    assert decision.__wrapped__ is not None
+
+
 def test_phase_artifacts_support_relative_output_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1401,6 +1483,26 @@ def test_state_json_writer_and_reader_enforce_one_size_limit(
         handle.truncate(limit + 1)
     with pytest.raises(ValueError, match="state JSON has invalid size"):
         load_run_state(output_dir)
+
+
+def test_checkpoint_json_reader_reports_observed_and_allowed_size(
+    tmp_path: Path,
+) -> None:
+    assert run_state_module._MAX_CHECKPOINT_BYTES >= 600_000_000
+    checkpoint = tmp_path / "phase1" / "resume_state.json"
+    checkpoint.parent.mkdir()
+    with checkpoint.open("wb") as handle:
+        handle.truncate(run_state_module._MAX_CHECKPOINT_BYTES + 1)
+
+    expected = (
+        f"observed={run_state_module._MAX_CHECKPOINT_BYTES + 1}, "
+        f"allowed=1-{run_state_module._MAX_CHECKPOINT_BYTES}"
+    )
+    with pytest.raises(ValueError, match=expected):
+        run_state_module._read_artifact_json(
+            tmp_path,
+            "phase1/resume_state.json",
+        )
 
 
 @pytest.mark.parametrize(
