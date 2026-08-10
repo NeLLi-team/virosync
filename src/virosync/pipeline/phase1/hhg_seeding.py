@@ -608,7 +608,13 @@ def run_hmmsearch(
     def search_sequences(sequence_batch: list[pyhmmer.easel.DigitalSequence]) -> None:
         for hmm, top_hits in zip(
             hmm_profiles,
-            pyhmmer.hmmsearch(hmm_profiles, sequence_batch, cpus=threads, **search_options),
+            pyhmmer.hmmsearch(
+                hmm_profiles,
+                sequence_batch,
+                cpus=threads,
+                parallel="targets",
+                **search_options,
+            ),
         ):
             hmm_name = hmm.name.decode() if isinstance(hmm.name, bytes) else hmm.name
 

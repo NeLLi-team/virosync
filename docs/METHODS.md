@@ -220,7 +220,9 @@ gates.
 When a protein hits at least two distinct ViroSync models, Phase 1 scans that
 protein against `models/pfam_virosync_screening.hmm` before Tier-1 DIAMOND
 validation. The supplied schema-v2 screening HMM contains 937 Pfam 38.0
-profiles. PyHMMER applies each profile's gathering cutoff. Proteins with one
+profiles. The scan distributes proteins across workers by amino-acid residue
+count. PyHMMER merges hits across workers before ViroSync applies each
+profile's sequence and domain gathering-score cutoffs. Proteins with one
 ViroSync model hit do not enter the Pfam scan.
 
 For each candidate model, ViroSync reads `pfam_signature` and `source_scope`

@@ -105,12 +105,16 @@ def scan_pfam_domains(
             hmms,
             sequences,
             cpus=threads,
-            bit_cutoffs="gathering",
+            parallel="targets",
+            E=float("inf"),
         ),
     ):
         domain_name = hmm.name.decode()
+        sequence_cutoff, domain_cutoff = hmm.cutoffs.gathering
         for hit in top_hits:
-            if hit.included and any(domain.included for domain in hit.domains):
+            if hit.score >= sequence_cutoff and any(
+                domain.score >= domain_cutoff for domain in hit.domains
+            ):
                 domains_by_protein[hit.name.decode()].add(domain_name)
     return domains_by_protein
 
