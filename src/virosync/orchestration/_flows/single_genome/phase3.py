@@ -371,8 +371,12 @@ def _run_phase3_subflow(
                     applications=interproscan_applications,
                 )
             except Exception as exc:
-                logger.warning("Phase 3: batch InterProScan failed: %s", exc)
-                interproscan_map = None
+                logger.error(
+                    "Phase 3: InterProScan failed after it was enabled; "
+                    "refusing silent fallback: %s",
+                    exc,
+                )
+                raise
 
     # ==================================================
     # Batch TMVec precomputation for ALL EVE proteins

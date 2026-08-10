@@ -312,7 +312,12 @@ def test_phylogenetic_gvclass_paths_are_encoded_and_contained(
 
     monkeypatch.setattr(phylogenetic_validation.subprocess, "run", _fake_run)
 
-    assert validator._run_gvclass(raw_id, "ATG" * 100, 0, 300) is None
+    # GVClass exits 0 here but writes no summary, which is a tool failure rather
+    # than an uncertain verdict: an absent result would be scored as the neutral
+    # 0.5 in compute_verdict(). The subject of this test is path encoding, which
+    # is asserted below and still happens before the error is raised.
+    with pytest.raises(phylogenetic_validation.EvidenceToolError):
+        validator._run_gvclass(raw_id, "ATG" * 100, 0, 300)
 
     input_dir = validator.gvclass_dir / component
     assert commands[0][1] == str(input_dir)

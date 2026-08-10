@@ -245,8 +245,11 @@ class FoldSeekSearcher:
                 hits = self.search(pdb_file)
                 results[query_id] = hits
             except Exception as e:
-                logger.warning(f"FoldSeek search failed for {query_id}: {e}")
-                results[query_id] = []
+                raise RuntimeError(
+                    f"FoldSeek search failed for {query_id}; an empty hit list "
+                    f"would be indistinguishable from a real absence of "
+                    f"structural homology: {e}"
+                ) from e
 
         return results
 

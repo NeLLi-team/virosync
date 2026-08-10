@@ -30,6 +30,18 @@ from virosync.utils.path_safety import require_strict_child, safe_filename_compo
 
 logger = logging.getLogger(__name__)
 
+
+class EvidenceToolError(RuntimeError):
+    """An evidence tool was run and failed.
+
+    compute_verdict() scores an absent GVClass or DIAMOND result as the neutral
+    0.5 that means "neither supports nor rejects". That is correct for a genuinely
+    uncertain domain and wrong for a crash: it lets a broken tool read as an
+    inconclusive one, and the caller cannot tell the difference. Failures raise
+    so they cannot be scored.
+    """
+
+
 # Domain classifications
 VIRAL_DOMAINS = {"NCLDV", "MIRUS", "NCLDV/MIRUS"}
 NON_VIRAL_DOMAINS = {"EUK", "BAC", "ARC"}  # PHAGE can be considered viral-like
@@ -452,8 +464,10 @@ class PhylogeneticValidator:
                 result.gvclass = self._run_gvclass(
                     eve_id, str(region_seq), actual_start, actual_end
                 )
+            except EvidenceToolError:
+                raise
             except Exception as e:
-                logger.warning(f"GVClass failed for {eve_id}: {e}")
+                raise EvidenceToolError(f"GVClass failed for {eve_id}: {e}") from e
 
         # Run Diamond
         if run_diamond and self.diamond_db:
@@ -461,8 +475,10 @@ class PhylogeneticValidator:
                 result.diamond = self._run_diamond(
                     eve_id, str(region_seq)
                 )
+            except EvidenceToolError:
+                raise
             except Exception as e:
-                logger.warning(f"Diamond failed for {eve_id}: {e}")
+                raise EvidenceToolError(f"Diamond failed for {eve_id}: {e}") from e
 
         # Compute combined verdict
         result.compute_verdict()
@@ -516,12 +532,13 @@ class PhylogeneticValidator:
             )
 
             if result.returncode != 0:
-                logger.warning(f"GVClass failed for {eve_id}: {result.stderr}")
-                return None
+                raise EvidenceToolError(
+                    f"GVClass exited {result.returncode} for {eve_id}: "
+                    f"{(result.stderr or '').strip()[-400:]}"
+                )
 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"GVClass timed out for {eve_id}")
-            return None
+        except subprocess.TimeoutExpired as exc:
+            raise EvidenceToolError(f"GVClass timed out for {eve_id}") from exc
 
         # Parse results
         summary_files = list(output_dir.glob("*.summary.tab"))
@@ -529,8 +546,10 @@ class PhylogeneticValidator:
             summary_files = list(output_dir.glob("gvclass_summary.tsv"))
 
         if not summary_files:
-            logger.warning(f"No GVClass summary file for {eve_id}")
-            return None
+            raise EvidenceToolError(
+                f"GVClass produced no summary file for {eve_id}; it exited 0 but "
+                "wrote nothing, so its verdict is unknown rather than uncertain"
+            )
 
         return self._parse_gvclass_summary(eve_id, summary_files[0])
 
@@ -672,8 +691,7 @@ class PhylogeneticValidator:
                 timeout=600,
             )
         except (RuntimeError, subprocess.CalledProcessError) as exc:
-            logger.warning(f"Diamond failed for {eve_id}: {exc}")
-            return None
+            raise EvidenceToolError(f"Diamond failed for {eve_id}: {exc}") from exc
 
         # Parse results
         return self._parse_diamond_output(eve_id, output_file, len(proteins))

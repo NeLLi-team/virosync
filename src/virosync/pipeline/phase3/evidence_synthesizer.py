@@ -2998,4 +2998,11 @@ class EvidenceSynthesizer:
             )
 
         except Exception as e:
-            logger.warning(f"Phylogenetic validation failed for {result.eve_id}: {e}")
+            # The rejection gate below is guarded by `and result.phylogenetic_result`,
+            # so swallowing here does not merely lose evidence: it disables rejection
+            # for this EVE without saying so, and a systemic failure would inflate the
+            # call set silently.
+            raise RuntimeError(
+                f"Phylogenetic validation failed for {result.eve_id}; refusing to "
+                f"continue with the rejection gate disabled: {e}"
+            ) from e
