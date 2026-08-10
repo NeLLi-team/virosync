@@ -34,7 +34,7 @@ import subprocess
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from Bio import SeqIO
 
@@ -774,7 +774,7 @@ def sample_control_porfs_genome_wide(
 
 def extract_sequences(
     proteome_fasta: Path,
-    porf_ids: set[str],
+    porf_ids: Iterable[str],
     output_fasta: Path,
 ) -> int:
     """
@@ -782,18 +782,19 @@ def extract_sequences(
 
     Args:
         proteome_fasta: Path to full proteome FASTA
-        porf_ids: Set of pORF IDs to extract
+        porf_ids: pORF IDs to extract
         output_fasta: Path to write extracted sequences
 
     Returns:
         Number of sequences extracted
     """
     output_fasta.parent.mkdir(parents=True, exist_ok=True)
+    wanted_ids = set(porf_ids)
     extracted = 0
 
     with open(output_fasta, "w") as out_handle:
         for record in SeqIO.parse(proteome_fasta, "fasta"):
-            if record.id in porf_ids:
+            if record.id in wanted_ids:
                 out_handle.write(f">{record.id}\n{record.seq}\n")
                 extracted += 1
 
@@ -1027,7 +1028,7 @@ def run_diamond_chunked(
 
 
 def classify_all_porfs(
-    all_porf_ids: set[str],
+    all_porf_ids: Iterable[str],
     diamond_hits: dict[str, list[DiamondHit]],
     proteome_index: dict[str, list[pORF]],
     host_prefix: str,
@@ -1050,16 +1051,19 @@ def classify_all_porfs(
     Returns:
         Dict mapping pORF ID to GeneTaxonomy
     """
+    ordered_porf_ids = list(all_porf_ids)
+    wanted_ids = set(ordered_porf_ids)
+
     # Build pORF lookup for coordinates
     porf_lookup: dict[str, pORF] = {}
     for porfs in proteome_index.values():
         for p in porfs:
-            if p.id in all_porf_ids:
+            if p.id in wanted_ids:
                 porf_lookup[p.id] = p
 
     taxonomy_map: dict[str, GeneTaxonomy] = {}
 
-    for porf_id in all_porf_ids:
+    for porf_id in ordered_porf_ids:
         porf = porf_lookup.get(porf_id)
         if not porf:
             # pORF not found in index - create minimal entry

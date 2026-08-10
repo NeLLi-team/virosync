@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     SeedGeneMapping,
+    classify_all_porfs,
+    extract_sequences,
     get_flanking_taxonomy,
     pORF,
 )
@@ -18,6 +20,43 @@ def _taxonomy(porf_id: str, start: int, end: int) -> GeneTaxonomy:
         start=start,
         end=end,
     )
+
+
+class _IterableIds:
+    """Iterable that fails if code repeatedly probes the source container."""
+
+    def __init__(self, values: list[str]) -> None:
+        self.values = values
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __contains__(self, value: object) -> bool:
+        raise AssertionError(f"unexpected source membership test: {value}")
+
+
+def test_boundary_query_ids_are_indexed_for_proteome_scans(tmp_path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    extracted = tmp_path / "query.faa"
+    proteome.write_text(
+        ">keep # 1 # 9 # 1 # ID=1_1\nMKK\n"
+        ">drop # 10 # 18 # 1 # ID=1_2\nMNN\n"
+    )
+
+    assert extract_sequences(
+        proteome,
+        _IterableIds(["keep"]),
+        extracted,
+    ) == 1
+    assert extracted.read_text() == ">keep\nMKK\n"
+
+    taxonomy = classify_all_porfs(
+        all_porf_ids=_IterableIds(["keep"]),
+        diamond_hits={},
+        proteome_index={"ctg": [pORF("keep", "ctg", 0, 9)]},
+        host_prefix="EUK__",
+    )
+    assert list(taxonomy) == ["keep"]
 
 
 def test_flanks_follow_refined_boundary_after_seed_contraction() -> None:
