@@ -298,7 +298,17 @@ def test_cleanup_abort_rejects_noncontiguous_gff_loss(tmp_path: Path) -> None:
         )
 
 
-def test_cleanup_abort_discards_malformed_final_header(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "truncated_header",
+    [
+        f">{prodigal._TILE_ID_PREFIX}0_2 # 7 # 1",
+        ">__virosync_til",
+    ],
+)
+def test_cleanup_abort_discards_malformed_final_header(
+    tmp_path: Path,
+    truncated_header: str,
+) -> None:
     record_id = f"{prodigal._TILE_ID_PREFIX}0"
     input_fasta = tmp_path / "input.fasta"
     proteins_faa = tmp_path / "proteins.faa"
@@ -306,7 +316,7 @@ def test_cleanup_abort_discards_malformed_final_header(tmp_path: Path) -> None:
     input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
     proteins_faa.write_text(
         f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-        f">{record_id}_2 # 7 # 1\nM"
+        f"{truncated_header}\nM"
     )
     genes_gff.write_text(
         "##gff-version 3\n"
@@ -331,6 +341,91 @@ def test_cleanup_abort_discards_malformed_final_header(tmp_path: Path) -> None:
     assert proteins_faa.read_text() == (
         f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
     )
+
+
+def test_strict_validation_rejects_no_delimiter_final_header(
+    tmp_path: Path,
+) -> None:
+    record_id = f"{prodigal._TILE_ID_PREFIX}0"
+    input_fasta = tmp_path / "input.fasta"
+    proteins_faa = tmp_path / "proteins.faa"
+    genes_gff = tmp_path / "genes.gff"
+    input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
+    proteins_faa.write_text(
+        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM"
+    )
+    genes_gff.write_text(
+        "##gff-version 3\n"
+        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
+        f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
+    )
+
+    with pytest.raises(RuntimeError, match="unparseable Prodigal protein header"):
+        prodigal._validate_tiled_prodigal_output(
+            input_fasta,
+            proteins_faa,
+            genes_gff,
+        )
+
+
+def test_cleanup_abort_rejects_no_delimiter_nonfinal_header(
+    tmp_path: Path,
+) -> None:
+    record_id = f"{prodigal._TILE_ID_PREFIX}0"
+    input_fasta = tmp_path / "input.fasta"
+    proteins_faa = tmp_path / "proteins.faa"
+    genes_gff = tmp_path / "genes.gff"
+    input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
+    proteins_faa.write_text(
+        ">__virosync_til\nM\n"
+        f">{record_id}_2 # 7 # 9 # 1 # ID=1_2\nM\n"
+    )
+    genes_gff.write_text(
+        "##gff-version 3\n"
+        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
+        f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
+    )
+
+    with pytest.raises(RuntimeError, match="unparseable Prodigal protein header"):
+        prodigal._validate_tiled_prodigal_output(
+            input_fasta,
+            proteins_faa,
+            genes_gff,
+            tile_cores={record_id: (0, 6)},
+            allow_unowned_gff_only=True,
+        )
+
+
+def test_cleanup_abort_rejects_malformed_final_without_missing_suffix(
+    tmp_path: Path,
+) -> None:
+    record_id = f"{prodigal._TILE_ID_PREFIX}0"
+    input_fasta = tmp_path / "input.fasta"
+    proteins_faa = tmp_path / "proteins.faa"
+    genes_gff = tmp_path / "genes.gff"
+    input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
+    proteins_faa.write_text(
+        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM"
+    )
+    genes_gff.write_text(
+        "##gff-version 3\n"
+        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="malformed final protein header has no matching GFF suffix",
+    ):
+        prodigal._validate_tiled_prodigal_output(
+            input_fasta,
+            proteins_faa,
+            genes_gff,
+            tile_cores={record_id: (0, 6)},
+            allow_unowned_gff_only=True,
+        )
 
 
 @pytest.mark.parametrize(

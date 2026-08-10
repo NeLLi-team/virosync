@@ -237,6 +237,13 @@ def _validate_tiled_prodigal_output(
             raise RuntimeError(
                 f"malformed Prodigal protein header: {record.id}"
             ) from exc
+        if (
+            parsed is None
+            and allow_unowned_gff_only
+            and index == len(faa_records) - 1
+        ):
+            malformed_final_header = True
+            continue
         if parsed is None:
             raise RuntimeError(f"unparseable Prodigal protein header: {record.id}")
         scaffold, start, end, strand = parsed
@@ -405,6 +412,8 @@ def _remove_discarded_proteins(
             if index == len(records) - 1:
                 continue
             raise
+        if parsed is None and index == len(records) - 1:
+            continue
         if parsed is None:
             raise RuntimeError(f"unparseable Prodigal protein header: {record.id}")
         scaffold, start, end, strand = parsed
