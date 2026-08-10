@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import ast
 import importlib
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -230,30 +233,79 @@ def test_direct_consumers_share_the_normalized_parser_contract() -> None:
 
 
 def test_boundary_touching_genes_do_not_overlap(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
     import virosync.orchestration.utils as orchestration_utils
 
-    records = (
-        ("left", "scaffold", 10, 20, "LEFT"),
-        ("inside", "scaffold", 20, 25, "INSIDE"),
-        ("right", "scaffold", 30, 40, "RIGHT"),
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">pORF_scaffold_25_29_late\nLATE\n"
+        ">pORF_scaffold_10_20_left\nLEFT\n"
+        ">pORF_scaffold_20_25_inside\nINSIDE\n"
+        ">pORF_scaffold_30_40_right\nRIGHT\n"
     )
-    monkeypatch.setattr(
-        orchestration_utils,
-        "_cached_proteome_records",
-        lambda _path: records,
-    )
+    orchestration_utils._load_proteome_data.cache_clear()
 
     observed = orchestration_utils.get_overlapping_genes(
-        tmp_path / "unused.faa",
+        proteome,
         boundary_scaffold="scaffold",
         boundary_start=20,
         boundary_end=30,
     )
 
-    assert observed == {"scaffold": [("inside", "INSIDE")]}
+    assert observed == {
+        "scaffold": [
+            ("pORF_scaffold_25_29_late", "LATE"),
+            ("pORF_scaffold_20_25_inside", "INSIDE"),
+        ]
+    }
+    orchestration_utils._load_proteome_data.cache_clear()
+
+
+def test_proteome_cache_coalesces_fill_and_retains_four_genomes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import virosync.orchestration.utils as orchestration_utils
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">pORF_scaffold_1_4_gene\nM\n")
+    orchestration_utils._load_proteome_data.cache_clear()
+    original_parse = orchestration_utils._parse_proteome_records
+    call_lock = Lock()
+    call_count = 0
+
+    def counted_parse(*args):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        time.sleep(0.05)
+        return original_parse(*args)
+
+    monkeypatch.setattr(
+        orchestration_utils,
+        "_parse_proteome_records",
+        counted_parse,
+    )
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(
+            executor.map(
+                lambda path: orchestration_utils._cached_proteome_data(path)[0],
+                [proteome] * 8,
+            )
+        )
+
+    assert call_count == 1
+    other_proteomes = []
+    for index in range(3):
+        other = tmp_path / f"proteome_{index}.faa"
+        other.write_text(f">pORF_scaffold_{index + 5}_{index + 8}_gene\nM\n")
+        other_proteomes.append(other)
+    for other in other_proteomes:
+        orchestration_utils._cached_proteome_data(other)
+    orchestration_utils._cached_proteome_data(proteome)
+    assert call_count == 4
+    orchestration_utils._load_proteome_data.cache_clear()
 
 
 def test_one_base_internal_bed_gff_fasta_round_trip() -> None:

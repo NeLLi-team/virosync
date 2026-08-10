@@ -5,25 +5,38 @@ Helper functions for data wiring between orchestration task functions.
 Addresses reviewer notes about avoiding large object serialization.
 """
 
-from pathlib import Path
-from typing import Optional, Callable, Any
+from bisect import bisect_left
 from collections import defaultdict
 from functools import lru_cache
+from pathlib import Path
+from threading import Lock
+from typing import Any, Callable, Optional
 
 from Bio import SeqIO
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.orchestration.resource_monitor import ResourceMonitor
 
 
-@lru_cache(maxsize=4)
+_ProteomeRecord = tuple[str, str, int, int, str]
+_ScaffoldIndex = tuple[
+    tuple[int, ...],
+    tuple[tuple[int, _ProteomeRecord], ...],
+    int,
+]
+_ProteomeData = tuple[
+    tuple[_ProteomeRecord, ...],
+    dict[str, _ScaffoldIndex],
+]
+
+
 def _parse_proteome_records(
     proteome_path: str, _size: int, _mtime: int
-) -> tuple[tuple[str, str, int, int, str], ...]:
+) -> tuple[_ProteomeRecord, ...]:
     """Parse a proteome FASTA once into (id, scaffold, start, end, seq) tuples.
 
-    Cached by (path, size, mtime) so the many per-boundary lookups for a genome
-    parse the proteome a single time instead of re-reading the whole FASTA each
-    call. The decoded coordinates and IDs are identical to the prior inline parse.
+    The loader caches these records by (path, size, mtime), so per-boundary
+    lookups parse the proteome once. Coordinates and IDs match the prior inline
+    parse.
     """
     records: list[tuple[str, str, int, int, str]] = []
     for record in SeqIO.parse(proteome_path, "fasta"):
@@ -50,16 +63,58 @@ def _parse_proteome_records(
     return tuple(records)
 
 
-def _cached_proteome_records(
+def _build_proteome_index(
+    records: tuple[_ProteomeRecord, ...],
+) -> dict[str, _ScaffoldIndex]:
+    by_scaffold: dict[str, list[tuple[int, _ProteomeRecord]]] = defaultdict(list)
+    for file_index, record in enumerate(records):
+        by_scaffold[record[1]].append((file_index, record))
+
+    index = {}
+    for scaffold, file_ordered in by_scaffold.items():
+        coordinate_ordered = tuple(
+            sorted(file_ordered, key=lambda item: (item[1][2], item[0]))
+        )
+        index[scaffold] = (
+            tuple(record[2] for _file_index, record in coordinate_ordered),
+            coordinate_ordered,
+            max(
+                (
+                    max(0, record[3] - record[2])
+                    for _file_index, record in file_ordered
+                ),
+                default=0,
+            ),
+        )
+    return index
+
+
+@lru_cache(maxsize=4)
+def _load_proteome_data(
+    proteome_path: str, size: int, mtime: int
+) -> _ProteomeData:
+    records = _parse_proteome_records(proteome_path, size, mtime)
+    return records, _build_proteome_index(records)
+
+
+_PROTEOME_CACHE_LOCK = Lock()
+
+
+def _cached_proteome_data(
     proteome_path: Path,
-) -> tuple[tuple[str, str, int, int, str], ...]:
+) -> _ProteomeData:
     p = Path(proteome_path)
     try:
         st = p.stat()
-        return _parse_proteome_records(str(p), st.st_size, int(st.st_mtime))
     except OSError:
-        # Fall back to an uncached parse if the file cannot be stat'd.
-        return _parse_proteome_records.__wrapped__(str(p), 0, 0)
+        records = _parse_proteome_records(str(p), 0, 0)
+        return records, _build_proteome_index(records)
+
+    # functools.lru_cache can execute the wrapped function more than once when
+    # concurrent misses race. Hold this lock around the cache-wrapper call so a
+    # 32-thread Phase 3 start parses one large proteome exactly once.
+    with _PROTEOME_CACHE_LOCK:
+        return _load_proteome_data(str(p), st.st_size, int(st.st_mtime))
 
 
 def get_overlapping_genes(
@@ -83,8 +138,26 @@ def get_overlapping_genes(
         Dictionary mapping scaffold ID to list of (gene_id, sequence) tuples
     """
     genes_by_scaffold: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    records, scaffold_index = _cached_proteome_data(proteome_path)
 
-    for record_id, scaffold, start, end, seq in _cached_proteome_records(proteome_path):
+    if boundary_scaffold:
+        indexed = scaffold_index.get(boundary_scaffold)
+        if indexed is None:
+            return {}
+        starts, coordinate_ordered, max_gene_length = indexed
+        if boundary_start is not None and boundary_end is not None:
+            # Every overlapping record starts after this exact lower bound.
+            left = bisect_left(starts, boundary_start - max_gene_length)
+            right = bisect_left(starts, boundary_end)
+            selected = [
+                item
+                for item in coordinate_ordered[left:right]
+                if item[1][3] > boundary_start
+            ]
+            selected.sort(key=lambda item: item[0])
+            records = tuple(record for _file_index, record in selected)
+
+    for record_id, scaffold, start, end, seq in records:
         # Filter by scaffold if specified
         if boundary_scaffold and scaffold != boundary_scaffold:
             continue
