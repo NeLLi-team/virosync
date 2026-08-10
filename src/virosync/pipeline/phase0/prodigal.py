@@ -19,6 +19,7 @@ import tempfile
 from typing import Optional
 
 from Bio import SeqIO
+from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 logger = logging.getLogger(__name__)
@@ -476,6 +477,8 @@ def _translate_gff_feature(
     coordinate: tuple[str, int, int, str],
     attributes: list[str],
     translation_table: int,
+    *,
+    reject_ambiguous: bool = True,
 ) -> str:
     """Translate one Prodigal GFF feature using Prodigal's FASTA convention."""
     _, start, end, strand = coordinate
@@ -505,9 +508,22 @@ def _translate_gff_feature(
         raise RuntimeError(
             "Prodigal GFF feature translation table differs from Model Data"
         )
-    if any(base not in "ACGTacgt" for base in str(coding)):
-        raise RuntimeError(
-            f"reconstructed Prodigal CDS contains an ambiguous base: {coordinate}"
+    coding_text = str(coding)
+    if any(base not in "ACGTacgt" for base in coding_text):
+        if reject_ambiguous:
+            raise RuntimeError(
+                f"reconstructed Prodigal CDS contains an ambiguous base: {coordinate}"
+            )
+        coding = Seq(
+            "".join(
+                codon
+                if all(base in "ACGTacgt" for base in codon)
+                else "NNN"
+                for codon in (
+                    coding_text[offset : offset + 3]
+                    for offset in range(0, len(coding_text), 3)
+                )
+            )
         )
     protein = str(coding.translate(table=translation_table))
     if protein and values["start_type"] != "Edge":
@@ -598,6 +614,7 @@ def _repair_cleanup_abort_proteins(
             coordinate,
             gff_attributes[coordinate],
             translation_table,
+            reject_ambiguous=False,
         )
         if reconstructed != str(survivor_records[coordinate].seq):
             raise RuntimeError(

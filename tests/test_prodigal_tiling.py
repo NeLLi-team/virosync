@@ -328,6 +328,57 @@ def test_cleanup_abort_reconstruction_rejects_survivor_mismatch(
         )
 
 
+def test_cleanup_abort_reconstruction_accepts_matching_ambiguous_survivor(
+    tmp_path: Path,
+) -> None:
+    input_fasta, proteins_faa, genes_gff, record_id = (
+        _write_reconstruction_fixture(tmp_path, first_protein="MX")
+    )
+    input_fasta.write_text(f">{record_id}\nGTGNNNTTACATTTACACATGTAA\n")
+    validation = prodigal._validate_tiled_prodigal_output(
+        input_fasta,
+        proteins_faa,
+        genes_gff,
+        tile_cores={record_id: (0, 18)},
+        allow_cleanup_recovery=True,
+    )
+
+    assert (
+        prodigal._repair_cleanup_abort_proteins(
+            input_fasta,
+            proteins_faa,
+            genes_gff,
+            validation,
+        )
+        == 2
+    )
+    assert str(next(SeqIO.parse(proteins_faa, "fasta")).seq) == "MX"
+
+
+def test_cleanup_abort_reconstruction_rejects_ambiguous_reconstructed_cds(
+    tmp_path: Path,
+) -> None:
+    input_fasta, proteins_faa, genes_gff, record_id = (
+        _write_reconstruction_fixture(tmp_path)
+    )
+    input_fasta.write_text(f">{record_id}\nGTGTAATTACATNNNNNNATGTAA\n")
+    validation = prodigal._validate_tiled_prodigal_output(
+        input_fasta,
+        proteins_faa,
+        genes_gff,
+        tile_cores={record_id: (0, 18)},
+        allow_cleanup_recovery=True,
+    )
+
+    with pytest.raises(RuntimeError, match="contains an ambiguous base"):
+        prodigal._repair_cleanup_abort_proteins(
+            input_fasta,
+            proteins_faa,
+            genes_gff,
+            validation,
+        )
+
+
 def test_cleanup_abort_reconstruction_rejects_unordered_gff(
     tmp_path: Path,
 ) -> None:
