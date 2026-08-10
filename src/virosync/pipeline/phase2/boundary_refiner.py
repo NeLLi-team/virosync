@@ -11,6 +11,7 @@ experiments and artifacts.
 """
 
 import logging
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -410,13 +411,31 @@ def annotate_boundaries_with_marker_floor(
         is_rescued_protein_id,
     )
 
+    markers_by_scaffold: dict[str, tuple[list[int], list]] = {}
+    grouped_markers: dict[str, list[tuple[int, object]]] = {}
+    for marker in validated_markers:
+        if marker.validation_status not in ("validated", "validated_novel"):
+            continue
+        midpoint = (marker.start + marker.end) // 2
+        grouped_markers.setdefault(marker.scaffold, []).append((midpoint, marker))
+    for scaffold, entries in grouped_markers.items():
+        # Consumers use only membership, counts, min/max, and any(); unlike the
+        # Phase-3 record lists, marker-floor order is not observable.
+        entries.sort(key=lambda item: item[0])
+        markers_by_scaffold[scaffold] = (
+            [item[0] for item in entries],
+            [item[1] for item in entries],
+        )
+
     for boundary in boundaries:
-        span_markers = [
-            m for m in validated_markers
-            if m.scaffold == boundary.scaffold
-            and m.validation_status in ("validated", "validated_novel")
-            and boundary.original_start <= (m.start + m.end) // 2 <= boundary.original_end
-        ]
+        marker_index = markers_by_scaffold.get(boundary.scaffold)
+        if marker_index is None:
+            span_markers = []
+        else:
+            midpoints, scaffold_markers = marker_index
+            lower = bisect_left(midpoints, boundary.original_start)
+            upper = bisect_right(midpoints, boundary.original_end)
+            span_markers = scaffold_markers[lower:upper]
         # Count distinct marker-bearing proteins. One ordinary pORF can produce
         # several HMM hits, so raw hit count must not satisfy the floor.
         rescue_boundary = "frameshift_rescue" in (

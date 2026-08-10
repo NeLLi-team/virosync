@@ -13,11 +13,18 @@ from Bio.Seq import Seq
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase1.seed_merger import MergedSeed
-from virosync.pipeline.phase2.boundary_diamond import pORF
+from virosync.pipeline.phase2.boundary_diamond import (
+    filter_taxonomy_to_boundary,
+    pORF,
+)
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     extend_seeds_by_genes,
     merge_adjacent_viral_boundaries,
+)
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _build_scaffold_start_index,
+    _query_boundary_coordinate_records,
 )
 
 
@@ -33,6 +40,45 @@ EXPECTED_DIRECT_CONSUMERS = {
     "pipeline/phase3/interproscan.py": 1,
     "pipeline/phase3/output_generator.py": 1,
 }
+
+
+def test_phase3_boundary_indexes_match_ordered_half_open_scans() -> None:
+    taxonomy_records = [
+        SimpleNamespace(scaffold="S1", start=20, end=30, name="first"),
+        SimpleNamespace(scaffold="S2", start=10, end=40, name="other"),
+        SimpleNamespace(scaffold="S1", start=10, end=20, name="left_touch"),
+        SimpleNamespace(scaffold="S1", start=20, end=20, name="zero"),
+        SimpleNamespace(scaffold="S1", start=20, end=25, name="second_tie"),
+        SimpleNamespace(scaffold="S1", start=30, end=40, name="right_touch"),
+        SimpleNamespace(scaffold="S1", start=15, end=35, name="spanning"),
+    ]
+    markers = [
+        SimpleNamespace(scaffold="S1", start=25, end=28, name="marker_first"),
+        SimpleNamespace(scaffold="S2", start=21, end=29, name="marker_other"),
+        SimpleNamespace(scaffold="S1", start=10, end=20, name="marker_touch"),
+        SimpleNamespace(scaffold="S1", start=18, end=23, name="marker_second"),
+    ]
+    boundary = SimpleNamespace(scaffold="S1", start=20, end=30)
+    taxonomy_map = {
+        record.name: record for record in taxonomy_records
+    }
+    expected_taxonomy = filter_taxonomy_to_boundary(taxonomy_map, boundary)
+    expected_markers = [
+        marker
+        for marker in markers
+        if marker.scaffold == boundary.scaffold
+        and marker.start < boundary.end
+        and marker.end > boundary.start
+    ]
+
+    observed_taxonomy, observed_markers = _query_boundary_coordinate_records(
+        boundary=boundary,
+        taxonomy_index=_build_scaffold_start_index(taxonomy_map.values()),
+        marker_index=_build_scaffold_start_index(markers),
+    )
+
+    assert observed_taxonomy == expected_taxonomy
+    assert observed_markers == expected_markers
 
 
 def _header(start: object, end: object, strand: object) -> str:

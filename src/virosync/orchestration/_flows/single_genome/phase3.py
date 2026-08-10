@@ -1,6 +1,9 @@
 """Phase 3 subflow: evidence synthesis, verification, tiering."""
 
 import json
+from bisect import bisect_left
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -28,7 +31,6 @@ from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.orchestration.runtime import call_task
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
-    filter_taxonomy_to_boundary,
     get_flanking_taxonomy,
     build_gene_taxonomy_record,
 )
@@ -39,6 +41,79 @@ from .loaders import (
     _load_tmvec_cache,
     _serialize_tmvec_cache,
 )
+
+
+_ScaffoldStartIndex = dict[
+    str,
+    tuple[
+        tuple[int, ...],
+        tuple[tuple[int, int, int, object], ...],
+        int,
+    ],
+]
+
+
+def _build_scaffold_start_index(records: Iterable[object]) -> _ScaffoldStartIndex:
+    """Index coordinate records by scaffold and start while retaining input order."""
+
+    grouped: dict[str, list[tuple[int, int, int, object]]] = defaultdict(list)
+    for ordinal, record in enumerate(records):
+        grouped[record.scaffold].append(
+            (record.start, record.end, ordinal, record)
+        )
+
+    index: _ScaffoldStartIndex = {}
+    for scaffold, entries in grouped.items():
+        entries.sort(key=lambda item: item[0])
+        index[scaffold] = (
+            tuple(item[0] for item in entries),
+            tuple(entries),
+            max(max(0, item[1] - item[0]) for item in entries),
+        )
+    return index
+
+
+def _query_scaffold_index(
+    index: _ScaffoldStartIndex,
+    *,
+    scaffold: str,
+    start: int,
+    end: int,
+) -> list[object]:
+    """Return half-open overlaps in the records' original insertion order."""
+
+    scaffold_index = index.get(scaffold)
+    if scaffold_index is None:
+        return []
+    starts, entries, max_length = scaffold_index
+    lower = bisect_left(starts, start - max_length)
+    upper = bisect_left(starts, end)
+    matches = [
+        item
+        for item in entries[lower:upper]
+        if item[0] < end and item[1] > start
+    ]
+    matches.sort(key=lambda item: item[2])
+    return [item[3] for item in matches]
+
+
+def _query_boundary_coordinate_records(
+    *,
+    boundary,
+    taxonomy_index: _ScaffoldStartIndex,
+    marker_index: _ScaffoldStartIndex,
+) -> tuple[list[object], list[object]]:
+    """Return ordered taxonomy and marker overlaps for one boundary."""
+
+    query = {
+        "scaffold": boundary.scaffold,
+        "start": boundary.start,
+        "end": boundary.end,
+    }
+    return (
+        _query_scaffold_index(taxonomy_index, **query),
+        _query_scaffold_index(marker_index, **query),
+    )
 
 
 def _is_marker_floor_recovery_candidate(result) -> bool:
@@ -452,6 +527,10 @@ def _run_phase3_subflow(
     hallmark_hits_map = {}
     gene_taxonomy_map_batched = {}
     interproscan_map_batched = {}
+    boundary_taxonomy_index = _build_scaffold_start_index(
+        boundary_taxonomy_map.values()
+    )
+    validated_marker_index = _build_scaffold_start_index(validated_markers)
 
     def build_boundary_evidence(boundary):
         """Build (boundary_id, hallmarks, gene_tax_result, interproscan_result)
@@ -464,11 +543,15 @@ def _run_phase3_subflow(
         boundary_id = f"{boundary.scaffold}_{boundary.start}_{boundary.end}"
         gene_tax_result = None
         interproscan_result = None
+        filtered_taxonomy, boundary_markers = _query_boundary_coordinate_records(
+            boundary=boundary,
+            taxonomy_index=boundary_taxonomy_index,
+            marker_index=validated_marker_index,
+        )
 
         # Get gene taxonomy for this boundary
         if use_precomputed_taxonomy:
             # Use pre-computed taxonomy from Phase 2b (filter to refined boundary)
-            filtered_taxonomy = filter_taxonomy_to_boundary(boundary_taxonomy_map, boundary)
             if filtered_taxonomy:
                 # Convert GeneTaxonomy objects to the format expected by verify_eve_task
                 # The expected format is: (list of records, summary dict)
@@ -637,11 +720,7 @@ def _run_phase3_subflow(
         single_marker_min_score = get_assembly_mode(
             assembly_mode
         ).single_marker_min_score
-        for marker in validated_markers:
-            if marker.scaffold != boundary.scaffold:
-                continue
-            if marker.start >= boundary.end or marker.end <= boundary.start:
-                continue
+        for marker in boundary_markers:
             marker_role = decide_marker_hit_role(
                 marker,
                 ablation_id=ablation_id,

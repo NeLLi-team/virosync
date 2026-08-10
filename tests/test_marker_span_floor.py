@@ -71,6 +71,41 @@ def test_floor_metadata_recorded_without_mutating_boundary():
     assert b.marker_floor_end - b.marker_floor_start > 5000
 
 
+def test_floor_index_keeps_unsorted_inclusive_midpoint_endpoints():
+    b = _boundary("S1", 120, 180, orig_start=100, orig_end=200)
+    markers = [
+        _marker("S1", 195, 205, porf="right_endpoint"),
+        _marker("other", 95, 105, porf="other_scaffold"),
+        _marker("S1", 95, 105, porf="left_endpoint"),
+        _marker("S1", 206, 216, porf="outside"),
+    ]
+
+    assert annotate_boundaries_with_marker_floor([b], markers) == 1
+    assert (b.marker_floor_start, b.marker_floor_end) == (95, 205)
+
+
+def test_floor_index_scopes_multiple_boundaries_and_scaffolds():
+    boundaries = [
+        _boundary("S1", 120, 180, orig_start=100, orig_end=200),
+        _boundary("S1", 320, 380, orig_start=300, orig_end=400),
+        _boundary("S2", 520, 580, orig_start=500, orig_end=600),
+    ]
+    markers = [
+        _marker("S1", 395, 405, porf="s1_right_b"),
+        _marker("S2", 495, 505, porf="s2_left"),
+        _marker("S1", 95, 105, porf="s1_left_a"),
+        _marker("S1", 295, 305, porf="s1_left_b"),
+        _marker("S2", 595, 605, porf="s2_right"),
+        _marker("S1", 195, 205, porf="s1_right_a"),
+    ]
+
+    assert annotate_boundaries_with_marker_floor(boundaries, markers) == 3
+    assert [
+        (boundary.marker_floor_start, boundary.marker_floor_end)
+        for boundary in boundaries
+    ] == [(95, 205), (295, 405), (495, 605)]
+
+
 def test_floor_requires_two_validated_markers():
     # A single validated marker must NOT record a floor (specificity).
     b = _boundary("S1", 3682, 10647, orig_start=0, orig_end=21500)
