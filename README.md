@@ -1,7 +1,7 @@
 # ViroSync
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync detects candidate endogenous viral elements (EVEs) in assembled eukaryotic genomes. The active pipeline combines hallmark-marker discovery, taxonomy-guided boundary refinement, host-aware trimming, and multi-evidence confidence scoring to prioritize regions for downstream review.
 
