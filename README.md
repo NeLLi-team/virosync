@@ -3,32 +3,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
-ViroSync detects candidate endogenous viral elements (EVEs) in assembled eukaryotic genomes. The active pipeline combines hallmark-marker discovery, taxonomy-guided boundary refinement, host-aware trimming, and multi-evidence confidence scoring to prioritize regions for downstream review.
-
-## Repository scope
-
-The tracked tree contains the ViroSync software, tests, setup files,
-documentation, and two example genomes. The `virosync-bench` repository
-contains benchmark code, results, analysis notebooks, figures, and manuscript
-files.
-
-```text
-virosync/
-├── .github/                CI and release checks
-├── config/                 runtime configuration
-├── docs/                   methods, release, and resource reference
-├── example/                standard and frameshift-screening examples
-├── release-manifests/      resource checksums and metadata
-├── scripts/                setup, validation, and maintenance commands
-├── src/virosync/           Python package
-├── tests/                  automated tests and small fixtures
-└── tools/                  isolated optional-tool environments
-```
-
-`pixi install` creates the ignored `.pixi/` environment. Resource setup creates
-an ignored versioned directory under `resources/` and points
-`resources/virosync` to it. `tasks/`, `.memd/`, `memory.md`, and `AGENTS.md`
-are ignored local agent state. These paths are not part of the distribution.
+ViroSync detects candidate endogenous viral elements (EVEs) in assembled eukaryotic genomes. The pipeline combines hallmark-marker discovery, taxonomy-guided boundary refinement, host-aware trimming, and multi-evidence confidence scoring.
 
 ## Workflow
 
@@ -37,21 +12,13 @@ ViroSync processes each genome in four phases.
 ![ViroSync workflow with Pfam marker validation and optional frameshift-sensitive marker rescue](docs/virosync_workflow.png)
 
 1. Phase 0: optional repeat masking and protein prediction with `prodigal-gv`.
-2. Phase 1: pyhmmer marker discovery, Pfam arbitration when the resource
-   supports it, and marker-database validation to assemble seed regions.
+2. Phase 1: pyhmmer marker discovery combined with Pfam domain identification, and marker-taxxonomy validation to assemble seed regions.
 3. Phase 2: gene-anchored boundary refinement using batched gene-taxonomy searches and host-aware trimming.
 4. Phase 3: confidence scoring and report generation using marker, taxonomy, compositional, and optional structural/domain evidence.
 
-The pipeline runs the HMM-gated workflow as its only execution path. Legacy novelty-heavy whole-proteome seeding (Path B) has been removed.
-Phase 2 requires the large `gene_taxonomy_faa_db` resource; the smaller marker validation database is not accepted as a boundary-taxonomy fallback.
-An opt-in prototype searches the Phase 0 proteome once and reuses the result
-for both Phase 2 taxonomy consumers. It is off by default because query shape
-can affect DIAMOND heuristics. Run paired prediction and boundary checks before
-using it for an analysis.
-
 ## Installation and Resources
 
-Install the project environment from the repository root:
+Clone the repository then install it from the repository root:
 
 ```bash
 pixi install --locked
@@ -69,13 +36,7 @@ bathsearch -h
 ```
 
 Enable the screen with `--frameshift-screening` or set
-`phase1.frameshift_screening_enabled: true` in the run config. Only
-event-bearing domains confirmed by Tier-1 DIAMOND validation can seed regions.
-An accepted rescue-only EVE must retain a confirmed rescued marker, and its FAA
-includes that marker domain. A rescue-seeded region can remain on retained
-ordinary marker support. `total_proteins` counts ordinary predicted proteins,
-so an EVE FAA can contain additional rescued domains.
-
+`phase1.frameshift_screening_enabled: true` in the run config.
 Provision the pinned core resources:
 
 ```bash
@@ -94,27 +55,6 @@ Expected:
 ```text
 Version: v1.0.7
 ```
-
-The public release provisions a pinned prebuilt resource bundle. Building the
-full ViroSync database from raw source inputs is not part of the public setup
-workflow yet.
-
-The default schema-v2 runtime bundle includes
-`models/pfam_virosync_screening.hmm` for
-multi-model hit arbitration. ViroSync scans only proteins hit by at least two
-marker models, then writes `phase1/pfam_arbitration.tsv` when arbitration runs.
-The legacy v1.0.6 schema-v1 bundle remains supported but cannot arbitrate
-ambiguous proteins. See [the Methods](docs/METHODS.md#2-pfam-model-arbitration)
-for the decision rules and [the resource reference](docs/RESOURCE_BUNDLE.md)
-for the runtime payload.
-
-[config/orchestration.yaml](config/orchestration.yaml) points to
-`resources_v1_0_7_runtime.tar.gz` by default. It pins both the archive and its
-internal manifest by SHA-256. Version 1.0.7 adds the authenticated Pfam screen
-to the v1.0.6 biological resources and omits files that ViroSync does not read.
-The bundle layout, marker annotation table, and resource release checks are
-documented in [docs/RESOURCE_BUNDLE.md](docs/RESOURCE_BUNDLE.md).
-
 The default install root is `resources/virosync`. Override it with either:
 
 ```bash
@@ -135,9 +75,7 @@ retains the previous working resource tree for recovery.
 
 ## Quick Start
 
-Run the standard example. The directory scan is non-recursive, so this command
-processes the top-level `example/test-1.fna` file and not the frameshift fixture
-in `example/frameshift/`:
+Run the standard example.
 
 ```bash
 pixi run virosync \
@@ -168,13 +106,7 @@ pixi run example-frameshift
 This command enables `--frameshift-screening` and writes
 `results/example-frameshift/batch_summary.tsv`. With the v1.0.7 resource
 bundle, the `trichomonas-g3` row should report `status=success`,
-`predictions=5`, and `accepted=2`. See the
-[frameshift screening guide](docs/FRAMESHIFT_SCREENING.md) for input
-provenance, output checks, and runtime measurements.
-
-The [frameshift screening guide](docs/FRAMESHIFT_SCREENING.md#run-the-shipped-example)
-lists the exact resource-dependent EVE contracts for public schema-v1 and
-Pfam-enabled schema-v2 bundles.
+`predictions=5`, and `accepted=2`.
 
 Run a single genome:
 
@@ -201,38 +133,6 @@ pixi run virosync \
 `pixi run example` runs the standard example.
 `pixi run example-frameshift` runs only the nested G3 fixture with the screen
 enabled.
-
-### Console output
-
-Setup and pipeline runs print the ViroSync banner, software version, database
-version, and one aggregate progress bar. Interactive terminals update
-the bar in place. Redirected output records progress at bounded milestones.
-
-Pass `--verbose` to the setup or run command to print configuration, phase
-details, and diagnostic logs:
-
-```bash
-pixi run virosync run --verbose \
-  -i genome.fasta \
-  -o results/run_name \
-  --config config/orchestration.yaml
-```
-
-Pass the root `--quiet` flag before the command to suppress the banner,
-progress, and final summary while retaining errors:
-
-```bash
-pixi run virosync --quiet run \
-  -i genome.fasta \
-  -o results/run_name \
-  --config config/orchestration.yaml
-```
-
-Fresh setup prompts and the download-size notice remain visible in quiet mode
-because they require an explicit install-location and download decision.
-
-Pixi can print task and cache messages before ViroSync starts. ViroSync
-verbosity flags do not control those messages.
 
 ## Optional Annotation Layers
 
@@ -306,126 +206,6 @@ pixi run -e structural virosync \
   --no-skip-structural
 ```
 
-If optional assets are missing, ViroSync prints a warning and continues with the
-corresponding layer disabled.
-
-Structural layers do not create new seed regions. They run during Phase 3 on candidates that already passed Phase 1/2, and can only annotate candidates or increase confidence through the structural component of the final score. The canonical output gate still applies after scoring.
-
-## Output Layout
-
-ViroSync writes one subdirectory per genome beneath the batch output root.
-
-```text
-results/<run_name>/
-├── batch_summary.tsv
-├── batch_report.md
-└── <genome_id>/
-    ├── phase0/
-    ├── phase1/
-    ├── phase2/
-    ├── phase3/
-    ├── phase0.complete.json
-    ├── phase1.complete.json
-    ├── phase2.complete.json
-    ├── phase3.complete.json
-    ├── phase3_synthesis/
-    │   ├── virosync_predictions.tsv
-    │   ├── virosync_predictions_detailed.tsv
-    │   ├── virosync_predictions.bed
-    │   ├── virosync_predictions.gff3
-    │   ├── virosync_summary.json
-    │   ├── evidence_profiles.json
-    │   ├── eve_ani_edges.tsv
-    │   ├── interproscan_summary.tsv
-    │   ├── virosync_tmvec_proteins.tsv
-    │   └── virosync_jelly_roll_proteins.tsv
-    ├── virosync_predictions_detailed.tsv
-    ├── virosync_tsv_invariant_report.tsv
-    ├── <genome_id>_eves.fna
-    ├── run.log
-    ├── virosync_run_complete.json
-    ├── virosync_run_state.json
-    └── notebooks/
-        └── jupyter/eve_analysis.ipynb
-```
-
-Key output semantics:
-
-| Path | Meaning |
-|------|---------|
-| `phase3_synthesis/virosync_predictions.tsv` | Canonical table of accepted predictions |
-| `phase3_synthesis/virosync_predictions.bed` | Canonical 0-based half-open coordinates for accepted predictions |
-| `phase3_synthesis/virosync_predictions.gff3` | Canonical GFF3 annotations for accepted predictions |
-| `phase3_synthesis/virosync_predictions_detailed.tsv` | Detailed table of all Phase 3 candidates, including rejected candidates |
-| `phase3_synthesis/eve_ani_edges.tsv` | Every EVE pair skani compared, with ANI and both aligned fractions. Written over the gate-accepted set before any later removal, so intersect it with the published predictions |
-| `<genome_id>/virosync_predictions_detailed.tsv` | Convenience copy of the detailed table at the run root |
-| `<genome_id>/<genome_id>_eves.fna` | Combined FASTA for accepted predictions only |
-| `<genome_id>/virosync_tsv_invariant_report.tsv` | QA report for detailed TSV invariants |
-| `<genome_id>/virosync_run_complete.json` | Human-readable final completion metadata; validated as a recorded output |
-| `<genome_id>/virosync_run_state.json` | Authoritative schema-v3 run identity, status, result counts, and final artifact identities |
-| `<genome_id>/phase<N>.complete.json` | Ordered phase record with dependency and artifact identities |
-| `batch_summary.tsv` | Per-genome status and count summary for the batch run |
-
-The output schema version is 6. `effective_eve_class` is one of `NCLDV`,
-`MIRUS`, `PPV`, `CRESS`, `PHAGE`, `VIRAL_UNKNOWN`, or `UNKNOWN`, and each
-accepted prediction contributes to one class count. `VIRAL_UNKNOWN` marks a
-region whose viral evidence does not settle on one lineage; `UNKNOWN` marks a
-region with no validated marker and no qualified viral gene hit. `PPV` contains
-the VP and PLV subtypes.
-[EVE taxonomy class](#eve-taxonomy-class) gives the assignment rule.
-
-The detailed table records direct ordinary/rescue arbitration in
-`canonical_selection_outcome`. Values are `kept`, `normal_gate_rejected`,
-`rescue_marker_excluded`, `overlap_selected`,
-`overlap_suppressed_by:<candidate_id>`, and
-`unsupported_no_viral_evidence`. The
-[frameshift screening guide](docs/FRAMESHIFT_SCREENING.md#read-the-output)
-defines each value.
-
-The detailed table writes `ppv_subtype=VP` or `ppv_subtype=PLV` only when
-subtype-specific HMM marker evidence supports one subtype and not the other,
-and only for regions published as `PPV`. Taxonomy cannot supply the subtype.
-The v1.0.7 database labels these genomes `PPV__` and holds no `VP__` or `PLV__`
-records. Ambiguous PPV candidates retain `effective_eve_class=PPV` and use `.`
-for `ppv_subtype`.
-
-The detailed table groups columns by final call, candidate provenance, marker
-evidence, gene taxonomy, composition and host evidence, InterProScan evidence,
-marker-set completeness, and ANI clustering. Its `taxonomy_best_hits`
-partition is:
-
-```text
-EUK;MITO;PLASTID;BAC;ARC;UNK;NO_HITS;NCLDV;MIRUS;PPV;CRESS;GVMAG;PHAGE
-```
-
-The four `*_top10_proteins` columns count raw top-10 prefix support. The
-mutually exclusive partition assigns a viral family only when the supporting
-hit reaches 25% amino-acid identity. When markers do not assign another family,
-identity-qualified gene taxonomy can assign CRESS. `vp_completeness` records
-VP-subtype evidence;
-`ppv_completeness` combines the PPV marker sets.
-
-The result reader maps three legacy class tokens onto current ones: `VP` and
-`PLV` to `PPV`, `MIXED` to `VIRAL_UNKNOWN`. Batch summaries report the parent
-classes only: `ncldv`, `mirus`, `ppv`, `cress`, `phage`, `viral_unknown`, and
-`unknown`.
-
-Normal runs validate schema-v3 state before reuse. The run fingerprint binds the input,
-effective output-determining configuration, source code, locked runtime, enabled tools
-and models, masking request, and resource manifests. Phase markers are checked in order;
-each recorded artifact must retain its relative path, size, SHA-256 digest, schema, and
-row count where applicable. Validation stops at the first stale phase and recomputes
-that phase and everything downstream. Schema-v1/v2 outputs and unmarked partial files
-are never resume evidence. `--clean-run` clears the genome output before the first
-attempt; an automatic retry validates and resumes the surviving schema-v3 phase prefix.
-
-Each successful genome run writes the executed analysis notebook `notebooks/jupyter/eve_analysis.ipynb` (rendered from the jupytext source `src/virosync/report/eve_analysis.py`).
-Notebook execution also emits rendered summary figures (for example confidence, marker, and gene-category PNGs) at the genome root.
-`eve_ani_network.png` draws the ANI clusters: a node per EVE colored by
-published class, a heavier border on EVEs whose class an MCP vote decided, and an edge for every
-pair the pipeline clustered. EVEs with no edge are left out, and the title
-states how many.
-
 ### EVE taxonomy class
 
 `effective_eve_class` comes from a weighted vote over the region's genes. Every
@@ -437,9 +217,8 @@ taxonomy:
   its resolved lineage is Preplasmiviricota, and as `PHAGE` otherwise.
 - A gene whose qualified hits give one class votes for that class. A gene whose
   hits span several classes votes `VIRAL_UNKNOWN`, which carries weight but
-  never wins. A gene with no qualified viral hit does not vote and is left out
-  of the denominator.
-
+  never wins.
+  
 A marker-bearing gene is searched twice, against the marker reference in
 Phase 1 and again in the Phase 2b all-gene search. Weights:
 
@@ -453,13 +232,6 @@ Phase 1 and again in the Phase 2b all-gene search. Weights:
 A lineage class (`NCLDV`, `MIRUS`, `PPV`, `CRESS`, or `PHAGE`) needs strictly
 more than half the total weight. Half is not enough, so two genes that disagree
 leave the region `VIRAL_UNKNOWN`.
-
-The major capsid protein decides ahead of that vote. An MCP marker that cast a
-vote sets the class on its own, however many other genes disagree, and does so
-even when its own top-10 spans several lineages and it therefore votes
-`VIRAL_UNKNOWN`. An MCP with no qualified viral hit casts no vote and decides
-nothing. MCP markers that disagree with each other fall through to the weighted
-vote, where each carries 5. That is the only place the weights break an MCP tie.
 
 A region with no viral vote at all is `VIRAL_UNKNOWN` when it carries a
 validated marker and `UNKNOWN` when it carries none.
@@ -592,40 +364,5 @@ accumulation around the viral core.
 | [config/orchestration.yaml](config/orchestration.yaml) | Repository-default orchestration and resource configuration |
 | [CHANGELOG.md](CHANGELOG.md) | Release and unreleased change log |
 
-## Testing
-
-Run the tracked test suite from the repository root:
-
-```bash
-pixi install --locked
-pixi run lint
-pixi run python -m pytest
-pixi run python -m compileall -q src tests scripts
-```
-
-Run the production release-surface guard:
-
-```bash
-pixi run check-production-ready
-```
-
-GitHub Actions run three public-readiness checks:
-
-- `tests`: installs the locked Pixi environment, runs the same pinned Ruff task
-  used locally, executes pytest and compileall, checks release surfaces, and
-  verifies the CLI version.
-- `production-guards`: typed-parses both shipped configurations, cross-checks
-  software and resource identities, authenticates the tracked v1.0.7 manifest,
-  and checks the public archive URL on schedules, manual runs, and release tags.
-- `example-smoke`: runs weekly, manually from the default branch, and for
-  release tags. It fully verifies provisioned resources, runs the standard
-  example clean and resumed, then runs the frameshift example clean. It checks
-  authenticated completion artifacts, coordinates, confirmed rescue markers,
-  and accepted rescued-marker FAA output before uploading path-safe summaries.
-
-## Reproducibility Notes
-
-- Always pass `--config config/orchestration.yaml` in scripted runs.
-- Keep run outputs outside the repository when processing real datasets.
 - Check `resources/virosync/DB_VERSION` to confirm the installed database bundle.
 - Use [docs/METHODS.md](docs/METHODS.md) for a code-verified description of the current workflow rather than older design notes.
