@@ -57,7 +57,7 @@ cat results/example_16t/batch_summary.tsv
 The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`
 with database version `v1.0.7`.
 
-The [documentation](docs/index.md) covers input modes, command-line options,
-outputs, performance tests, and optional analyses.
+The [documentation](https://nelli-team.github.io/virosync/) covers input modes,
+command-line options, outputs, performance tests, and optional analyses.
 
 ViroSync is available for non-commercial use under the terms in [LICENSE](LICENSE).

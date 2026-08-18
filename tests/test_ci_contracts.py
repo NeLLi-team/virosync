@@ -10,6 +10,7 @@ WORKFLOWS = (
     ROOT / ".github/workflows/tests.yml",
     ROOT / ".github/workflows/production-guards.yml",
     ROOT / ".github/workflows/example-smoke.yml",
+    ROOT / ".github/workflows/docs.yml",
 )
 
 
