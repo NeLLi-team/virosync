@@ -699,6 +699,37 @@ def test_optional_extractor_preserves_only_archive_executable_bits(
     assert (target / "data.txt").stat().st_mode & 0o777 == 0o644
 
 
+def test_optional_extractor_accepts_dot_root_without_allowing_traversal(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "dot-root.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        _add_member(handle, root)
+        _add_bytes(handle, "./payload/data.txt", b"safe\n")
+
+    target = tmp_path / "installed"
+    resource_installer.safe_extract_optional_archive(archive, target)
+    assert (target / "payload/data.txt").read_bytes() == b"safe\n"
+
+    unsafe_archive = tmp_path / "dot-traversal.tar.gz"
+    with tarfile.open(unsafe_archive, "w:gz") as handle:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        _add_member(handle, root)
+        _add_bytes(handle, "./../escape.txt", b"unsafe\n")
+
+    unsafe_target = tmp_path / "unsafe"
+    with pytest.raises(resource_installer.ArchiveSafetyError):
+        resource_installer.safe_extract_optional_archive(
+            unsafe_archive,
+            unsafe_target,
+        )
+    assert not unsafe_target.exists()
+    assert not (tmp_path / "escape.txt").exists()
+
+
 @pytest.mark.parametrize(("script_mode", "expected"), [(0o755, True), (0o644, False)])
 def test_interproscan_archive_setup_requires_executable_script(
     tmp_path: Path,

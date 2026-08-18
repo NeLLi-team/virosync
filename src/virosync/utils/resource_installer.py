@@ -300,13 +300,25 @@ def _archive_member_path(
     raw_name = member.name
     if not raw_name or "\\" in raw_name or raw_name.startswith("/"):
         raise ArchiveSafetyError(f"Unsafe absolute or malformed archive path: {raw_name!r}")
+    if archive_root == ".":
+        if raw_name.rstrip("/") == ".":
+            if not member.isdir():
+                raise ArchiveSafetyError("Archive root must be a directory entry")
+            return None
+        if not raw_name.startswith("./"):
+            raise ArchiveSafetyError(
+                f"Unexpected archive root for {raw_name!r}; expected './'"
+            )
+        raw_name = raw_name[2:]
     raw_parts = raw_name.rstrip("/").split("/")
     if any(part in {"", ".", ".."} for part in raw_parts):
-        raise ArchiveSafetyError(f"Unsafe archive traversal path: {raw_name!r}")
+        raise ArchiveSafetyError(f"Unsafe archive traversal path: {member.name!r}")
     path = PurePosixPath(*raw_parts)
+    if archive_root == ".":
+        return path
     if path.is_absolute() or not path.parts or path.parts[0] != archive_root:
         raise ArchiveSafetyError(
-            f"Unexpected archive root for {raw_name!r}; expected {archive_root!r}"
+            f"Unexpected archive root for {member.name!r}; expected {archive_root!r}"
         )
     if len(path.parts) == 1:
         if not member.isdir():
@@ -344,8 +356,20 @@ def _preflight_archive(
 
 
 def _discover_single_archive_root(handle: tarfile.TarFile) -> str:
+    members = handle.getmembers()
+    dot_roots = [member for member in members if member.name.rstrip("/") == "."]
+    if dot_roots:
+        if len(dot_roots) != 1 or not dot_roots[0].isdir():
+            raise ArchiveSafetyError("Archive root must be one directory entry")
+        if any(
+            member.name.rstrip("/") != "." and not member.name.startswith("./")
+            for member in members
+        ):
+            raise ArchiveSafetyError("Archive mixes './' and named top-level roots")
+        return "."
+
     roots: set[str] = set()
-    for member in handle.getmembers():
+    for member in members:
         raw_name = member.name
         if not raw_name or "\\" in raw_name or raw_name.startswith("/"):
             raise ArchiveSafetyError(
@@ -416,7 +440,7 @@ def safe_extract_archive(archive_path: Path, target_dir: Path) -> None:
 
 
 def safe_extract_optional_archive(archive_path: Path, target_dir: Path) -> None:
-    """Safely extract a legacy optional archive with one arbitrary top-level root."""
+    """Safely extract an optional archive with one named or ``.`` root."""
     _safe_extract_archive(
         archive_path,
         target_dir,
