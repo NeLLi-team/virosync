@@ -42,6 +42,17 @@ RESOURCE_IDENTITY = (
     RESOURCE_ARCHIVE_SHA256,
     RESOURCE_MANIFEST_SHA256,
 )
+TMVEC_RESOURCE_ARCHIVE = "virosync_tmvec2_resources_v1.0.0.tar.gz"
+TMVEC_RESOURCE_URL = (
+    f"https://dl.newlineages.com/virosync/{TMVEC_RESOURCE_ARCHIVE}"
+)
+TMVEC_RESOURCE_SHA256 = (
+    "2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6"
+)
+TMVEC_MANIFEST_SHA256 = (
+    "a137f821b06fea727c625a52f5fa776d3ad75a66a90b59ee82d903ff0e034456"
+)
+TMVEC_RESOURCE_IDENTITY = (TMVEC_RESOURCE_URL, TMVEC_RESOURCE_SHA256)
 
 FORBIDDEN_TRACKED_PATTERNS = (
     "resources/",
@@ -150,6 +161,16 @@ def resource_identity(config: ApplicationConfig) -> tuple[object, ...]:
     )
 
 
+def tmvec_resource_identity(config: ApplicationConfig) -> tuple[object, ...]:
+    """Return the typed TMVec2-resource identity from one shipped config."""
+
+    orchestration = config.orchestration
+    return (
+        orchestration.tmvec_resources_url,
+        orchestration.tmvec_resources_sha256,
+    )
+
+
 def check_resource_version(failures: list[str]) -> None:
     config_paths = (
         "config/orchestration.yaml",
@@ -168,11 +189,22 @@ def check_resource_version(failures: list[str]) -> None:
             f"{relative} core-resource identity differs from the release pin",
             failures,
         )
+        require(
+            tmvec_resource_identity(config) == TMVEC_RESOURCE_IDENTITY,
+            f"{relative} TMVec2-resource identity differs from the release pin",
+            failures,
+        )
     if set(parsed_configs) == set(config_paths):
         require(
             resource_identity(parsed_configs[config_paths[0]])
             == resource_identity(parsed_configs[config_paths[1]]),
             "shipped configs disagree on the core-resource identity",
+            failures,
+        )
+        require(
+            tmvec_resource_identity(parsed_configs[config_paths[0]])
+            == tmvec_resource_identity(parsed_configs[config_paths[1]]),
+            "shipped configs disagree on the TMVec2-resource identity",
             failures,
         )
 
@@ -269,6 +301,13 @@ def check_resource_version(failures: list[str]) -> None:
     for path in ("README.md", "docs/METHODS.md", "docs/RESOURCE_BUNDLE.md"):
         require_contains(path, DATABASE_VERSION, failures)
         require_contains(path, RESOURCE_ARCHIVE, failures)
+
+    for value in (
+        TMVEC_RESOURCE_ARCHIVE,
+        TMVEC_RESOURCE_SHA256,
+        TMVEC_MANIFEST_SHA256,
+    ):
+        require_contains("docs/RESOURCE_BUNDLE.md", value, failures)
 
     # The smoke workflow runs on the self-hosted runner with resources
     # provisioned out-of-band, so it no longer caches by key; it must still pin

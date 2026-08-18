@@ -68,6 +68,7 @@ tasks/
 docs/handoffs/
 
 # Documentation (release docs tracked; private manuscript/plan material stays local)
+site/
 docs/DEL/
 # Manuscript source lives in the virosync-bench repo.
 /docs/ms/

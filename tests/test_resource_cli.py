@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from click.testing import CliRunner
+import pytest
 import yaml
 
 from virosync.cli.main import cli
 from virosync.config import ApplicationConfig
+from virosync.orchestration import cli as orchestration_cli
 from virosync.orchestration.cli import (
     _database_version,
     _resolve_pipeline_resources,
@@ -222,7 +225,7 @@ def test_custom_setup_source_does_not_inherit_shipped_digest_pins(
     assert callable(captured[0]["progress_callback"])
 
 
-def test_setup_reports_only_explicit_optional_resource_failure(
+def test_setup_fails_for_explicit_tmvec_resource_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -256,13 +259,348 @@ def test_setup_reports_only_explicit_optional_resource_failure(
             str(tmp_path / "core.tar.gz"),
             "--tmvec-url",
             str(tmp_path / "tmvec.tar.gz"),
+            "--tmvec-resource-sha256",
+            "3" * 64,
+            "--no-write-config",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "TMVec2 setup failed" in result.output
+    assert "Setup complete" not in result.output
+    assert "InterProScan unavailable" not in result.output
+
+
+def test_setup_forwards_optional_targets_force_and_config_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+    config_path = tmp_path / "orchestration.yaml"
+    core_calls: list[dict] = []
+    optional_calls: list[dict] = []
+
+    def fake_core_setup(cls, **kwargs):
+        core_calls.append(kwargs)
+        return database_root
+
+    def fake_optional_setup(cls, **kwargs):
+        optional_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(fake_core_setup),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_optional_archive",
+        classmethod(fake_optional_setup),
+    )
+
+    tmvec_dir = tmp_path / "tmvec"
+    interproscan_dir = tmp_path / "interproscan"
+    boltz_db = tmp_path / "structures" / "viral"
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(config_path),
+            "--db-root",
+            str(database_root),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--core-version",
+            "v9.9.9",
+            "--core-resource-sha256",
+            "1" * 64,
+            "--core-manifest-sha256",
+            "2" * 64,
+            "--tmvec-url",
+            str(tmp_path / "tmvec.tar.gz"),
+            "--tmvec-resource-sha256",
+            "3" * 64,
+            "--tmvec-dir",
+            str(tmvec_dir),
+            "--interproscan-url",
+            str(tmp_path / "interproscan.tar.gz"),
+            "--interproscan-resource-sha256",
+            "4" * 64,
+            "--interproscan-dir",
+            str(interproscan_dir),
+            "--boltz-db-dir",
+            str(boltz_db),
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert core_calls[0]["force"] is True
+    assert [call["name"] for call in optional_calls] == ["tmvec", "interproscan"]
+    assert [call["target_path"] for call in optional_calls] == [
+        tmvec_dir,
+        interproscan_dir,
+    ]
+    assert all(call["force"] is True for call in optional_calls)
+    assert optional_calls[0]["archive_sha256"] == "3" * 64
+    assert optional_calls[1]["archive_sha256"] == "4" * 64
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["orchestration"]["tmvec_resources_url"] == str(
+        tmp_path / "tmvec.tar.gz"
+    )
+    assert payload["orchestration"]["tmvec_resources_sha256"] == "3" * 64
+    assert payload["orchestration"]["interproscan_resources_url"] == str(
+        tmp_path / "interproscan.tar.gz"
+    )
+    assert payload["orchestration"]["interproscan_resources_sha256"] == "4" * 64
+    assert payload["phase3"]["tmvec_database_dir"] == str(tmvec_dir)
+    assert payload["phase3"]["interproscan_dir"] == str(interproscan_dir)
+    assert payload["phase3"]["viral_structure_db"] == str(boltz_db)
+
+
+def test_setup_tmvec_default_target_tracks_custom_core_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "custom" / "virosync"
+    optional_calls: list[dict] = []
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+
+    def fake_optional_setup(cls, **kwargs):
+        optional_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_optional_archive",
+        classmethod(fake_optional_setup),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(tmp_path / "missing.yaml"),
+            "--db-root",
+            str(database_root),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--tmvec",
+            "--tmvec-url",
+            str(tmp_path / "tmvec.tar.gz"),
+            "--tmvec-resource-sha256",
+            "4" * 64,
             "--no-write-config",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "TMVec unavailable" in result.output
-    assert "InterProScan unavailable" not in result.output
+    assert optional_calls[0]["target_path"] == (
+        database_root.parent / "virosync-optional" / "tmvec"
+    )
+
+
+def test_setup_custom_tmvec_url_does_not_reuse_configured_checksum(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+    config_path = tmp_path / "orchestration.yaml"
+    config_path.write_text(
+        "schema_version: 1\n"
+        "orchestration:\n"
+        "  tmvec_resources_url: https://example.test/default.tar.gz\n"
+        f"  tmvec_resources_sha256: \"{'5' * 64}\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_optional_archive",
+        classmethod(
+            lambda cls, **_kwargs: pytest.fail(
+                "TMVec setup started without the custom archive checksum"
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(config_path),
+            "--db-root",
+            str(database_root),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--tmvec-url",
+            "https://example.test/custom.tar.gz",
+            "--no-write-config",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "URL/path and its SHA-256 must be configured together" in result.output
+
+
+def test_setup_interproscan_url_requires_checksum(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(
+            lambda cls, **_kwargs: pytest.fail(
+                "core setup started before InterProScan identity validation"
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(tmp_path / "missing.yaml"),
+            "--db-root",
+            str(tmp_path / "resources"),
+            "--interproscan-url",
+            "https://example.test/interproscan.tar.gz",
+            "--no-write-config",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "archive URL/path and its SHA-256" in result.output
+
+
+def test_interactive_decline_clears_optional_archive_identities(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+    config_path = tmp_path / "orchestration.yaml"
+    config_path.write_text(
+        "schema_version: 1\n"
+        "orchestration:\n"
+        "  tmvec_resources_url: https://example.test/tmvec.tar.gz\n"
+        f"  tmvec_resources_sha256: \"{'5' * 64}\"\n"
+        "  interproscan_resources_url: https://example.test/interproscan.tar.gz\n"
+        f"  interproscan_resources_sha256: \"{'6' * 64}\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_optional_archive",
+        classmethod(
+            lambda cls, **_kwargs: pytest.fail(
+                "optional setup started after the operator declined"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "missing_tmvec_files",
+        classmethod(lambda cls, **_kwargs: ["missing"]),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "interproscan_available",
+        classmethod(lambda cls, _path: False),
+    )
+    monkeypatch.setattr(
+        orchestration_cli,
+        "_prompt_optional_archive_choice",
+        lambda **kwargs: (False, kwargs["default_target"], None),
+    )
+    monkeypatch.setattr(
+        orchestration_cli,
+        "sys",
+        SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True)),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(config_path),
+            "--db-root",
+            str(database_root),
+            "--interactive-optional",
+            "--boltz-db-dir",
+            str(tmp_path / "boltz" / "viral"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["orchestration"]["tmvec_resources_url"] is None
+    assert payload["orchestration"]["tmvec_resources_sha256"] is None
+    assert payload["orchestration"]["interproscan_resources_url"] is None
+    assert payload["orchestration"]["interproscan_resources_sha256"] is None
+
+
+def test_interactive_optional_flag_does_not_prompt_without_tty(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database_root = tmp_path / "resources" / "virosync"
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "setup_database",
+        classmethod(lambda cls, **_kwargs: database_root),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "missing_tmvec_files",
+        classmethod(lambda cls, **_kwargs: ["missing"]),
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "interproscan_available",
+        classmethod(lambda cls, _path: False),
+    )
+    monkeypatch.setattr(
+        orchestration_cli,
+        "_prompt_optional_archive_choice",
+        lambda **_kwargs: pytest.fail("optional prompt opened without a TTY"),
+    )
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "setup",
+            "--config",
+            str(tmp_path / "missing.yaml"),
+            "--db-root",
+            str(database_root),
+            "--core-resource",
+            str(tmp_path / "core.tar.gz"),
+            "--interactive-optional",
+            "--no-write-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
 
 
 def test_fresh_setup_prompts_before_starting_progress(
@@ -292,14 +630,14 @@ def test_fresh_setup_prompts_before_starting_progress(
             "setup",
             "--config",
             str(tmp_path / "missing.yaml"),
-            "--core-resource",
-            str(tmp_path / "core.tar.gz"),
             "--no-write-config",
         ],
         input="\n\n",
     )
 
     assert result.exit_code == 0, result.output
+    assert "Download size: 5.88 GB (5,877,324,818 bytes)" in result.output
+    assert "Resource payload: 13.14 GB (13,137,477,318 bytes)" in result.output
     assert result.output.index("Download and install to") < result.output.index(
         "Progress:"
     )
@@ -410,4 +748,44 @@ def test_pipeline_resolution_clears_absent_auto_marker_source(
         None,
     )
 
+    assert resolved.databases.marker_faa_db is None
+
+
+def test_pipeline_resolution_clears_installed_marker_dbs_for_directory_rebuild(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    marker_dir = tmp_path / "marker-parts"
+    faa_dir = tmp_path / "proteins"
+    application = ApplicationConfig.from_dict(
+        {
+            "databases": {
+                "marker_faa_dir": str(marker_dir),
+                "faa_dir": str(faa_dir),
+            },
+            "phase1": {"rebuild_db": True},
+        }
+    )
+
+    def fake_resolve(cls, _payload, _config_path):
+        return {
+            "hmm_database": str(tmp_path / "combined.hmm"),
+            "marker_faa_db": str(tmp_path / "installed-marker.faa"),
+            "marker_db": str(tmp_path / "installed-marker.dmnd"),
+            "gene_taxonomy_faa_db": str(tmp_path / "combined-proteome.dmnd"),
+        }
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "resolve_config_paths",
+        classmethod(fake_resolve),
+    )
+
+    resolved = _resolve_pipeline_resources(
+        application.pipeline,
+        application.orchestration,
+        None,
+    )
+
+    assert resolved.databases.marker_db is None
     assert resolved.databases.marker_faa_db is None

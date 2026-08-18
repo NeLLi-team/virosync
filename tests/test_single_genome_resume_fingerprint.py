@@ -798,17 +798,17 @@ def test_tmvec_model_revisions_are_feature_gated_and_fingerprinted(
     before = _enabled_model_identities({"use_tmvec_database": True})
     monkeypatch.setattr(
         tmvec_predictor,
-        "PROTTRANS_MODEL_REVISION",
+        "LOBSTER_MODEL_REVISION",
         "revision-after-test-mutation",
     )
     after = _enabled_model_identities({"use_tmvec_database": True})
 
     assert _identity_digest(
         before,
-        f"model:{tmvec_predictor.PROTTRANS_MODEL_ID}",
+        f"model:{tmvec_predictor.LOBSTER_MODEL_ID}",
     ) != _identity_digest(
         after,
-        f"model:{tmvec_predictor.PROTTRANS_MODEL_ID}",
+        f"model:{tmvec_predictor.LOBSTER_MODEL_ID}",
     )
     assert _run_fingerprint_for_identity_items(before) != (
         _run_fingerprint_for_identity_items(after)

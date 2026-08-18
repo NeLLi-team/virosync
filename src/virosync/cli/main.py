@@ -30,6 +30,14 @@ logger = logging.getLogger("virosync")
 _GLOBAL_CLI_FLAGS = {"-v", "--verbose", "-q", "--quiet"}
 
 
+def _configure_logging(verbose: bool) -> None:
+    """Show ViroSync diagnostics without third-party debug payloads."""
+    logging.getLogger().setLevel(logging.ERROR)
+    logging.getLogger("virosync").setLevel(
+        logging.DEBUG if verbose else logging.ERROR
+    )
+
+
 def print_banner(database_version: str = "not resolved"):
     """Print ViroSync banner."""
     banner = f"""
@@ -63,13 +71,13 @@ def cli(ctx, verbose: bool, quiet: bool):
     ctx.ensure_object(dict)
 
     if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        _configure_logging(True)
         ctx.obj["verbose"] = True
     elif quiet:
-        logging.getLogger().setLevel(logging.ERROR)
+        _configure_logging(False)
         ctx.obj["quiet"] = True
     else:
-        logging.getLogger().setLevel(logging.ERROR)
+        _configure_logging(False)
         ctx.obj["verbose"] = False
         ctx.obj["quiet"] = False
 
@@ -139,7 +147,7 @@ class _LazyRunCommand(click.Command):
     def __init__(self):
         super().__init__(
             name="run",
-            help="Run ViroSync pipeline with Python parallelization.",
+            help="Run ViroSync on one or more genomes.",
             context_settings=CONTEXT_SETTINGS,
         )
         self._real = None
@@ -156,10 +164,6 @@ class _LazyRunCommand(click.Command):
         return self._real.get_params(ctx)
 
     def parse_args(self, ctx, args):
-        if not args:
-            self._load()
-            click.echo(ctx.get_help())
-            ctx.exit(0)
         self._load()
         return self._real.parse_args(ctx, args)
 
@@ -182,6 +186,7 @@ class _LazyOrchestrateGroup(click.Group):
     _STATIC_COMMANDS = {
         "info": "Show orchestration system information.",
         "resources": "Verify installed core resources.",
+        "run": "Run ViroSync on one or more genomes.",
         "setup": "Install ViroSync resources and optional databases.",
     }
 
@@ -248,8 +253,14 @@ def _is_bare_run(argv: list[str]) -> bool:
     if first_token is None or not first_token.startswith("-"):
         return False
 
-    has_input = any(token in {"-i", "--input"} for token in argv)
-    has_output = any(token in {"-o", "--output"} for token in argv)
+    has_input = any(
+        token in {"-i", "--input"} or token.startswith("--input=")
+        for token in argv
+    )
+    has_output = any(
+        token in {"-o", "--output"} or token.startswith("--output=")
+        for token in argv
+    )
     return has_input and has_output
 
 

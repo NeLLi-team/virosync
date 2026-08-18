@@ -3,10 +3,6 @@ ViroSync orchestration task functions.
 
 Each pipeline phase is decomposed into granular Python functions for reuse by
 the single-genome orchestrator.
-
-Reviewer Notes Addressed:
-- Avoid passing large in-memory objects: tasks load data from disk paths
-- result_storage_key interpolation: removed, using default per-run keys
 """
 
 import logging
@@ -24,7 +20,7 @@ from virosync.pipeline.phase0.masking import (
 from virosync.orchestration.runtime import get_orchestration_logger
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
-# Kept as a public module attribute for callers/tests; it is no longer an automatic
+# Public module attribute for callers and tests. It is not an automatic
 # failure fallback.
 quick_mask = _quick_mask
 
@@ -534,7 +530,7 @@ def gene_taxonomy_batch_task(
     """
     Run Diamond gene taxonomy for all candidates in one batch using genome-wide prodigal genes.
 
-    Uses TIER 2 database (combined_proteome.dmnd) for comprehensive gene taxonomy.
+    Uses the Tier 2 database (combined_proteome.dmnd) for all-gene taxonomy.
     """
     from virosync.pipeline.phase3.gene_taxonomy import run_gene_taxonomy_diamond_batch
     from virosync.orchestration.utils import run_with_monitor
@@ -656,7 +652,7 @@ def verify_eve_task(
         boltz_max_seq_len: Maximum sequence length for Boltz prediction
         boltz_no_kernels: Use --no_kernels flag for safer Boltz execution
         use_tmvec_database: Enable TMVec database search (optional; disabled by default)
-        tmvec_databases: TMVec databases to search (bfvd/cath/swissprot)
+        tmvec_databases: TMVec2 database to search (`bfvd`)
         tmvec_min_score: TMVec score threshold for structural support
         device: Device for TMVec/Boltz (cuda/cpu)
         viral_structure_db: FoldSeek database path for structural homology

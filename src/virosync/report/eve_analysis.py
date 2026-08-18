@@ -1211,7 +1211,7 @@ else:
                       markeredgecolor='#0077BB', markeredgewidth=1.2, zorder=10)
     MARKER_RT  = dict(marker='^', markersize=8, color='white',
                       markeredgecolor='#222222', markeredgewidth=1.0, zorder=9)
-    # MCP (major capsid) marker genes: yellow star, black outline -- easy to spot.
+    # MCP (major capsid) marker genes: yellow star with a black outline.
     MARKER_MCP = dict(marker='*', markersize=14, color='#FFD400',
                       markeredgecolor='#000000', markeredgewidth=1.2, zorder=11)
     

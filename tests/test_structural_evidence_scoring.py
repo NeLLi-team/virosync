@@ -51,6 +51,11 @@ def test_tmvec_structural_support_requires_configured_score_threshold(
     assert result.has_structural_support is False
     assert result.tmvec_all_proteins[0]["eve_id"] == result.eve_id
     assert result.tmvec_all_proteins[0]["tmvec_bfvd_score"] == 0.49
+    assert not {
+        "tmvec_cath_score",
+        "tmvec_swiss_score",
+        "tmvec_viral_specificity",
+    } & result.tmvec_all_proteins[0].keys()
 
     synthesizer._run_tmvec_database_scan(
         result,

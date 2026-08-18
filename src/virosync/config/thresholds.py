@@ -2,7 +2,7 @@
 Centralized Threshold Configuration for ViroSync.
 
 This module provides a single source of truth for all pipeline thresholds,
-enabling easy tuning without modifying source code across multiple files.
+so users can tune thresholds without editing source files.
 
 Usage:
     from virosync.config.thresholds import get_config, ViroSyncConfig

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -57,32 +56,11 @@ def _disabled_feature_states() -> dict[str, FeatureResolution]:
     }
 
 
-def _stub_ready_tmvec_preflight_assets(monkeypatch, tmp_path: Path) -> None:
+def _stub_ready_tmvec_preflight_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         orchestration_cli.ViroSyncDatabaseManager,
-        "missing_tmvec_files",
-        lambda *args, **kwargs: [],
-    )
-    cache = tmp_path / ".cache" / "virosync" / "tmvec"
-    cache.mkdir(parents=True)
-    (cache / "tm_vec_swiss_model_large_params.json").write_bytes(b"config")
-    (cache / "tm_vec_swiss_model_large.ckpt").write_bytes(b"checkpoint")
-    monkeypatch.setattr(
-        orchestration_cli,
-        "_TMVEC_CHECKPOINT_MD5",
-        {
-            path.name: hashlib.md5(
-                path.read_bytes(),
-                usedforsecurity=False,
-            ).hexdigest()
-            for path in cache.iterdir()
-        },
-        raising=False,
-    )
-    monkeypatch.setattr(
-        orchestration_cli.Path,
-        "home",
-        classmethod(lambda cls: tmp_path),
+        "load_tmvec_manifest",
+        lambda *args, **kwargs: {"model": {"family": "tmvec2"}},
     )
     monkeypatch.setattr(
         orchestration_cli.importlib.util,
@@ -299,7 +277,7 @@ def test_retired_tier_model_options_are_absent_from_cli_help() -> None:
     assert "--tier2-model" not in result.output
 
 
-def test_tmvec_lenient_mode_disables_and_records_reason(monkeypatch) -> None:
+def test_tmvec_request_fails_instead_of_disabling(monkeypatch) -> None:
     config = PipelineConfig.from_dict({"phase3": {"use_tmvec_database": True}})
     monkeypatch.setattr(
         orchestration_cli,
@@ -307,14 +285,8 @@ def test_tmvec_lenient_mode_disables_and_records_reason(monkeypatch) -> None:
         lambda config: ["TMVec databases not available under /missing"],
     )
 
-    resolved, states = _resolve_optional_features(config)
-
-    assert resolved.phase3.use_tmvec_database is False
-    assert states["tmvec"].requested is True
-    assert states["tmvec"].enabled is False
-    assert states["tmvec"].required is False
-    assert states["tmvec"].reason_code == "requirements_unmet"
-    assert "not available" in states["tmvec"].details[0]
+    with pytest.raises(click.ClickException, match="TMVec2 requirements not met"):
+        _resolve_optional_features(config)
 
 
 def test_tmvec_strict_mode_fails_instead_of_disabling(monkeypatch) -> None:
@@ -333,17 +305,16 @@ def test_tmvec_strict_mode_fails_instead_of_disabling(monkeypatch) -> None:
         lambda config: ["CUDA device is not available"],
     )
 
-    with pytest.raises(click.ClickException, match="strict requirements"):
+    with pytest.raises(click.ClickException, match="TMVec2 requirements not met"):
         _resolve_optional_features(config)
 
 
-def test_lenient_cuda_request_disables_during_preflight_when_cuda_unavailable(
-    tmp_path: Path,
+def test_cuda_tmvec_request_fails_when_cuda_is_unavailable(
     monkeypatch,
 ) -> None:
     import torch
 
-    _stub_ready_tmvec_preflight_assets(monkeypatch, tmp_path)
+    _stub_ready_tmvec_preflight_assets(monkeypatch)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     config = PipelineConfig.from_dict(
         {
@@ -352,26 +323,18 @@ def test_lenient_cuda_request_disables_during_preflight_when_cuda_unavailable(
         }
     )
 
-    resolved, states = _resolve_optional_features(config)
-
-    assert resolved.phase3.use_tmvec_database is False
-    assert states["tmvec"].enabled is False
-    assert "selected CUDA device is not available" in states["tmvec"].details
+    with pytest.raises(click.ClickException, match="selected CUDA device is not available"):
+        _resolve_optional_features(config)
 
 
-def test_plain_cpu_tmvec_corrupt_checkpoint_disables_during_preflight(
-    tmp_path: Path,
+def test_plain_cpu_tmvec_manifest_checksum_failure_is_fatal(
     monkeypatch,
 ) -> None:
-    _stub_ready_tmvec_preflight_assets(monkeypatch, tmp_path)
-    checkpoint = (
-        tmp_path
-        / ".cache"
-        / "virosync"
-        / "tmvec"
-        / "tm_vec_swiss_model_large.ckpt"
+    monkeypatch.setattr(
+        orchestration_cli,
+        "_tmvec_runtime_issues",
+        lambda config: ["TMVec file checksum mismatch"],
     )
-    checkpoint.write_bytes(checkpoint.read_bytes() + b"corrupt")
     config = PipelineConfig.from_dict(
         {
             "compute": {"device": "cpu"},
@@ -379,11 +342,8 @@ def test_plain_cpu_tmvec_corrupt_checkpoint_disables_during_preflight(
         }
     )
 
-    resolved, states = _resolve_optional_features(config)
-
-    assert resolved.phase3.use_tmvec_database is False
-    assert states["tmvec"].enabled is False
-    assert any("checkpoint checksum mismatch" in item for item in states["tmvec"].details)
+    with pytest.raises(click.ClickException, match="checksum mismatch"):
+        _resolve_optional_features(config)
 
 
 def _stub_runtime_boundaries(monkeypatch, application, received) -> None:
@@ -460,6 +420,122 @@ def test_run_resolves_process_concurrency_once(
     effective = received["effective_config"]
     assert effective["orchestration"]["max_concurrent_genomes"] == value
     assert effective["phase3"]["export_all_eve_sequences"] is True
+
+
+def test_scalar_cli_overrides_reach_the_runner_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    received: dict[str, object] = {}
+    input_fasta = tmp_path / "input.fna"
+    input_fasta.write_text(">scaffold_1\nACGT\n")
+    _stub_runtime_boundaries(monkeypatch, _application(), received)
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "run",
+            "-i",
+            str(input_fasta),
+            "-o",
+            str(tmp_path / "results"),
+            "--hmm-chunk-size",
+            "123",
+            "--phase1-initial-window-genes",
+            "7",
+            "--phase1-min-markers-initial",
+            "3",
+            "--phase1-merge-distance",
+            "42",
+            "--search-backend",
+            "diamond",
+            "--use-taxonomy-ml",
+            "--taxonomy-ml-model",
+            "gbdt",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = received["config"]
+    assert config.phase1.hmm_chunk_size == 123
+    assert config.phase1.initial_window_genes == 7
+    assert config.phase1.min_markers_initial == 3
+    assert config.phase1.merge_distance == 42
+    assert config.compute.search_backend.value == "diamond"
+    assert config.phase2.taxonomy_ml_enabled is True
+    assert config.phase2.taxonomy_ml_model == "gbdt"
+
+
+@pytest.mark.parametrize(
+    ("flags", "use_boltz", "skip_structural"),
+    [
+        (["--boltz"], True, False),
+        (["--boltz", "--skip-structural"], True, True),
+        (["--no-boltz", "--no-skip-structural"], False, False),
+    ],
+)
+def test_boltz_and_structural_skip_cli_interaction(
+    tmp_path: Path,
+    monkeypatch,
+    flags: list[str],
+    use_boltz: bool,
+    skip_structural: bool,
+) -> None:
+    received: dict[str, object] = {}
+    input_fasta = tmp_path / "input.fna"
+    input_fasta.write_text(">scaffold_1\nACGT\n")
+    _stub_runtime_boundaries(monkeypatch, _application(), received)
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "run",
+            "-i",
+            str(input_fasta),
+            "-o",
+            str(tmp_path / "results"),
+            *flags,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = received["config"]
+    assert config.phase3.use_boltz is use_boltz
+    assert config.phase3.skip_structural is skip_structural
+
+
+@pytest.mark.parametrize("root_flag", ["--quiet", "--verbose"])
+def test_root_output_flags_reach_run_command(
+    tmp_path: Path,
+    monkeypatch,
+    root_flag: str,
+) -> None:
+    received: dict[str, object] = {}
+    input_fasta = tmp_path / "input.fna"
+    input_fasta.write_text(">scaffold_1\nACGT\n")
+    _stub_runtime_boundaries(monkeypatch, _application(), received)
+
+    from virosync.cli.main import cli as root_cli
+
+    result = CliRunner().invoke(
+        root_cli,
+        [
+            root_flag,
+            "run",
+            "-i",
+            str(input_fasta),
+            "-o",
+            str(tmp_path / "results"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    if root_flag == "--quiet":
+        assert "Batch Processing Complete" not in result.output
+        assert "Effective config" not in result.output
+    else:
+        assert "Effective config" in result.output
+        assert "Batch Processing Complete" in result.output
 
 
 def test_run_rejects_conflicting_concurrency_aliases_before_resources(
@@ -561,6 +637,56 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
     assert config.phase3.tmvec_require_gpu is enable
     assert config.phase3.interproscan_enabled is enable
     assert config.compute.device.value == "cuda"
+
+
+@pytest.mark.parametrize(
+    ("option", "filename", "field", "is_dir"),
+    [
+        ("--hmm-db", "markers.hmm", "hmm_database", False),
+        ("--hmm-allowlist", "allowlist.txt", "hmm_allowlist", False),
+        ("--marker-faa-db", "marker.faa", "marker_faa_db", False),
+        ("--marker-faa-dir", "marker-parts", "marker_faa_dir", True),
+        ("--marker-db", "marker.dmnd", "marker_db", False),
+        ("--faa-dir", "proteins", "faa_dir", True),
+        ("--gvclass-db", "gvclass.dmnd", "gvclass_db", False),
+        ("--diamond-db", "phylogenetic.dmnd", "diamond_db", False),
+    ],
+)
+def test_relative_database_path_override_uses_cli_working_directory(
+    tmp_path: Path,
+    monkeypatch,
+    option: str,
+    filename: str,
+    field: str,
+    is_dir: bool,
+) -> None:
+    received: dict[str, object] = {}
+    input_fasta = tmp_path / "input.fna"
+    marker_path = tmp_path / filename
+    input_fasta.write_text(">scaffold_1\nACGT\n")
+    if is_dir:
+        marker_path.mkdir()
+    else:
+        marker_path.write_text(">marker\nAAAA\n")
+    _stub_runtime_boundaries(monkeypatch, _application(), received)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        orchestrate,
+        [
+            "run",
+            "-i",
+            "input.fna",
+            "-o",
+            "results",
+            option,
+            filename,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = received["config"]
+    assert getattr(config.databases, field) == marker_path.resolve()
 
 
 def test_path_preflight_precedes_resource_resolution(
@@ -698,8 +824,8 @@ def test_strict_tmvec_invalid_assets_fail_before_config_loaded(
     )
 
     assert result.exit_code == 1
-    assert "TMVec strict requirements not met" in result.output
-    assert "non-empty regular file" in result.output
+    assert "TMVec2 requirements not met" in result.output
+    assert "TMVEC_MANIFEST.json" in result.output
     assert "Config loaded" not in result.output
     assert not (tmp_path / "results").exists()
 
@@ -819,6 +945,46 @@ def test_selected_marker_build_inputs_are_existence_checked(tmp_path: Path) -> N
 
     with pytest.raises(click.ClickException, match="Marker FAA database"):
         _validate_runtime_config(config)
+
+
+def test_rebuild_requires_and_validates_marker_build_inputs(tmp_path: Path) -> None:
+    hmm = tmp_path / "markers.hmm"
+    marker_faa = tmp_path / "marker.faa"
+    faa_dir = tmp_path / "faa"
+    hmm.write_bytes(b"hmm")
+    marker_faa.write_text(">marker\nAAAA\n")
+    faa_dir.mkdir()
+
+    valid = PipelineConfig.from_dict(
+        {
+            "databases": {
+                "hmm_database": str(hmm),
+                "marker_db": str(tmp_path / "unused-missing-marker.dmnd"),
+                "marker_faa_db": str(marker_faa),
+                "faa_dir": str(faa_dir),
+            },
+            "phase1": {
+                "rebuild_db": True,
+                "frameshift_screening_enabled": False,
+            },
+        }
+    )
+    _validate_runtime_config(valid)
+
+    missing_sources = PipelineConfig.from_dict(
+        {
+            "databases": {
+                "hmm_database": str(hmm),
+                "marker_db": str(tmp_path / "installed-marker.dmnd"),
+            },
+            "phase1": {
+                "rebuild_db": True,
+                "frameshift_screening_enabled": False,
+            },
+        }
+    )
+    with pytest.raises(click.ClickException, match=r"rebuild_db requires.*faa_dir"):
+        _validate_runtime_config(missing_sources)
 
 
 def test_enabled_frameshift_screening_requires_bath_tools_before_run(

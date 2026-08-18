@@ -283,6 +283,33 @@ def test_core_resource_identity_is_strict_and_all_or_none(
         ApplicationConfig.from_dict({"orchestration": orchestration})
 
 
+@pytest.mark.parametrize("prefix", ["tmvec", "interproscan"])
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"url": "https://example.invalid/archive.tar.gz"}, "requires"),
+        ({"sha256": "0" * 64}, "requires"),
+        (
+            {
+                "url": "https://example.invalid/archive.tar.gz",
+                "sha256": "A" * 64,
+            },
+            "lowercase 64-character SHA-256",
+        ),
+    ],
+)
+def test_optional_resource_identity_requires_url_and_sha256(
+    prefix: str,
+    values: dict[str, str],
+    message: str,
+) -> None:
+    orchestration = {
+        f"{prefix}_resources_{name}": value for name, value in values.items()
+    }
+    with pytest.raises(ConfigError, match=message):
+        ApplicationConfig.from_dict({"orchestration": orchestration})
+
+
 def test_application_normalizes_documented_aliases_once() -> None:
     config = ApplicationConfig.from_dict(
         {

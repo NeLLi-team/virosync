@@ -497,10 +497,10 @@ def _enabled_model_identities(flat_config: dict) -> list[ResourceIdentity]:
     if not bool(flat_config.get("use_tmvec_database")):
         return []
     from virosync.pipeline.phase3.tmvec_predictor import (
-        PROTTRANS_MODEL_ID,
-        PROTTRANS_MODEL_REVISION,
-        PROTTRANS_PROXY_MODEL_ID,
-        PROTTRANS_PROXY_MODEL_REVISION,
+        LOBSTER_MODEL_ID,
+        LOBSTER_MODEL_REVISION,
+        TMVEC2_MODEL_ID,
+        TMVEC2_MODEL_REVISION,
     )
 
     return [
@@ -517,8 +517,8 @@ def _enabled_model_identities(flat_config: dict) -> list[ResourceIdentity]:
             ),
         )
         for model_id, revision in (
-            (PROTTRANS_MODEL_ID, PROTTRANS_MODEL_REVISION),
-            (PROTTRANS_PROXY_MODEL_ID, PROTTRANS_PROXY_MODEL_REVISION),
+            (LOBSTER_MODEL_ID, LOBSTER_MODEL_REVISION),
+            (TMVEC2_MODEL_ID, TMVEC2_MODEL_REVISION),
         )
     ]
 
@@ -2113,7 +2113,7 @@ def _single_genome_flow_impl(
     )
     report_progress(90, "phase 3 complete")
 
-    # Release GPU memory after Phase 3 (TMVec models ~45 GiB).
+    # Release model memory after Phase 3.
     try:
         from virosync.utils.gpu import release_gpu_memory
         release_gpu_memory()

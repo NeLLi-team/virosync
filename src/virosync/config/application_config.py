@@ -62,7 +62,9 @@ class OrchestrationConfig:
     core_resources_sha256: Optional[str] = None
     core_resources_manifest_sha256: Optional[str] = None
     tmvec_resources_url: Optional[str] = None
+    tmvec_resources_sha256: Optional[str] = None
     interproscan_resources_url: Optional[str] = None
+    interproscan_resources_sha256: Optional[str] = None
     max_concurrent_genomes: int = 4
     retries: int = 1
     retry_delay_seconds: int = 60
@@ -110,6 +112,44 @@ class OrchestrationConfig:
                 errors.append(
                     f"orchestration.{name} must be a lowercase 64-character SHA-256"
                 )
+        if self.tmvec_resources_url is not None and self.tmvec_resources_sha256 is None:
+            errors.append(
+                "orchestration.tmvec_resources_url requires tmvec_resources_sha256"
+            )
+        if self.tmvec_resources_url is None and self.tmvec_resources_sha256 is not None:
+            errors.append(
+                "orchestration.tmvec_resources_sha256 requires tmvec_resources_url"
+            )
+        if self.tmvec_resources_sha256 is not None and re.fullmatch(
+            r"[0-9a-f]{64}", self.tmvec_resources_sha256
+        ) is None:
+            errors.append(
+                "orchestration.tmvec_resources_sha256 must be a lowercase "
+                "64-character SHA-256"
+            )
+        if (
+            self.interproscan_resources_url is not None
+            and self.interproscan_resources_sha256 is None
+        ):
+            errors.append(
+                "orchestration.interproscan_resources_url requires "
+                "interproscan_resources_sha256"
+            )
+        if (
+            self.interproscan_resources_url is None
+            and self.interproscan_resources_sha256 is not None
+        ):
+            errors.append(
+                "orchestration.interproscan_resources_sha256 requires "
+                "interproscan_resources_url"
+            )
+        if self.interproscan_resources_sha256 is not None and re.fullmatch(
+            r"[0-9a-f]{64}", self.interproscan_resources_sha256
+        ) is None:
+            errors.append(
+                "orchestration.interproscan_resources_sha256 must be a lowercase "
+                "64-character SHA-256"
+            )
         if self.max_concurrent_genomes < 1:
             errors.append("orchestration.max_concurrent_genomes must be >= 1")
         if self.retries < 0:

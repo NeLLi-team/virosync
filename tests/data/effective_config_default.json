@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "d3d9875bd05f473a8b456fc4541eabd2afaaeb361ef9efa6a388c771da6773fd",
+  "effective_config_sha256": "109fb8a16b1d5ddecaacba2e8bdacbb4392abf29a68f51758adc1c49576d7c49",
   "execution": {
     "masking": {
       "backend": "off",
@@ -74,11 +74,13 @@
     "core_resources_version": "v1.0.7",
     "database_root": null,
     "gpu_id": null,
+    "interproscan_resources_sha256": null,
     "interproscan_resources_url": null,
     "max_concurrent_genomes": 6,
     "retries": 1,
     "retry_delay_seconds": 60,
-    "tmvec_resources_url": null
+    "tmvec_resources_sha256": "2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6",
+    "tmvec_resources_url": "https://dl.newlineages.com/virosync/virosync_tmvec2_resources_v1.0.0.tar.gz"
   },
   "phase1": {
     "assembly_mode": "default",
@@ -179,9 +181,7 @@
     "skip_structural": true,
     "tmvec_database_dir": null,
     "tmvec_databases": [
-      "bfvd",
-      "cath",
-      "swissprot"
+      "bfvd"
     ],
     "tmvec_min_score": 0.5,
     "tmvec_require_gpu": false,

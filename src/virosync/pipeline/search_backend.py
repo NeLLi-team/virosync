@@ -206,7 +206,7 @@ def _run_diamond(
     env.pop("MKL_NUM_THREADS", None)
 
     def _invoke(t: int) -> None:
-        # Isolated tempdir per call — Diamond writes intermediate index chunks
+        # Isolated temp directory per call. DIAMOND writes intermediate index chunks
         # here and we want them gone (and uncontended) the moment the call
         # completes, regardless of where the caller's TMPDIR points.
         with tempfile.TemporaryDirectory(prefix="diamond_call_") as tdir:

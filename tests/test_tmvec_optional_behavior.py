@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,27 +12,170 @@ import torch
 from virosync.pipeline.phase3 import tmvec_predictor
 from virosync.pipeline.phase3.tmvec_database import TMVecDatabaseSearch
 from virosync.pipeline.phase3.tmvec_predictor import TMvecPredictor
+from virosync.utils import database_manager
 from virosync.utils.database_manager import ViroSyncDatabaseManager
+from virosync.utils.resource_installer import ResourceInstallError
 from virosync.utils.resource_manifest import LEGACY_RUNTIME_RESOURCE_FILES
 
 
-def _write_tmvec_pair(
-    root: Path,
-    embeddings_name: str,
-    metadata_name: str,
-    rows: int = 2,
-    dimensions: int = 512,
-    object_metadata: bool = False,
-) -> None:
-    np.save(root / embeddings_name, np.ones((rows, dimensions), dtype=np.float32))
-    if object_metadata:
-        metadata = np.array(
-            [{"id": f"protein-{index}"} for index in range(rows)],
-            dtype=object,
-        )
-    else:
-        metadata = np.array([f"protein-{index}" for index in range(rows)])
-    np.save(root / metadata_name, metadata, allow_pickle=object_metadata)
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_tmvec2_sequence_preparation_removes_prodigal_terminal_stop() -> None:
+    assert TMvecPredictor._prepare_sequence("  MAKX*\n") == "MAKX"
+
+
+@pytest.mark.parametrize("sequence", ["*", " \n*", "MA*K"])
+def test_tmvec2_sequence_preparation_rejects_invalid_stops(sequence: str) -> None:
+    with pytest.raises(ValueError, match="stop"):
+        TMvecPredictor._prepare_sequence(sequence)
+
+
+def test_tmvec2_runtime_architecture_matches_manifest_contract() -> None:
+    config = tmvec_predictor.TMvecConfig()
+    assert database_manager.TMVEC2_ARCHITECTURE == {
+        "base_embedding_dim": config.d_model,
+        "output_dim": config.out_dim,
+        "nhead": config.nhead,
+        "num_layers": config.num_layers,
+        "dim_feedforward": config.dim_feedforward,
+        "transformer_activation": config.activation,
+        "projection_hidden_dim": config.projection_hidden_dim,
+        "projection_activation": "relu",
+        "dropout": config.dropout,
+        "max_sequence_length": config.max_length,
+    }
+
+
+def _write_tmvec2_bundle(root: Path, monkeypatch) -> dict:
+    base_dir = root / "models" / "lobster_24M"
+    head_dir = root / "models" / "tmvec-2"
+    bfvd_dir = root / "bfvd"
+    reference_dir = root / "reference"
+    for path in (base_dir, head_dir, bfvd_dir, reference_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    base_names = [
+        "config.json",
+        "pytorch_model.bin",
+        "special_tokens_map.json",
+        "tokenizer_config.json",
+        "vocab.txt",
+    ]
+    head_names = ["params.json", "tmvec-2.ckpt"]
+    for name in base_names:
+        (base_dir / name).write_bytes(f"base-{name}".encode())
+    for name in head_names:
+        (head_dir / name).write_bytes(f"head-{name}".encode())
+    monkeypatch.setattr(
+        database_manager,
+        "TMVEC2_BASE_WEIGHT_SHA256",
+        _sha256(base_dir / "pytorch_model.bin"),
+    )
+    monkeypatch.setattr(
+        database_manager,
+        "TMVEC2_HEAD_WEIGHT_SHA256",
+        _sha256(head_dir / "tmvec-2.ckpt"),
+    )
+
+    embeddings = bfvd_dir / "bfvd_embeddings.npy"
+    metadata = bfvd_dir / "bfvd_annotations.tsv"
+    cpu_reference = reference_dir / "smoke_query.cpu.reference_embedding.npy"
+    cuda_reference = reference_dir / "smoke_query.cuda.reference_embedding.npy"
+    np.save(embeddings, np.ones((2, 512), dtype=np.float32))
+    metadata.write_text(
+        "id\tprotein_name\nBFVD-1\tprotein one\nBFVD-2\tprotein two\n",
+        encoding="utf-8",
+    )
+    np.save(cpu_reference, np.ones(512, dtype=np.float32))
+    np.save(cuda_reference, np.ones(512, dtype=np.float32))
+
+    manifest = {
+        "schema_version": 1,
+        "bundle_version": "v1.0.0",
+        "model": {
+            "family": "tmvec2",
+            "architecture": dict(database_manager.TMVEC2_ARCHITECTURE),
+            "base": {
+                "id": database_manager.TMVEC2_BASE_MODEL_ID,
+                "revision": database_manager.TMVEC2_BASE_MODEL_REVISION,
+                "files": [
+                    {
+                        "path": f"models/lobster_24M/{name}",
+                        "sha256": _sha256(base_dir / name),
+                    }
+                    for name in base_names
+                ],
+            },
+            "head": {
+                "id": database_manager.TMVEC2_HEAD_MODEL_ID,
+                "revision": database_manager.TMVEC2_HEAD_MODEL_REVISION,
+                "files": [
+                    {
+                        "path": f"models/tmvec-2/{name}",
+                        "sha256": _sha256(head_dir / name),
+                    }
+                    for name in head_names
+                ],
+            },
+        },
+        "databases": {
+            "bfvd": {
+                "attribution": {
+                    "name": "BFVD",
+                    "creator": "Kim, Rachel Seongeun",
+                    "source_url": "https://bfvd.steineggerlab.workers.dev/",
+                    "doi": "10.5281/zenodo.13993145",
+                    "license": "CC BY 4.0",
+                    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                    "changes": (
+                        "Converted BFVD protein sequences to "
+                        "Lobster-24M/TMVec2 embeddings."
+                    ),
+                },
+                "embeddings": {
+                    "path": "bfvd/bfvd_embeddings.npy",
+                    "sha256": _sha256(embeddings),
+                    "rows": 2,
+                },
+                "metadata": {
+                    "path": "bfvd/bfvd_annotations.tsv",
+                    "sha256": _sha256(metadata),
+                    "rows": 2,
+                },
+            }
+        },
+        "smoke_query": {
+            "id": "bfvd-smoke",
+            "sequence": "M" * 60,
+            "database": "bfvd",
+            "expected_target_id": "BFVD-1",
+            "expected_score": 1.0,
+            "score_tolerance": 0.01,
+            "reference_embeddings": {
+                "cpu": {
+                    "path": "reference/smoke_query.cpu.reference_embedding.npy",
+                    "sha256": _sha256(cpu_reference),
+                    "dimensions": 512,
+                    "atol": 1e-5,
+                    "rtol": 1e-5,
+                },
+                "cuda": {
+                    "path": "reference/smoke_query.cuda.reference_embedding.npy",
+                    "sha256": _sha256(cuda_reference),
+                    "dimensions": 512,
+                    "atol": 1e-5,
+                    "rtol": 1e-5,
+                },
+            },
+        },
+    }
+    (root / "TMVEC_MANIFEST.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def test_tmvec_database_search_requires_explicit_portable_root() -> None:
@@ -41,6 +187,8 @@ def test_tmvec_predictor_failure_raises_when_gpu_required(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _write_tmvec2_bundle(tmp_path, monkeypatch)
+
     def _fail_predictor(*args, **kwargs):
         raise RuntimeError("no CUDA device")
 
@@ -61,6 +209,8 @@ def test_tmvec_predictor_failure_disables_when_gpu_not_required(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _write_tmvec2_bundle(tmp_path, monkeypatch)
+
     def _fail_predictor(*args, **kwargs):
         raise RuntimeError("no CUDA device")
 
@@ -80,6 +230,8 @@ def test_tmvec_predictor_failure_raises_after_preflight_enablement(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _write_tmvec2_bundle(tmp_path, monkeypatch)
+
     monkeypatch.setattr(
         "virosync.pipeline.phase3.tmvec_database.get_tmvec_predictor",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("predictor failed")),
@@ -247,30 +399,26 @@ def test_tmvec_zero_embedding_disables_hits_when_gpu_not_required(
     }
 
 
-def test_tmvec_loads_trained_figshare_checkpoint_strictly(
+def test_tmvec2_loads_local_checkpoint_strictly(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "tm_vec_swiss_model_large_params.json"
-    config_path.write_text(
-        """{
-  "d_model": 1024,
-  "nhead": 4,
-  "num_layers": 4,
-  "dim_feedforward": 2048,
-  "out_dim": 512,
-  "dropout": 0.1,
-  "activation": "relu"
-}"""
+    model_dir = tmp_path / "models" / "tmvec-2"
+    model_dir.mkdir(parents=True)
+    config = tmvec_predictor.TMvecConfig()
+    (model_dir / "params.json").write_text(
+        json.dumps(
+            {
+                name: getattr(config, name)
+                for name in config.__dataclass_fields__
+            }
+        ),
+        encoding="utf-8",
     )
-    ckpt_path = tmp_path / "tm_vec_swiss_model_large.ckpt"
     torch.save(
-        {"state_dict": {"encoder.weight": torch.ones(1), "mlp.weight": torch.ones(1)}},
-        ckpt_path,
+        {"state_dict": {"projection.0.weight": torch.ones(1)}},
+        model_dir / "tmvec-2.ckpt",
     )
-
-    def _fake_download(self, url, filename, expected_md5=None):
-        return config_path if filename.endswith("_params.json") else ckpt_path
 
     class FakeTMvecModel:
         def __init__(self, config):
@@ -285,26 +433,156 @@ def test_tmvec_loads_trained_figshare_checkpoint_strictly(
             return self
 
         def eval(self):
-            self.evaluated = True
+            return self
 
-    monkeypatch.setattr(TMvecPredictor, "_download_model", _fake_download)
     monkeypatch.setattr(tmvec_predictor, "TMvecModel", FakeTMvecModel)
 
-    predictor = TMvecPredictor(device="cpu")
-    predictor._load_tmvec()
+    predictor = TMvecPredictor(device="cpu", model_root=tmp_path / "models")
+    predictor._load_tmvec2()
 
     state_dict, strict = predictor._tmvec_model.loaded
-    assert predictor._config.d_model == 1024
+    assert predictor._config == tmvec_predictor.TMvecConfig()
     assert strict is True
-    assert "projection.weight" in state_dict
-    assert "mlp.weight" not in state_dict
+    assert list(state_dict) == ["projection.0.weight"]
 
 
-def test_tmvec_rejects_incompatible_huggingface_tmvec2() -> None:
-    predictor = TMvecPredictor(device="cpu", model_name="scikit-bio/tmvec-2")
+def test_tmvec2_uses_lobster_attention_mask_for_padding() -> None:
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.call = None
 
-    with pytest.raises(RuntimeError, match="expects 408-dimensional"):
-        predictor._load_tmvec()
+        def __call__(self, sequences, **kwargs):
+            self.call = (sequences, kwargs)
+            return {
+                "input_ids": torch.tensor([[0, 5, 6, 2]]),
+                "attention_mask": torch.tensor([[1, 1, 1, 0]]),
+            }
+
+    class FakeLobsterBase:
+        def __call__(self, **kwargs):
+            assert kwargs["output_hidden_states"] is True
+            features = torch.ones((1, 4, 408), dtype=torch.float32)
+            return SimpleNamespace(hidden_states=(features,))
+
+    class FakeHead:
+        def __init__(self) -> None:
+            self.padding_mask = None
+
+        def __call__(self, features, padding_mask):
+            assert features.shape == (1, 4, 408)
+            self.padding_mask = padding_mask
+            return torch.ones((1, 512), dtype=torch.float32)
+
+    predictor = TMvecPredictor(device="cpu")
+    predictor._initialized = True
+    predictor._config = tmvec_predictor.TMvecConfig()
+    predictor._tokenizer = FakeTokenizer()
+    predictor._lobster_model = SimpleNamespace(model=FakeLobsterBase())
+    predictor._tmvec_model = FakeHead()
+
+    result = predictor.embed("A C D E F")
+
+    assert result.shape == (512,)
+    sequences, kwargs = predictor._tokenizer.call
+    assert sequences == ["ACDEF"]
+    assert kwargs == {
+        "padding": True,
+        "truncation": True,
+        "max_length": 512,
+        "return_tensors": "pt",
+    }
+    assert predictor._tmvec_model.padding_mask.tolist() == [
+        [False, False, False, True]
+    ]
+
+
+def test_tmvec_database_passes_local_model_root(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+    events = []
+
+    class Predictor:
+        available = True
+
+    def _predictor(**kwargs):
+        events.append("predictor")
+        captured.update(kwargs)
+        return Predictor()
+
+    def _manifest(cls, root, **kwargs):
+        events.append("manifest")
+        return {
+            "databases": {
+                "bfvd": {
+                    "embeddings": {"path": "bfvd/bfvd_embeddings.npy"},
+                    "metadata": {"path": "bfvd/bfvd_annotations.tsv"},
+                }
+            }
+        }
+
+    monkeypatch.setattr(
+        "virosync.pipeline.phase3.tmvec_database.get_tmvec_predictor",
+        _predictor,
+    )
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "load_tmvec_manifest",
+        classmethod(_manifest),
+    )
+    searcher = TMVecDatabaseSearch(database_root=tmp_path, device="cpu")
+
+    assert searcher.predictor is not None
+    assert events == ["manifest", "predictor"]
+    assert captured["model_root"] == tmp_path / "models"
+
+
+def test_tmvec_database_loads_hash_bound_tsv_metadata(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bfvd = tmp_path / "bfvd"
+    bfvd.mkdir()
+    np.save(bfvd / "bfvd_embeddings.npy", np.ones((2, 512), dtype=np.float32))
+    (bfvd / "bfvd_annotations.tsv").write_text(
+        "id\tprotein_name\nBFVD-1\tprotein one\nBFVD-2\tprotein two\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "databases": {
+            "bfvd": {
+                "embeddings": {"path": "bfvd/bfvd_embeddings.npy"},
+                "metadata": {"path": "bfvd/bfvd_annotations.tsv"},
+            }
+        }
+    }
+    calls = []
+
+    def _manifest(cls, root, **kwargs):
+        calls.append((root, kwargs))
+        return manifest
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "load_tmvec_manifest",
+        classmethod(_manifest),
+    )
+    searcher = TMVecDatabaseSearch(database_root=tmp_path, device="cpu")
+
+    database = searcher._load_db("bfvd")
+
+    assert database["ids"] == ["BFVD-1", "BFVD-2"]
+    assert database["annotations"][0]["protein_name"] == "protein one"
+    assert calls == [
+        (
+            tmp_path,
+            {"verify_hashes": True, "databases": ["bfvd"]},
+        )
+    ]
+
+
+def test_tmvec2_rejects_unbuilt_database_keys(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Unsupported TMVec2 database"):
+        TMVecDatabaseSearch(database_root=tmp_path, databases=["cath"])
+
 
 
 def test_phase3_honors_explicit_cpu_when_cuda_is_available(monkeypatch) -> None:
@@ -324,202 +602,153 @@ def test_phase3_rejects_unavailable_explicit_cuda(monkeypatch) -> None:
         phase3_flow._resolve_tmvec_device("cuda")
 
 
-def test_legacy_untrained_bfvd_embeddings_raise_when_gpu_required(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "bfvd_root"
-    emb_dir = root / "tmvec_embeddings"
-    emb_dir.mkdir(parents=True)
-    _write_tmvec_pair(
-        emb_dir,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-    (emb_dir / "bfvd_embeddings.log").write_text(
-        "Using TMvec with default ProtT5 configuration\n"
-    )
-
-    searcher = TMVecDatabaseSearch(database_root=root, require_gpu=True)
-
-    with pytest.raises(RuntimeError, match="legacy untrained/random-weight"):
-        searcher._load_db("bfvd")
-
-
-def test_legacy_untrained_bfvd_embeddings_disable_when_gpu_not_required(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "bfvd_root"
-    emb_dir = root / "tmvec_embeddings"
-    emb_dir.mkdir(parents=True)
-    _write_tmvec_pair(
-        emb_dir,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-    (emb_dir / "stdout.log").write_text("Using TMvec with random initialization\n")
-
-    searcher = TMVecDatabaseSearch(database_root=root, require_gpu=False)
-
-    assert searcher._load_db("bfvd") is None
-
-
-def test_missing_tmvec_files_accepts_supported_flat_and_nested_layouts(
-    tmp_path: Path,
-) -> None:
-    flat_bfvd = tmp_path / "flat_bfvd"
-    flat_bfvd.mkdir()
-    _write_tmvec_pair(
-        flat_bfvd,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-
-    nested_bfvd = tmp_path / "nested_bfvd"
-    (nested_bfvd / "tmvec_embeddings").mkdir(parents=True)
-    _write_tmvec_pair(
-        nested_bfvd / "tmvec_embeddings",
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-
-    flat_pdb = tmp_path / "flat_pdb"
-    flat_pdb.mkdir()
-    _write_tmvec_pair(flat_pdb, "embeddings.npy", "metadata.npy")
-
-    assert ViroSyncDatabaseManager.missing_tmvec_files(flat_bfvd, ["bfvd"]) == []
-    assert ViroSyncDatabaseManager.missing_tmvec_files(nested_bfvd, ["bfvd"]) == []
-    assert ViroSyncDatabaseManager.missing_tmvec_files(flat_pdb, ["pdb"]) == []
-
-
-@pytest.mark.parametrize("invalid_kind", ["empty", "directory"])
-def test_missing_tmvec_files_rejects_non_regular_or_empty_assets(
-    tmp_path: Path,
-    invalid_kind: str,
-) -> None:
-    root = tmp_path / invalid_kind
-    root.mkdir()
-    invalid = root / "bfvd_embeddings.npy"
-    if invalid_kind == "directory":
-        invalid.mkdir()
-    else:
-        invalid.write_bytes(b"")
-    np.save(
-        root / "bfvd_annotations.npy",
-        np.array([{"id": "valid"}], dtype=object),
-        allow_pickle=True,
-    )
-
-    missing = ViroSyncDatabaseManager.missing_tmvec_files(root, ["bfvd"])
-
-    assert len(missing) == 1
-    assert "non-empty regular file" in missing[0]
-
-
-@pytest.mark.parametrize(
-    ("case", "message"),
-    [
-        ("corrupt_header", "valid NPY"),
-        ("one_dimensional", "2-D"),
-        ("empty_shape", "non-empty"),
-        ("nonnumeric", "numeric"),
-        ("wrong_width", "512"),
-        ("row_mismatch", "row count"),
-        ("truncated", "truncated"),
-    ],
-)
-def test_tmvec_preflight_rejects_invalid_npy_assets(
-    tmp_path: Path,
-    case: str,
-    message: str,
-) -> None:
-    root = tmp_path / case
-    root.mkdir()
-    _write_tmvec_pair(
-        root,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-    embeddings = root / "bfvd_embeddings.npy"
-    if case == "corrupt_header":
-        embeddings.write_bytes(b"not-npy")
-    elif case == "one_dimensional":
-        np.save(embeddings, np.ones(3, dtype=np.float32))
-    elif case == "empty_shape":
-        np.save(embeddings, np.ones((0, 3), dtype=np.float32))
-    elif case == "nonnumeric":
-        np.save(embeddings, np.array([["not", "numeric"]]))
-    elif case == "wrong_width":
-        np.save(embeddings, np.ones((2, 3), dtype=np.float32))
-    elif case == "row_mismatch":
-        np.save(
-            root / "bfvd_annotations.npy",
-            np.array([{"id": "only-one"}], dtype=object),
-            allow_pickle=True,
-        )
-    elif case == "truncated":
-        embeddings.write_bytes(embeddings.read_bytes()[:-1])
-
-    missing = ViroSyncDatabaseManager.missing_tmvec_files(root, ["bfvd"])
-
-    assert len(missing) == 1
-    assert message in missing[0]
-
-
-def test_tmvec_preflight_does_not_load_object_metadata_payload(
+def test_tmvec_manifest_accepts_hash_bound_tmvec2_bundle(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    _write_tmvec_pair(
-        tmp_path,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-    monkeypatch.setattr(np, "load", lambda *args, **kwargs: pytest.fail("payload loaded"))
+    expected = _write_tmvec2_bundle(tmp_path, monkeypatch)
 
+    actual = ViroSyncDatabaseManager.load_tmvec_manifest(
+        tmp_path,
+        verify_hashes=True,
+        databases=["bfvd"],
+    )
+
+    assert actual == expected
     assert ViroSyncDatabaseManager.missing_tmvec_files(tmp_path, ["bfvd"]) == []
 
 
-def test_tmvec_preflight_rejects_object_metadata_truncated_by_one_byte(
+def test_tmvec_manifest_rejects_manifestless_legacy_arrays(tmp_path: Path) -> None:
+    bfvd = tmp_path / "bfvd"
+    bfvd.mkdir()
+    np.save(bfvd / "bfvd_embeddings.npy", np.ones((1, 512), dtype=np.float32))
+    (bfvd / "bfvd_annotations.tsv").write_text("id\nBFVD-1\n", encoding="utf-8")
+
+    issues = ViroSyncDatabaseManager.missing_tmvec_files(tmp_path, ["bfvd"])
+
+    assert len(issues) == 1
+    assert "TMVEC_MANIFEST.json" in issues[0]
+
+
+def test_tmvec_manifest_rejects_tampered_database(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    _write_tmvec_pair(
-        tmp_path,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
-    )
-    metadata = tmp_path / "bfvd_annotations.npy"
-    metadata.write_bytes(metadata.read_bytes()[:-1])
+    _write_tmvec2_bundle(tmp_path, monkeypatch)
+    embeddings = tmp_path / "bfvd" / "bfvd_embeddings.npy"
+    embeddings.write_bytes(embeddings.read_bytes()[:-1] + b"x")
 
-    missing = ViroSyncDatabaseManager.missing_tmvec_files(tmp_path, ["bfvd"])
-
-    assert len(missing) == 1
-    assert "pickle payload" in missing[0]
-    assert "STOP" in missing[0]
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        ViroSyncDatabaseManager.load_tmvec_manifest(
+            tmp_path,
+            verify_hashes=True,
+            databases=["bfvd"],
+        )
 
 
-def test_tmvec_preflight_rejects_object_metadata_trailing_data(
+def test_tmvec_manifest_rejects_pickle_metadata(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    _write_tmvec_pair(
-        tmp_path,
-        "bfvd_embeddings.npy",
-        "bfvd_annotations.npy",
-        object_metadata=True,
+    manifest = _write_tmvec2_bundle(tmp_path, monkeypatch)
+    unsafe = tmp_path / "bfvd" / "bfvd_annotations.npy"
+    np.save(unsafe, np.array([{"id": "BFVD-1"}], dtype=object), allow_pickle=True)
+    manifest["databases"]["bfvd"]["metadata"] = {
+        "path": "bfvd/bfvd_annotations.npy",
+        "sha256": _sha256(unsafe),
+        "rows": 1,
+    }
+    (tmp_path / "TMVEC_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="must use TSV or JSONL"):
+        ViroSyncDatabaseManager.load_tmvec_manifest(tmp_path, databases=["bfvd"])
+
+
+def test_tmvec_manifest_rejects_duplicate_metadata_ids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest = _write_tmvec2_bundle(tmp_path, monkeypatch)
+    metadata = tmp_path / "bfvd" / "bfvd_annotations.tsv"
+    metadata.write_text(
+        "id\tprotein_name\nBFVD-1\tprotein one\nBFVD-1\tduplicate\n",
+        encoding="utf-8",
     )
-    metadata = tmp_path / "bfvd_annotations.npy"
-    metadata.write_bytes(metadata.read_bytes() + b"unexpected")
+    manifest["databases"]["bfvd"]["metadata"]["sha256"] = _sha256(metadata)
+    (tmp_path / "TMVEC_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    missing = ViroSyncDatabaseManager.missing_tmvec_files(tmp_path, ["bfvd"])
+    with pytest.raises(RuntimeError, match="duplicate id 'BFVD-1'"):
+        ViroSyncDatabaseManager.load_tmvec_manifest(tmp_path, databases=["bfvd"])
 
-    assert len(missing) == 1
-    assert "unexpected trailing data" in missing[0]
+
+def test_tmvec_manifest_rejects_member_path_escape(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest = _write_tmvec2_bundle(tmp_path, monkeypatch)
+    manifest["databases"]["bfvd"]["metadata"]["path"] = "../outside.tsv"
+    (tmp_path / "TMVEC_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="stay inside"):
+        ViroSyncDatabaseManager.load_tmvec_manifest(tmp_path, databases=["bfvd"])
+
+
+def test_tmvec_manifest_rejects_wrong_architecture(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest = _write_tmvec2_bundle(tmp_path, monkeypatch)
+    manifest["model"]["architecture"]["base_embedding_dim"] = 1024
+    (tmp_path / "TMVEC_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="architecture mismatch"):
+        ViroSyncDatabaseManager.load_tmvec_manifest(tmp_path, databases=["bfvd"])
+
+
+def test_tmvec_setup_downloads_hash_pinned_model_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest = _write_tmvec2_bundle(tmp_path, monkeypatch)
+    file_payloads = {}
+    for section_name in ("base", "head"):
+        for item in manifest["model"][section_name]["files"]:
+            path = tmp_path / item["path"]
+            file_payloads[path.name] = path.read_bytes()
+            path.unlink()
+    downloads = []
+
+    def fake_download(cls, source, target, **_kwargs):
+        downloads.append(source)
+        target.write_bytes(file_payloads[target.name])
+
+    monkeypatch.setattr(
+        ViroSyncDatabaseManager,
+        "_copy_or_download_archive",
+        classmethod(fake_download),
+    )
+
+    ViroSyncDatabaseManager._download_tmvec_models(tmp_path)
+
+    assert len(downloads) == 7
+    assert all("/resolve/" in source and "?download=true" in source for source in downloads)
+    ViroSyncDatabaseManager.load_tmvec_manifest(
+        tmp_path,
+        verify_hashes=True,
+        databases=["bfvd"],
+    )
+
+
+def test_optional_archive_checksum_fails_before_extract(tmp_path: Path) -> None:
+    archive = tmp_path / "tmvec.tar.gz"
+    archive.write_bytes(b"not the pinned archive")
+
+    with pytest.raises(ResourceInstallError, match="checksum mismatch"):
+        ViroSyncDatabaseManager._install_archive(
+            tmp_path / "target",
+            str(archive),
+            archive_sha256="0" * 64,
+        )
 
 
 def _write_core_resource_files(root: Path, hmm_name: str) -> None:

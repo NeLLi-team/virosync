@@ -363,7 +363,7 @@ def score_host_signature(
     Score a gene fingerprint against the host signature distribution.
 
     Domain-level tokens (euk, bac, etc.) are excluded from both sides
-    before comparison — they are too generic to discriminate host from viral.
+    before comparison because they are too generic to separate host from viral.
     """
     if not fingerprint or not model or not model.token_weights:
         return 0.0

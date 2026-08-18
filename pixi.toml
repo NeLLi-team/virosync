@@ -130,11 +130,18 @@ pytorch-cpu = "==2.9.1"
 # Boltz is kept in tools/boltz_runtime/pixi.toml because its dependency stack
 # drifts independently from the main ViroSync runtime.
 torch = "==2.9.1"
-transformers = "==4.57.3"
-fair-esm = "==2.0.0"
-omegaconf = "==2.3.0"
-tm-vec = "==1.0.3"
-pytorch-lightning = "==2.5.5"
+transformers = "==4.44.2"
+lbster = { git = "https://github.com/prescient-design/lobster.git", rev = "85794b9963e1e0bae1d6261d31e2f529cf62ad18" }
+
+[feature.docs.dependencies]
+python = "==3.11.14"
+mkdocs = "==1.6.1"
+mkdocs-material = "==9.7.7"
+pymdown-extensions = "==11.0.1"
+
+[feature.docs.tasks]
+docs-build = "mkdocs build --strict"
+docs-serve = "mkdocs serve"
 
 # NOTE: Shared workstation - use max 48 threads (of 64 available)
 
@@ -142,3 +149,4 @@ pytorch-lightning = "==2.5.5"
 default = { features = ["dev", "cpu"], solve-group = "default" }
 gpu = { features = ["dev", "gpu"], solve-group = "gpu" }
 structural = { features = ["dev", "gpu"], solve-group = "gpu" }
+docs = { features = ["docs"], no-default-feature = true }

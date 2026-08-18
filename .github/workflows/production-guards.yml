@@ -51,3 +51,16 @@ jobs:
             echo "resource size '$actual_bytes' != expected '$EXPECTED_BYTES'"
             exit 1
           }
+
+          TMVEC_URL=$(awk '/tmvec_resources_url:/{print $2; exit}' config/orchestration.yaml)
+          TMVEC_EXPECTED_BYTES=672805975
+          echo "Verifying TMVec2 resource URL: $TMVEC_URL"
+          tmvec_actual_bytes="$(
+            curl --retry 3 --retry-delay 10 --connect-timeout 20 --max-time 60 -fsSI "$TMVEC_URL" |
+              tr -d '\r' |
+              awk 'tolower($1) == "content-length:" { size=$2 } END { print size }'
+          )"
+          test "$tmvec_actual_bytes" = "$TMVEC_EXPECTED_BYTES" || {
+            echo "TMVec2 resource size '$tmvec_actual_bytes' != expected '$TMVEC_EXPECTED_BYTES'"
+            exit 1
+          }

@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "6d608bf7bee3fceb4a022c8142095797d35a073c601c816b5e969c699a71155a",
+  "effective_config_sha256": "6002b0fc4c3e809fbe5a1c43d62e62687c64399dcdc6787acb4d711dda0ab5e1",
   "execution": {
     "masking": {
       "backend": "off",
@@ -119,11 +119,13 @@
     "core_resources_version": "v1.0.7",
     "database_root": null,
     "gpu_id": null,
+    "interproscan_resources_sha256": null,
     "interproscan_resources_url": null,
     "max_concurrent_genomes": 6,
     "retries": 1,
     "retry_delay_seconds": 60,
-    "tmvec_resources_url": null
+    "tmvec_resources_sha256": "2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6",
+    "tmvec_resources_url": "https://dl.newlineages.com/virosync/virosync_tmvec2_resources_v1.0.0.tar.gz"
   },
   "phase1": {
     "assembly_mode": "default",

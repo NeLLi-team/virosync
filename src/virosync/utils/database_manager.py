@@ -9,7 +9,8 @@ import json
 import logging
 import math
 import os
-import pickletools
+import csv
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ from virosync.utils.resource_installer import (
     recover_pending_install,
     safe_extract_archive,
     safe_extract_optional_archive,
+    sha256_file,
     sibling_install_lock,
     verified_install_receipt,
 )
@@ -46,6 +48,30 @@ logger = logging.getLogger(__name__)
 # ``resource_installer`` enforces fcntl.flock(..., fcntl.LOCK_EX) on the stable
 # sibling ``.resource-install.lock`` before any recovery, download, or activation.
 TMVEC_EMBEDDING_WIDTH = 512
+TMVEC_MANIFEST_NAME = "TMVEC_MANIFEST.json"
+TMVEC2_BASE_MODEL_ID = "asalam91/lobster_24M"
+TMVEC2_BASE_MODEL_REVISION = "9c36ae05d277e312ac319cbc41b5759472f5bd90"
+TMVEC2_BASE_WEIGHT_SHA256 = (
+    "d80ed1022349db63a51a3ee2ea0ea5f71aa78e36f4a5dd4977ae3da49e6b9aa6"
+)
+TMVEC2_HEAD_MODEL_ID = "scikit-bio/TMVec-2"
+TMVEC2_HEAD_MODEL_REVISION = "91fbaaefbacd72ff6bc2f2126e8a0c165b2a9d92"
+TMVEC2_HEAD_WEIGHT_SHA256 = (
+    "7739dc359b62712061ad79f01269b37d96eae0a9e4c810c4d5fbef58eab85302"
+)
+TMVEC2_ARCHITECTURE = {
+    "base_embedding_dim": 408,
+    "output_dim": TMVEC_EMBEDDING_WIDTH,
+    "nhead": 8,
+    "num_layers": 4,
+    "dim_feedforward": 2048,
+    "transformer_activation": "gelu",
+    "projection_hidden_dim": 1024,
+    "projection_activation": "relu",
+    "dropout": 0.2,
+    "max_sequence_length": 512,
+}
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ViroSyncDatabaseManager:
@@ -64,19 +90,7 @@ class ViroSyncDatabaseManager:
     TMVEC_REQUIRED_FILES = {
         "bfvd": [
             "bfvd/bfvd_embeddings.npy",
-            "bfvd/bfvd_annotations.npy",
-        ],
-        "cath": [
-            "cath/cath_large.npy",
-            "cath/cath_large_metadata.npy",
-        ],
-        "swissprot": [
-            "swissprot/swiss_large.npy",
-            "swissprot/swiss_large_metadata.npy",
-        ],
-        "pdb": [
-            "pdb/embeddings.npy",
-            "pdb/metadata.npy",
+            "bfvd/bfvd_annotations.tsv",
         ],
     }
     INTERPROSCAN_REQUIRED_FILES = ["interproscan.sh"]
@@ -86,6 +100,8 @@ class ViroSyncDatabaseManager:
             "version": "v1.0.7",
             "source": "https://dl.newlineages.com/virosync/resources_v1_0_7_runtime.tar.gz",
             "filename": "resources_v1_0_7_runtime.tar.gz",
+            "archive_size_bytes": 5_877_324_818,
+            "payload_size_bytes": 13_137_477_318,
             "archive_sha256": (
                 "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
             ),
@@ -278,10 +294,17 @@ class ViroSyncDatabaseManager:
         target_dir: Path,
         source: str,
         filename: Optional[str] = None,
+        archive_sha256: Optional[str] = None,
         force: bool = False,
         progress_callback=None,
+        payload_preparer=None,
+        payload_validator=None,
     ) -> None:
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if archive_sha256 is not None and _SHA256_RE.fullmatch(archive_sha256) is None:
+            raise ResourceInstallError(
+                "optional resource archive SHA-256 must be a lowercase 64-character digest"
+            )
         archive_name = filename or Path(source).name or "resources.tar.gz"
         with tempfile.TemporaryDirectory(
             prefix=f".{target_dir.name}.optional-stage-",
@@ -304,10 +327,21 @@ class ViroSyncDatabaseManager:
                     else None
                 ),
             )
+            if archive_sha256 is not None:
+                actual_sha256 = sha256_file(archive_path)
+                if actual_sha256 != archive_sha256:
+                    raise ResourceInstallError(
+                        "optional resource archive checksum mismatch: "
+                        f"expected {archive_sha256}, found {actual_sha256}"
+                    )
             if progress_callback is not None:
                 progress_callback(70, "extracting")
             logger.info("Extracting archive: %s", archive_path)
             cls._extract_optional_archive(archive_path, payload_path)
+            if payload_preparer is not None:
+                payload_preparer(payload_path)
+            if payload_validator is not None:
+                payload_validator(payload_path)
             if progress_callback is not None:
                 progress_callback(90, "activating")
             if force:
@@ -499,24 +533,58 @@ class ViroSyncDatabaseManager:
         source: Optional[str],
         required_files: list[str],
         version: str = "unknown",
+        archive_sha256: Optional[str] = None,
         force: bool = False,
         progress_callback=None,
     ) -> bool:
-        if source is None:
-            missing = [rel for rel in required_files if not (target_path / rel).exists()]
+        def _validate_payload(path: Path) -> None:
+            if name == "tmvec":
+                cls.load_tmvec_manifest(path, verify_hashes=True)
+                return
+            missing = [rel for rel in required_files if not (path / rel).is_file()]
             if missing:
+                raise ResourceInstallError(
+                    f"{name} installation incomplete; missing files: {missing}"
+                )
+            if name == "interproscan" and not os.access(
+                path / "interproscan.sh", os.X_OK
+            ):
+                raise ResourceInstallError(
+                    "InterProScan installation incomplete; interproscan.sh "
+                    "is not executable"
+                )
+
+        if (
+            name in {"tmvec", "interproscan"}
+            and source is not None
+            and archive_sha256 is None
+        ):
+            logger.error("%s archive source requires archive_sha256", name)
+            return False
+
+        if source is None:
+            try:
+                if name == "tmvec":
+                    cls._download_tmvec_models(target_path)
+                _validate_payload(target_path)
+            except (OSError, ResourceInstallError, ValueError) as exc:
                 logger.warning(
-                    "%s not installed and no source URL/path provided. Missing: %s",
+                    "%s not installed and no source URL/path provided: %s",
                     name,
-                    missing,
+                    exc,
                 )
                 return False
+            installed_version = (
+                cls.load_tmvec_manifest(target_path)["bundle_version"]
+                if name == "tmvec"
+                else version
+            )
             metadata_path = target_path / "DB_METADATA.json"
             if not metadata_path.exists():
                 cls._write_database_metadata(
                     target_path=target_path,
                     component=name,
-                    version=version,
+                    version=installed_version,
                     source="preexisting",
                     extra={
                         "required_files": required_files,
@@ -529,26 +597,549 @@ class ViroSyncDatabaseManager:
             cls._install_archive(
                 target_path,
                 source,
+                archive_sha256=archive_sha256,
                 force=force,
                 progress_callback=progress_callback,
+                payload_preparer=(
+                    cls._download_tmvec_models if name == "tmvec" else None
+                ),
+                payload_validator=_validate_payload,
             )
         except Exception as exc:
             logger.error("%s installation failed: %s", name, exc)
             return False
 
-        missing = [rel for rel in required_files if not (target_path / rel).exists()]
-        if missing:
-            logger.warning("%s installation incomplete; missing files: %s", name, missing)
-            return False
-
+        installed_version = (
+            cls.load_tmvec_manifest(target_path)["bundle_version"]
+            if name == "tmvec"
+            else version
+        )
         cls._write_database_metadata(
             target_path=target_path,
             component=name,
-            version=version,
+            version=installed_version,
             source=source,
-            extra={"required_files": required_files},
+            extra={
+                "required_files": required_files,
+                "archive_sha256": archive_sha256,
+            },
         )
         return True
+
+    @staticmethod
+    def _tmvec_npy_header(path: Path) -> tuple[tuple[int, ...], np.dtype]:
+        with path.open("rb") as handle:
+            version = np.lib.format.read_magic(handle)
+            shape, _fortran_order, dtype = np.lib.format._read_array_header(
+                handle,
+                version,
+            )
+            payload_offset = handle.tell()
+        if dtype.hasobject:
+            raise ResourceInstallError(f"TMVec NPY asset must not contain objects: {path}")
+        expected_bytes = math.prod(shape) * dtype.itemsize
+        payload_bytes = path.stat().st_size - payload_offset
+        if payload_bytes != expected_bytes:
+            raise ResourceInstallError(
+                f"TMVec NPY payload size mismatch for {path}: "
+                f"expected {expected_bytes}, found {max(0, payload_bytes)}"
+            )
+        return tuple(shape), dtype
+
+    @staticmethod
+    def _tmvec_member(root: Path, value: object, label: str) -> Path:
+        if not isinstance(value, str) or not value.strip():
+            raise ResourceInstallError(f"{label} must be a non-empty relative path")
+        relative = Path(value)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ResourceInstallError(f"{label} must stay inside the TMVec resource root")
+        resolved_root = root.resolve()
+        resolved = (root / relative).resolve()
+        if not resolved.is_relative_to(resolved_root):
+            raise ResourceInstallError(f"{label} resolves outside the TMVec resource root")
+        if not resolved.is_file() or resolved.stat().st_size <= 0:
+            raise ResourceInstallError(f"{label} is missing or empty: {resolved}")
+        return resolved
+
+    @classmethod
+    def _download_tmvec_models(cls, root: Path) -> None:
+        """Fetch hash-pinned model files declared by an authenticated DB bundle."""
+        manifest_path = root / TMVEC_MANIFEST_NAME
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ResourceInstallError(
+                f"cannot read {manifest_path} before model download: {exc}"
+            ) from exc
+        model = payload.get("model") if isinstance(payload, dict) else None
+        if not isinstance(model, dict) or model.get("family") != "tmvec2":
+            raise ResourceInstallError("TMVec bundle does not declare model.family=tmvec2")
+
+        contracts = {
+            "base": (
+                TMVEC2_BASE_MODEL_ID,
+                TMVEC2_BASE_MODEL_REVISION,
+                {
+                    "config.json",
+                    "pytorch_model.bin",
+                    "special_tokens_map.json",
+                    "tokenizer_config.json",
+                    "vocab.txt",
+                },
+            ),
+            "head": (
+                TMVEC2_HEAD_MODEL_ID,
+                TMVEC2_HEAD_MODEL_REVISION,
+                {"params.json", "tmvec-2.ckpt"},
+            ),
+        }
+        resolved_root = root.resolve()
+        for label, (model_id, revision, required_names) in contracts.items():
+            section = model.get(label)
+            if (
+                not isinstance(section, dict)
+                or section.get("id") != model_id
+                or section.get("revision") != revision
+            ):
+                raise ResourceInstallError(
+                    f"TMVec bundle must pin {model_id}@{revision} before model download"
+                )
+            files = section.get("files")
+            if not isinstance(files, list) or not files:
+                raise ResourceInstallError(f"model.{label}.files must be a non-empty list")
+            declared_names = [
+                Path(item.get("path", "")).name
+                for item in files
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            ]
+            if len(declared_names) != len(required_names) or set(
+                declared_names
+            ) != required_names:
+                raise ResourceInstallError(
+                    f"model.{label}.files must contain exactly: "
+                    + ", ".join(sorted(required_names))
+                )
+            for index, item in enumerate(files):
+                if not isinstance(item, dict):
+                    raise ResourceInstallError(
+                        f"model.{label}.files[{index}] must be a mapping"
+                    )
+                relative_text = item.get("path")
+                sha256 = item.get("sha256")
+                if not isinstance(relative_text, str) or not relative_text:
+                    raise ResourceInstallError(
+                        f"model.{label}.files[{index}].path must be a relative path"
+                    )
+                relative = Path(relative_text)
+                expected_dir = "lobster_24M" if label == "base" else "tmvec-2"
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative.parent != Path("models") / expected_dir
+                ):
+                    raise ResourceInstallError(
+                        f"model.{label} file has an invalid bundle path: {relative_text}"
+                    )
+                target = (root / relative).resolve()
+                if not target.is_relative_to(resolved_root):
+                    raise ResourceInstallError(
+                        f"model.{label} file resolves outside the bundle: {relative_text}"
+                    )
+                if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
+                    raise ResourceInstallError(
+                        f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256"
+                    )
+                if target.is_file() and sha256_file(target) == sha256:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = (
+                    f"https://huggingface.co/{model_id}/resolve/{revision}/"
+                    f"{relative.name}?download=true"
+                )
+                cls._copy_or_download_archive(source, target)
+                if sha256_file(target) != sha256:
+                    raise ResourceInstallError(
+                        f"downloaded TMVec model checksum mismatch: {target}"
+                    )
+
+    @classmethod
+    def load_tmvec_manifest(
+        cls,
+        tmvec_root: str | Path,
+        *,
+        verify_hashes: bool = False,
+        databases: Optional[list[str]] = None,
+    ) -> dict:
+        """Load and validate one model-bound TMVec2 resource manifest."""
+        root = Path(tmvec_root).expanduser()
+        manifest_path = root / TMVEC_MANIFEST_NAME
+        try:
+            if not manifest_path.is_file() or manifest_path.stat().st_size <= 0:
+                raise ResourceInstallError(f"missing {manifest_path}")
+            if manifest_path.stat().st_size > 1024 * 1024:
+                raise ResourceInstallError(f"{manifest_path} exceeds 1 MiB")
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except ResourceInstallError:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ResourceInstallError(
+                f"cannot read {manifest_path}: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ResourceInstallError(f"{manifest_path} must contain a JSON object")
+        if payload.get("schema_version") != 1:
+            raise ResourceInstallError("TMVec manifest schema_version must be 1")
+        bundle_version = payload.get("bundle_version")
+        if not isinstance(bundle_version, str) or re.fullmatch(
+            r"v[0-9]+\.[0-9]+\.[0-9]+",
+            bundle_version,
+        ) is None:
+            raise ResourceInstallError(
+                "TMVec manifest bundle_version must have the form vMAJOR.MINOR.PATCH"
+            )
+
+        model = payload.get("model")
+        if not isinstance(model, dict) or model.get("family") != "tmvec2":
+            raise ResourceInstallError("TMVec manifest model.family must be 'tmvec2'")
+        architecture = model.get("architecture")
+        if not isinstance(architecture, dict):
+            raise ResourceInstallError("TMVec manifest model.architecture must be a mapping")
+        for name, expected in TMVEC2_ARCHITECTURE.items():
+            actual = architecture.get(name)
+            if type(actual) is not type(expected) or actual != expected:
+                raise ResourceInstallError(
+                    f"TMVec2 architecture mismatch for {name}: "
+                    f"expected {expected!r}, found {actual!r}"
+                )
+        if set(architecture) != set(TMVEC2_ARCHITECTURE):
+            unexpected = sorted(set(architecture) - set(TMVEC2_ARCHITECTURE))
+            missing = sorted(set(TMVEC2_ARCHITECTURE) - set(architecture))
+            raise ResourceInstallError(
+                "TMVec2 architecture keys differ from the release contract: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+
+        model_contracts = {
+            "base": (
+                TMVEC2_BASE_MODEL_ID,
+                TMVEC2_BASE_MODEL_REVISION,
+                "models/lobster_24M/pytorch_model.bin",
+                TMVEC2_BASE_WEIGHT_SHA256,
+                {
+                    "config.json",
+                    "pytorch_model.bin",
+                    "special_tokens_map.json",
+                    "tokenizer_config.json",
+                    "vocab.txt",
+                },
+            ),
+            "head": (
+                TMVEC2_HEAD_MODEL_ID,
+                TMVEC2_HEAD_MODEL_REVISION,
+                "models/tmvec-2/tmvec-2.ckpt",
+                TMVEC2_HEAD_WEIGHT_SHA256,
+                {"params.json", "tmvec-2.ckpt"},
+            ),
+        }
+        manifest_members: set[str] = set()
+        for label, (model_id, revision, weight_path, weight_sha, required_names) in (
+            model_contracts.items()
+        ):
+            section = model.get(label)
+            if not isinstance(section, dict):
+                raise ResourceInstallError(f"TMVec manifest model.{label} must be a mapping")
+            if section.get("id") != model_id or section.get("revision") != revision:
+                raise ResourceInstallError(
+                    f"TMVec manifest model.{label} must pin {model_id}@{revision}"
+                )
+            files = section.get("files")
+            if not isinstance(files, list) or not files:
+                raise ResourceInstallError(
+                    f"TMVec manifest model.{label}.files must be a non-empty list"
+                )
+            names: set[str] = set()
+            weight_verified = False
+            for index, item in enumerate(files):
+                if not isinstance(item, dict):
+                    raise ResourceInstallError(
+                        f"TMVec manifest model.{label}.files[{index}] must be a mapping"
+                    )
+                relative = item.get("path")
+                sha256 = item.get("sha256")
+                member = cls._tmvec_member(
+                    root,
+                    relative,
+                    f"model.{label}.files[{index}].path",
+                )
+                relative_text = str(relative)
+                prefix = f"models/{'lobster_24M' if label == 'base' else 'tmvec-2'}/"
+                if not relative_text.startswith(prefix):
+                    raise ResourceInstallError(
+                        f"model.{label} file must be under {prefix}: {relative_text}"
+                    )
+                if relative_text in manifest_members:
+                    raise ResourceInstallError(
+                        f"TMVec manifest lists a file more than once: {relative_text}"
+                    )
+                manifest_members.add(relative_text)
+                names.add(Path(relative_text).name)
+                if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
+                    raise ResourceInstallError(
+                        f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256"
+                    )
+                if relative_text == weight_path:
+                    if sha256 != weight_sha:
+                        raise ResourceInstallError(
+                            f"{weight_path} does not match the pinned upstream SHA-256"
+                        )
+                    weight_verified = True
+                if verify_hashes and sha256_file(member) != sha256:
+                    raise ResourceInstallError(f"TMVec file checksum mismatch: {member}")
+            if names != required_names:
+                raise ResourceInstallError(
+                    f"model.{label}.files must contain exactly: "
+                    + ", ".join(sorted(required_names))
+                )
+            if not weight_verified:
+                raise ResourceInstallError(
+                    f"model.{label}.files must include {weight_path}"
+                )
+
+        smoke = payload.get("smoke_query")
+        if not isinstance(smoke, dict):
+            raise ResourceInstallError("TMVec manifest smoke_query must be a mapping")
+        smoke_id = smoke.get("id")
+        sequence = smoke.get("sequence")
+        expected_target_id = smoke.get("expected_target_id")
+        if not isinstance(smoke_id, str) or not smoke_id:
+            raise ResourceInstallError("smoke_query.id must be a non-empty string")
+        if (
+            not isinstance(sequence, str)
+            or not sequence
+            or len(sequence) > TMVEC2_ARCHITECTURE["max_sequence_length"]
+            or re.fullmatch(r"[A-Z]+", sequence) is None
+        ):
+            raise ResourceInstallError(
+                "smoke_query.sequence must contain 1-512 uppercase amino-acid letters"
+            )
+        if smoke.get("database") != "bfvd":
+            raise ResourceInstallError("smoke_query.database must be 'bfvd'")
+        if not isinstance(expected_target_id, str) or not expected_target_id:
+            raise ResourceInstallError(
+                "smoke_query.expected_target_id must be a non-empty string"
+            )
+        expected_score = smoke.get("expected_score")
+        score_tolerance = smoke.get("score_tolerance")
+        if (
+            isinstance(expected_score, bool)
+            or not isinstance(expected_score, (int, float))
+            or not -1.0 <= float(expected_score) <= 1.0
+        ):
+            raise ResourceInstallError("smoke_query.expected_score must be in [-1, 1]")
+        if (
+            isinstance(score_tolerance, bool)
+            or not isinstance(score_tolerance, (int, float))
+            or not 0.0 <= float(score_tolerance) <= 2.0
+        ):
+            raise ResourceInstallError("smoke_query.score_tolerance must be in [0, 2]")
+
+        references = smoke.get("reference_embeddings")
+        if not isinstance(references, dict) or set(references) != {"cpu", "cuda"}:
+            raise ResourceInstallError(
+                "smoke_query.reference_embeddings must contain cpu and cuda mappings"
+            )
+        reference_paths: set[str] = set()
+        for device_name in ("cpu", "cuda"):
+            reference = references[device_name]
+            label = f"smoke_query.reference_embeddings.{device_name}"
+            if not isinstance(reference, dict):
+                raise ResourceInstallError(f"{label} must be a mapping")
+            if reference.get("dimensions") != TMVEC_EMBEDDING_WIDTH:
+                raise ResourceInstallError(
+                    f"{label}.dimensions must be {TMVEC_EMBEDDING_WIDTH}"
+                )
+            for tolerance_name in ("atol", "rtol"):
+                tolerance = reference.get(tolerance_name)
+                if (
+                    isinstance(tolerance, bool)
+                    or not isinstance(tolerance, (int, float))
+                    or not 0.0 <= float(tolerance) <= 1.0
+                ):
+                    raise ResourceInstallError(
+                        f"{label}.{tolerance_name} must be in [0, 1]"
+                    )
+            reference_value = reference.get("path")
+            reference_path = cls._tmvec_member(
+                root,
+                reference_value,
+                f"{label}.path",
+            )
+            if reference_value in reference_paths:
+                raise ResourceInstallError(
+                    "CPU and CUDA upstream references must use separate files"
+                )
+            reference_paths.add(reference_value)
+            reference_sha = reference.get("sha256")
+            if (
+                not isinstance(reference_sha, str)
+                or _SHA256_RE.fullmatch(reference_sha) is None
+            ):
+                raise ResourceInstallError(
+                    f"{label}.sha256 must be a lowercase SHA-256"
+                )
+            reference_shape, reference_dtype = cls._tmvec_npy_header(reference_path)
+            if reference_shape not in {
+                (TMVEC_EMBEDDING_WIDTH,),
+                (1, TMVEC_EMBEDDING_WIDTH),
+            } or reference_dtype.kind not in "f":
+                raise ResourceInstallError(
+                    f"{label} must be a 512-value floating NPY array"
+                )
+            if verify_hashes and sha256_file(reference_path) != reference_sha:
+                raise ResourceInstallError(
+                    f"TMVec file checksum mismatch: {reference_path}"
+                )
+
+        database_payload = payload.get("databases")
+        if not isinstance(database_payload, dict) or "bfvd" not in database_payload:
+            raise ResourceInstallError("TMVec manifest databases must include bfvd")
+        requested_databases = (
+            list(database_payload) if databases is None else databases
+        )
+        unsupported = sorted(set(requested_databases) - set(cls.TMVEC_REQUIRED_FILES))
+        if unsupported:
+            raise ResourceInstallError(
+                "unsupported TMVec database key(s): " + ", ".join(unsupported)
+            )
+        absent = sorted(set(requested_databases) - set(database_payload))
+        if absent:
+            raise ResourceInstallError(
+                "TMVec manifest does not contain requested database(s): "
+                + ", ".join(absent)
+            )
+
+        for name, database in database_payload.items():
+            if name not in cls.TMVEC_REQUIRED_FILES or not isinstance(database, dict):
+                raise ResourceInstallError(f"invalid TMVec database entry: {name}")
+            if name == "bfvd":
+                attribution = database.get("attribution")
+                if attribution != {
+                    "name": "BFVD",
+                    "creator": "Kim, Rachel Seongeun",
+                    "source_url": "https://bfvd.steineggerlab.workers.dev/",
+                    "doi": "10.5281/zenodo.13993145",
+                    "license": "CC BY 4.0",
+                    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                    "changes": (
+                        "Converted BFVD protein sequences to "
+                        "Lobster-24M/TMVec2 embeddings."
+                    ),
+                }:
+                    raise ResourceInstallError(
+                        "BFVD attribution must name the official source and CC BY 4.0 license"
+                    )
+            resolved_files: dict[str, tuple[Path, dict]] = {}
+            for file_kind in ("embeddings", "metadata"):
+                file_info = database.get(file_kind)
+                if not isinstance(file_info, dict):
+                    raise ResourceInstallError(
+                        f"databases.{name}.{file_kind} must be a mapping"
+                    )
+                rows = file_info.get("rows")
+                if isinstance(rows, bool) or not isinstance(rows, int) or rows < 1:
+                    raise ResourceInstallError(
+                        f"databases.{name}.{file_kind}.rows must be a positive integer"
+                    )
+                member = cls._tmvec_member(
+                    root,
+                    file_info.get("path"),
+                    f"databases.{name}.{file_kind}.path",
+                )
+                sha256 = file_info.get("sha256")
+                if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
+                    raise ResourceInstallError(
+                        f"databases.{name}.{file_kind}.sha256 must be a lowercase SHA-256"
+                    )
+                if verify_hashes and sha256_file(member) != sha256:
+                    raise ResourceInstallError(f"TMVec file checksum mismatch: {member}")
+                resolved_files[file_kind] = (member, file_info)
+
+            embedding_path, embedding_info = resolved_files["embeddings"]
+            embedding_shape, embedding_dtype = cls._tmvec_npy_header(embedding_path)
+            expected_rows = embedding_info["rows"]
+            if (
+                embedding_shape != (expected_rows, TMVEC_EMBEDDING_WIDTH)
+                or embedding_dtype.kind not in "iuf"
+            ):
+                raise ResourceInstallError(
+                    f"databases.{name}.embeddings must have shape "
+                    f"({expected_rows}, {TMVEC_EMBEDDING_WIDTH}) with a real numeric dtype"
+                )
+
+            metadata_path, metadata_info = resolved_files["metadata"]
+            if metadata_path.suffix not in {".tsv", ".jsonl"}:
+                raise ResourceInstallError(
+                    f"databases.{name}.metadata must use TSV or JSONL, not pickle"
+                )
+            metadata_rows = 0
+            found_expected_target = False
+            seen_target_ids: set[str] = set()
+            try:
+                with metadata_path.open("r", encoding="utf-8", newline="") as handle:
+                    if metadata_path.suffix == ".tsv":
+                        records = csv.DictReader(handle, delimiter="\t")
+                        if records.fieldnames is None or "id" not in records.fieldnames:
+                            raise ResourceInstallError(
+                                f"databases.{name}.metadata TSV must have an id column"
+                            )
+                        record_iter = records
+                    else:
+                        def _jsonl_records():
+                            for line_number, line in enumerate(handle, start=1):
+                                if not line.strip():
+                                    continue
+                                try:
+                                    item = json.loads(line)
+                                except json.JSONDecodeError as exc:
+                                    raise ResourceInstallError(
+                                        f"invalid JSONL in {metadata_path} line {line_number}: {exc}"
+                                    ) from exc
+                                if not isinstance(item, dict):
+                                    raise ResourceInstallError(
+                                        f"{metadata_path} line {line_number} must be a JSON object"
+                                    )
+                                yield item
+                        record_iter = _jsonl_records()
+                    for item in record_iter:
+                        target_id = item.get("id")
+                        if not isinstance(target_id, str) or not target_id:
+                            raise ResourceInstallError(
+                                f"databases.{name}.metadata contains an empty id"
+                            )
+                        if target_id in seen_target_ids:
+                            raise ResourceInstallError(
+                                f"databases.{name}.metadata contains duplicate id "
+                                f"{target_id!r}"
+                            )
+                        seen_target_ids.add(target_id)
+                        metadata_rows += 1
+                        if name == "bfvd" and target_id == expected_target_id:
+                            found_expected_target = True
+            except (OSError, UnicodeError) as exc:
+                raise ResourceInstallError(
+                    f"cannot read TMVec metadata {metadata_path}: {exc}"
+                ) from exc
+            if metadata_rows != metadata_info["rows"] or metadata_rows != expected_rows:
+                raise ResourceInstallError(
+                    f"databases.{name} row count mismatch: embeddings={expected_rows}, "
+                    f"metadata manifest={metadata_info['rows']}, metadata file={metadata_rows}"
+                )
+            if name == "bfvd" and not found_expected_target:
+                raise ResourceInstallError(
+                    "smoke_query.expected_target_id is absent from BFVD metadata"
+                )
+
+        return payload
 
     @classmethod
     def missing_tmvec_files(
@@ -556,160 +1147,30 @@ class ViroSyncDatabaseManager:
         tmvec_root: Optional[str | Path],
         databases: Optional[list[str]] = None,
     ) -> list[str]:
-        root = Path(tmvec_root).expanduser() if tmvec_root is not None else cls.default_tmvec_path()
-        dbs = databases or ["bfvd"]
-        missing: list[str] = []
-
-        def _ready_file(path: Path) -> bool:
-            try:
-                return path.is_file() and path.stat().st_size > 0
-            except OSError:
-                return False
-
-        def _npy_header(path: Path) -> tuple[tuple[int, ...], np.dtype, int, int]:
-            with path.open("rb") as handle:
-                version = np.lib.format.read_magic(handle)
-                shape, _fortran_order, dtype = np.lib.format._read_array_header(
-                    handle,
-                    version,
-                )
-                payload_offset = handle.tell()
-                file_size = path.stat().st_size
-                if not dtype.hasobject:
-                    expected_bytes = math.prod(shape) * dtype.itemsize
-                    if file_size - payload_offset < expected_bytes:
-                        raise ValueError(
-                            f"numeric payload is truncated: expected {expected_bytes} "
-                            f"bytes, found {max(0, file_size - payload_offset)}"
-                        )
-                else:
-                    try:
-                        for _opcode, _argument, _position in pickletools.genops(
-                            handle
-                        ):
-                            pass
-                    except Exception as exc:
-                        raise ValueError(
-                            f"object pickle payload is invalid: {exc}"
-                        ) from exc
-                    if handle.tell() != file_size:
-                        raise ValueError(
-                            "object pickle payload has unexpected trailing data"
-                        )
-            return tuple(shape), dtype, payload_offset, file_size
-
-        def _group_issues(group: list[Path]) -> list[str]:
-            issues: list[str] = []
-            if len(group) != 2:
-                return ["expected an embeddings/metadata file pair"]
-            headers = []
-            for path in group:
-                if not _ready_file(path):
-                    issues.append(f"{path} must be a non-empty regular file")
-                    headers.append(None)
-                    continue
-                try:
-                    headers.append(_npy_header(path))
-                except Exception as exc:
-                    issues.append(f"{path} is not a valid NPY asset: {exc}")
-                    headers.append(None)
-
-            embedding_header, metadata_header = headers
-            if embedding_header is not None:
-                embedding_shape, embedding_dtype, _, _ = embedding_header
-                if len(embedding_shape) != 2:
-                    issues.append(
-                        f"{group[0]} embeddings must be 2-D, got {embedding_shape}"
-                    )
-                elif any(size < 1 for size in embedding_shape):
-                    issues.append(
-                        f"{group[0]} embeddings must have a non-empty shape, "
-                        f"got {embedding_shape}"
-                    )
-                elif embedding_shape[1] != TMVEC_EMBEDDING_WIDTH:
-                    issues.append(
-                        f"{group[0]} embeddings must have width "
-                        f"{TMVEC_EMBEDDING_WIDTH}, got {embedding_shape[1]}"
-                    )
-                if embedding_dtype.kind not in "iuf":
-                    issues.append(
-                        f"{group[0]} embeddings must use a real numeric dtype, "
-                        f"got {embedding_dtype}"
-                    )
-
-            if metadata_header is not None:
-                metadata_shape, _, _, _ = metadata_header
-                if not metadata_shape:
-                    issues.append(f"{group[1]} metadata must have a row dimension")
-                elif metadata_shape[0] < 1:
-                    issues.append(f"{group[1]} metadata must have at least one row")
-                elif (
-                    embedding_header is not None
-                    and len(embedding_header[0]) == 2
-                    and metadata_shape[0] != embedding_header[0][0]
-                ):
-                    issues.append(
-                        "TMVec embedding/metadata row count mismatch: "
-                        f"{embedding_header[0][0]} != {metadata_shape[0]}"
-                    )
-            return issues
-
-        def _candidate_groups(name: str) -> Optional[list[list[Path]]]:
-            if name == "bfvd":
-                return [
-                    [root / "bfvd" / "bfvd_embeddings.npy", root / "bfvd" / "bfvd_annotations.npy"],
-                    [root / "bfvd_embeddings.npy", root / "bfvd_annotations.npy"],
-                    [
-                        root / "tmvec_embeddings" / "bfvd_embeddings.npy",
-                        root / "tmvec_embeddings" / "bfvd_annotations.npy",
-                    ],
-                ]
-            if name == "cath":
-                return [
-                    [root / "cath" / "cath_large.npy", root / "cath" / "cath_large_metadata.npy"],
-                    [root / "cath_large.npy", root / "cath_large_metadata.npy"],
-                ]
-            if name == "swissprot":
-                return [
-                    [root / "swissprot" / "swiss_large.npy", root / "swissprot" / "swiss_large_metadata.npy"],
-                    [root / "swiss_large.npy", root / "swiss_large_metadata.npy"],
-                ]
-            if name == "pdb":
-                return [
-                    [root / "pdb" / "embeddings.npy", root / "pdb" / "metadata.npy"],
-                    [root / "embeddings.npy", root / "metadata.npy"],
-                ]
-            rel_paths = cls.TMVEC_REQUIRED_FILES.get(name)
-            if rel_paths is None:
-                return None
-            return [[root / rel for rel in rel_paths]]
-
-        for name in dbs:
-            path_groups = _candidate_groups(name)
-            if path_groups is None:
-                missing.append(f"{name}: unsupported database key")
-                continue
-
-            candidate_issues = [_group_issues(group) for group in path_groups]
-            if any(not issues for issues in candidate_issues):
-                continue
-
-            expected = " OR ".join(
-                "[" + ", ".join(str(path) for path in group) + "]"
-                for group in path_groups
+        root = (
+            Path(tmvec_root).expanduser()
+            if tmvec_root is not None
+            else cls.default_tmvec_path()
+        )
+        try:
+            cls.load_tmvec_manifest(
+                root,
+                verify_hashes=False,
+                databases=["bfvd"] if databases is None else databases,
             )
-            details = " OR ".join(
-                "; ".join(issues) for issues in candidate_issues if issues
-            )
-            missing.append(f"{name}: no valid TMVec NPY pair {expected}: {details}")
-        return missing
+        except (OSError, ResourceInstallError, ValueError) as exc:
+            return [str(exc)]
+        return []
 
     @classmethod
     def interproscan_available(cls, interproscan_dir: Optional[str | Path]) -> bool:
         if interproscan_dir is None:
             return False
         path = Path(interproscan_dir).expanduser()
-        return all((path / rel).exists() for rel in cls.INTERPROSCAN_REQUIRED_FILES)
+        return all(
+            (path / rel).is_file() and os.access(path / rel, os.X_OK)
+            for rel in cls.INTERPROSCAN_REQUIRED_FILES
+        )
 
     @classmethod
     def default_paths(cls, db_path: Path) -> dict[str, Optional[Path]]:

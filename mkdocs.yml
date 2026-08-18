@@ -1,0 +1,55 @@
+site_name: ViroSync
+site_description: Detect endogenous viral elements in assembled eukaryotic genomes.
+site_url: https://nelli-team.github.io/virosync/
+repo_url: https://github.com/NeLLi-team/virosync
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Use light mode
+
+nav:
+  - Home: index.md
+  - Get started: getting-started.md
+  - Performance: performance.md
+  - Optional analyses:
+      - Overview: optional-features.md
+      - Frameshift screening: FRAMESHIFT_SCREENING.md
+  - Reference:
+      - Command line: reference/cli.md
+      - Methods and outputs: METHODS.md
+      - Resource bundle: RESOURCE_BUNDLE.md
+
+exclude_docs: |
+  DEL/
+  handoffs/
+  ms/
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences

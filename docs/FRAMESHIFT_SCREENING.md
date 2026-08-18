@@ -21,14 +21,14 @@ channels, so it cannot be a pixi dependency. Build it with:
 pixi run setup-bath
 ```
 
-This builds the tested revisions into `.bath/` and is idempotent, so it
-returns immediately once installed. Pass `--force` to rebuild:
+This builds the tested revisions into `.bath/`. Later setup calls return
+without a rebuild. Pass `--force` to rebuild:
 `bash scripts/install_bath.sh --force`. `pixi.toml` puts `.bath/bin` on `PATH`
-for every task, so no manual export is needed and `pixi run example-frameshift`
-works straight afterwards.
+for every task. After setup, `pixi run example-frameshift` finds the tools
+without a manual export.
 
-Run it once before the frameshift example. It is deliberately not a dependency
-of `example-frameshift`, which stays an explicit opt-in pinned by
+Run it once before the frameshift example. It is not a dependency of
+`example-frameshift`, which remains an explicit opt-in pinned by
 `tests/test_ci_contracts.py::test_frameshift_example_task_is_explicit_opt_in`.
 
 Check both entrypoints:
@@ -38,14 +38,13 @@ pixi run bathconvert -h
 pixi run bathsearch -h
 ```
 
-### Building by hand
+### Build by hand
 
-`scripts/install_bath.sh` runs the steps below. Two of them differ from the
-upstream instructions. A plain clone of easel does not contain the pinned
-commit, so it must be fetched by SHA or `git checkout` fails with
-`unable to read tree`. And the repository ships only `configure.ac`, so
-`configure` has to be generated; `autoconf` is not a project dependency, and
-`pixi exec` supplies it for that one command without changing the manifest.
+`scripts/install_bath.sh` runs the commands in this section. Two commands
+differ from the upstream instructions. A plain clone of easel does not contain
+the pinned commit. Fetch the commit by SHA before checkout. The repository also
+ships only `configure.ac`. Generate `configure` with `pixi exec`. This supplies
+`autoconf` for one command without changing the project manifest.
 
 ```bash
 git clone https://github.com/TravisWheelerLab/BATH.git

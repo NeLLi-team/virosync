@@ -681,6 +681,51 @@ def test_safe_extractor_rejects_unsafe_archive_shapes_before_visibility(
     assert not (tmp_path / "outside").exists()
 
 
+def test_optional_extractor_preserves_only_archive_executable_bits(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "interproscan.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        script = tarfile.TarInfo("interproscan/interproscan.sh")
+        script.size = len(b"#!/bin/sh\n")
+        script.mode = 0o775
+        handle.addfile(script, io.BytesIO(b"#!/bin/sh\n"))
+        _add_bytes(handle, "interproscan/data.txt", b"data\n")
+
+    target = tmp_path / "installed"
+    resource_installer.safe_extract_optional_archive(archive, target)
+
+    assert (target / "interproscan.sh").stat().st_mode & 0o777 == 0o755
+    assert (target / "data.txt").stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize(("script_mode", "expected"), [(0o755, True), (0o644, False)])
+def test_interproscan_archive_setup_requires_executable_script(
+    tmp_path: Path,
+    script_mode: int,
+    expected: bool,
+) -> None:
+    archive = tmp_path / "interproscan.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        script = tarfile.TarInfo("interproscan/interproscan.sh")
+        script.size = len(b"#!/bin/sh\n")
+        script.mode = script_mode
+        handle.addfile(script, io.BytesIO(b"#!/bin/sh\n"))
+
+    target = tmp_path / "installed"
+    result = ViroSyncDatabaseManager.setup_optional_archive(
+        name="interproscan",
+        target_path=target,
+        source=str(archive),
+        required_files=["interproscan.sh"],
+        version="test",
+        archive_sha256=_sha256_file(archive),
+    )
+
+    assert result is expected
+    assert ViroSyncDatabaseManager.interproscan_available(target) is expected
+
+
 @pytest.mark.parametrize(
     ("case", "keywords"),
     [

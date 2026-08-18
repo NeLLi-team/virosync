@@ -442,6 +442,65 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
     assert events[-1] == "outputs"
 
 
+@pytest.mark.parametrize("use_prebuilt", [True, False])
+def test_phase1_selects_prebuilt_or_run_local_marker_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    use_prebuilt: bool,
+) -> None:
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    kwargs["resume"] = False
+    kwargs["resume_authorized"] = False
+    kwargs["rebuild_db"] = not use_prebuilt
+
+    hmm_database = tmp_path / "markers.hmm"
+    marker_db = tmp_path / "installed-marker.dmnd"
+    marker_faa_dir = tmp_path / "marker-parts"
+    faa_dir = tmp_path / "faa"
+    hmm_database.write_text("HMM\n")
+    marker_db.write_text("DB\n")
+    marker_faa_dir.mkdir()
+    faa_dir.mkdir()
+    (marker_faa_dir / "marker-a.faa").write_text(">marker-a\nAAAA\n")
+    (faa_dir / "reference.faa").write_text(">reference\nAAAA\n")
+    kwargs["hmm_database"] = hmm_database
+    kwargs["marker_db"] = marker_db if use_prebuilt else None
+    kwargs["marker_faa_dir"] = marker_faa_dir
+    kwargs["faa_dir"] = faa_dir
+    builder_calls: list[str] = []
+
+    def fake_build_marker_faa(*args, **task_kwargs):
+        builder_calls.append("marker")
+        return output_dir / "phase1" / "database" / "marker.faa"
+
+    def fake_ensure_combined_faa(*args, **task_kwargs):
+        builder_calls.append("combined")
+        return output_dir / "phase1" / "database" / "combined.faa"
+
+    def fake_call_task(task, **task_kwargs):
+        if task is phase1_module.hhg_seeding_task:
+            return [], []
+        if task is phase1_module.generate_outputs_task:
+            return {}
+        raise AssertionError(f"unexpected task: {task}")
+
+    monkeypatch.setattr(phase1_module, "build_marker_faa", fake_build_marker_faa)
+    monkeypatch.setattr(
+        phase1_module,
+        "ensure_combined_faa",
+        fake_ensure_combined_faa,
+    )
+    monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
+    monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
+
+    result = _run_phase1_subflow(**kwargs)
+
+    assert result["success"] is True
+    assert builder_calls == ([] if use_prebuilt else ["marker", "combined"])
+
+
 def test_pfam_contradiction_stops_before_marker_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

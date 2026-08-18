@@ -1322,7 +1322,7 @@ class EvidenceSynthesizerConfig:
 
     # TMVec database search (fast structural evidence)
     use_tmvec_database: bool = False
-    tmvec_databases: Optional[list[str]] = None  # ["bfvd", "cath", "swissprot"]
+    tmvec_databases: Optional[list[str]] = None  # BFVD only
     tmvec_database_dir: Optional[Path] = None
     tmvec_min_score: float = 0.5
     tmvec_require_gpu: bool = False
@@ -2507,13 +2507,8 @@ class EvidenceSynthesizer:
             for porf_id, sequence in porf_sequences:
                 hits = precomputed_tmvec.get(porf_id, {})
                 bfvd_hit = hits.get("bfvd")
-                cath_hit = hits.get("cath")
-                swiss_hit = hits.get("swissprot")
 
                 bfvd_score = bfvd_hit.tm_score if bfvd_hit else 0.0
-                cath_score = cath_hit.tm_score if cath_hit else 0.0
-                swiss_score = swiss_hit.tm_score if swiss_hit else 0.0
-                viral_specificity = bfvd_score - max(cath_score, swiss_score)
 
                 record = {
                     "eve_id": result.eve_id,
@@ -2525,11 +2520,6 @@ class EvidenceSynthesizer:
                     "tmvec_bfvd_organism": bfvd_hit.organism if bfvd_hit else "",
                     "tmvec_bfvd_lineage": bfvd_hit.lineage if bfvd_hit else "",
                     "tmvec_bfvd_keywords": bfvd_hit.keywords if bfvd_hit else "",
-                    "tmvec_cath_score": cath_score,
-                    "tmvec_cath_hit": cath_hit.target_id if cath_hit else "",
-                    "tmvec_swiss_score": swiss_score,
-                    "tmvec_swiss_hit": swiss_hit.target_id if swiss_hit else "",
-                    "tmvec_viral_specificity": viral_specificity,
                 }
                 tmvec_records.append(record)
                 best_bfvd = max(best_bfvd, bfvd_score)
@@ -2542,13 +2532,8 @@ class EvidenceSynthesizer:
             for porf_id, sequence in porf_sequences:
                 hits = searcher.search_sequence(sequence)
                 bfvd_hit = hits.get("bfvd")
-                cath_hit = hits.get("cath")
-                swiss_hit = hits.get("swissprot")
 
                 bfvd_score = bfvd_hit.tm_score if bfvd_hit else 0.0
-                cath_score = cath_hit.tm_score if cath_hit else 0.0
-                swiss_score = swiss_hit.tm_score if swiss_hit else 0.0
-                viral_specificity = bfvd_score - max(cath_score, swiss_score)
 
                 record = {
                     "eve_id": result.eve_id,
@@ -2560,11 +2545,6 @@ class EvidenceSynthesizer:
                     "tmvec_bfvd_organism": bfvd_hit.organism if bfvd_hit else "",
                     "tmvec_bfvd_lineage": bfvd_hit.lineage if bfvd_hit else "",
                     "tmvec_bfvd_keywords": bfvd_hit.keywords if bfvd_hit else "",
-                    "tmvec_cath_score": cath_score,
-                    "tmvec_cath_hit": cath_hit.target_id if cath_hit else "",
-                    "tmvec_swiss_score": swiss_score,
-                    "tmvec_swiss_hit": swiss_hit.target_id if swiss_hit else "",
-                    "tmvec_viral_specificity": viral_specificity,
                 }
                 tmvec_records.append(record)
                 best_bfvd = max(best_bfvd, bfvd_score)

@@ -2,7 +2,7 @@
 ViroSync Orchestration Utilities.
 
 Helper functions for data wiring between orchestration task functions.
-Addresses reviewer notes about avoiding large object serialization.
+Shared helpers keep task inputs on disk instead of serializing large objects.
 """
 
 from bisect import bisect_left

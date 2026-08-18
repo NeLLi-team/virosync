@@ -367,6 +367,7 @@ def _safe_extract_archive(
     target_dir: Path,
     *,
     archive_root: str | None,
+    preserve_executable: bool = False,
 ) -> None:
     archive_path = Path(archive_path)
     target_dir = Path(target_dir)
@@ -392,7 +393,8 @@ def _safe_extract_archive(
                         )
                     with source_handle, destination.open("xb") as output_handle:
                         shutil.copyfileobj(source_handle, output_handle, 1024 * 1024)
-                    destination.chmod(0o644)
+                    executable = preserve_executable and bool(member.mode & 0o111)
+                    destination.chmod(0o755 if executable else 0o644)
             except Exception:
                 shutil.rmtree(target_dir, ignore_errors=True)
                 raise
@@ -415,7 +417,12 @@ def safe_extract_archive(archive_path: Path, target_dir: Path) -> None:
 
 def safe_extract_optional_archive(archive_path: Path, target_dir: Path) -> None:
     """Safely extract a legacy optional archive with one arbitrary top-level root."""
-    _safe_extract_archive(archive_path, target_dir, archive_root=None)
+    _safe_extract_archive(
+        archive_path,
+        target_dir,
+        archive_root=None,
+        preserve_executable=True,
+    )
 
 
 def _validate_extracted_inventory(root: Path, required_files: list[str]) -> None:

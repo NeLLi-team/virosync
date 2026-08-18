@@ -7,11 +7,17 @@ B3  resource download uses bounded retries + timeouts (curl -f fails on 4xx/5xx)
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import subprocess
 
 import pytest
 
-from virosync.orchestration.cli import _cap_threads_per_worker
+from virosync.orchestration import cli as orchestration_cli
+from virosync.orchestration.cli import (
+    _apply_gpu_id_env,
+    _cap_threads_per_worker,
+    _collect_genome_paths,
+)
 from virosync.utils import database_manager as dm
 from virosync.utils.resource_installer import (
     _download_error_detail,
@@ -20,6 +26,61 @@ from virosync.utils.resource_installer import (
 
 
 # --- B2: thread cap by max_concurrent_genomes --------------------------------
+
+
+def test_directory_input_uses_supported_files_at_top_level_only(tmp_path: Path) -> None:
+    top = tmp_path / "inputs"
+    nested = top / "nested"
+    nested.mkdir(parents=True)
+    expected = [top / "a.fa", top / "b.fasta", top / "c.fna"]
+    for path in [*expected, nested / "hidden.fna", top / "ignored.txt"]:
+        path.write_text(">seq\nACGT\n", encoding="utf-8")
+
+    assert _collect_genome_paths(top) == expected
+
+
+def test_list_input_keeps_paths_relative_to_working_directory(tmp_path: Path) -> None:
+    list_path = tmp_path / "genomes.txt"
+    list_path.write_text(
+        "# comment\nrelative/input.fna\n\n/absolute/input.fna\n",
+        encoding="utf-8",
+    )
+
+    assert _collect_genome_paths(list_path) == [
+        Path("relative/input.fna"),
+        Path("/absolute/input.fna"),
+    ]
+
+
+def test_gpu_id_sets_uuid_selector_and_requested_index(monkeypatch) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("VIROSYNC_GPU", raising=False)
+    monkeypatch.setattr(
+        orchestration_cli,
+        "_gpu_uuid_from_index",
+        lambda _index: "GPU-test-uuid",
+    )
+
+    detail = _apply_gpu_id_env(2, None)
+
+    assert detail == "gpu-id=2, CUDA_VISIBLE_DEVICES=GPU-test-uuid"
+    assert orchestration_cli.os.environ["CUDA_VISIBLE_DEVICES"] == "GPU-test-uuid"
+    assert orchestration_cli.os.environ["VIROSYNC_GPU"] == "2"
+
+
+def test_gpu_id_uses_numeric_selector_when_uuid_lookup_fails(monkeypatch) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("VIROSYNC_GPU", raising=False)
+    monkeypatch.setattr(
+        orchestration_cli,
+        "_gpu_uuid_from_index",
+        lambda _index: None,
+    )
+
+    _apply_gpu_id_env(None, 3)
+
+    assert orchestration_cli.os.environ["CUDA_VISIBLE_DEVICES"] == "3"
+    assert orchestration_cli.os.environ["VIROSYNC_GPU"] == "3"
 
 def test_cap_threads_reduces_when_oversubscribed() -> None:
     # 48 threads across 6 concurrent genomes -> 8 each; 16 requested -> reduced + warned

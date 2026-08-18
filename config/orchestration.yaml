@@ -5,8 +5,10 @@ orchestration:
   core_resources_version: v1.0.7
   core_resources_sha256: 57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2
   core_resources_manifest_sha256: f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3
-  tmvec_resources_url: null
+  tmvec_resources_url: https://dl.newlineages.com/virosync/virosync_tmvec2_resources_v1.0.0.tar.gz
+  tmvec_resources_sha256: 2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6
   interproscan_resources_url: null
+  interproscan_resources_sha256: null
   max_concurrent_genomes: 6
   retries: 1
   retry_delay_seconds: 60
@@ -113,8 +115,6 @@ phase3:
   tmvec_require_gpu: false
   tmvec_databases:
   - bfvd
-  - cath
-  - swissprot
   tmvec_database_dir: null
   tmvec_min_score: 0.5
   viral_structure_db: null

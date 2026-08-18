@@ -8,6 +8,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- Optional TMVec2 search with Lobster-24M features and matching BFVD
+  embeddings. Setup downloads and verifies the pinned database and model files,
+  and the structural preflight runs a model-parity check and a real BFVD query.
 - Pfam arbitration for proteins that hit at least two ViroSync marker models.
   Schema-v2 runtime bundles carry the authenticated screening HMM. Phase 1 can
   confirm, reassign, retain as unresolved, or reject an assignment
@@ -44,6 +47,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- TMVec2 uses only the matching BFVD embedding database. Existing configs must
+  set `phase3.tmvec_databases` to `[bfvd]`. A requested TMVec2 run now exits
+  before analysis if its runtime, models, manifest, or BFVD query check fails.
+- `--rebuild-db` now ignores `--marker-db` and builds a run-local marker
+  database from `faa_dir` plus one marker FASTA source.
+- GVClass validation now requires an executable `gvclass` file. The
+  `VIROSYNC_GVCLASS_PATH` environment variable remains available as the
+  default for `--gvclass`.
+- InterProScan archive setup now checks the SHA-256 before it extracts
+  executable files.
+- `virosync run` with no input now returns usage status 2, which matches
+  `virosync orchestrate run`.
 - The default core resource is the authenticated v1.0.7 schema-v2 runtime
   bundle with the 937-model Pfam screen. The public install omits the HMMER
   indices and marker source FASTA because the pipeline does not read them.

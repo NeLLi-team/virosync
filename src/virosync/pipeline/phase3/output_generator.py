@@ -2157,7 +2157,7 @@ class OutputGenerator:
         return output_path
 
     def write_tmvec_proteins_tsv(self, results: list[VerificationResult]) -> Path:
-        """Write per-protein TMVec hits across all databases."""
+        """Write per-protein TMVec2 BFVD hits."""
         output_path = self.output_dir / "virosync_tmvec_proteins.tsv"
         header = [
             "eve_id",
@@ -2169,11 +2169,6 @@ class OutputGenerator:
             "tmvec_bfvd_organism",
             "tmvec_bfvd_lineage",
             "tmvec_bfvd_keywords",
-            "tmvec_cath_score",
-            "tmvec_cath_hit",
-            "tmvec_swiss_score",
-            "tmvec_swiss_hit",
-            "tmvec_viral_specificity",
         ]
         with atomic_write_context(output_path, "w") as f:
             f.write("\t".join(header) + "\n")

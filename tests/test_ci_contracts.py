@@ -101,7 +101,9 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
 def test_production_guard_checks_public_resource_size() -> None:
     workflow = _text(ROOT / ".github/workflows/production-guards.yml")
     assert "EXPECTED_BYTES=5877324818" in workflow
+    assert "TMVEC_EXPECTED_BYTES=672805975" in workflow
     assert 'test "$actual_bytes" = "$EXPECTED_BYTES"' in workflow
+    assert 'test "$tmvec_actual_bytes" = "$TMVEC_EXPECTED_BYTES"' in workflow
 
 
 def test_frameshift_example_task_is_explicit_opt_in() -> None:

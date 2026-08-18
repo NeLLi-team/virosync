@@ -20,8 +20,7 @@ def release_gpu_memory() -> None:
 
     Clears the global TMVec predictor (the largest GPU consumer), runs Python
     garbage collection, and empties the CUDA memory cache. Call this between
-    pipeline phases to prevent OOM when a worker moves from Phase 3
-    (TMVec ~45 GiB) between phases.
+    pipeline phases to prevent OOM when a worker leaves Phase 3.
     """
     try:
         from virosync.pipeline.phase3.tmvec_predictor import release_tmvec_predictor
@@ -42,5 +41,4 @@ def release_gpu_memory() -> None:
                 logger.info("Released %.0f MiB GPU memory", freed_mib)
     except ImportError:
         pass
-
 

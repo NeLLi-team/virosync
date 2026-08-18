@@ -785,8 +785,8 @@ class PipelineConfig:
             "file",
         )
 
-        # A prebuilt marker DB supersedes the marker-FAA build inputs.
-        if self.databases.marker_db is not None:
+        # A prebuilt marker DB supersedes build inputs unless rebuild was requested.
+        if self.databases.marker_db is not None and not self.phase1.rebuild_db:
             selected(
                 "Marker Diamond database",
                 self.databases.marker_db,
@@ -837,13 +837,19 @@ class PipelineConfig:
         # HMM-gated workflow requires HMM database (only path supported)
         if not self.databases.hmm_database:
             errors.append("HMM-gated workflow requires databases.hmm_database")
-        if self.databases.marker_db is None and (
+        missing_marker_build_inputs = (
             self.databases.faa_dir is None
             or (
                 self.databases.marker_faa_dir is None
                 and self.databases.marker_faa_db is None
             )
-        ):
+        )
+        if self.phase1.rebuild_db and missing_marker_build_inputs:
+            errors.append(
+                "phase1.rebuild_db requires databases.faa_dir plus "
+                "databases.marker_faa_db or databases.marker_faa_dir"
+            )
+        elif self.databases.marker_db is None and missing_marker_build_inputs:
             errors.append(
                 "HMM-gated workflow requires databases.marker_db, or "
                 "databases.faa_dir plus marker_faa_db/marker_faa_dir"
@@ -997,13 +1003,8 @@ class PipelineConfig:
                 "phase3.tmvec_require_gpu requires phase3.use_tmvec_database=true"
             )
         if self.phase3.tmvec_databases is not None:
-            unsupported = sorted(
-                set(self.phase3.tmvec_databases) - {"bfvd", "cath", "swissprot", "pdb"}
-            )
-            if unsupported:
-                errors.append(
-                    f"phase3.tmvec_databases contains unsupported values: {unsupported}"
-                )
+            if self.phase3.tmvec_databases != ["bfvd"]:
+                errors.append("phase3.tmvec_databases must be ['bfvd']")
 
         if not self.host.prefixes:
             errors.append("host.prefixes must include at least one prefix")

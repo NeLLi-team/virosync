@@ -3,7 +3,6 @@
 import click
 import yaml
 import copy
-import hashlib
 import importlib.util
 import logging
 import os
@@ -36,10 +35,6 @@ from virosync.utils.executables import resolve_boltz_executable
 # Supported genome file extensions
 GENOME_EXTENSIONS = {".fna", ".fasta", ".fa"}
 GVCLASS_PATH_ENV_VAR = "VIROSYNC_GVCLASS_PATH"
-_TMVEC_CHECKPOINT_MD5 = {
-    "tm_vec_swiss_model_large_params.json": "fbb1f2288be74ad6c5ac1c05a19f876d",
-    "tm_vec_swiss_model_large.ckpt": "69d8ef7a3286b8f6077fb89310ac19dd",
-}
 
 
 def _collect_genome_paths(input_path: Path) -> list[Path]:
@@ -192,12 +187,12 @@ def _warn_optional_resource(message: str) -> None:
 
 def _command_output_flags(local_verbose: bool = False) -> tuple[bool, bool]:
     """Resolve root and command-local verbosity and configure logging."""
+    from virosync.cli.main import _configure_logging
+
     root_obj = click.get_current_context().find_root().obj or {}
     verbose = bool(local_verbose or root_obj.get("verbose"))
     quiet = bool(root_obj.get("quiet")) and not verbose
-    logging.getLogger().setLevel(
-        logging.DEBUG if verbose else logging.ERROR
-    )
+    _configure_logging(verbose)
     return verbose, quiet
 
 
@@ -226,25 +221,26 @@ def _print_banner(database_version: str) -> None:
 def _tmvec_runtime_issues(config: PipelineConfig) -> list[str]:
     """Return local-only TMVec readiness failures without downloading assets."""
     issues = []
-    missing_databases = ViroSyncDatabaseManager.missing_tmvec_files(
-        tmvec_root=config.phase3.tmvec_database_dir,
-        databases=config.phase3.tmvec_databases,
+    root = (
+        config.phase3.tmvec_database_dir
+        or ViroSyncDatabaseManager.default_tmvec_path()
     )
-    if missing_databases:
-        root = (
-            config.phase3.tmvec_database_dir
-            or ViroSyncDatabaseManager.default_tmvec_path()
+    try:
+        ViroSyncDatabaseManager.load_tmvec_manifest(
+            root,
+            verify_hashes=True,
+            databases=config.phase3.tmvec_databases or ["bfvd"],
         )
+    except Exception as exc:
         issues.append(
-            f"TMVec databases not available under {root}: "
-            + "; ".join(missing_databases)
+            f"TMVec2 resources are not ready under {root}: {exc}"
         )
 
     dependency_modules = {
         "torch": "torch",
         "transformers": "transformers",
-        "pytorch-lightning": "pytorch_lightning",
-        "sentencepiece": "sentencepiece",
+        "lightning": "lightning",
+        "lbster": "lobster",
     }
     missing_dependencies = [
         label
@@ -255,39 +251,6 @@ def _tmvec_runtime_issues(config: PipelineConfig) -> list[str]:
         issues.append(
             "missing dependencies: " + ", ".join(sorted(missing_dependencies))
         )
-
-    cache_dir = Path.home() / ".cache" / "virosync" / "tmvec"
-    checkpoint_files = (
-        cache_dir / "tm_vec_swiss_model_large_params.json",
-        cache_dir / "tm_vec_swiss_model_large.ckpt",
-    )
-    def checkpoint_ready(path: Path) -> bool:
-        try:
-            return path.is_file() and path.stat().st_size > 0
-        except OSError:
-            return False
-
-    missing_checkpoints = [
-        path.name for path in checkpoint_files if not checkpoint_ready(path)
-    ]
-    if missing_checkpoints:
-        issues.append(
-            f"missing trained checkpoint files under {cache_dir}: "
-            + ", ".join(missing_checkpoints)
-        )
-
-    if not missing_checkpoints:
-        for path in checkpoint_files:
-            digest = hashlib.md5(usedforsecurity=False)
-            try:
-                with path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
-            except OSError as exc:
-                issues.append(f"cannot read trained checkpoint {path}: {exc}")
-                continue
-            if digest.hexdigest() != _TMVEC_CHECKPOINT_MD5[path.name]:
-                issues.append(f"trained checkpoint checksum mismatch: {path}")
 
     if config.compute.device.value != "cuda":
         if config.phase3.tmvec_require_gpu:
@@ -352,17 +315,14 @@ def _resolve_optional_features(
     tmvec_requested = resolved.phase3.use_tmvec_database
     tmvec_issues = _tmvec_runtime_issues(resolved) if tmvec_requested else []
     tmvec_reason = "; ".join(tmvec_issues) or None
-    if tmvec_issues and resolved.phase3.tmvec_require_gpu:
-        raise click.ClickException("TMVec strict requirements not met: " + tmvec_reason)
     if tmvec_issues:
-        _warn_optional_resource(f"TMVec disabled: {tmvec_reason}.")
-        resolved.phase3.use_tmvec_database = False
+        raise click.ClickException("TMVec2 requirements not met: " + tmvec_reason)
     states["tmvec"] = FeatureResolution(
         requested=tmvec_requested,
         required=resolved.phase3.tmvec_require_gpu,
         enabled=resolved.phase3.use_tmvec_database,
-        reason_code="requirements_unmet" if tmvec_issues else None,
-        details=tuple(tmvec_issues),
+        reason_code=None,
+        details=(),
     )
 
     interpro_requested = resolved.phase3.interproscan_enabled
@@ -558,10 +518,19 @@ def _resolve_pipeline_resources(
         "interproscan_dir": resolved.get("interproscan_dir"),
     }
     updated = config.with_overrides(**overrides)
-    if resolved.get("marker_faa_db") is None:
+    database_updates = {}
+    if resolved.get("marker_faa_db") is None or (
+        config.phase1.rebuild_db
+        and config.databases.marker_faa_db is None
+        and config.databases.marker_faa_dir is not None
+    ):
+        database_updates["marker_faa_db"] = None
+    if config.phase1.rebuild_db:
+        database_updates["marker_db"] = None
+    if database_updates:
         updated = replace(
             updated,
-            databases=replace(updated.databases, marker_faa_db=None),
+            databases=replace(updated.databases, **database_updates),
         )
     return updated
 
@@ -588,8 +557,15 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     if config.phase3.run_gvclass:
         if config.phase3.gvclass_path is None:
             errors.append("phase3.run_gvclass requires phase3.gvclass_path")
-        elif not config.phase3.gvclass_path.exists():
-            errors.append(f"GVClass path does not exist: {config.phase3.gvclass_path}")
+        else:
+            gvclass_executable = config.phase3.gvclass_path / "gvclass"
+            if not gvclass_executable.is_file() or not os.access(
+                gvclass_executable, os.X_OK
+            ):
+                errors.append(
+                    "GVClass executable is missing or not executable: "
+                    f"{gvclass_executable}"
+                )
     if errors:
         raise click.ClickException(
             "Invalid runtime configuration: " + "; ".join(errors)
@@ -636,10 +612,21 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     help="Pinned SHA-256 of RESOURCE_MANIFEST.json inside the archive",
 )
 @click.option(
+    "--tmvec/--no-tmvec",
+    default=None,
+    help="Install the optional TMVec2 BFVD resource set",
+)
+@click.option(
     "--tmvec-url",
     type=str,
     default=None,
-    help="Optional TMVec archive URL/path",
+    help="TMVec2 BFVD bundle URL/path",
+)
+@click.option(
+    "--tmvec-resource-sha256",
+    type=str,
+    default=None,
+    help="Pinned SHA-256 of the TMVec2 BFVD bundle",
 )
 @click.option(
     "--tmvec-dir",
@@ -652,6 +639,12 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     type=str,
     default=None,
     help="Optional InterProScan archive URL/path",
+)
+@click.option(
+    "--interproscan-resource-sha256",
+    type=str,
+    default=None,
+    help="Pinned SHA-256 of the InterProScan archive",
 )
 @click.option(
     "--interproscan-dir",
@@ -696,9 +689,12 @@ def setup(
     core_version: Optional[str],
     core_resource_sha256: Optional[str],
     core_manifest_sha256: Optional[str],
+    tmvec: Optional[bool],
     tmvec_url: Optional[str],
+    tmvec_resource_sha256: Optional[str],
     tmvec_dir: Optional[Path],
     interproscan_url: Optional[str],
+    interproscan_resource_sha256: Optional[str],
     interproscan_dir: Optional[Path],
     boltz_db_dir: Optional[Path],
     interactive_optional: bool,
@@ -716,6 +712,72 @@ def setup(
     config_data = application_config.to_dict()
     orchestration_cfg = dict(config_data.get("orchestration", {}))
     phase3_cfg = dict(config_data.get("phase3", {}))
+    if tmvec is False and any(
+        value is not None
+        for value in (tmvec_url, tmvec_resource_sha256, tmvec_dir)
+    ):
+        raise click.UsageError(
+            "--no-tmvec cannot be combined with --tmvec-url, "
+            "--tmvec-resource-sha256, or --tmvec-dir"
+        )
+    initial_tmvec_source = tmvec_url or orchestration_cfg.get("tmvec_resources_url")
+    use_config_tmvec_identity = (
+        tmvec_url is None
+        or tmvec_url == orchestration_cfg.get("tmvec_resources_url")
+    )
+    initial_tmvec_sha256 = tmvec_resource_sha256 or (
+        orchestration_cfg.get("tmvec_resources_sha256")
+        if use_config_tmvec_identity
+        else None
+    )
+    initial_tmvec_request = tmvec is True or any(
+        value is not None
+        for value in (tmvec_url, tmvec_resource_sha256, tmvec_dir)
+    ) or bool(phase3_cfg.get("use_tmvec_database"))
+    if initial_tmvec_request and bool(initial_tmvec_source) != bool(
+        initial_tmvec_sha256
+    ):
+        click.echo(
+            click.style(
+                "TMVec2 setup failed: the bundle URL/path and its SHA-256 "
+                "must be configured together.",
+                fg="red",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
+    initial_interpro_source = interproscan_url or orchestration_cfg.get(
+        "interproscan_resources_url"
+    )
+    use_config_interpro_identity = (
+        interproscan_url is None
+        or interproscan_url == orchestration_cfg.get("interproscan_resources_url")
+    )
+    initial_interpro_sha256 = interproscan_resource_sha256 or (
+        orchestration_cfg.get("interproscan_resources_sha256")
+        if use_config_interpro_identity
+        else None
+    )
+    initial_interpro_request = any(
+        value is not None
+        for value in (
+            interproscan_url,
+            interproscan_resource_sha256,
+            interproscan_dir,
+        )
+    ) or bool(phase3_cfg.get("interproscan_enabled"))
+    if initial_interpro_request and bool(initial_interpro_source) != bool(
+        initial_interpro_sha256
+    ):
+        click.echo(
+            click.style(
+                "InterProScan setup failed: the archive URL/path and its SHA-256 "
+                "must be configured together.",
+                fg="red",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
 
     env_db_root = os.environ.get("VIROSYNC_DB_ROOT")
     root = Path(
@@ -778,8 +840,18 @@ def setup(
                 click.echo(f"Using existing database at: {root}")
         else:
             click.echo("ViroSync core resources:")
-            click.echo("  Download size: ~6.8 GB (compressed)")
-            click.echo("  Installed size: ~15 GB")
+            if source_record and source_record.get("archive_size_bytes"):
+                archive_size = int(source_record["archive_size_bytes"])
+                click.echo(
+                    f"  Download size: {archive_size / 1_000_000_000:.2f} GB "
+                    f"({archive_size:,} bytes)"
+                )
+            if source_record and source_record.get("payload_size_bytes"):
+                payload_size = int(source_record["payload_size_bytes"])
+                click.echo(
+                    f"  Resource payload: {payload_size / 1_000_000_000:.2f} GB "
+                    f"({payload_size:,} bytes)"
+                )
             click.echo(f"  Default location: {root}")
             click.echo()
             user_path = click.prompt("Install location", default=str(root))
@@ -832,13 +904,15 @@ def setup(
         or phase3_cfg.get("tmvec_database_dir")
         or defaults["tmvec_database_dir"]
     )
-    tmvec_source = tmvec_url or orchestration_cfg.get("tmvec_resources_url")
-    tmvec_requested = bool(
+    tmvec_source = initial_tmvec_source
+    tmvec_archive_sha256 = initial_tmvec_sha256
+    configured_tmvec_request = bool(
         tmvec_url is not None
+        or tmvec_resource_sha256 is not None
         or tmvec_dir is not None
-        or tmvec_source
         or phase3_cfg.get("use_tmvec_database")
     )
+    tmvec_requested = bool(tmvec) if tmvec is not None else configured_tmvec_request
     tmvec_databases = (
         phase3_cfg.get("tmvec_databases")
         or orchestration_cfg.get("tmvec_databases")
@@ -853,11 +927,12 @@ def setup(
         or phase3_cfg.get("interproscan_dir")
         or ViroSyncDatabaseManager.default_interproscan_path(installed_root)
     )
-    interpro_source = interproscan_url or orchestration_cfg.get("interproscan_resources_url")
+    interpro_source = initial_interpro_source
+    interpro_archive_sha256 = initial_interpro_sha256
     interpro_requested = bool(
         interproscan_url is not None
+        or interproscan_resource_sha256 is not None
         or interproscan_dir is not None
-        or interpro_source
         or phase3_cfg.get("interproscan_enabled")
     )
 
@@ -870,18 +945,34 @@ def setup(
     if interactive_optional:
         if progress is not None and progress.is_tty:
             click.echo()
-        if tmvec_url is None and tmvec_dir is None:
+        if tmvec is None and tmvec_url is None and tmvec_dir is None:
+            prompt_source = tmvec_source
             tmvec_requested, tmvec_target, tmvec_source = _prompt_optional_archive_choice(
                 name="TMVec",
                 default_target=tmvec_target,
                 default_source=tmvec_source,
             )
+            if not tmvec_requested or tmvec_source != prompt_source:
+                tmvec_archive_sha256 = None
+            if tmvec_requested and tmvec_source and not tmvec_archive_sha256:
+                tmvec_archive_sha256 = click.prompt(
+                    "TMVec bundle SHA-256",
+                    type=str,
+                )
         if interproscan_url is None and interproscan_dir is None:
+            prompt_source = interpro_source
             interpro_requested, interpro_target, interpro_source = _prompt_optional_archive_choice(
                 name="InterProScan",
                 default_target=interpro_target,
                 default_source=interpro_source,
             )
+            if not interpro_requested or interpro_source != prompt_source:
+                interpro_archive_sha256 = None
+            if interpro_requested and interpro_source and not interpro_archive_sha256:
+                interpro_archive_sha256 = click.prompt(
+                    "InterProScan archive SHA-256",
+                    type=str,
+                )
         if boltz_db_dir is None:
             enable_boltz = click.confirm(
                 "Configure Boltz/FoldSeek viral structure DB path now?",
@@ -895,20 +986,44 @@ def setup(
                 )
                 boltz_db_path = ViroSyncDatabaseManager.normalize_path(boltz_input)
 
-    tmvec_required: list[str] = []
-    for db_name in tmvec_databases:
-        tmvec_required.extend(
-            ViroSyncDatabaseManager.TMVEC_REQUIRED_FILES.get(db_name, [])
-        )
-    if not tmvec_required:
-        tmvec_required = ViroSyncDatabaseManager.TMVEC_REQUIRED_FILES["bfvd"]
+    tmvec_required = ViroSyncDatabaseManager.TMVEC_REQUIRED_FILES["bfvd"]
 
-    if tmvec_requested and tmvec_source:
+    if tmvec_requested and bool(tmvec_source) != bool(tmvec_archive_sha256):
+        if progress is not None:
+            progress.update("resources", 100, "failed", True)
+            progress.finish(False)
+        click.echo(
+            click.style(
+                "TMVec2 setup failed: the bundle URL/path and its SHA-256 "
+                "must be configured together.",
+                fg="red",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
+    if interpro_requested and bool(interpro_source) != bool(
+        interpro_archive_sha256
+    ):
+        if progress is not None:
+            progress.update("resources", 100, "failed", True)
+            progress.finish(False)
+        click.echo(
+            click.style(
+                "InterProScan setup failed: the archive URL/path and its SHA-256 "
+                "must be configured together.",
+                fg="red",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
+
+    if tmvec_requested:
         tmvec_ok = ViroSyncDatabaseManager.setup_optional_archive(
             name="tmvec",
             target_path=tmvec_target,
             source=tmvec_source,
             required_files=tmvec_required,
+            archive_sha256=tmvec_archive_sha256,
             force=force,
             progress_callback=(
                 (
@@ -935,23 +1050,18 @@ def setup(
                 fg="green",
             )
         )
-    elif not tmvec_ok and (tmvec_requested or verbose):
-        if tmvec_requested:
-            click.echo(
-                click.style(
-                    "TMVec unavailable; runtime will proceed with TMVec disabled.",
-                    fg="yellow",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(
-                click.style(
-                    "TMVec setup skipped; runtime will proceed with TMVec disabled.",
-                    fg="yellow",
-                ),
-                err=True,
-            )
+    elif not tmvec_ok and tmvec_requested:
+        if progress is not None:
+            progress.update("resources", 100, "failed", True)
+            progress.finish(False)
+        click.echo(
+            click.style(
+                "TMVec2 setup failed. The target was not activated.",
+                fg="red",
+            ),
+            err=True,
+        )
+        raise SystemExit(1)
     if progress is not None:
         progress.update("resources", 92, "TMVec check complete")
 
@@ -961,6 +1071,7 @@ def setup(
             target_path=interpro_target,
             source=interpro_source,
             required_files=ViroSyncDatabaseManager.INTERPROSCAN_REQUIRED_FILES,
+            archive_sha256=interpro_archive_sha256,
             force=force,
             progress_callback=(
                 (
@@ -1010,6 +1121,10 @@ def setup(
         orch["core_resources_version"] = selected_version
         orch["core_resources_sha256"] = selected_archive_sha256
         orch["core_resources_manifest_sha256"] = selected_manifest_sha256
+        orch["tmvec_resources_url"] = tmvec_source
+        orch["tmvec_resources_sha256"] = tmvec_archive_sha256
+        orch["interproscan_resources_url"] = interpro_source
+        orch["interproscan_resources_sha256"] = interpro_archive_sha256
         databases["hmm_database"] = str(defaults["hmm_db"])
         databases["marker_faa_db"] = (
             str(defaults["marker_faa_db"])
@@ -1157,49 +1272,53 @@ def verify_resources(config_path: Path, db_root: Optional[Path], full: bool) -> 
 )
 @click.option(
     "--hmm-db",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
     help="Path to HMM database",
 )
 @click.option(
     "--hmm-allowlist",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
     help="Path to HMM allowlist file",
 )
 @click.option(
     "--marker-faa-db",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
     help="Marker FAA database file (e.g., marker.faa). Overrides --marker-faa-dir.",
 )
 @click.option(
     "--marker-faa-dir",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path),
     help="Directory with marker FAA files",
 )
 @click.option(
     "--marker-db",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
     help="Marker Diamond database file (e.g., marker.dmnd). Used for Phase 1 marker validation.",
 )
 @click.option(
     "--faa-dir",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path),
     help="Directory with FAA files used to build marker-validation inputs when needed",
 )
 @click.option(
     "--gvclass-db",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
     help="Path to GVClass database",
 )
 @click.option(
     "--gvclass",
     "gvclass_path",
-    type=click.Path(exists=True, path_type=Path),
-    help=f"Path to GVClass installation directory (defaults to ${GVCLASS_PATH_ENV_VAR} when set)",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True, path_type=Path),
+    envvar=GVCLASS_PATH_ENV_VAR,
+    help=(
+        "Path to the GVClass installation directory. "
+        f"Default: ${GVCLASS_PATH_ENV_VAR} when set."
+    ),
 )
 @click.option(
     "--diamond-db",
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to Diamond database",
+    type=click.Path(exists=True, resolve_path=True, path_type=Path),
+    help="Path to the Phase 3 phylogenetic Diamond database",
 )
 @click.option(
     "--enable-phylogenetic/--disable-phylogenetic",
@@ -1233,7 +1352,7 @@ def verify_resources(config_path: Path, db_root: Optional[Path], full: bool) -> 
 @click.option(
     "--rebuild-db/--no-rebuild-db",
     default=None,
-    help="Enable/disable rebuilding marker.faa/combined.faa from inputs",
+    help="Force a run-local FAA build that ignores --marker-db, or avoid forcing it",
 )
 @click.option(
     "--phase1-initial-window-bp",
@@ -1251,7 +1370,7 @@ def verify_resources(config_path: Path, db_root: Optional[Path], full: bool) -> 
     "--phase1-min-markers-initial",
     default=None,
     type=click.IntRange(min=1),
-    help="Phase 1: minimum markers to form initial cluster (default: config value or 2)",
+    help="Phase 1: minimum markers to form initial cluster (default: config value or 1)",
 )
 @click.option(
     "--phase1-extension-kb",
@@ -1379,26 +1498,10 @@ def run(
     taxonomy_ml_model: Optional[str],
     verbose: bool,
     ):
-    """Run ViroSync pipeline with standard-library Python parallelization.
+    """Run ViroSync on one or more genomes with local worker threads.
 
-    Processes one or more genomes in parallel using Python worker threads.
-    Each genome uses its configured tool thread budget internally. Output is
-    organized into per-genome subdirectories.
-
-    Input can be:
-    - A single genome file (.fna, .fasta, .fa)
-    - A directory containing genome files
-    - A text file with genome paths (one per line, # for comments)
-
-    Examples:
-        # Single genome
-        virosync run -i genome.fna -o results/
-
-        # Directory of genomes
-        virosync run -i genomes/ -o results/ -w 8
-
-        # List file
-        virosync run -i genomes.txt -o results/ -w 8
+    INPUT accepts one FASTA file, a directory of FASTA files, or a text file
+    with one FASTA path per line. OUTPUT contains one subdirectory per genome.
     """
     verbose, quiet = _command_output_flags(verbose)
     ctx = click.get_current_context()
@@ -1667,8 +1770,9 @@ def info():
     click.echo(f"ViroSync version: {virosync.__version__}")
     click.echo("")
     click.echo("Available commands:")
-    click.echo("  setup           - Install core resources and optional TMVec/InterProScan")
+    click.echo("  setup           - Install core resources and set optional resource paths")
     click.echo("  run             - Process genome(s) with local Python parallelism")
+    click.echo("  resources       - Verify installed core resources")
     click.echo("")
     click.echo("Input options:")
     click.echo("  --input/-i      - Single genome file, directory, or list file")
