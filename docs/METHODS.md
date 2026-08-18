@@ -622,20 +622,14 @@ identities and counts.
 Recommended smoke test:
 
 ``` bash
-pixi run virosync \
-  -i example/ \
-  -o results/example_16t \
-  --config config/orchestration.yaml \
-  -w 1 \
-  --threads-per-worker 16 \
-  --clean-run
+pixi run example
 ```
 
 Quick validations:
 
 ``` bash
 cat resources/virosync/DB_VERSION
-cat results/example_16t/batch_summary.tsv
+cat results/example/batch_summary.tsv
 ```
 
 Expected operational targets for current resource pinning:
@@ -650,9 +644,9 @@ pixi run example-frameshift
 cat results/example-frameshift/batch_summary.tsv
 ```
 
-The `trichomonas-g3` row should report `status=success`, `predictions=5`, and
-`accepted=2` with v1.0.7. Put the pinned BATH commands on `PATH` before
-running it.
+Against the v1.0.7 bundle, the `trichomonas-g3` row should report
+`status=success`, `predictions=5`, and `accepted=2`. Put the pinned BATH
+commands on `PATH` before running it.
 
 The [frameshift screening guide](FRAMESHIFT_SCREENING.md#run-the-shipped-example)
 lists the exact schema-v1 and schema-v2 EVE sets for this fixture.

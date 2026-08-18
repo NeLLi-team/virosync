@@ -39,23 +39,52 @@ Resource setup downloads and verifies `resources_v1_0_7_runtime.tar.gz`. See
 Run the shipped example:
 
 ```bash
-pixi run virosync \
-  -i example/ \
-  -o results/example_16t \
-  --config config/orchestration.yaml \
-  -w 1 \
-  --threads-per-worker 16 \
-  --clean-run
+pixi run example
 ```
 
-Check the batch summary:
+The task writes to `results/example/`. Check the batch summary:
 
 ```bash
-cat results/example_16t/batch_summary.tsv
+cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`
-with database version `v1.0.7`.
+The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`.
+The resource tree records the database version separately:
+
+```bash
+cat resources/virosync/DB_VERSION
+```
+
+It must print `v1.0.7`.
+
+## Run your own genomes
+
+Give `-i` a single FASTA file:
+
+```bash
+pixi run virosync \
+  -i genome.fna \
+  -o results/my_genome \
+  --config config/orchestration.yaml \
+  -w 1 \
+  --threads-per-worker 16
+```
+
+Or a directory of FASTA files:
+
+```bash
+pixi run virosync \
+  -i genomes/ \
+  -o results/my_genomes \
+  --config config/orchestration.yaml \
+  -w 4 \
+  --threads-per-worker 16
+```
+
+ViroSync reads `.fna`, `.fasta`, and `.fa` files. It does not search
+subdirectories. `-i` also accepts a text file with one FASTA path per line.
+`-w` sets how many genomes run at the same time. `--threads-per-worker` sets
+the threads for each of those genomes.
 
 The [documentation](https://nelli-team.github.io/virosync/) covers input modes,
 command-line options, outputs, performance tests, and optional analyses.

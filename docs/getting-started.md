@@ -57,28 +57,36 @@ Keep the variable set for later runs.
 ## Run the example
 
 ```bash
-pixi run virosync \
-  -i example/ \
-  -o results/example_16t \
-  --config config/orchestration.yaml \
-  -w 1 \
-  --threads-per-worker 16 \
-  --clean-run
+pixi run example
 ```
 
-Check the summary:
+The task runs the genomes in `example/` and writes to `results/example/`. Check
+the summary:
 
 ```bash
-cat results/example_16t/batch_summary.tsv
+cat results/example/batch_summary.tsv
 ```
 
 The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`.
 
-Run the same command without `--clean-run` to test resume. ViroSync reuses the
-completed genome only after it validates the run state and all recorded output
-files.
+The task passes `--clean-run`, which ignores existing outputs and starts from
+scratch. To test resume, run the same input without that flag:
+
+```bash
+pixi run virosync \
+  -i example/ \
+  -o results/example \
+  --config config/orchestration.yaml \
+  -w 1 \
+  --threads-per-worker 8
+```
+
+ViroSync reuses the completed genome only after it validates the run state and
+all recorded output files.
 
 ## Run your genome
+
+Point `-i` at a single FASTA file:
 
 ```bash
 pixi run virosync \
@@ -89,6 +97,21 @@ pixi run virosync \
   --threads-per-worker 16
 ```
 
-You can also use a directory of FASTA files or a text file with one FASTA path
-per line. See the [command-line reference](reference/cli.md) for run controls
-and [methods and outputs](METHODS.md) for the result files.
+Or at a directory of FASTA files:
+
+```bash
+pixi run virosync \
+  -i genomes/ \
+  -o results/my_genomes \
+  --config config/orchestration.yaml \
+  -w 4 \
+  --threads-per-worker 16
+```
+
+ViroSync reads `.fna`, `.fasta`, and `.fa` files. It does not search
+subdirectories. `-i` also accepts a text file with one FASTA path per line.
+`-w` sets how many genomes run at the same time. `--threads-per-worker` sets
+the threads for each of those genomes.
+
+See the [command-line reference](reference/cli.md) for run controls and
+[methods and outputs](METHODS.md) for the result files.
