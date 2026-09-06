@@ -51,7 +51,6 @@ Validation rules in the production filter:
 """
 
 import logging
-from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -102,12 +101,14 @@ class NovelMarkerCriteria:
         min_hmm_coverage: Minimum query coverage (0.0-1.0)
         require_cluster: If True, marker must be near other markers
         max_confidence_weight: Maximum contribution to confidence scoring
+        initial_window_bp: Maximum gap to a validated marker for cluster support
     """
 
     min_hmm_score: float = 30.0
     min_hmm_coverage: float = 0.5
     require_cluster: bool = True
     max_confidence_weight: float = 0.7
+    initial_window_bp: int = 10000
 
 
 
@@ -452,8 +453,10 @@ def filter_validated_markers(
 
     # Parse pORF coordinates from headers
     porf_coords = {}
+    protein_lengths = {}
     for record in SeqIO.parse(proteome_fasta, "fasta"):
         name = record.id
+        protein_lengths[name] = len(record.seq)
         prodigal_parsed = parse_prodigal_header(record.description, name)
         if prodigal_parsed:
             scaffold, start, end, strand = prodigal_parsed
@@ -507,11 +510,6 @@ def filter_validated_markers(
                 hit.query_end,
             )
 
-    hmm_hits_by_scaffold = Counter(
-        query_porf.split("|aa", 1)[0].rsplit("_", 1)[0]
-        for query_porf in hmm_hit_lookup
-    )
-
     hmm_group_counts = {"GVOGm": 0, "OG": 0, "OTHER": 0}
     for hmm_target, _score, _evalue, _qstart, _qend in hmm_hit_lookup.values():
         hmm_group_counts[_marker_group(hmm_target)] += 1
@@ -520,8 +518,10 @@ def filter_validated_markers(
     if novel_criteria is None:
         novel_criteria = NovelMarkerCriteria()
 
-    # Validate markers
+    # Classify DIAMOND-backed markers first. HMM-only markers are held for a
+    # second pass so they can use final, order-independent validated neighbors.
     validated_markers = []
+    novel_candidates = []
     stats = {
         "validated": 0,
         "validated_novel": 0,
@@ -552,51 +552,23 @@ def filter_validated_markers(
             contig_len = contig_lengths.get(contig)
             if frame and contig_len:
                 start, end, strand = aa_to_nt_coords(qstart, qend, contig_len, frame, offset=offset)
-                scaffold = contig
-                coords = (scaffold, start, end, strand)
+                coords = (contig, start, end, strand)
         if not coords:
             logger.warning(f"Could not parse coordinates for {query_porf}")
             continue
         scaffold, start, end, strand = coords
 
-        # Get the configured number of ranked Diamond hits.
-        # Diamond queries use base protein name (full-protein search),
-        # so look up by base name; fall back to full query_porf for
-        # backward compatibility with old-format result files.
-        top10_hits = diamond_hits.get(base_query, []) or diamond_hits.get(query_porf, [])
+        # Diamond queries use base protein name (full-protein search). Fall
+        # back to full query_porf for old result files.
+        top10_hits = list(
+            diamond_hits.get(base_query, []) or diamond_hits.get(query_porf, [])
+        )
         if not top10_hits:
-            # No Diamond hits - check if qualifies as validated_novel
             stats["no_diamond_hits"] += 1
-
-            # Calculate HMM coverage (query coverage from HMM alignment)
-            # Coverage = (query_end - query_start + 1) / query_length
-            # Note: We approximate coverage using the aligned region proportion
-            hmm_aligned_len = qend - qstart + 1
-            # Use a reasonable estimate of typical pORF length (300 aa) if unknown
-            # This is a conservative estimate; actual coverage may be higher
-            hmm_coverage = min(1.0, hmm_aligned_len / 300.0)
-
-            # Check for nearby markers on same scaffold (simplified check)
-            # A marker is "nearby" if another HMM hit exists on the same scaffold
-            query_scaffold = query_porf.split("|aa", 1)[0].rsplit("_", 1)[0]
-            own_hit_count = int(query_scaffold == scaffold)
-            has_nearby_markers = hmm_hits_by_scaffold[scaffold] > own_hit_count
-
-            # Use validate_hmm_hit to determine status
-            validation_result = validate_hmm_hit(
-                hmm_score=hmm_score,
-                hmm_coverage=hmm_coverage,
-                diamond_hits=[],
-                novel_criteria=novel_criteria,
-                has_nearby_markers=has_nearby_markers,
-            )
-            validation_status = validation_result.value
-
-            if validation_result == ValidationStatus.VALIDATED_NOVEL:
-                stats["validated_novel"] += 1
-            else:
-                stats["unvalidated"] += 1
-
+            protein_length = protein_lengths.get(base_query)
+            hmm_coverage = None
+            if protein_length:
+                hmm_coverage = min(1.0, (qend - qstart + 1) / protein_length)
             validated_markers.append(ValidatedMarkerHit(
                 query_porf=query_porf,
                 scaffold=scaffold,
@@ -606,7 +578,7 @@ def filter_validated_markers(
                 hmm_target=hmm_target,
                 hmm_score=hmm_score,
                 hmm_evalue=hmm_evalue,
-                validation_status=validation_status,
+                validation_status="unvalidated",
                 top10_prefixes="",
                 best_hit_target="",
                 best_hit_pident=0.0,
@@ -617,6 +589,9 @@ def filter_validated_markers(
                 has_vp=0,
                 has_viral=0,
             ))
+            novel_candidates.append(
+                (len(validated_markers) - 1, base_query, hmm_coverage)
+            )
             continue
 
         # Sort by bit score (descending) and take the configured top K.
@@ -714,6 +689,32 @@ def filter_validated_markers(
             taxonomy_substring_counts=taxonomy_substring_counts,
             taxonomy_raw_counts=taxonomy_raw_counts,
         ))
+
+    validated_support = [
+        marker
+        for marker in validated_markers
+        if marker.validation_status == "validated"
+    ]
+    for marker_index, base_query, hmm_coverage in novel_candidates:
+        marker = validated_markers[marker_index]
+        has_nearby_markers = any(
+            support.query_porf.split("|aa", 1)[0] != base_query
+            and support.scaffold == marker.scaffold
+            and max(0, marker.start - support.end, support.start - marker.end)
+            <= novel_criteria.initial_window_bp
+            for support in validated_support
+        )
+        validation_result = ValidationStatus.UNVALIDATED
+        if hmm_coverage is not None:
+            validation_result = validate_hmm_hit(
+                hmm_score=marker.hmm_score,
+                hmm_coverage=hmm_coverage,
+                diamond_hits=[],
+                novel_criteria=novel_criteria,
+                has_nearby_markers=has_nearby_markers,
+            )
+        marker.validation_status = validation_result.value
+        stats[validation_result.value] += 1
 
     logger.info("Marker validation results:")
     logger.info(

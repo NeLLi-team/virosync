@@ -1,44 +1,15 @@
 #!/usr/bin/env python3
 """
-Classify MCP (Major Capsid Protein) sequences as DJR (Double Jelly Roll) or SJR (Single Jelly Roll).
+Classify MCP candidates as DJR, SJR, HK97, or UNKNOWN, and record MCP support.
 
-Multi-Signal Classification Approach:
-=====================================
-This script uses multiple evidence sources to classify MCPs, with confidence scores
-that reflect the strength of evidence:
+Fold classification and MCP support are separate. InterProScan, TMVec, and
+Foldseek can assign a fold. Validated Mirus_MCP and explicit HK97 capsid
+markers can assign HK97.
+Generic HMM-domain and length rules remain diagnostic fold labels only.
 
-1. InterProScan Jelly Roll Domain Counting (PRIMARY - highest confidence)
-   - PF21738: Double jelly roll capsid-like protein → DJR indicator
-   - IPR049512: Double jelly roll-like domain → DJR indicator
-   - 2+ jelly roll domains detected → DJR (confidence 0.95)
-   - 1 jelly roll domain detected → SJR (confidence 0.90)
-
-2. Multiple HMM Hits to Same Protein
-   - Non-overlapping PLV_MCP domain hits indicate multiple jelly roll domains
-   - 2+ non-overlapping domains → DJR evidence (confidence 0.85)
-
-3. TMVec Reference Similarity
-   - Comparison against curated DJR/SJR reference proteins
-   - DJR references: Mavirus (6G45), Mimivirus, PBCV-1
-   - SJR references: Adenovirus hexon, T4 gp23
-   - Score >0.3 to reference → classification with confidence up to 0.80
-
-4. FoldSeek Structural Hits (with Boltz predictions)
-   - Parse PDB hits for known DJR/SJR structures
-   - 6G45, Mimivirus, PBCV-1 → DJR (confidence 0.75)
-   - Adenovirus structures → SJR (confidence 0.75)
-
-5. Length Heuristics (fallback - lowest confidence)
-   - >400 aa → likely DJR (confidence 0.60)
-   - PLV_MCP marker → DJR (confidence 0.50, structural evidence from Boltz/Foldseek)
-   - Otherwise → UNKNOWN (insufficient evidence)
-   NOTE: SJR classification based on length was removed - Boltz/Foldseek PDB
-   evidence shows all PLV MCPs are DJR (hits to Marseillevirus, PBCV-1, etc.)
-
-Classification Logic:
-- Signals are evaluated in priority order
-- First definitive signal determines classification
-- Confidence reflects evidence strength, not certainty
+The MCP support field records sequence validation or a quality-gated Foldseek
+match to a known capsid structure. Other candidates remain in the output for
+diagnosis, but they do not become supported MCPs.
 
 Usage:
     python scripts/classify_jelly_roll.py \\
@@ -61,12 +32,18 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+import math
 import re
+import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from Bio import SeqIO
+from virosync.config import get_config
+from virosync.utils.path_safety import safe_filename_component
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -111,6 +88,9 @@ SJR_PDB_PATTERNS = [
     r"4cwu",      # Adenovirus hexon
     r"1p30",      # Adenovirus hexon
 ]
+HK97_PDB_PATTERNS = [
+    r"(?<![a-z0-9])1ohg(?![a-z0-9])",  # HK97 major capsid protein
+]
 
 # TMVec reference score threshold
 TMVEC_SCORE_THRESHOLD = 0.3
@@ -128,6 +108,8 @@ class ClassificationSignals:
     tmvec_sjr_hit: str = ""
     foldseek_hit_is_djr: bool = False
     foldseek_hit_is_sjr: bool = False
+    foldseek_hit_is_hk97: bool = False
+    foldseek_hit_is_supported: bool = False
     foldseek_top_hit: str = ""
     length: int = 0
     evidence_sources: list[str] = field(default_factory=list)
@@ -138,16 +120,28 @@ class JellyRollClassification:
     """Classification result for a single protein."""
 
     protein_id: str
-    jelly_roll_type: str  # DJR, SJR, or UNKNOWN
+    jelly_roll_type: str  # DJR, SJR, HK97, or UNKNOWN
     confidence: float  # 0.0-1.0
     length: int  # Protein length in amino acids
     marker: str  # HMM marker that detected it
     evidence: str  # Evidence source(s) for classification
     sequence: str  # Full sequence for reference
+    mcp_support: str  # candidate, sequence_supported, or structure_supported
+    validation_status: str  # Marker validation status from Phase 1
+
+
+def is_hk97_marker(marker_name: str) -> bool:
+    """Return True for known Mirus MCP or explicit HK97 capsid marker names."""
+    normalized = re.sub(r"[^a-z0-9]+", "_", marker_name.lower()).strip("_")
+    return normalized == "mirus_mcp" or bool(
+        re.fullmatch(r"hk97_(?:major_)?capsid(?:_protein)?", normalized)
+    )
 
 
 def is_mcp_marker(marker_name: str) -> bool:
     """Check if a marker name corresponds to an MCP marker."""
+    if is_hk97_marker(marker_name):
+        return True
     marker_lower = marker_name.lower()
     for pattern in MCP_MARKER_PATTERNS:
         if pattern.lower() in marker_lower:
@@ -181,13 +175,18 @@ def calculate_sjr_confidence(length: int) -> float:
     return 0.0
 
 
-def classify_with_signals(signals: ClassificationSignals, marker: str) -> tuple[str, float, str]:
+def classify_with_signals(
+    signals: ClassificationSignals,
+    marker: str,
+    marker_inference_supported: bool,
+) -> tuple[str, float, str]:
     """
-    Multi-signal classification for DJR/SJR.
+    Classify a capsid fold from independent evidence and marker support.
 
     Args:
         signals: Classification signals from all evidence sources
         marker: HMM marker name
+        marker_inference_supported: Whether the marker family has sequence validation
 
     Returns:
         (classification, confidence, evidence_description) tuple
@@ -200,8 +199,14 @@ def classify_with_signals(signals: ClassificationSignals, marker: str) -> tuple[
         # Boltz/Foldseek evidence shows PLV MCPs are DJR, not SJR
         return "DJR", 0.85, "interproscan:1_djr_domain"
 
+    hk97_marker = is_hk97_marker(marker)
+
+    # A qualified match to the solved HK97 capsid outranks a generic HMM count.
+    if signals.foldseek_hit_is_hk97 and signals.foldseek_hit_is_supported:
+        return "HK97", 0.75, f"foldseek:{signals.foldseek_top_hit}"
+
     # Priority 2: Multiple HMM hits to same protein
-    if signals.hmm_domain_count >= 2:
+    if not hk97_marker and signals.hmm_domain_count >= 2:
         return "DJR", 0.85, f"hmm:{signals.hmm_domain_count}_domains"
 
     # Priority 3: TMVec reference similarity
@@ -217,6 +222,13 @@ def classify_with_signals(signals: ClassificationSignals, marker: str) -> tuple[
         return "DJR", 0.75, f"foldseek:{signals.foldseek_top_hit}"
     if signals.foldseek_hit_is_sjr:
         return "SJR", 0.75, f"foldseek:{signals.foldseek_top_hit}"
+    if signals.foldseek_hit_is_hk97:
+        return "HK97", 0.75, f"foldseek:{signals.foldseek_top_hit}"
+
+    if hk97_marker:
+        if marker_inference_supported:
+            return "HK97", 0.5, "hk97_marker"
+        return "UNKNOWN", 0.0, "insufficient_evidence"
 
     # Priority 5: Length heuristics (fallback)
     # NOTE: Removed SJR classification based on length - Boltz/Foldseek PDB evidence
@@ -459,17 +471,18 @@ def load_tmvec_results(
 
 def load_foldseek_results(
     foldseek_path: Path | None,
-) -> dict[str, tuple[bool, bool, str]]:
+) -> dict[str, tuple[bool, bool, bool, str, bool]]:
     """
-    Load FoldSeek results and check for DJR/SJR structural hits.
+    Load Foldseek results and check for known capsid structures.
 
     Returns:
-        Dictionary mapping query IDs to (is_djr, is_sjr, top_hit).
+        Query IDs mapped to DJR, SJR, HK97, target, and quality support.
     """
     if foldseek_path is None or not foldseek_path.exists():
         return {}
 
-    results: dict[str, tuple[bool, bool, str]] = {}
+    results: dict[str, tuple[bool, bool, bool, str, bool]] = {}
+    thresholds = get_config().structural
 
     with foldseek_path.open() as f:
         for line in f:
@@ -489,9 +502,31 @@ def load_foldseek_results(
             # Check against SJR PDB patterns
             is_sjr = any(re.search(pattern, target) for pattern in SJR_PDB_PATTERNS)
 
+            # Check against a solved HK97 major capsid protein
+            is_hk97 = any(re.search(pattern, target) for pattern in HK97_PDB_PATTERNS)
+
+            quality_supported = False
+            if len(parts) >= 8 and (is_djr or is_sjr or is_hk97):
+                try:
+                    evalue = float(parts[2])
+                    bits, qcov, tcov, lddt, tm_score = map(float, parts[3:8])
+                    valid_values = (
+                        all(math.isfinite(value) for value in (evalue, bits, qcov, tcov, lddt, tm_score))
+                        and evalue >= 0.0
+                        and bits >= 0.0
+                        and all(0.0 <= value <= 1.0 for value in (qcov, tcov, lddt, tm_score))
+                    )
+                    quality_supported = (
+                        valid_values
+                        and evalue <= thresholds.evalue_significant
+                        and tm_score >= thresholds.tm_score_significant
+                    )
+                except ValueError:
+                    pass
+
             # Only store first (best) hit per query
             if query not in results:
-                results[query] = (is_djr, is_sjr, parts[1])
+                results[query] = (is_djr, is_sjr, is_hk97, parts[1], quality_supported)
 
     return results
 
@@ -500,10 +535,14 @@ def load_sequences(
     sequences_path: Path, porf_ids: set[str] | None = None
 ) -> dict[str, str]:
     """Load protein sequences from FASTA file."""
+    requested_ids = None
+    if porf_ids is not None:
+        requested_ids = porf_ids | {extract_base_porf_id(porf_id) for porf_id in porf_ids}
+
     sequences: dict[str, str] = {}
     for record in SeqIO.parse(sequences_path, "fasta"):
         seq_id = record.id
-        if porf_ids is not None and seq_id not in porf_ids:
+        if requested_ids is not None and seq_id not in requested_ids:
             continue
         sequences[seq_id] = str(record.seq)
     return sequences
@@ -515,7 +554,7 @@ def classify_proteins(
     interproscan_domains: dict[str, int] | None = None,
     hmm_domain_counts: dict[str, int] | None = None,
     tmvec_results: dict[str, tuple[float, str, float, str]] | None = None,
-    foldseek_results: dict[str, tuple[bool, bool, str]] | None = None,
+    foldseek_results: dict[str, tuple[bool, bool, bool, str, bool]] | None = None,
 ) -> list[JellyRollClassification]:
     """
     Classify all MCP proteins using multi-signal approach.
@@ -528,21 +567,66 @@ def classify_proteins(
     tmvec_results = tmvec_results or {}
     foldseek_results = foldseek_results or {}
 
+    foldseek_by_base = {}
+    if foldseek_results:
+        bases_by_alias: dict[str, set[str]] = defaultdict(set)
+        for hit_id in marker_hits:
+            hit_base_id = extract_base_porf_id(hit_id)
+            for raw_id in (hit_id, hit_base_id):
+                for alias in (raw_id, safe_filename_component(raw_id)):
+                    bases_by_alias[alias].add(hit_base_id)
+        for query, hit in foldseek_results.items():
+            model_id = re.sub(r"_model(?:_[0-9]+)?$", "", query)
+            matching_bases = bases_by_alias.get(query, set()) | bases_by_alias.get(model_id, set())
+            if len(matching_bases) == 1:
+                foldseek_by_base.setdefault(next(iter(matching_bases)), hit)
+            elif matching_bases:
+                logger.warning("Ignoring ambiguous Foldseek query name: %s", query)
+
+    validation_by_base: dict[str, str] = {}
+    validated_mcp_base_ids: set[str] = set()
+    hk97_validated_base_ids: set[str] = set()
+    for hit_id, (hit_marker, hit_status) in marker_hits.items():
+        hit_base_id = extract_base_porf_id(hit_id)
+        if (
+            hit_status.lower() in {"validated", "validated_novel"}
+            and is_mcp_marker(hit_marker)
+        ):
+            validated_mcp_base_ids.add(hit_base_id)
+        if (
+            hit_status.lower() in {"validated", "validated_novel"}
+            and is_hk97_marker(hit_marker)
+        ):
+            hk97_validated_base_ids.add(hit_base_id)
+        prior_status = validation_by_base.get(hit_base_id, "")
+        if not prior_status or (
+            hit_status.lower() in {"validated", "validated_novel"}
+            and prior_status.lower() not in {"validated", "validated_novel"}
+        ):
+            validation_by_base[hit_base_id] = hit_status
+
     for porf_id, (marker, status) in marker_hits.items():
         base_id = extract_base_porf_id(porf_id)
         if base_id in processed_ids:
             continue
 
-        sequence = sequences.get(porf_id) or sequences.get(base_id)
+        sequence = sequences.get(porf_id)
+        used_base_sequence = False
+        if not sequence:
+            sequence = sequences.get(base_id)
+            used_base_sequence = base_id != porf_id
         if not sequence:
             logger.debug(f"Sequence not found for {porf_id}")
             continue
 
-        domain_length = len(sequence)
-        estimated_length = estimate_full_protein_length(porf_id, domain_length)
+        protein_length = (
+            len(sequence)
+            if used_base_sequence
+            else estimate_full_protein_length(porf_id, len(sequence))
+        )
 
         # Build classification signals
-        signals = ClassificationSignals(length=estimated_length)
+        signals = ClassificationSignals(length=protein_length)
 
         # Signal 1: InterProScan domains
         for lookup_id in [porf_id, base_id]:
@@ -572,28 +656,44 @@ def classify_proteins(
                     signals.evidence_sources.append("tmvec")
                 break
 
-        # Signal 4: FoldSeek results (look for protein in Boltz model names)
-        for query, (is_djr, is_sjr, top_hit) in foldseek_results.items():
-            if base_id in query or porf_id in query:
-                signals.foldseek_hit_is_djr = is_djr
-                signals.foldseek_hit_is_sjr = is_sjr
-                signals.foldseek_top_hit = top_hit
-                if is_djr or is_sjr:
-                    signals.evidence_sources.append("foldseek")
-                break
+        # Signal 4: Use only whole query names that resolve to one base protein.
+        if base_id in foldseek_by_base:
+            is_djr, is_sjr, is_hk97, top_hit, quality_supported = foldseek_by_base[base_id]
+            signals.foldseek_hit_is_djr = is_djr
+            signals.foldseek_hit_is_sjr = is_sjr
+            signals.foldseek_hit_is_hk97 = is_hk97
+            signals.foldseek_hit_is_supported = quality_supported
+            signals.foldseek_top_hit = top_hit
+            if is_djr or is_sjr or is_hk97:
+                signals.evidence_sources.append("foldseek")
 
-        # Classify using multi-signal approach
-        jelly_roll_type, confidence, evidence = classify_with_signals(signals, marker)
+        validation_status = validation_by_base.get(base_id, status)
+        if base_id in validated_mcp_base_ids:
+            mcp_support = "sequence_supported"
+        elif signals.foldseek_hit_is_supported:
+            mcp_support = "structure_supported"
+        else:
+            mcp_support = "candidate"
+
+        # Support applies to the base protein. Marker-family inference still
+        # needs a validated hit from that family. Keep the first query ID and marker in output.
+        jelly_roll_type, confidence, evidence = classify_with_signals(
+            signals,
+            marker,
+            base_id in hk97_validated_base_ids,
+        )
 
         classifications.append(
             JellyRollClassification(
                 protein_id=porf_id,
                 jelly_roll_type=jelly_roll_type,
                 confidence=confidence,
-                length=estimated_length,
+                length=protein_length,
                 marker=marker,
                 evidence=evidence,
                 sequence=sequence,
+                mcp_support=mcp_support,
+                validation_status=validation_status,
             )
         )
         processed_ids.add(base_id)
@@ -609,7 +709,18 @@ def write_results(
 
     with output_path.open("w") as f:
         writer = csv.writer(f, delimiter="\t")
-        writer.writerow(["protein_id", "type", "confidence", "length", "marker", "evidence"])
+        writer.writerow(
+            [
+                "protein_id",
+                "type",
+                "confidence",
+                "length",
+                "marker",
+                "evidence",
+                "mcp_support",
+                "validation_status",
+            ]
+        )
 
         for c in classifications:
             writer.writerow(
@@ -620,6 +731,8 @@ def write_results(
                     c.length,
                     c.marker,
                     c.evidence,
+                    c.mcp_support,
+                    c.validation_status,
                 ]
             )
 
@@ -628,7 +741,7 @@ def write_results(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Classify MCP sequences as DJR or SJR using multi-signal approach.",
+        description="Classify MCP candidates by capsid fold and support.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example:
@@ -655,7 +768,7 @@ Example:
         "--output",
         type=Path,
         required=True,
-        help="Output TSV file path for jelly roll classifications",
+        help="Output TSV file path for capsid-fold classifications and MCP support",
     )
     parser.add_argument(
         "--interproscan",
@@ -733,7 +846,10 @@ Example:
         foldseek_results = load_foldseek_results(args.foldseek)
         djr_hits = sum(1 for r in foldseek_results.values() if r[0])
         sjr_hits = sum(1 for r in foldseek_results.values() if r[1])
-        logger.info(f"Found {djr_hits} DJR and {sjr_hits} SJR structural hits")
+        hk97_hits = sum(1 for r in foldseek_results.values() if r[2])
+        logger.info(
+            f"Found {djr_hits} DJR, {sjr_hits} SJR, and {hk97_hits} HK97 structural hits"
+        )
 
     # Load sequences
     logger.info(f"Loading sequences from {args.sequences}")
@@ -756,11 +872,13 @@ Example:
     # Print summary
     djr_count = sum(1 for c in classifications if c.jelly_roll_type == "DJR")
     sjr_count = sum(1 for c in classifications if c.jelly_roll_type == "SJR")
+    hk97_count = sum(1 for c in classifications if c.jelly_roll_type == "HK97")
     unknown_count = sum(1 for c in classifications if c.jelly_roll_type == "UNKNOWN")
 
     logger.info("Classification summary:")
     logger.info(f"  DJR (Double Jelly Roll): {djr_count}")
     logger.info(f"  SJR (Single Jelly Roll): {sjr_count}")
+    logger.info(f"  HK97: {hk97_count}")
     logger.info(f"  UNKNOWN: {unknown_count}")
 
     if classifications:
@@ -789,7 +907,17 @@ Example:
         with extended_output.open("w") as f:
             writer = csv.writer(f, delimiter="\t")
             writer.writerow(
-                ["protein_id", "type", "confidence", "length", "marker", "evidence", "sequence"]
+                [
+                    "protein_id",
+                    "type",
+                    "confidence",
+                    "length",
+                    "marker",
+                    "evidence",
+                    "sequence",
+                    "mcp_support",
+                    "validation_status",
+                ]
             )
             for c in classifications:
                 writer.writerow(
@@ -801,6 +929,8 @@ Example:
                         c.marker,
                         c.evidence,
                         c.sequence,
+                        c.mcp_support,
+                        c.validation_status,
                     ]
                 )
         logger.info(f"Wrote extended output with sequences to {extended_output}")

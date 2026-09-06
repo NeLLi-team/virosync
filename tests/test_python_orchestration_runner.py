@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -477,6 +478,42 @@ def test_batch_progress_is_monotonic_and_finishes_failed_queries() -> None:
     ]
     assert "2/2 genomes" in lines[-1]
     assert lines[-1].endswith("finished with failures")
+
+
+def test_batch_progress_tty_line_never_exceeds_terminal_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrapped line breaks the in-place redraw, so it must stay inside the width."""
+    columns = 80
+    monkeypatch.setattr(
+        python_runner.shutil,
+        "get_terminal_size",
+        lambda fallback=(100, 20): os.terminal_size((columns, 20)),
+    )
+    stream = io.StringIO()
+    progress = python_runner.BatchProgress(
+        1,
+        stream=stream,
+        is_tty=True,
+        unit="resource set",
+    )
+
+    for percent in range(0, 101, 5):
+        progress.update(
+            "resources",
+            percent,
+            f"downloading core resources ({percent}%)",
+        )
+    progress.finish(True)
+
+    rendered = [
+        segment.replace("\x1b[K", "")
+        for segment in stream.getvalue().split("\r")
+        if segment.strip()
+    ]
+    assert rendered, "expected at least one rendered bar"
+    assert max(len(segment.rstrip("\n")) for segment in rendered) <= columns - 1
+    assert rendered[-1].startswith("Progress: [")
 
 
 def test_batch_outputs_fail_offsetting_per_genome_class_mismatches(

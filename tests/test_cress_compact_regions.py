@@ -305,6 +305,7 @@ def test_post_taxonomy_merge_preserves_cress_boundary() -> None:
     observed = merge_adjacent_viral_boundaries(
         boundaries,
         taxonomy_map={},
+        proteome_index={},
     )
 
     assert [

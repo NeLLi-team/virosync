@@ -28,6 +28,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     SeedGeneMapping,
     VIRAL_PREFIXES,
     has_identity_qualified_viral_hit,
+    missing_boundary_taxonomy_ids,
     pORF,
 )
 from virosync.pipeline.taxonomy_utils import calculate_fingerprint_overlap, compute_hit_weight
@@ -111,8 +112,9 @@ def extend_seeds_by_genes(
                 last_idx + extension_genes,
             )
 
-            new_start = scaffold_porfs[ext_first].start
-            new_end = scaffold_porfs[ext_last].end
+            selected_porfs = scaffold_porfs[ext_first : ext_last + 1]
+            new_start = selected_porfs[0].start
+            new_end = max(p.end for p in selected_porfs)
 
             extended_scaffold.append(replace(seed, start=new_start, end=new_end))
 
@@ -472,6 +474,7 @@ def annotate_boundaries_with_marker_floor(
 def merge_adjacent_viral_boundaries(
     boundaries: list[RefinedBoundary],
     taxonomy_map: dict,
+    proteome_index: dict[str, list[pORF]],
     max_gap_bp: int = 10000,
     min_viral_fraction: float = 0.3,
 ) -> list[RefinedBoundary]:
@@ -485,6 +488,7 @@ def merge_adjacent_viral_boundaries(
     Args:
         boundaries: List of RefinedBoundary objects (constrained)
         taxonomy_map: Dict mapping porf_id -> GeneTaxonomy from Phase 2b
+        proteome_index: Scaffold -> sorted list of all pORFs
         max_gap_bp: Maximum gap between boundaries to consider merging (bp)
         min_viral_fraction: Minimum fraction of gap genes that must be viral
 
@@ -525,6 +529,15 @@ def merge_adjacent_viral_boundaries(
             ) != (
                 "frameshift_rescue" in next_sources
             )
+            merged_start = min(current.start, next_boundary.start)
+            merged_end = max(current.end, next_boundary.end)
+            taxonomy_complete = not missing_boundary_taxonomy_ids(
+                scaffold=scaffold,
+                start=merged_start,
+                end=merged_end,
+                taxonomy_map=taxonomy_map,
+                proteome_index=proteome_index,
+            )
 
             # Strictly overlapping same-provenance boundaries merge. Touching
             # half-open intervals continue through the evidence-aware gap path.
@@ -532,6 +545,7 @@ def merge_adjacent_viral_boundaries(
                 gap_end < gap_start
                 and not cress_in_pair
                 and not mixed_rescue_pair
+                and taxonomy_complete
             ):
                 from dataclasses import replace
 
@@ -562,6 +576,9 @@ def merge_adjacent_viral_boundaries(
                 current = replace(
                     current,
                     end=max(current.end, next_boundary.end),
+                    original_start=min(
+                        current.original_start, next_boundary.original_start
+                    ),
                     original_end=max(
                         current.original_end, next_boundary.original_end
                     ),
@@ -578,6 +595,7 @@ def merge_adjacent_viral_boundaries(
             if (
                 not cress_in_pair
                 and not mixed_rescue_pair
+                and taxonomy_complete
                 and gap_end - gap_start <= max_gap_bp
             ):
                 # Find genes in the gap and check their taxonomy
@@ -680,8 +698,13 @@ def merge_adjacent_viral_boundaries(
 
                     current = replace(
                         current,
-                        end=next_boundary.end,
-                        original_end=next_boundary.original_end,
+                        end=max(current.end, next_boundary.end),
+                        original_start=min(
+                            current.original_start, next_boundary.original_start
+                        ),
+                        original_end=max(
+                            current.original_end, next_boundary.original_end
+                        ),
                         confidence=max(current.confidence, next_boundary.confidence),
                         region_classification_ncldv_markers=combined_ncldv,
                         region_classification_vp_plv_markers=combined_vp_plv,

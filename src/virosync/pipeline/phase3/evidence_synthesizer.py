@@ -1,12 +1,12 @@
 """
 Evidence Synthesizer for EVE Verification.
 
-Implements the Gated Escalation Logic that routes predictions through
-validation pathways based on confidence levels:
+Combines all enabled evidence for each candidate, then assigns one of the
+default confidence tiers:
 
-- High confidence (P > 0.95): Accept directly
-- Low confidence (P < 0.60): Reject as noise
-- Ambiguous (0.60 ≤ P ≤ 0.95): Send to tie-breaker modules
+- HIGH: score >= 0.70
+- MEDIUM: 0.20 <= score < 0.70
+- LOW: score < 0.20
 
 Tie-breaker modules include:
 - Structural homology (Boltz + FoldSeek, optional)
@@ -740,17 +740,17 @@ def _confidence_tier_for_score(score: float, *, high: float, low: float) -> str:
 
 
 def assign_confidence_tier(result: "VerificationResult", high: float = 0.7, low: float = 0.2) -> str:
-    """Assign confidence tier based on final confidence score.
+    """Assign a tier from the final rule-based score, not a probability.
 
     Tiers:
-      - HIGH: confidence >= high - high probability of true EVE
-      - MEDIUM: low <= confidence < high - moderate evidence, needs validation
-      - LOW: confidence < low - weak evidence, likely false positive
+      - HIGH: confidence >= high
+      - MEDIUM: low <= confidence < high
+      - LOW: confidence < low
 
     Args:
         result: VerificationResult with final_confidence set
-        high: Threshold for HIGH tier (default 0.8)
-        low: Threshold for MEDIUM tier (default 0.4)
+        high: Threshold for HIGH tier (default 0.7)
+        low: Threshold for MEDIUM tier (default 0.2)
 
     Returns:
         Tier string: "HIGH", "MEDIUM", or "LOW"
@@ -1114,9 +1114,11 @@ class VerificationResult:
     interproscan_numt_markers: list[str] = field(default_factory=list)
     numt_flag: str = "NONE"  # NONE/DETECTED
 
-    # Jelly roll (DJR/SJR) MCP classification
+    # Capsid-fold and MCP-support classification
     jelly_roll_djr_count: int = 0  # Number of DJR-classified MCP proteins
     jelly_roll_sjr_count: int = 0  # Number of SJR-classified MCP proteins
+    jelly_roll_hk97_count: int = 0  # Number of HK97-classified MCP proteins
+    jelly_roll_supported_mcp_count: int = 0  # Number of sequence- or structure-supported MCPs
     jelly_roll_total_mcp: int = 0  # Total MCP proteins classified
     jelly_roll_avg_confidence: float = 0.0  # Average classification confidence
     jelly_roll_confidence_bonus: float = 0.0  # Confidence bonus from validated DJR
@@ -1266,6 +1268,8 @@ class VerificationResult:
             "interproscan_category_score": self.interproscan_category_score,
             "jelly_roll_djr_count": self.jelly_roll_djr_count,
             "jelly_roll_sjr_count": self.jelly_roll_sjr_count,
+            "jelly_roll_hk97_count": self.jelly_roll_hk97_count,
+            "jelly_roll_supported_mcp_count": self.jelly_roll_supported_mcp_count,
             "jelly_roll_total_mcp": self.jelly_roll_total_mcp,
             "jelly_roll_avg_confidence": self.jelly_roll_avg_confidence,
             "jelly_roll_confidence_bonus": self.jelly_roll_confidence_bonus,
@@ -1358,7 +1362,7 @@ class EvidenceSynthesizerConfig:
 
 def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
     """
-    Load jelly roll classification data from TSV file.
+    Load capsid-fold and MCP-support data from a TSV file.
 
     Returns a dict mapping pORF base IDs (without domain suffixes) to classification records.
 
@@ -1375,6 +1379,11 @@ def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
     try:
         with open(jelly_roll_path) as f:
             reader = csv.DictReader(f, delimiter="\t")
+            if "mcp_support" not in (reader.fieldnames or []):
+                logger.info(
+                    "Jelly roll TSV has no mcp_support column; treating all records as candidates: %s",
+                    jelly_roll_path,
+                )
             for row in reader:
                 # Support both historical and current output schemas:
                 # - porf_id/classification
@@ -1398,6 +1407,8 @@ def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
                     "classification": classification,
                     "confidence": confidence,
                     "evidence": row.get("evidence", ""),
+                    "mcp_support": row.get("mcp_support") or "candidate",
+                    "validation_status": row.get("validation_status") or "",
                 }
                 if base_id not in results:
                     results[base_id] = []
@@ -1462,15 +1473,22 @@ def calculate_eve_confidence(
 
     Implements Step 10 confidence formula from PIPELINE_HMM_GATED_PLAN.md:
 
-    Score Components:
-    - Marker score (0.30): Based on marker types and counts
-    - Composition score (0.20): Deviation from genome background
-    - Gene taxonomy bonus (0.20): Viral (NCLDV/MIRUS/VP/PLV) genes in region
-    - Structural score (0.15): TMVec structural similarity
-    - Optional boundary confidence (0.15): legacy Phase 2 confidence signal
+    Normalized weighted base components:
+    - Marker score (0.24): Based on marker types and counts
+    - Composition score (0.18): Deviation from genome background
+    - Gene taxonomy score (0.24): Viral genes in the region
+    - InterProScan score (0.08): Viral-domain support
+    - Seed-cluster score (0.08): Same-family marker support
+    - Optional boundary confidence (0.18): Legacy Phase 2 confidence signal
+
+    Active base weights are normalized. Structural evidence contributes a
+    separate additive term of at most 0.15 before penalties, bonuses, caps,
+    and configured priority-marker floors are applied.
 
     Penalties:
-    - High-identity EUK (max -0.30): Fraction of genes with >=70% EUK identity
+    - High-identity EUK (max -0.12): Fraction of genes with >=70% EUK identity
+    - Host-signature excess (max -0.18)
+    - Small non-MCP region (max -0.15)
 
     Args:
         result: VerificationResult with all evidence populated
@@ -2469,11 +2487,15 @@ class EvidenceSynthesizer:
         result: VerificationResult,
         jelly_roll_summary: Optional[dict],
     ) -> None:
-        """Apply per-boundary DJR/SJR MCP summary before confidence scoring."""
+        """Apply capsid-fold and MCP-support data before confidence scoring."""
         if not jelly_roll_summary:
             return
         result.jelly_roll_djr_count = int(jelly_roll_summary.get("djr_count", 0) or 0)
         result.jelly_roll_sjr_count = int(jelly_roll_summary.get("sjr_count", 0) or 0)
+        result.jelly_roll_hk97_count = int(jelly_roll_summary.get("hk97_count", 0) or 0)
+        result.jelly_roll_supported_mcp_count = int(
+            jelly_roll_summary.get("supported_mcp_count", 0) or 0
+        )
         result.jelly_roll_total_mcp = int(jelly_roll_summary.get("total_mcp", 0) or 0)
         result.jelly_roll_avg_confidence = float(jelly_roll_summary.get("avg_confidence", 0.0) or 0.0)
         result.jelly_roll_confidence_bonus = float(
@@ -2481,7 +2503,7 @@ class EvidenceSynthesizer:
         )
         proteins = jelly_roll_summary.get("mcp_proteins", [])
         result.jelly_roll_mcp_proteins = proteins if isinstance(proteins, list) else []
-        if result.jelly_roll_total_mcp > 0:
+        if result.jelly_roll_supported_mcp_count > 0:
             result.has_mcp = True
 
     def _run_tmvec_database_scan(
@@ -2833,78 +2855,30 @@ class EvidenceSynthesizer:
                 result.likely_family = infer_likely_family(result)
                 return result
 
-        # Override decisions
-        if (
+        # Override routing. All routes use the same configured score and
+        # post-score policy; the route only changes provenance logging.
+        marker_taxonomy_override = (
             (result.gene_taxonomy_has_ncldv_mirus or result.gene_taxonomy_has_vp_plv)
             and result.hallmark_count >= 2
             and refined_boundary.confidence >= 0.15
-        ):
+        )
+        mcp_override = not marker_taxonomy_override and should_accept_mcp_override(result)
+        if marker_taxonomy_override or mcp_override:
             # Defensive: ensure gene_count is synced with gene_taxonomy_total
             if result.gene_count == 0 and result.gene_taxonomy_total > 0:
                 result.gene_count = result.gene_taxonomy_total
 
-            result.final_confidence = calculate_eve_confidence(
-                result=result,
-                crf_confidence=refined_boundary.confidence,
-                tmvec_score=None,
-                host_signature_score_threshold=self.config.host_signature_score_threshold,
-                ablation_id=self.config.ablation_id,
-                high_tier_threshold=self.config.high_tier_threshold,
-                low_tier_threshold=self.config.low_tier_threshold,
-            )
-            result.confidence_tier = assign_confidence_tier(
-                result,
-                high=self.config.high_tier_threshold,
-                low=self.config.low_tier_threshold,
-            )
-
-            # Sync status with confidence_tier
-            if result.confidence_tier == "HIGH":
-                result.status = VerificationStatus.HIGH_CONFIDENCE
-            elif result.confidence_tier == "MEDIUM":
-                result.status = VerificationStatus.MEDIUM_CONFIDENCE
+            self._calculate_final_decision(result, refined_boundary, has_hhg_evidence)
+            if marker_taxonomy_override:
+                logger.info(
+                    f"{result.eve_id}: {result.confidence_tier} confidence via marker+taxonomy override "
+                    f"(markers={result.hallmark_count}, ncldv_mirus={result.gene_taxonomy_ncldv_top10}, genes={result.gene_count}, score={result.final_confidence:.3f})"
+                )
             else:
-                result.status = VerificationStatus.LOW_CONFIDENCE_TIEBREAKER
-
-            logger.info(
-                f"{result.eve_id}: {result.confidence_tier} confidence via marker+taxonomy override "
-                f"(markers={result.hallmark_count}, ncldv_mirus={result.gene_taxonomy_ncldv_top10}, genes={result.gene_count}, score={result.final_confidence:.3f})"
-            )
-            result.likely_family = infer_likely_family(result)
-            return result
-
-        if should_accept_mcp_override(result):
-            # Defensive: ensure gene_count is synced with gene_taxonomy_total
-            if result.gene_count == 0 and result.gene_taxonomy_total > 0:
-                result.gene_count = result.gene_taxonomy_total
-
-            result.final_confidence = calculate_eve_confidence(
-                result=result,
-                crf_confidence=refined_boundary.confidence,
-                tmvec_score=None,
-                host_signature_score_threshold=self.config.host_signature_score_threshold,
-                ablation_id=self.config.ablation_id,
-                high_tier_threshold=self.config.high_tier_threshold,
-                low_tier_threshold=self.config.low_tier_threshold,
-            )
-            result.confidence_tier = assign_confidence_tier(
-                result,
-                high=self.config.high_tier_threshold,
-                low=self.config.low_tier_threshold,
-            )
-
-            # Sync status with confidence_tier
-            if result.confidence_tier == "HIGH":
-                result.status = VerificationStatus.HIGH_CONFIDENCE
-            elif result.confidence_tier == "MEDIUM":
-                result.status = VerificationStatus.MEDIUM_CONFIDENCE
-            else:
-                result.status = VerificationStatus.LOW_CONFIDENCE_TIEBREAKER
-
-            logger.info(
-                f"{result.eve_id}: {result.confidence_tier} confidence via MCP override "
-                f"(markers={result.hallmark_count}, mcp={result.has_mcp}, genes={result.gene_count}, score={result.final_confidence:.3f})"
-            )
+                logger.info(
+                    f"{result.eve_id}: {result.confidence_tier} confidence via MCP override "
+                    f"(markers={result.hallmark_count}, mcp={result.has_mcp}, genes={result.gene_count}, score={result.final_confidence:.3f})"
+                )
             result.likely_family = infer_likely_family(result)
             return result
 

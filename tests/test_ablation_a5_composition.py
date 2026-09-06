@@ -13,6 +13,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
     VerificationResult,
+    VerificationStatus,
     assign_confidence_tier,
     calculate_eve_confidence,
     evaluate_composition_ablation_effect,
@@ -258,21 +259,40 @@ def _configure_override_path(result: VerificationResult, path: str) -> None:
     if path == "marker_taxonomy":
         result.gene_taxonomy_has_ncldv_mirus = True
         result.hallmark_count = 2
+        result.region_classification = "NCLDV"
+        result.region_classification_ncldv_markers = 1
+        result.region_classification_mirus_markers = 1
     elif path == "mcp":
         result.has_mcp = True
         result.hallmark_count = 1
-    elif path != "final":
+        result.region_classification = "NCLDV"
+        result.region_classification_ncldv_markers = 1
+    elif path == "final":
+        result.hallmark_count = 1
+    else:
         raise AssertionError(f"unknown test path: {path}")
 
 
 @pytest.mark.parametrize("path", ["marker_taxonomy", "mcp", "final"])
-def test_a5_reaches_all_three_scoring_paths(
+def test_configured_scoring_reaches_all_three_routes(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
 ) -> None:
     result = _candidate()
     _configure_override_path(result, path)
-    synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig(ablation_id=AblationID.A5))
+    result.hallmark_genes = ["polb"]
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(
+            ablation_id=AblationID.A5,
+            use_crf_in_final_score=True,
+            priority_marker_list=["polb"],
+            marker_floor_priority_only=0.21,
+            marker_floor_priority_plus_family=0.61,
+            marker_floor_priority_multi_family=0.91,
+            marker_family_bonus_per_family=0.11,
+            marker_multi_family_bonus=0.17,
+        )
+    )
     boundary = RefinedBoundary(
         scaffold="scaffold",
         start=0,
@@ -286,6 +306,7 @@ def test_a5_reaches_all_three_scoring_paths(
         "_detect_contig_edge",
         "_process_hallmark_hits",
         "_process_gene_taxonomy",
+        "_assign_taxonomy_class",
         "_process_interproscan",
         "_apply_jelly_roll_summary",
         "_run_tiebreakers",
@@ -296,9 +317,33 @@ def test_a5_reaches_all_three_scoring_paths(
 
     assert observed is result
     assert observed.ablation_id is AblationID.A5
+    assert observed.score_components["weights"]["crf"] == pytest.approx(0.18)
     assert observed.score_components["weights"]["composition"] == 0.0
-    assert observed.score_components["composition_bonus"] == 0.0
+    assert observed.score_components["priority_marker_active"] is True
+    expected_floor = {"marker_taxonomy": 0.91, "mcp": 0.61, "final": 0.21}[path]
+    assert observed.score_components["priority_floor"] == pytest.approx(expected_floor)
+    expected_bonus = {"marker_taxonomy": 0.25, "mcp": 0.24, "final": 0.08}[path]
+    assert observed.score_components["bonus_total"] == pytest.approx(expected_bonus)
+    expected_confidence = {
+        "marker_taxonomy": 0.91,
+        "mcp": 0.6870731707317074,
+        "final": 0.38073170731707323,
+    }[path]
+    assert observed.final_confidence == pytest.approx(expected_confidence)
+    expected_tier = "HIGH" if path == "marker_taxonomy" else "MEDIUM"
+    assert observed.confidence_tier == expected_tier
+    expected_status = (
+        VerificationStatus.HIGH_CONFIDENCE
+        if path == "marker_taxonomy"
+        else VerificationStatus.MEDIUM_CONFIDENCE
+    )
+    assert observed.status is expected_status
+    assert observed.likely_family == ("UNKNOWN" if path == "final" else "NCLDV")
     assert observed.composition_ablation_effect.interventions == 1
+    assert observed.composition_ablation_effect.reference_confidence is not None
+    assert observed.composition_ablation_effect.selected_confidence == pytest.approx(
+        expected_confidence
+    )
 
 
 def test_config_requires_the_single_ablation_enum() -> None:

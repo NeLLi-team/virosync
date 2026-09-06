@@ -1,9 +1,9 @@
 """Per-genome ANI clustering of accepted EVEs, with MCP class propagation.
 
-Accepted regions are compared all-vs-all with skani. Regions that cluster are
-the same integrated element seen more than once in one genome, so an MCP-bearing
-member's taxonomy class names the class of MCP-free members that carry no
-diagnostic capsid of their own.
+Accepted regions are compared all-vs-all with skani. Connected components
+group regions with qualifying sequence matches. An eligible MCP-bearing
+member can supply the class of a non-donor. This rule does not prove that
+every member is a copy of the same element or directly matches the donor.
 
 Clustering itself only rewrites ``taxonomy_class``; ``clustering_bonus`` stays
 0.0 because confidence scoring already ran. Publishing decisions live in
@@ -104,11 +104,10 @@ def unsupported_eve_ids(accepted_results: list) -> set[str]:
 
     An EVE reaches ``UNKNOWN`` only when it carries no validated marker and no
     gene of its own returned an identity-qualified viral hit in the all-gene
-    search. Nothing in it is viral, so it is most likely host sequence that the
-    length rule admitted.
+    search. The absence of such evidence does not establish cellular origin.
 
-    ANI rescues it: sharing a cluster with a marker-bearing EVE makes it another
-    copy of a real element whose own copy has simply decayed past recognition.
+    The pipeline retains it if it shares a cluster with a marker-bearing EVE.
+    This is a rescue rule, not proof of viral origin or sequence decay.
 
     Call after :func:`cluster_accepted_eves`, which populates ``cluster_id``.
     Unlike everything else in this module this changes which EVEs are published,

@@ -33,6 +33,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
     get_flanking_taxonomy,
     build_gene_taxonomy_record,
+    missing_boundary_taxonomy_ids,
 )
 from virosync.orchestration.utils import get_genes_for_boundary
 
@@ -102,6 +103,8 @@ def _query_boundary_coordinate_records(
     boundary,
     taxonomy_index: _ScaffoldStartIndex,
     marker_index: _ScaffoldStartIndex,
+    taxonomy_map: Optional[dict] = None,
+    proteome_index: Optional[dict] = None,
 ) -> tuple[list[object], list[object]]:
     """Return ordered taxonomy and marker overlaps for one boundary."""
 
@@ -110,6 +113,19 @@ def _query_boundary_coordinate_records(
         "start": boundary.start,
         "end": boundary.end,
     }
+    if taxonomy_map is not None and proteome_index is not None:
+        missing_ids = missing_boundary_taxonomy_ids(
+            **query,
+            taxonomy_map=taxonomy_map,
+            proteome_index=proteome_index,
+        )
+        if missing_ids:
+            raise RuntimeError(
+                "Phase 3 taxonomy coverage is incomplete for "
+                f"{boundary.scaffold}:{boundary.start}-{boundary.end}: "
+                f"{len(missing_ids)} overlapping genes were not searched"
+            )
+
     return (
         _query_scaffold_index(taxonomy_index, **query),
         _query_scaffold_index(marker_index, **query),
@@ -324,9 +340,8 @@ def _run_phase3_subflow(
         )
     elif merged_seeds:
         # Outside A3, Phase 2b is mandatory when seeds exist.
-        logger.error(
-            "Phase 3: No taxonomy data available! Phase 2b should have run. "
-            "Gene taxonomy scores will be unavailable."
+        raise RuntimeError(
+            "Phase 3 requires complete Phase 2b gene taxonomy when seeds exist"
         )
 
     if interproscan_enabled:
@@ -551,6 +566,8 @@ def _run_phase3_subflow(
             boundary=boundary,
             taxonomy_index=boundary_taxonomy_index,
             marker_index=validated_marker_index,
+            taxonomy_map=(boundary_taxonomy_map if use_precomputed_taxonomy else None),
+            proteome_index=(proteome_index if use_precomputed_taxonomy else None),
         )
 
         # Get gene taxonomy for this boundary
@@ -890,6 +907,12 @@ def _run_phase3_subflow(
 
     n_readmitted = 0
     if readmit_boundaries:
+        from .phase2 import _recalculate_boundary_composition
+
+        _recalculate_boundary_composition(
+            readmit_boundaries,
+            masked_path=masked_path,
+        )
         # Evidence parity is partial by construction. Hallmarks and Phase-2b gene
         # taxonomy are recomputed for the floored span, but InterProScan and TMVec
         # were precomputed for the ORIGINAL boundaries only, so proteins that the

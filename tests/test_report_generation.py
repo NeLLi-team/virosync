@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import csv
+from collections import Counter, defaultdict
+import json
 import os
+import re
 import struct
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import pandas as pd
 import pytest
 
@@ -407,6 +412,183 @@ def test_notebook_mcp_helper_matches_canonical_detector() -> None:
     assert [report_is_mcp_gene(name) for name in corpus] == [
         is_mcp_gene(name) for name in corpus
     ]
+
+
+def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    synthesis = tmp_path / "phase3_synthesis"
+    synthesis.mkdir()
+    (synthesis / "evidence_profiles.json").write_text(
+        json.dumps(
+            {
+                "EVE_contig_0-150": {
+                    "scaffold": "contig",
+                    "start": 0,
+                    "end": 150,
+                    "status": "accepted",
+                    "final_confidence": 0.9,
+                    "confidence_tier": "HIGH",
+                    "taxonomy_class": "NCLDV",
+                }
+            }
+        )
+    )
+    phase0 = tmp_path / "phase0"
+    phase0.mkdir()
+    phase0.joinpath("proteome.fasta").write_text(
+        "".join(
+            f">contig_{index} # {start} # {start + 29} # 1 # ID=contig_{index};partial=00\nM\n"
+            for index, start in enumerate(range(1, 151, 30), start=1)
+        )
+    )
+    synthesis.joinpath("virosync_jelly_roll_proteins.tsv").write_text(
+        "protein_id\ttype\tconfidence\tlength\tmarker\tevidence\t"
+        "mcp_support\tvalidation_status\n"
+        "contig_1|aa1-200\tHK97\t0.900\t200\tMirus_MCP\tmarker_family\t"
+        "structure_supported\tunvalidated\n"
+        "contig_2\tUNKNOWN\t0.000\t300\tMCP\tinsufficient_evidence\t"
+        "sequence_supported\tvalidated\n"
+        "contig_3\tDJR\t0.500\t410\tMCP\tlength\tcandidate\tunvalidated\n"
+        "contig_5\tSJR\t0.700\t300\tMCP\ttmvec:reference\n"
+    )
+    marker_dir = tmp_path / "phase1" / "marker_validation"
+    marker_dir.mkdir(parents=True)
+    marker_dir.joinpath("validated_marker_hits.tsv").write_text(
+        "query_porf\thmm_target\tvalidation_status\n"
+        "contig_4\tMCP\tvalidated_novel\n"
+        "contig_3\tMCP\tunvalidated\n"
+    )
+
+    helper_namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_helper_cell(), helper_namespace)
+    namespace: dict[str, object] = {
+        "BASE": tmp_path,
+        "SYNTHESIS": synthesis,
+        "GENOME_ID": "demo",
+        "SHOW_TIERS": ["HIGH"],
+        "json": json,
+        "pd": pd,
+        "defaultdict": defaultdict,
+        "re": re,
+        "csv": csv,
+        "_report_is_mcp_gene": helper_namespace["_report_is_mcp_gene"],
+    }
+    exec(_notebook_cell("# ---- Load data ----"), namespace)
+
+    assert namespace["mcp_porf_ids"] == {"contig_1", "contig_2", "contig_4"}
+    classifications = namespace["mcp_classification_map"]
+    assert classifications["contig_1"] == {
+        "type": "HK97",
+        "confidence": 0.9,
+        "mcp_support": "structure_supported",
+        "validation_status": "unvalidated",
+    }
+    assert classifications["contig_5"]["mcp_support"] == "candidate"
+
+    namespace.update(
+        {
+            "BOUNDARY_TAXONOMY": {
+                "contig_1": {"top1_prefix": "BAC", "top1_target": "bacterium"},
+                "contig_2": {"top1_prefix": "ARC", "top1_target": "archaeon"},
+                "contig_3": {"top1_prefix": "BAC", "top1_target": "bacterium"},
+                "contig_4": {"top1_prefix": "EUK", "top1_target": "other-eukaryote"},
+                "contig_5": {"top1_prefix": "ARC", "top1_target": "archaeon"},
+            },
+            "_report_viral_category": lambda _record: None,
+            "_canonical_viral_category": lambda _origin, _target: None,
+            "is_host_gene": lambda _target: False,
+            "FLANK_SIZE": 0,
+            "canon_family": lambda profile: profile["taxonomy_class"],
+        }
+    )
+    exec(_notebook_cell("def _make_gene_record(gene, region):"), namespace)
+
+    genes = {
+        gene["porf_id"]: gene
+        for gene in namespace["eve_genes_extended"]["EVE_contig_0-150"]["eve_genes"]
+    }
+    assert (genes["contig_1"]["is_mcp"], genes["contig_1"]["fold_type"]) == (
+        True,
+        "HK97",
+    )
+    assert (genes["contig_2"]["is_mcp"], genes["contig_2"]["fold_type"]) == (
+        True,
+        "UNKNOWN",
+    )
+    assert (genes["contig_3"]["is_mcp"], genes["contig_3"]["fold_type"]) == (
+        False,
+        "DJR",
+    )
+    assert (genes["contig_5"]["is_mcp"], genes["contig_5"]["fold_type"]) == (
+        False,
+        "SJR",
+    )
+    assert [genes[f"contig_{index}"]["category"] for index in range(1, 6)] == [
+        "BAC",
+        "ARC",
+        "BAC",
+        "EUK",
+        "ARC",
+    ]
+
+    namespace.update(
+        {
+            "plt": plt,
+            "mpatches": mpatches,
+            "Line2D": Line2D,
+            "Counter": Counter,
+            "COLORS": {
+                category: "#BBBBBB"
+                for category in (
+                    "PPV",
+                    "MIRUS",
+                    "NCLDV",
+                    "GVMAG",
+                    "PHAGE",
+                    "HOST",
+                    "EUK",
+                    "BAC",
+                    "ARC",
+                    "UNKNOWN",
+                )
+            },
+            "HOST_GENUS": "",
+        }
+    )
+    monkeypatch.setattr(plt, "savefig", lambda *args, **kwargs: None)
+    monkeypatch.setattr(plt, "show", lambda: None)
+    monkeypatch.setattr(plt, "tight_layout", lambda *args, **kwargs: None)
+    exec(
+        _notebook_cell("# ---- Gene Map: all canonical EVEs with colored flanking genes ----"),
+        namespace,
+    )
+
+    marker_lines = [
+        line for line in namespace["ax"].lines if line.get_marker() in {"o", "*"}
+    ]
+    circles = {
+        float(line.get_xdata()[0])
+        for line in marker_lines
+        if line.get_marker() == "o"
+    }
+    stars = {
+        float(line.get_xdata()[0]): line.get_markeredgecolor()
+        for line in marker_lines
+        if line.get_marker() == "*"
+    }
+    assert circles == {15.0, 45.0, 105.0}
+    assert stars == {15.0: "#CC3311", 75.0: "#000000", 135.0: "#0077BB"}
+    legend_labels = [
+        text.get_text() for text in namespace["ax"].get_legend().get_texts()
+    ]
+    assert "Supported MCP" in legend_labels
+    assert "HK97 fold classification" in legend_labels
+    assert "DJR fold classification" in legend_labels
+    assert "SJR fold classification" in legend_labels
+    assert not any("structural" in label.lower() for label in legend_labels)
+    plt.close(namespace["fig"])
 
 
 def test_notebook_taxonomy_resolver_matches_pipeline() -> None:

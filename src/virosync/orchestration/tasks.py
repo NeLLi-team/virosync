@@ -836,7 +836,7 @@ def _build_jelly_roll_summary_for_boundary(
     porf_sequences: list[tuple[str, str]],
     jelly_roll_map: Optional[dict[str, list[dict]]],
 ) -> Optional[dict]:
-    """Aggregate DJR/SJR evidence for a single boundary from classified MCP proteins."""
+    """Aggregate capsid-fold and MCP-support records for one boundary."""
     if not porf_sequences or not jelly_roll_map:
         return None
 
@@ -848,6 +848,8 @@ def _build_jelly_roll_summary_for_boundary(
                 classification = str(record.get("classification") or "UNKNOWN").upper()
                 evidence = str(record.get("evidence") or "")
                 marker = str(record.get("marker") or "")
+                mcp_support = str(record.get("mcp_support") or "candidate")
+                validation_status = str(record.get("validation_status") or "")
                 try:
                     confidence = float(record.get("confidence", 0.0))
                 except (TypeError, ValueError):
@@ -859,6 +861,8 @@ def _build_jelly_roll_summary_for_boundary(
                     "confidence": confidence,
                     "evidence": evidence,
                     "marker": marker,
+                    "mcp_support": mcp_support,
+                    "validation_status": validation_status,
                 }
                 prior = best_records.get(protein_id)
                 if prior is None or confidence > prior["confidence"]:
@@ -869,21 +873,35 @@ def _build_jelly_roll_summary_for_boundary(
 
     records = sorted(best_records.values(), key=lambda rec: rec["porf_id"])
     total_mcp = len(records)
-    djr_confidences = [r["confidence"] for r in records if r["classification"] == "DJR"]
+    supported_records = [
+        r
+        for r in records
+        if r["mcp_support"] in {"sequence_supported", "structure_supported"}
+    ]
+    supported_djr_confidences = [
+        r["confidence"] for r in supported_records if r["classification"] == "DJR"
+    ]
     sjr_count = sum(1 for r in records if r["classification"] == "SJR")
-    djr_count = len(djr_confidences)
+    djr_count = sum(1 for r in records if r["classification"] == "DJR")
+    hk97_count = sum(1 for r in records if r["classification"] == "HK97")
     avg_confidence = sum(r["confidence"] for r in records) / total_mcp
 
     confidence_bonus = 0.0
-    if djr_count > 0:
-        avg_djr_confidence = sum(djr_confidences) / djr_count
-        djr_fraction = djr_count / total_mcp
+    if supported_djr_confidences:
+        supported_djr_count = len(supported_djr_confidences)
+        avg_djr_confidence = sum(supported_djr_confidences) / supported_djr_count
+        djr_fraction = supported_djr_count / total_mcp
         # Moderate DJR-only contribution: strongest when all MCPs support DJR.
-        confidence_bonus = min(0.15, 0.05 * djr_count * avg_djr_confidence * djr_fraction)
+        confidence_bonus = min(
+            0.15,
+            0.05 * supported_djr_count * avg_djr_confidence * djr_fraction,
+        )
 
     return {
         "djr_count": djr_count,
         "sjr_count": sjr_count,
+        "hk97_count": hk97_count,
+        "supported_mcp_count": len(supported_records),
         "total_mcp": total_mcp,
         "avg_confidence": avg_confidence,
         "confidence_bonus": confidence_bonus,
@@ -1192,19 +1210,19 @@ def classify_jelly_roll_task(
     foldseek_results_path: Optional[Path] = None,
 ) -> Path:
     """
-    Classify MCP proteins as DJR (Double Jelly Roll) or SJR (Single Jelly Roll).
+    Classify MCP candidates by capsid fold and support.
 
-    Uses multi-signal classification approach:
-    1. InterProScan domain counting (highest confidence)
-    2. Multiple HMM domain hits detection
-    3. TMVec reference similarity
-    4. FoldSeek structural hits
-    5. Length heuristics (fallback)
+    InterProScan domain counts take priority, then quality-gated HK97
+    Foldseek hits. Other fold signals precede HK97 marker-family inference.
+    HK97-family candidates do not use generic HMM-count or length rules.
+
+    Phase 1 sequence validation or a quality-gated Foldseek capsid hit assigns
+    MCP support. Other records remain diagnostic candidates.
 
     Args:
         marker_hits_path: Path to validated_marker_hits.tsv from phase1
-        sequences_path: Path to hmm_hit_porfs.faa containing HMM-hit sequences
-        output_path: Output TSV file for jelly roll classifications
+        sequences_path: Path to hmm_hit_porfs.faa with full base-ID sequences or domain sequences from HMM hits
+        output_path: Output TSV file for capsid-fold classifications and MCP support
         interproscan_path: Optional path to InterProScan batch results
         tmvec_results_path: Optional path to TMVec results TSV
         foldseek_results_path: Optional path to FoldSeek results TSV
@@ -1295,7 +1313,12 @@ def classify_jelly_roll_task(
         # Log summary
         djr_count = sum(1 for c in classifications if c.jelly_roll_type == "DJR")
         sjr_count = sum(1 for c in classifications if c.jelly_roll_type == "SJR")
-        logger.info(f"Classified {len(classifications)} proteins: {djr_count} DJR, {sjr_count} SJR")
+        hk97_count = sum(1 for c in classifications if c.jelly_roll_type == "HK97")
+        unknown_count = sum(1 for c in classifications if c.jelly_roll_type == "UNKNOWN")
+        logger.info(
+            f"Classified {len(classifications)} proteins: {djr_count} DJR, "
+            f"{sjr_count} SJR, {hk97_count} HK97, {unknown_count} UNKNOWN"
+        )
 
         # Write results
         write_results(classifications, output_path)

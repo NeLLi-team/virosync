@@ -923,7 +923,11 @@ def test_merged_seed_sources_are_ordered_like_the_detailed_tsv_field() -> None:
         ),
     ]
 
-    merged = merge_adjacent_viral_boundaries(boundaries, taxonomy_map={})
+    merged = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map={},
+        proteome_index={},
+    )
 
     assert len(merged) == 1
     assert merged[0].seed_sources == ["compositional", "hhg", "marker", "novelty"]

@@ -110,10 +110,8 @@ class BatchProgress:
             and percent < self._last_percent + 10
         ):
             return
-        bar_width = max(
-            20,
-            min(40, shutil.get_terminal_size((100, 20)).columns - 70),
-        )
+        columns = shutil.get_terminal_size((100, 20)).columns
+        bar_width = max(20, min(40, columns - 70))
         filled = int(bar_width * percent / 100)
         bar = "#" * filled + "-" * (bar_width - filled)
         finished = min(
@@ -124,6 +122,11 @@ class BatchProgress:
             f"Progress: [{bar}] {percent:3d}% | "
             f"{finished}/{self.total_queries} {self.unit} | {self._label}"
         )
+        if self.is_tty:
+            # A line wider than the terminal wraps, and the carriage return then
+            # rewinds only to the start of the last visual row, so every update
+            # leaves the previous fragment on screen. Keep it inside the width.
+            output = output[: max(0, columns - 1)]
         if output == self._last_output:
             return
         if self.is_tty:

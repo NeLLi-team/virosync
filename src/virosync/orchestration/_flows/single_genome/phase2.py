@@ -56,10 +56,63 @@ def _sum_intervention_counts(
 
 def _seeds_to_refined_boundaries(
     merged_seeds: list,
+) -> list[RefinedBoundary]:
+    """Convert exact seed intervals to Phase-2 boundaries."""
+
+    return [
+        RefinedBoundary(
+            scaffold=seed.scaffold,
+            start=seed.start,
+            end=seed.end,
+            seed_id=seed.seed_id,
+            original_start=seed.start,
+            original_end=seed.end,
+            confidence=0.0,
+            posterior_probability=0.0,
+            seed_sources=list(seed.sources),
+            seed_confidence=seed.confidence,
+            seed_hhg_score=seed.hhg_score,
+            seed_novelty_score=seed.novelty_score,
+            seed_compositional_score=seed.compositional_score,
+            seed_has_mcp=seed.has_mcp,
+            gc_deviation=0.0,
+            cub_deviation=getattr(seed, "cub_deviation", 0.0),
+            max_kfd=0.0,
+            predicted_family=getattr(seed, "predicted_family", ""),
+            region_classification_ncldv_markers=getattr(
+                seed,
+                "region_classification_ncldv_markers",
+                0,
+            ),
+            region_classification_vp_plv_markers=getattr(
+                seed,
+                "region_classification_vp_plv_markers",
+                0,
+            ),
+            region_classification_mirus_markers=getattr(
+                seed,
+                "region_classification_mirus_markers",
+                0,
+            ),
+            candidate_start=getattr(seed, "host_trim_original_start", None),
+            candidate_end=getattr(seed, "host_trim_original_end", None),
+            host_trim_reason=getattr(seed, "host_trim_reason", ""),
+            host_trim_common_euk_taxonomy=getattr(
+                seed,
+                "host_trim_common_euk_taxonomy",
+                "",
+            ),
+        )
+        for seed in merged_seeds
+    ]
+
+
+def _recalculate_boundary_composition(
+    boundaries: list[RefinedBoundary],
     *,
     masked_path: Path,
-) -> list[RefinedBoundary]:
-    """Convert exact seed intervals while retaining composition audit fields."""
+) -> None:
+    """Set GC and k-mer deviations from each boundary's current coordinates."""
 
     from Bio import SeqIO
 
@@ -68,6 +121,9 @@ def _seeds_to_refined_boundaries(
         calculate_gc_deviation,
         calculate_kfd,
     )
+
+    if not boundaries:
+        return
 
     scaffold_index = SeqIO.index(str(masked_path), "fasta")
     try:
@@ -89,74 +145,24 @@ def _seeds_to_refined_boundaries(
             else None
         )
 
-        refined_boundaries = []
-        for seed in merged_seeds:
-            seed_gc_dev = getattr(seed, "gc_deviation", 0.0)
-            seed_kfd = 0.0
-            if (
-                bg_model is not None
-                and seed_gc_dev == 0.0
-                and seed.scaffold in scaffold_index
-            ):
-                scaffold_sequence = str(scaffold_index[seed.scaffold].seq)
-                region_sequence = scaffold_sequence[seed.start : seed.end]
-                if len(region_sequence) >= 100:
-                    seed_gc_dev = calculate_gc_deviation(
-                        region_sequence,
-                        bg_model.gc_content,
-                    )
-                    seed_kfd = calculate_kfd(
-                        region_sequence,
-                        bg_model.kmer_freqs,
-                        k=4,
-                    )
-
-            refined_boundaries.append(
-                RefinedBoundary(
-                    scaffold=seed.scaffold,
-                    start=seed.start,
-                    end=seed.end,
-                    seed_id=seed.seed_id,
-                    original_start=seed.start,
-                    original_end=seed.end,
-                    confidence=0.0,
-                    posterior_probability=0.0,
-                    seed_sources=list(seed.sources),
-                    seed_confidence=seed.confidence,
-                    seed_hhg_score=seed.hhg_score,
-                    seed_novelty_score=seed.novelty_score,
-                    seed_compositional_score=seed.compositional_score,
-                    seed_has_mcp=seed.has_mcp,
-                    gc_deviation=seed_gc_dev,
-                    cub_deviation=getattr(seed, "cub_deviation", 0.0),
-                    max_kfd=seed_kfd,
-                    predicted_family=getattr(seed, "predicted_family", ""),
-                    region_classification_ncldv_markers=getattr(
-                        seed,
-                        "region_classification_ncldv_markers",
-                        0,
-                    ),
-                    region_classification_vp_plv_markers=getattr(
-                        seed,
-                        "region_classification_vp_plv_markers",
-                        0,
-                    ),
-                    region_classification_mirus_markers=getattr(
-                        seed,
-                        "region_classification_mirus_markers",
-                        0,
-                    ),
-                    candidate_start=getattr(seed, "host_trim_original_start", None),
-                    candidate_end=getattr(seed, "host_trim_original_end", None),
-                    host_trim_reason=getattr(seed, "host_trim_reason", ""),
-                    host_trim_common_euk_taxonomy=getattr(
-                        seed,
-                        "host_trim_common_euk_taxonomy",
-                        "",
-                    ),
-                )
+        for boundary in boundaries:
+            boundary.gc_deviation = 0.0
+            boundary.max_kfd = 0.0
+            if bg_model is None or boundary.scaffold not in scaffold_index:
+                continue
+            scaffold_sequence = str(scaffold_index[boundary.scaffold].seq)
+            region_sequence = scaffold_sequence[boundary.start : boundary.end]
+            if len(region_sequence) < 100:
+                continue
+            boundary.gc_deviation = calculate_gc_deviation(
+                region_sequence,
+                bg_model.gc_content,
             )
-        return refined_boundaries
+            boundary.max_kfd = calculate_kfd(
+                region_sequence,
+                bg_model.kmer_freqs,
+                k=4,
+            )
     finally:
         scaffold_index.close()
 
@@ -315,8 +321,9 @@ def _run_phase2_subflow(
             len(merged_seeds),
         )
         proteome_index = build_proteome_index(proteome_path)
-        refined_boundaries = _seeds_to_refined_boundaries(
-            merged_seeds,
+        refined_boundaries = _seeds_to_refined_boundaries(merged_seeds)
+        _recalculate_boundary_composition(
+            refined_boundaries,
             masked_path=masked_path,
         )
         boundaries_bed_path = _write_phase2_checkpoints(
@@ -819,10 +826,7 @@ def _run_phase2_subflow(
     # Boundary confidence fields remain available for output compatibility.
 
     if merged_seeds:
-        refined_boundaries = _seeds_to_refined_boundaries(
-            merged_seeds,
-            masked_path=masked_path,
-        )
+        refined_boundaries = _seeds_to_refined_boundaries(merged_seeds)
         logger.info(
             "Phase 2: Converted %d gene-extended seeds to RefinedBoundary",
             len(refined_boundaries),
@@ -1010,6 +1014,7 @@ def _run_phase2_subflow(
         refined_boundaries = merge_adjacent_viral_boundaries(
             boundaries=refined_boundaries,
             taxonomy_map=boundary_taxonomy_map,
+            proteome_index=proteome_index,
             max_gap_bp=10000,  # Max 10kb gap to consider merging
             min_viral_fraction=0.3,  # At least 30% of gap genes must be viral
         )
@@ -1044,6 +1049,11 @@ def _run_phase2_subflow(
                 n_marker_floored,
                 len(refined_boundaries),
             )
+
+    _recalculate_boundary_composition(
+        refined_boundaries,
+        masked_path=masked_path,
+    )
 
     # Log region statistics with before/after comparison
     if refined_boundaries and merged_seeds:

@@ -14,6 +14,8 @@ from Bio.Seq import Seq
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
+    BoundaryDiamondConfig,
+    collect_query_proteins,
     filter_taxonomy_to_boundary,
     pORF,
 )
@@ -25,6 +27,15 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.orchestration._flows.single_genome.phase3 import (
     _build_scaffold_start_index,
     _query_boundary_coordinate_records,
+)
+from virosync.orchestration._flows.single_genome.phase2 import (
+    _recalculate_boundary_composition,
+    _seeds_to_refined_boundaries,
+)
+from virosync.features.compositional import (
+    BackgroundModel,
+    calculate_gc_deviation,
+    calculate_kfd,
 )
 
 
@@ -79,6 +90,27 @@ def test_phase3_boundary_indexes_match_ordered_half_open_scans() -> None:
 
     assert observed_taxonomy == expected_taxonomy
     assert observed_markers == expected_markers
+
+
+def test_phase3_rejects_partial_taxonomy_before_scoring() -> None:
+    boundary = SimpleNamespace(scaffold="scaffold", start=100, end=400)
+    searched = SimpleNamespace(scaffold="scaffold", start=100, end=180)
+    taxonomy_map = {"searched": searched}
+    proteome_index = {
+        "scaffold": [
+            pORF(id="searched", scaffold="scaffold", start=100, end=180),
+            pORF(id="unsearched", scaffold="scaffold", start=300, end=380),
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="1 overlapping genes were not searched"):
+        _query_boundary_coordinate_records(
+            boundary=boundary,
+            taxonomy_index=_build_scaffold_start_index(taxonomy_map.values()),
+            marker_index={},
+            taxonomy_map=taxonomy_map,
+            proteome_index=proteome_index,
+        )
 
 
 def _header(start: object, end: object, strand: object) -> str:
@@ -450,7 +482,11 @@ def test_touching_refined_boundaries_are_not_unconditional_overlaps() -> None:
         RefinedBoundary(scaffold="scaffold", start=10, end=20),
     ]
 
-    observed = merge_adjacent_viral_boundaries(boundaries, taxonomy_map={})
+    observed = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map={},
+        proteome_index={},
+    )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
         (0, 10),
@@ -474,7 +510,11 @@ def test_post_taxonomy_merge_keeps_overlapping_mixed_rescue_boundaries_separate(
         ),
     ]
 
-    observed = merge_adjacent_viral_boundaries(boundaries, taxonomy_map={})
+    observed = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map={},
+        proteome_index={},
+    )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
         (0, 20),
@@ -507,9 +547,254 @@ def test_post_taxonomy_merge_keeps_viral_gap_mixed_rescue_boundaries_separate() 
         )
     }
 
-    observed = merge_adjacent_viral_boundaries(boundaries, taxonomy_map)
+    observed = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map,
+        proteome_index={},
+    )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
         (0, 100),
         (200, 300),
     ]
+
+
+def test_nested_gene_end_sets_extension_and_taxonomy_flank_bound() -> None:
+    seed = MergedSeed(
+        scaffold="scaffold",
+        start=100,
+        end=3000,
+        seed_id="seed",
+    )
+    proteome_index = {
+        "scaffold": [
+            pORF(
+                id="outer",
+                scaffold="scaffold",
+                start=100,
+                end=3000,
+                strand="+",
+            ),
+            pORF(
+                id="nested",
+                scaffold="scaffold",
+                start=200,
+                end=400,
+                strand="-",
+            ),
+        ]
+    }
+
+    extended = extend_seeds_by_genes(
+        [seed],
+        proteome_index,
+        extension_genes=0,
+    )
+    query = collect_query_proteins(
+        [seed],
+        proteome_index,
+        BoundaryDiamondConfig(flank_genes=0, control_sample_size=0),
+    )
+
+    assert (extended[0].start, extended[0].end) == (100, 3000)
+    assert query.seed_gene_mappings[seed.seed_id].flank_end_bp == 3000
+
+
+def test_taxonomy_query_covers_fixed_flank_envelope_and_excludes_controls() -> None:
+    seed = MergedSeed(scaffold="s", start=1000, end=1100, seed_id="seed")
+    spans = [
+        ("left_touch", 0, 500),
+        ("left_overlap", 100, 600),
+        ("upstream", 500, 700),
+        ("outer_seed", 800, 1300),
+        ("interior_hole", 850, 900),
+        ("seed_gene", 1000, 1100),
+        ("downstream", 1200, 1400),
+        ("right_overlap", 1350, 1600),
+        ("right_touch", 1400, 1500),
+        ("outside", 1550, 1650),
+    ]
+    query = collect_query_proteins(
+        [seed],
+        {"s": [pORF(id=name, scaffold="s", start=start, end=end, strand="+")
+               for name, start, end in spans]},
+        BoundaryDiamondConfig(
+            flank_genes=1, control_sample_size=100,
+            control_min_distance=0, control_region_genes=1,
+        ),
+    )
+
+    assert query.eve_porf_ids["seed"] == ["outer_seed", "seed_gene"]
+    assert set(query.boundary_porf_ids["seed"]) == {
+        "left_overlap", "upstream", "interior_hole", "downstream", "right_overlap",
+    }
+    assert len(query.boundary_porf_ids["seed"]) == 5
+    assert set(query.control_porf_ids) == {"left_touch", "right_touch", "outside"}
+    assert len(query.all_porf_ids) == len(set(query.all_porf_ids)) == len(spans)
+    mapping = query.seed_gene_mappings["seed"]
+    assert (mapping.flank_start_bp, mapping.flank_end_bp) == (500, 1400)
+    assert (mapping.flank_start_idx, mapping.flank_end_idx) == (2, 6)
+    assert mapping.upstream_porf_ids == ["upstream"]
+    assert mapping.downstream_porf_ids == ["downstream"]
+    assert mapping.flank_genes_config == 1
+
+
+def test_overlap_merge_keeps_nested_interval_and_original_span_union() -> None:
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=100,
+            end=500,
+            original_start=300,
+            original_end=600,
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=200,
+            end=300,
+            original_start=50,
+            original_end=900,
+        ),
+    ]
+
+    observed = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map={},
+        proteome_index={},
+    )
+
+    assert len(observed) == 1
+    assert (observed[0].start, observed[0].end) == (100, 500)
+    assert (observed[0].original_start, observed[0].original_end) == (50, 900)
+
+
+def test_merge_requires_taxonomy_for_all_100_gene_interval_queries() -> None:
+    proteome = [
+        pORF(
+            id=f"gene_{index}",
+            scaffold="scaffold",
+            start=index * 100,
+            end=index * 100 + 80,
+        )
+        for index in range(100)
+    ]
+    boundaries = [
+        RefinedBoundary(scaffold="scaffold", start=1000, end=2000),
+        RefinedBoundary(scaffold="scaffold", start=7000, end=8000),
+    ]
+    searched_indices = set(range(0, 30)) | set(range(60, 90))
+    taxonomy_map = {
+        porf.id: SimpleNamespace(
+            scaffold=porf.scaffold,
+            start=porf.start,
+            end=porf.end,
+            has_ncldv_mirus=True,
+            has_vp_plv=False,
+        )
+        for index, porf in enumerate(proteome)
+        if index in searched_indices
+    }
+
+    observed = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map,
+        proteome_index={"scaffold": proteome},
+    )
+
+    assert len(observed) == 2
+    assert sum(
+        1
+        for porf in proteome
+        if 1000 <= porf.start < 8000 and porf.id not in taxonomy_map
+    ) == 30
+
+
+def test_fully_searched_100_gene_interval_still_merges() -> None:
+    proteome = [
+        pORF(
+            id=f"gene_{index}",
+            scaffold="scaffold",
+            start=index * 100,
+            end=index * 100 + 80,
+        )
+        for index in range(100)
+    ]
+    taxonomy_map = {
+        porf.id: SimpleNamespace(
+            scaffold=porf.scaffold,
+            start=porf.start,
+            end=porf.end,
+            has_ncldv_mirus=True,
+            has_vp_plv=False,
+        )
+        for porf in proteome
+    }
+
+    observed = merge_adjacent_viral_boundaries(
+        [
+            RefinedBoundary(scaffold="scaffold", start=1000, end=2000),
+            RefinedBoundary(scaffold="scaffold", start=7000, end=8000),
+        ],
+        taxonomy_map,
+        proteome_index={"scaffold": proteome},
+    )
+
+    assert [(boundary.start, boundary.end) for boundary in observed] == [
+        (1000, 8000)
+    ]
+
+
+def test_final_merged_interval_composition_matches_direct_calculation(
+    tmp_path: Path,
+) -> None:
+    sequence = ("A" * 150) + ("GC" * 150) + ("T" * 150)
+    masked_path = tmp_path / "masked.fna"
+    masked_path.write_text(f">scaffold\n{sequence}\n")
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=50,
+            end=300,
+            gc_deviation=0.9,
+            max_kfd=0.9,
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=250,
+            end=500,
+            gc_deviation=0.8,
+            max_kfd=0.8,
+        ),
+    ]
+    merged = merge_adjacent_viral_boundaries(
+        boundaries,
+        taxonomy_map={},
+        proteome_index={},
+    )
+
+    _recalculate_boundary_composition(merged, masked_path=masked_path)
+
+    background = BackgroundModel.from_sequence(sequence, k=4)
+    final_sequence = sequence[50:500]
+    assert merged[0].gc_deviation == pytest.approx(
+        calculate_gc_deviation(final_sequence, background.gc_content)
+    )
+    assert merged[0].max_kfd == pytest.approx(
+        calculate_kfd(final_sequence, background.kmer_freqs, k=4)
+    )
+    assert merged[0].gc_deviation != 0.9
+
+
+def test_boundary_conversion_does_not_reuse_cached_seed_composition() -> None:
+    seed = MergedSeed(
+        scaffold="scaffold",
+        start=0,
+        end=100,
+        gc_deviation=0.99,
+        max_kfd=0.98,
+    )
+
+    boundary = _seeds_to_refined_boundaries([seed])[0]
+
+    assert boundary.gc_deviation == 0.0
+    assert boundary.max_kfd == 0.0

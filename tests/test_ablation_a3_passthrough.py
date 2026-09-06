@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from virosync.ablation import AblationID, InterventionCounts
+from virosync.features.compositional import (
+    BackgroundModel,
+    calculate_gc_deviation,
+    calculate_kfd,
+)
 from virosync.orchestration._flows.single_genome import phase2
 from virosync.orchestration._flows.single_genome.phase2_resume_state import (
     load_phase2_resume_state,
@@ -28,6 +33,8 @@ def _run_a3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         seed_id="seed-1",
         sources=["hhg", "marker_validation"],
         confidence="high",
+        gc_deviation=0.99,
+        max_kfd=0.98,
     )
 
     def forbidden(*_args, **_kwargs):
@@ -107,6 +114,15 @@ def test_a3_forwards_exact_phase1_intervals_without_phase2_biology(
         220,
     )
     assert (boundary.original_start, boundary.original_end) == (20, 220)
+    sequence = "ACGT" * 100
+    background = BackgroundModel.from_sequence(sequence, k=4)
+    region_sequence = sequence[20:220]
+    assert boundary.gc_deviation == pytest.approx(
+        calculate_gc_deviation(region_sequence, background.gc_content)
+    )
+    assert boundary.max_kfd == pytest.approx(
+        calculate_kfd(region_sequence, background.kmer_freqs, k=4)
+    )
 
     report_state = load_phase2_state(tmp_path / "phase2" / "refined_state.json")
     resume_state = load_phase2_resume_state(

@@ -491,6 +491,7 @@ def _run_phase1_subflow(
             min_hmm_score=novel_marker_min_score,
             min_hmm_coverage=novel_marker_min_coverage,
             require_cluster=novel_marker_require_cluster,
+            initial_window_bp=initial_window_bp,
         ),
     )
     if frameshift_hits:
@@ -543,6 +544,7 @@ def _run_phase1_subflow(
                 min_hmm_score=novel_marker_min_score,
                 min_hmm_coverage=novel_marker_min_coverage,
                 require_cluster=novel_marker_require_cluster,
+                initial_window_bp=initial_window_bp,
             ),
         )
         confirmed_frameshift_markers = select_confirmed_frameshift_markers(

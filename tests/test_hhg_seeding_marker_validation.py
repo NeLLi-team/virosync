@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from virosync.pipeline.phase1.hhg_seeding import (
     HMMHit,
     validate_hmm_hits_with_combined_db,
@@ -157,13 +159,194 @@ def test_filter_uses_prodigal_coordinates_without_reading_genome(tmp_path: Path)
         diamond,
         proteome,
         genome_fasta=missing_genome,
-        novel_criteria=NovelMarkerCriteria(min_hmm_coverage=0.3),
+        novel_criteria=NovelMarkerCriteria(
+            min_hmm_coverage=0.3,
+            require_cluster=False,
+        ),
     )
 
     assert [marker.validation_status for marker in markers] == [
         "validated_novel",
         "validated_novel",
+        "validated_novel",
+    ]
+    assert [(marker.scaffold, marker.start, marker.end) for marker in markers] == [
+        ("contig_1", 0, 300),
+        ("contig_1", 300, 600),
+        ("contig_2", 0, 300),
+    ]
+
+
+def test_novel_coverage_uses_full_protein_length(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+        ">contig_1_2 # 301 # 3300 # + # ID=1_2;partial=00\n"
+        f"{'M' * 1000}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("")
+    hits = [
+        HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 100),
+        HMMHit("contig_1_2", "mcp", 80.0, 1e-20, 80.0, 1, 150),
+    ]
+
+    markers = filter_validated_markers(
+        hits,
+        diamond,
+        proteome,
+        novel_criteria=NovelMarkerCriteria(require_cluster=False),
+    )
+
+    assert [marker.validation_status for marker in markers] == [
+        "validated_novel",
         "unvalidated",
+    ]
+
+
+def test_novel_marker_with_unknown_protein_length_is_unvalidated(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">other\nMMMM\n")
+    genome = tmp_path / "genome.fna"
+    genome.write_text(f">contig_1\n{'A' * 300}\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("")
+    hit = HMMHit("contig_1_frame=1", "mcp", 80.0, 1e-20, 80.0, 1, 100)
+
+    markers = filter_validated_markers(
+        [hit],
+        diamond,
+        proteome,
+        genome_fasta=genome,
+        novel_criteria=NovelMarkerCriteria(
+            min_hmm_coverage=0.0,
+            require_cluster=False,
+        ),
+    )
+
+    assert markers[0].validation_status == "unvalidated"
+
+
+def test_nearby_diamond_validated_protein_supports_novel_marker_in_any_order(
+    tmp_path: Path,
+) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+        ">contig_1_2 # 10001 # 10300 # + # ID=1_2;partial=00\n"
+        f"{'M' * 100}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        "".join(
+            f"contig_1_2\tEUK__host_{index}\t1e-40\t{300 - index}\t80\t100\n"
+            for index in range(10)
+        )
+        + "contig_1_2\tNCLDV__reference\t1e-40\t200\t35\t100\n"
+    )
+    novel = HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 100)
+    validated = HMMHit("contig_1_2", "polb", 80.0, 1e-20, 80.0, 1, 100)
+
+    forward = filter_validated_markers(
+        [novel, validated], diamond, proteome, max_seqs=11
+    )
+    reverse = filter_validated_markers(
+        [validated, novel], diamond, proteome, max_seqs=11
+    )
+
+    expected = {
+        "contig_1_1|aa1-100": "validated_novel",
+        "contig_1_2|aa1-100": "validated",
+    }
+    assert {marker.query_porf: marker.validation_status for marker in forward} == expected
+    assert {marker.query_porf: marker.validation_status for marker in reverse} == expected
+
+
+@pytest.mark.parametrize(
+    ("support_query", "support_start", "support_pident"),
+    [
+        ("contig_1_2", 10302, 35.0),
+        ("contig_1_2", 10001, 24.9),
+        ("contig_2_1", 10001, 35.0),
+    ],
+    ids=["distant", "weak", "cross-scaffold"],
+)
+def test_invalid_cluster_support_does_not_validate_novel_marker(
+    tmp_path: Path,
+    support_query: str,
+    support_start: int,
+    support_pident: float,
+) -> None:
+    support_index = support_query.rsplit("_", 1)[1]
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+        f">{support_query} # {support_start} # {support_start + 299} # + # "
+        f"ID=2_{support_index};partial=00\n"
+        f"{'M' * 100}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        f"{support_query}\tNCLDV__reference\t1e-40\t200\t{support_pident}\t100\n"
+    )
+    hits = [
+        HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 100),
+        HMMHit(support_query, "polb", 80.0, 1e-20, 80.0, 1, 100),
+    ]
+
+    markers = filter_validated_markers(hits, diamond, proteome)
+
+    assert markers[0].validation_status == "unvalidated"
+
+
+def test_nearby_hmm_only_hits_do_not_support_each_other(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+        ">contig_1_2 # 301 # 600 # + # ID=1_2;partial=00\n"
+        f"{'M' * 100}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("")
+    hits = [
+        HMMHit(query, "mcp", 80.0, 1e-20, 80.0, 1, 100)
+        for query in ("contig_1_1", "contig_1_2")
+    ]
+
+    markers = filter_validated_markers(hits, diamond, proteome)
+
+    assert [marker.validation_status for marker in markers] == [
+        "unvalidated",
+        "unvalidated",
+    ]
+
+
+def test_second_hmm_segment_on_same_protein_cannot_support_novel_segment(
+    tmp_path: Path,
+) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
+        f"{'M' * 100}\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        "contig_1_1|aa61-100\tNCLDV__reference\t1e-40\t200\t35\t100\n"
+    )
+    hits = [
+        HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 60),
+        HMMHit("contig_1_1", "polb", 80.0, 1e-20, 80.0, 61, 100),
+    ]
+
+    markers = filter_validated_markers(hits, diamond, proteome)
+
+    assert [marker.validation_status for marker in markers] == [
+        "unvalidated",
+        "validated",
     ]
 
 
@@ -185,6 +368,7 @@ def test_filter_reads_genome_for_frame_coordinates(tmp_path: Path) -> None:
     )
 
     assert len(markers) == 1
+    assert markers[0].validation_status == "validated_novel"
     assert (markers[0].scaffold, markers[0].start, markers[0].end, markers[0].strand) == (
         "contig_1",
         0,

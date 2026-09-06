@@ -415,6 +415,23 @@ def build_proteome_index(proteome_fasta: Path) -> dict[str, list[pORF]]:
     return index
 
 
+def missing_boundary_taxonomy_ids(
+    *,
+    scaffold: str,
+    start: int,
+    end: int,
+    taxonomy_map: dict,
+    proteome_index: dict[str, list[pORF]],
+) -> list[str]:
+    """Return overlapping proteome genes that have no taxonomy record."""
+
+    return [
+        porf.id
+        for porf in proteome_index.get(scaffold, [])
+        if porf.start < end and porf.end > start and porf.id not in taxonomy_map
+    ]
+
+
 def collect_query_proteins(
     merged_seeds: list,
     proteome_index: dict[str, list[pORF]],
@@ -507,17 +524,27 @@ def collect_query_proteins(
         upstream_porf_ids_ordered = [p.id for p in reversed(upstream_porfs)]
         downstream_porf_ids_ordered = [p.id for p in downstream_porfs]
 
-        # Boundary includes genes outside the EVE but within flank range
-        boundary_porfs = upstream_porfs + downstream_porfs
-        boundary_porf_ids[seed_id] = [p.id for p in boundary_porfs]
-
         # Log per-EVE region collection
         active_logger.info("EVE %s: collected %d EVE genes, boundary: upstream=%d, downstream=%d",
                           seed_id, len(eve_porfs), len(upstream_porfs), len(downstream_porfs))
 
         # Calculate flanking bounds for boundary constraint enforcement
         flank_start_bp = scaffold_porfs[boundary_start_idx].start if boundary_start_idx < len(scaffold_porfs) else seed.start
-        flank_end_bp = scaffold_porfs[boundary_end_idx].end if boundary_end_idx < len(scaffold_porfs) else seed.end
+        flank_end_bp = max(
+            p.end
+            for p in scaffold_porfs[boundary_start_idx : boundary_end_idx + 1]
+        )
+
+        # Search all overlaps of the fixed envelope, including edge genes and
+        # gaps between start-sorted seed genes. Keep the trim walk unchanged.
+        query_indices = {
+            i for i, p in enumerate(scaffold_porfs)
+            if p.start < flank_end_bp and p.end > flank_start_bp
+        }
+        eve_index_set = set(eve_indices)
+        boundary_porf_ids[seed_id] = [
+            scaffold_porfs[i].id for i in sorted(query_indices - eve_index_set)
+        ]
 
         # Create SeedGeneMapping for boundary enforcement
         seed_gene_mappings[seed_id] = SeedGeneMapping(
@@ -538,9 +565,7 @@ def collect_query_proteins(
         # Track excluded indices for control sampling
         if scaffold not in all_eve_boundary_indices:
             all_eve_boundary_indices[scaffold] = set()
-        all_eve_boundary_indices[scaffold].update(
-            range(boundary_start_idx, boundary_end_idx + 1)
-        )
+        all_eve_boundary_indices[scaffold].update(query_indices)
 
     # Pass 2: Sample control pORFs from outside ALL EVE/boundary regions
     control_porf_ids = sample_control_porfs_genome_wide(

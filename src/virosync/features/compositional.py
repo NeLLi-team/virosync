@@ -1,20 +1,19 @@
 """
 Compositional features for EVE detection.
 
-This module provides sequence-based features that can identify viral regions
-WITHOUT relying on HMM homology searches. These features detect compositional
-anomalies that distinguish viral DNA from host DNA.
+This module measures sequence composition relative to a background model.
+Composition can differ for viral or cellular reasons; these features alone
+do not identify a viral insertion.
 
 Key features:
-- KFD (K-mer Frequency Deviation): Jensen-Shannon divergence of k-mer frequencies
+- KFD (K-mer Frequency Deviation): Jensen-Shannon distance of k-mer frequencies
 - CUB (Codon Usage Bias): Deviation from host codon usage patterns
 - GC Content: Local GC percentage
 - pORF Density: Gene density per window
 
-These features are critical for:
-1. Detecting highly divergent/novel viruses with no HMM hits
-2. CRF boundary detection (Tier 1 and Tier 2)
-3. Evidence coherence scoring
+The normal pipeline uses GC deviation and KFD in candidate scoring. The
+window-feature types retain legacy fields; they do not imply active CRF or
+evidence-graph scoring in that workflow.
 """
 
 import logging
@@ -78,7 +77,7 @@ def calculate_kfd(
     k: int = 4,
 ) -> float:
     """
-    Calculate K-mer Frequency Deviation using Jensen-Shannon divergence.
+    Calculate K-mer Frequency Deviation using Jensen-Shannon distance.
 
     KFD measures how different the k-mer composition of a local window is
     from the genome-wide background. Viral insertions often have distinct
@@ -90,7 +89,8 @@ def calculate_kfd(
         k: K-mer length (default: 4, giving 256 possible k-mers)
 
     Returns:
-        Jensen-Shannon divergence score (0-1). Higher = more divergent from host.
+        Square root of Jensen-Shannon divergence using natural logarithms
+        (0 to sqrt(log(2))). Higher values indicate a greater difference.
         Returns 0.0 if sequence is too short or has too many Ns.
 
     Example:
@@ -144,7 +144,7 @@ def calculate_kfd(
     p_vec = p_vec / p_vec.sum()
     q_vec = q_vec / q_vec.sum()
 
-    # Calculate Jensen-Shannon divergence
+    # SciPy returns the square root of Jensen-Shannon divergence.
     js_divergence = jensenshannon(p_vec, q_vec)
 
     return float(js_divergence) if not np.isnan(js_divergence) else 0.0
@@ -175,7 +175,7 @@ def calculate_gc_deviation(sequence: str, background_gc: float) -> float:
         background_gc: Background GC content (0-1)
 
     Returns:
-        Absolute deviation from background GC (0-0.5)
+        Absolute deviation from background GC (0-1)
     """
     local_gc = calculate_gc_content(sequence)
     return abs(local_gc - background_gc)

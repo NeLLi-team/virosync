@@ -9,12 +9,26 @@ earlier mutating ``clamp`` approach extended already-accepted regions and droppe
 them MEDIUM->LOW -> NCLDV loss).
 """
 
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from virosync.features.compositional import (
+    BackgroundModel,
+    calculate_gc_deviation,
+    calculate_kfd,
+)
+from virosync.orchestration._flows.single_genome.phase2 import (
+    _recalculate_boundary_composition,
+)
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     annotate_boundaries_with_marker_floor,
+    merge_adjacent_viral_boundaries,
 )
+from virosync.pipeline.phase2.boundary_diamond import pORF
 from virosync.orchestration._flows.single_genome.phase3 import (
     _is_marker_floor_recovery_candidate,
 )
@@ -214,6 +228,81 @@ def test_validated_novel_counts_as_validated():
     assert n == 1
     assert b.marker_floor_start == 1000
     assert b.marker_floor_end == 8500
+
+
+def test_marker_floor_alternative_recalculates_composition(
+    tmp_path: Path,
+) -> None:
+    sequence = ("A" * 400) + ("GC" * 300)
+    masked_path = tmp_path / "masked.fna"
+    masked_path.write_text(f">S1\n{sequence}\n")
+    boundary = _boundary("S1", 0, 200, orig_start=0, orig_end=800)
+    boundary.gc_deviation = 0.91
+    boundary.max_kfd = 0.92
+    markers = [
+        _marker("S1", 300, 350, porf="marker_a"),
+        _marker("S1", 700, 750, porf="marker_b"),
+    ]
+    assert annotate_boundaries_with_marker_floor([boundary], markers) == 1
+    alternative = replace(
+        boundary,
+        start=min(boundary.start, boundary.marker_floor_start),
+        end=max(boundary.end, boundary.marker_floor_end),
+    )
+
+    _recalculate_boundary_composition(
+        [alternative],
+        masked_path=masked_path,
+    )
+
+    background = BackgroundModel.from_sequence(sequence, k=4)
+    alternative_sequence = sequence[alternative.start : alternative.end]
+    assert alternative.gc_deviation == pytest.approx(
+        calculate_gc_deviation(alternative_sequence, background.gc_content)
+    )
+    assert alternative.max_kfd == pytest.approx(
+        calculate_kfd(alternative_sequence, background.kmer_freqs, k=4)
+    )
+    assert alternative.gc_deviation != 0.91
+    assert alternative.max_kfd != 0.92
+
+
+def test_adjacent_merge_original_span_union_retains_marker_floor() -> None:
+    gap_porf = pORF(
+        id="gap_gene",
+        scaffold="S1",
+        start=2100,
+        end=2200,
+    )
+    taxonomy_map = {
+        gap_porf.id: SimpleNamespace(
+            scaffold="S1",
+            start=gap_porf.start,
+            end=gap_porf.end,
+            has_ncldv_mirus=True,
+            has_vp_plv=False,
+        )
+    }
+    merged = merge_adjacent_viral_boundaries(
+        [
+            _boundary("S1", 1000, 2000, orig_start=500, orig_end=10000),
+            _boundary("S1", 2500, 3500, orig_start=0, orig_end=8000),
+        ],
+        taxonomy_map=taxonomy_map,
+        proteome_index={"S1": [gap_porf]},
+    )
+    markers = [
+        _marker("S1", 100, 200, porf="marker_a"),
+        _marker("S1", 9000, 9600, porf="marker_b"),
+    ]
+
+    assert len(merged) == 1
+    assert (merged[0].original_start, merged[0].original_end) == (0, 10000)
+    assert annotate_boundaries_with_marker_floor(merged, markers) == 1
+    assert (merged[0].marker_floor_start, merged[0].marker_floor_end) == (
+        100,
+        9600,
+    )
 
 
 def test_no_floor_when_boundary_already_contains_span():
