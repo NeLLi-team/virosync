@@ -36,22 +36,23 @@ state, CPU count, and installed memory.
 <!-- cli-reference:virosync-run -->
 ## Run ViroSync
 
-Run one genome, a directory of FASTA files, or a text file with one FASTA path
-per line. A directory scan uses only its top level. Relative paths in a list
-file start at the current working directory. `virosync orchestrate run` calls
-the same command.
+Input can be one uncompressed genome FASTA, a directory of FASTA files, or a
+text file with one FASTA path per line. A directory scan uses only its top
+level and matches the lowercase extensions `.fna`, `.fasta`, and `.fa`.
+Relative paths in a list file start at the current working directory.
+`virosync orchestrate run` calls the same command.
 
 ### Input and execution
 
 | Option | Behavior |
 | --- | --- |
-| `-i PATH`, `--input PATH` | Required input. Accepts `.fna`, `.fasta`, or `.fa`, a directory, or a list file. The path must exist. |
+| `-i PATH`, `--input PATH` | Required input. Accepts an uncompressed `.fna`, `.fasta`, or `.fa` file, a directory, or a list file. The path must exist. |
 | `-o PATH`, `--output PATH` | Required output root. ViroSync creates one subdirectory per genome. |
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
 | `--clean-run` | Start again and do not reuse completed output. Without this option, ViroSync validates run state before resume. |
-| `-w N`, `--workers N` | Set the number of genome slots. Minimum: 1. Default: config value or 4. |
-| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: config value or 8. |
-| `--max-concurrent-genomes N` | Cap genomes in flight. Minimum: 1. It must equal `--workers` when both options are supplied. |
+| `-w N`, `--workers N` | Set the number of genome slots. Minimum: 1. Default: `orchestration.max_concurrent_genomes`; fallback: 4. The shipped config sets 6. |
+| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`; fallback: 8. |
+| `--max-concurrent-genomes N` | Cap genomes in flight. Minimum: 1. Default: `--workers` when supplied, then `orchestration.max_concurrent_genomes`; fallback: 4. It must equal `--workers` when both options are supplied. |
 | `-v`, `--verbose` | Show the effective config and diagnostic logs instead of the progress display. |
 
 ### Database and tool paths
@@ -80,7 +81,7 @@ All path overrides in this table must exist.
 | `--low-tier-threshold FLOAT` | Set the LOW confidence cutoff from 0 to 1. Default: config value or 0.2. It must be below the HIGH cutoff. |
 | `--hmm-chunk-size N` | Set the number of predicted open reading frames per HMM chunk. Minimum: 1. |
 | `--rebuild-db`, `--no-rebuild-db` | Force or avoid a run-local marker database build. Forced mode ignores `--marker-db` and needs an FAA directory plus one marker FASTA source, from CLI or config. Without a prebuilt database, ViroSync must build one even when the flag is off. |
-| `--phase1-initial-window-bp N` | Set the first marker-cluster window in base pairs. Minimum: 1. Default: 10000. |
+| `--phase1-initial-window-bp N` | Set the first marker-cluster window and the maximum gap to an independently validated neighbor for novel-marker support, in base pairs. Minimum: 1. Default: 10000. |
 | `--phase1-initial-window-genes N` | Set the first marker-cluster window in genes. Minimum: 1. Default: 5. |
 | `--phase1-min-markers-initial N` | Set the minimum marker count for an initial cluster. Minimum and default: 1. |
 | `--phase1-extension-kb N` | Extend from the outer markers by this many kilobases. Minimum: 0. Default: 5. |

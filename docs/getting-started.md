@@ -17,6 +17,11 @@ Python for this project.
 
 ## Install the core resources
 
+Core setup downloads about 6 GB and installs about 13 GB. The archive and
+extracted payload coexist during setup and use about 19 GB together. Allow
+extra space for filesystem overhead, the Pixi environment, outputs, and older
+resource bundles that remain on disk.
+
 ```bash
 pixi run setup-virosync-resources
 ```
@@ -108,10 +113,11 @@ pixi run virosync \
   --threads-per-worker 16
 ```
 
-ViroSync reads `.fna`, `.fasta`, and `.fa` files. It does not search
-subdirectories. `-i` also accepts a text file with one FASTA path per line.
-`-w` sets how many genomes run at the same time. `--threads-per-worker` sets
-the threads for each of those genomes.
+ViroSync accepts uncompressed `.fna`, `.fasta`, and `.fa` files. For directory
+input, it scans only top-level files with these lowercase extensions. `-i`
+also accepts a text file with one FASTA path per line. `-w` sets how many
+genomes run at the same time. `--threads-per-worker` sets the threads for each
+of those genomes.
 
 See the [command-line reference](reference/cli.md) for run controls and
 [methods and outputs](METHODS.md) for the result files.

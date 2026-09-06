@@ -17,8 +17,8 @@ assembled eukaryotic genomes with a four-phase workflow:
 
 The pipeline runs the HMM-gated workflow as its only execution path. The
 Python runner processes genomes in parallel. Phase 2 uses gene extension and
-taxonomy trimming to set boundaries. CRF expansion is available in the code,
-but it is not the default boundary method.
+taxonomy trimming to set boundaries. Legacy CRF fields remain in result and
+configuration objects, but this workflow has no CRF expansion implementation.
 
 Primary command entrypoint:
 
@@ -82,7 +82,9 @@ median 2.2.1-to-2.1.21 runtime ratios was 0.959, or about 4.1% faster.
 ## Authenticated run state and resume
 
 Each genome output has one authoritative `virosync_run_state.json` with schema
-version 3 and four ordered `phase<N>.complete.json` records. The run fingerprint
+version 3 and up to four ordered `phase<N>.complete.json` records. A run with
+no Phase 1 seeds finishes after that phase and records valid empty outputs;
+it does not need Phase 2 or Phase 3 completion records. The run fingerprint
 is canonical JSON over:
 
 - input FASTA size and SHA-256;
@@ -99,8 +101,9 @@ result and the exact sequence passed to Prodigal. Phase 1 stores a lossless
 `phase1/resume_state.json`; Phase 2 stores lossless refined and full resume
 state plus an exact BED projection.
 
-Resume validates the phase chain from Phase 0. At the first missing or stale
-marker or artifact, that phase and every downstream phase are invalidated
+Resume validates the required phase chain from Phase 0. At the first missing
+or stale required marker or artifact, that phase and every downstream phase
+are invalidated
 through guarded no-follow deletion. Unmarked files, schema-v1/v2 state, and a
 TSV header alone are never accepted. Final success is reusable only after the
 canonical and detailed tables, BED, GFF3, summary, invariant report, completion
@@ -142,12 +145,14 @@ Predicted proteins are screened against the marker HMM database
 (`models/combined.hmm` in the required v1.0.7 resource bundle) using
 pyhmmer.
 
-The HMM search wrapper accepts an optional reporting E-value cutoff.
-When the cutoff is unset (`evalue_cutoff=None`), ViroSync passes
-infinite pyhmmer reporting thresholds and records all reported HMM hits
-for downstream validation. The June 2026 Python workflow-runner
-benchmark rerun used this no-HMM-reporting-cutoff mode, followed by the
-same marker-validation, boundary-refinement, and canonical output gates.
+The default HMM search has no finite reporting E-value cutoff
+(`evalue_cutoff=None`). ViroSync passes infinite pyhmmer reporting thresholds
+and applies profile-specific score floors before marker validation.
+`PLV_PC_054` uses its sequence and best-domain gathering (GA) cutoffs when the
+profile provides them. Profiles with `_caps_` in their names use their GA
+cutoffs when present; otherwise both scores must reach 75 bits. Other profiles
+have no additional HMM score floor at this step. A reported hit must still
+pass marker validation, boundary refinement, and the final acceptance gate.
 
 Phase 1 can also run an opt-in nucleotide-level marker rescue screen. ViroSync
 streams the raw combined HMM file, selects profiles whose names match
@@ -158,8 +163,9 @@ table retains only hits with at least one BATH frameshift or stop event and uses
 0-based, half-open assembly coordinates. ViroSync extracts BATH's
 model-conditioned aligned amino-acid domain, removes alignment gaps, replaces
 literal stop codons with `X`, and searches the domain against the Tier-1 marker
-database with DIAMOND `blastp --sensitive`, E-value `1e-5`, and ten targets per
-query. A candidate must have a validated viral reference at 25% or greater
+database with DIAMOND `blastp --sensitive` and E-value `1e-5`.
+`phase1.marker_validation_top_k` sets `--max-target-seqs` to 10 in the shipped
+configs. A candidate must have a validated viral reference at 25% or greater
 identity, at least 50% VS-model coverage, and at least 50% DIAMOND query
 coverage. Overlapping same-strand candidates collapse to the highest-scoring
 HMM hit. Confirmed markers join the Phase 1 seed set before region assembly.
@@ -278,12 +284,20 @@ Current marker status logic:
   legacy `VP__`/`PLV__` transitionally), or `CRESS__` top-10 marker hit with
   percent identity at least 25%.
 - `validated_novel`: no Diamond hit but passes HMM-only gating
-  (score/coverage/cluster criteria); in seed construction this path is
-  effectively restricted to MCP-like markers.
-- `supported`: partial viral support (for example GVMAG-associated)
-  without full validation.
-- `unvalidated`: predominantly cellular signal or below validation
-  criteria.
+  (by default, score at least 30 and HMM alignment over at least 50% of the
+  full FASTA protein length). When cluster support is required, a different
+  protein must have independent viral DIAMOND validation on the same scaffold
+  within `phase1.initial_window_bp` (10 kb by default). Another HMM-only hit
+  cannot supply that support. Seed construction restricts novel markers to
+  MCP-like markers.
+- `supported`: a retained GVMAG hit without a qualifying validation hit.
+- `unvalidated`: none of the validation or support rules above passes.
+
+The ordinary `validated` rule accepts a qualifying viral hit among the
+retained top hits. It does not require that hit to outrank cellular hits
+or impose a DIAMOND query-coverage cutoff. A lower-ranked viral hit can
+validate a marker despite stronger cellular hits. The novel-marker coverage
+rule is separate from this ordinary rule.
 
 ### 4) Host signature model
 
@@ -311,11 +325,17 @@ to gene extension.
 
 ### 2) Gene extension and boundary taxonomy
 
-Each trimmed seed is extended by plus/minus genes (default: 5), and
-overlapping extended seeds are merged. A second batched search covers all
+Each trimmed seed is extended by five genes on each side, and overlapping
+extended seeds are merged. A second batched search covers all
 seed, interior, flanking, and sampled control genes. Both searches use the
 large gene-taxonomy database (Tier 2). The result is a per-gene taxonomy map
 with top-hit and top-k support fields.
+
+The search selects ten flanking genes per side by default and fixes the
+coordinate bounds of that selection. It also searches every predicted
+protein that overlaps those bounds, including proteins outside the selected
+gene-index range. These proteins do not become host controls or extend the
+search bounds. Trimming uses the original flanking-gene lists.
 
 The opt-in `phase2.diamond_superset_prototype_enabled` path searches
 the complete Phase 0 proteome once, before trimming, and slices that raw result
@@ -344,6 +364,11 @@ Refinement can run with:
 - heuristic taxonomy walk (default), or
 - optional ML-assisted taxonomy refiner when enabled.
 
+The optional ML refiner uses seed-interior genes as positive training labels
+and sampled control genes as negative labels. Its `train_accuracy` and
+`train_auc` describe those training rows, not independent EVE truth. They do
+not establish performance on new genomes.
+
 ### 4) Host-aware trimming
 
 Boundaries are trimmed using:
@@ -353,18 +378,34 @@ Boundaries are trimmed using:
 - the Phase 1 host-signature model,
 - local density logic for ambiguous/no-hit neighborhoods.
 
-After trimming, boundaries are hard-constrained to the seed-specific
-flanking envelope so every retained gene remains in the precomputed
-taxonomy support range.
+After trimming, ViroSync constrains boundaries to the seed-specific flanking
+envelope. The right endpoint uses the maximum selected gene end, because
+nested or opposite-strand genes need not end in start-coordinate order.
 
 ### 5) Adjacent-boundary merge
 
 Adjacent EVEs can be merged when short inter-boundary gaps show enough
-viral taxonomy support (or strong flanking viral context).
+viral taxonomy support (or strong flanking viral context). A merge requires
+taxonomy records for every protein that overlaps the resulting interval.
+ViroSync leaves regions separate when their gap contains unsearched genes;
+it does not treat an unsearched gene as a no-hit result. Both merge paths
+retain the union of the original spans for marker-floor recovery.
 
-Note: current default Phase 2 path converts refined seeds directly to
-`RefinedBoundary` objects and does not perform CRF-driven boundary
-expansion.
+Phase 3 checks taxonomy coverage again, including marker-floor alternatives.
+Incomplete coverage stops the run instead of producing a score with a partial
+gene denominator. This guard does not apply to A3, which deliberately bypasses
+the Tier-2 search.
+
+ViroSync calculates GC deviation and KFD from the final Phase-2 interval and
+recalculates them for each wider marker-floor alternative before scoring.
+The background uses the first 10 Mb in FASTA order. Reordering compositionally
+different scaffolds can therefore change scores. The sample concatenates
+scaffold pieces, including artificial k-mers across joins. KFD is the
+Jensen-Shannon distance (the square root of divergence, using natural
+logarithms); GC deviation is the absolute difference in GC fractions.
+
+The default Phase 2 path converts refined seeds to `RefinedBoundary` objects
+without CRF-driven expansion.
 
 ## Phase 3: evidence synthesis and confidence assignment
 
@@ -374,14 +415,16 @@ Evidence includes:
 
 - marker content and marker-family consistency,
 - gene taxonomy composition (interior and flanking tracked separately),
-- compositional deviation (for example KFD/GC/CUB-derived features),
+- GC deviation and k-mer frequency deviation (KFD),
 - host-signature burden (fraction of host-like interior genes),
 - optional InterProScan keyword/category support,
 - optional TMVec structural similarity (database search),
 - optional Boltz + Foldseek structural tie-breaker,
-- optional phylogenetic validation (GVClass + Diamond path when
-  enabled),
-- coherence analysis from evidence graph features.
+- optional phylogenetic validation (GVClass + Diamond path when enabled).
+
+The normal path leaves codon-usage bias (CUB) at zero and supplies no window
+features to the evidence graph. Graph coherence supplies no active
+evidence in this path; the confidence formula does not use `coherence_score`.
 
 Structural/domain layers are candidate annotators and confidence
 modifiers, not seed generators. TMVec, Boltz/Foldseek, and InterProScan
@@ -390,19 +433,126 @@ increase confidence for those candidates, but cannot create new EVE
 regions by themselves, and the final canonical output gate is still
 applied after scoring.
 
+### MCP fold classification
+
+Phase 3 classifies MCP-like HMM hits before region scoring, even when
+TMVec, InterProScan and Boltz are disabled. The classifier selects hits whose
+model names contain `MCP`, `major_capsid` or `capsid_protein`, ignoring case, from
+`validated_marker_hits.tsv`. It also recognizes explicit HK97 capsid marker
+names. It retains candidate rows as well as validated
+rows. The output records fold assignment, MCP support and marker-validation
+status separately. Fold assignment does not assign taxonomic origin.
+
+Sequence lookup first uses the exact query ID, then the base protein ID
+without `|aaSTART-END`. Full base-ID sequences supply their actual length.
+An exact domain-only sequence uses the domain end coordinate as the length
+estimate. A protein with no nonempty matching sequence has no classification
+row. Multiple domains from one base protein produce one row, retaining the
+first eligible query ID and marker name. MCP support uses validation across
+that protein's MCP hits. The output status is the first qualifying status, or
+the first status if none qualifies. HK97 family inference requires a qualifying
+hit from the HK97 marker family itself.
+
+The `type` column contains `DJR`, `SJR`, `HK97` or `UNKNOWN`. `UNKNOWN` means
+unresolved fold, not absent MCP or unknown taxonomy. The output file retains
+the name `virosync_jelly_roll_proteins.tsv` and its first six columns:
+`protein_id`, `type`, `confidence`, `length`, `marker`, `evidence`.
+The appended columns are `mcp_support` and `validation_status`.
+
+| MCP support | Meaning | Can activate the MCP score floor? |
+| --- | --- | --- |
+| `candidate` | A detected MCP-like HMM match without qualifying support | No |
+| `sequence_supported` | The marker passed `validated` or `validated_novel` criteria | Yes |
+| `structure_supported` | A match to a recognized capsid structure passed the structural input checks | Yes |
+
+Sequence support uses CPU marker validation. It does not
+require a GPU or a taxonomic assignment. A supported MCP can retain an
+`UNKNOWN` fold. Length, an MCP-like model name, or multiple HMM matches alone
+cannot promote a candidate to supported MCP evidence. Old tables without the
+support column load as candidates and produce a log notice.
+
+A supported `Mirus_MCP` marker receives an inferred `HK97` fold, confidence
+0.50 and evidence `hk97_marker`, unless optional fold evidence takes priority.
+This is a marker-family inference, not structural confirmation. Mirusvirus MCPs
+have the HK97 fold rather than the jelly-roll fold
+([Gaïa et al., 2023](https://www.nature.com/articles/s41586-023-05962-4)).
+An unsupported Mirus MCP candidate stays `UNKNOWN` without optional fold evidence;
+its length or repeated HMM matches do not imply DJR.
+
+For other marker families with no optional input, two or more HMM domains
+produce a DJR assignment with confidence 0.85 when the domain counter finds
+less than 50% overlap for each added domain. Otherwise,
+a protein longer than 400 aa gets a length-based DJR assignment. Its confidence
+is at most 0.60, or 0.70 for `PLV_MCP` models. A `PLV_MCP` hit at 400 aa or
+less gets DJR with confidence 0.50; other short proteins get `UNKNOWN` with
+confidence zero. These are heuristic assignments, not verified protein folds.
+The classifier can use InterProScan domain counts and existing Foldseek hits.
+Its standalone CLI also accepts TMVec reference results; the pipeline's
+pre-score classifier does not receive those TMVec results.
+
+The optional Foldseek input recognizes the HK97 MCP structure
+[PDB 1OHG](https://www.rcsb.org/structure/1OHG). Independent structural support
+requires the eight-column alignment format
+`query,target,evalue,bits,qcov,tcov,lddt,alntmscore`, a finite alignment TM-score
+of at least 0.5 and E-value at most 0.001, using the structural thresholds.
+Two-column reference matches can label a fold but cannot establish MCP support.
+These checks do not measure prediction quality or establish experimental
+confirmation. The classifier consumes an existing result file; it does not run
+a predictor or download structural models.
+
+Foldseek queries must match a whole MCP marker ID, its base protein ID,
+or the `safe_filename_component` form of either ID. The classifier also accepts
+these names with an `_model` or `_model_<digits>` suffix. It logs a warning and
+ignores a query when the accepted forms map it to more than one base protein.
+Other query-name decorations do not match. The CPU-only benchmark does not
+use this optional Foldseek input.
+
+Only a supported record can set the region's MCP flag through this step.
+Diagnostic counts and per-protein evidence retain candidate records.
+The profile includes HK97 and supported-MCP counts. With `D` supported DJR
+records among `N` total matched records and mean supported DJR confidence `c`,
+the additive bonus is `min(0.15, 0.05 * D * c * D/N)`. HK97 and unsupported DJR
+records do not add a DJR bonus. Other evidence can independently set the MCP
+flag. Configured confidence floors and final acceptance rules still apply.
+
 ### Confidence model
 
-The final score is computed from weighted components plus bonuses minus
-penalties:
+The final score combines weighted components, bonuses, and penalties:
 
-- base weighted mixture of marker, gene taxonomy, composition, optional
-  CRF contribution, InterPro, structural support, and seed-cluster
-  evidence,
+- normalized base mixture of marker, gene taxonomy, composition, optional
+  boundary confidence, InterPro, and seed-cluster evidence,
 - additive bonuses for convergent evidence (for example marker+taxonomy
-  synergy, MCP, completeness, family consistency, taxonomy divergence
-  bonuses),
-- penalties for high-confidence eukaryotic-only signal, elevated
-  host-signature fraction, and very small non-MCP regions.
+  synergy, MCP, completeness, family consistency, and viral-gene enrichment),
+- a separate additive structural term, with coefficient 0.15 when active,
+- penalties for strict eukaryotic-only signal, a broad host top-hit fraction,
+  elevated host-signature fraction, and very small non-MCP regions.
+
+Confidence is a rule-based score, not a calibrated probability that a region
+is an EVE. Several components reuse marker or taxonomy evidence. Bonuses and
+floors therefore do not represent independent observations. The legacy CRF
+term is zero in the normal workflow. The normal gene-taxonomy summary does
+not populate the legacy taxonomy-distribution fields. Their divergence
+bonuses and penalty reductions are inactive.
+
+The gene-taxonomy score normally uses the count of identity-qualified viral
+genes. If that count is zero, it instead uses the count of genes with any
+NCLDV/Mirus top-ten match, without an identity threshold. The broad host-penalty
+condition and the 5% low-evidence cap use the same fallback. Adding the first
+qualified viral hit can lower the score by turning off that fallback.
+The viral-enrichment bonus and zero-viral-evidence cap still use qualified
+counts. This scoring fallback does not change the identity threshold for the
+published lineage vote.
+
+Base weights are marker 0.24, gene taxonomy 0.24, composition 0.18,
+InterPro 0.08, and seed cluster 0.08. The default configuration removes the
+0.18 boundary-confidence weight. A zero composition score also removes its
+weight. The remaining weights are normalized by their sum. Disabled
+InterPro contributes zero score but retains its denominator weight.
+
+The broad host term counts genes whose top hit has the configured host prefix
+(`EUK__` in the default config). It uses no identity threshold. The internal
+field name is `high_pident_euk`. The stricter eukaryotic-only term uses a
+separate count.
 
 Protective rules include:
 
@@ -413,12 +563,63 @@ Protective rules include:
 
 Tier mapping defaults:
 
-- `HIGH`: score \>= 0.7
-- `MEDIUM`: 0.2 \<= score \< 0.7
-- `LOW`: score \< 0.2
+- `HIGH`: score `>= 0.7`
+- `MEDIUM`: score `>= 0.2` and `< 0.7`
+- `LOW`: score `< 0.2`
 
 Candidates with priority-marker evidence can be promoted from `LOW` to
 `MEDIUM` under configured rules.
+
+### Canonical acceptance and marker-span retries
+
+The acceptance gate uses region length, confidence tier, MCP presence and
+hallmark content. Length is `end-start`. Hallmark count is the number of
+marker-bearing base proteins after retaining the best-scoring model per
+protein. ATPases are `PLV_PC_054`, `GVOGm0760`, and names containing `atpase`,
+ignoring case; other hallmark names count as non-ATPase.
+
+For HIGH and MEDIUM, the gate prefers a concrete `region_classification`,
+then `classification`, then `likely_family`. It uses MIXED only when none
+supplies a concrete family. LOW uses the first nonempty `likely_family` or
+`classification`; the other fields serve only a MIXED fallback. These gate
+families are separate from the published lineage class.
+
+| Gate family | HIGH or MEDIUM | LOW |
+| --- | --- | --- |
+| NCLDV or Mirus | Length >5,000 bp or MCP present. | Length >5,000 bp and at least two hallmark proteins. |
+| PPV or MIXED | Length >2,000 bp and either MCP present or at least two hallmark proteins with at least one non-ATPase hallmark. | Same rule. |
+| CRESS | Positive length, at least one hallmark protein, and CRESS identity-marker support. | Same rule. |
+| UNKNOWN or another class | Reject. | Reject. |
+
+CRESS support requires a compact CRESS boundary and either two distinct
+validated genes from models `VS000792`-`VS000808` with a `CRESS__` hit at
+identity of at least 25%, or one such gene whose top target begins with
+`CRESS__` or `PHAGE__MONDNA__`. A passing LOW call has selection status
+`promoted_low`; this does not change its reported LOW tier.
+
+Phase 2 stores a wider marker-span alternative without changing the refined
+boundary. It selects `validated` or `validated_novel` markers on the same
+scaffold whose integer midpoint, `(start+end)//2`, lies between the stored
+original seed endpoints, including both endpoints. The span test requires two
+distinct raw `query_porf` IDs, including domain suffixes. This differs from
+the base-protein hallmark count used for scoring. One ID suffices only when
+the boundary has `frameshift_rescue` provenance and a marker has a generated
+rescue ID. The alternative is the union of the current boundary and selected
+marker spans, and must be strictly wider than the current boundary.
+
+Phase 3 tests this alternative only for candidates with selection status
+`normal_gate_rejected` or `rescue_marker_excluded`. It recalculates composition
+and rebuilds marker and gene-taxonomy evidence for the wider span. Every
+overlapping predicted gene must have a taxonomy record, except in A3.
+The alternative must pass the acceptance gate, have a non-ATPase hallmark,
+have at least 10% identity-qualified viral interior genes, and overlap no
+accepted region on the same scaffold. Alternatives enter this test in
+descending score order, then scaffold and start order. Each accepted
+alternative blocks later overlapping alternatives. This step leaves the
+boundaries of already accepted regions unchanged.
+
+The retry does not launch new InterProScan or TMVec searches for proteins
+added by the wider span. Those optional tools run on the input boundaries.
 
 ### Taxonomy class assignment
 
@@ -439,17 +640,22 @@ votes with its top-10 taxonomy:
   several distinct classes make the vote `VIRAL_UNKNOWN`, which carries weight
   but can never win; no qualified viral hit is no vote.
 
-A gene without a vote is left out of the denominator. A validated marker with
-no qualified hit is the HMM-only `validated_novel` case.
+A gene without a vote is left out of the denominator. An HMM-only
+`validated_novel` marker has no marker-database vote. Its protein can still
+cast an ordinary weight-1 vote if the all-gene search finds a qualified viral
+hit.
 
 A marker-bearing gene is searched twice, against the marker validation database
 in Phase 1 and again in the Phase 2b all-gene search. Weights:
 
-- validated MCP marker: weight 5 on the marker call;
-- validated marker, all-gene search agrees: weight 3;
-- validated marker, all-gene search disagrees: weight 2 on the marker call and
-  weight 1 on the conflicting all-gene call;
-- no marker: weight 1 on the all-gene call.
+- MCP marker with a qualified marker-database vote: weight 5 on that call;
+- other marker with a qualified marker-database vote and an agreeing
+  all-gene call: weight 3;
+- other marker with a qualified marker-database vote and a conflicting
+  all-gene call: weight 2 on the marker call and weight 1 on the all-gene call;
+- other marker with a qualified marker-database vote but no all-gene call:
+  weight 2 on the marker call;
+- no marker-database vote: weight 1 on a qualified all-gene call, if present.
 
 A lineage class (`NCLDV`, `MIRUS`, `PPV`, `CRESS`, or `PHAGE`) needs strictly
 more than half the total weight. Half is not enough, so two genes that disagree
@@ -465,10 +671,9 @@ disagree fall through to the weighted vote at weight 5 each, which is the only
 place the weights break an MCP tie.
 
 Phase 3 drops an `UNKNOWN` region from the published set unless it shares an ANI
-cluster with a marker-bearing EVE. Such a region holds no viral evidence at all,
-so without a clustered relative to vouch for it the length rule admitted host
-sequence. The drop runs after clustering, and it is the only step that publishes
-fewer EVEs than the acceptance gate kept.
+cluster with a marker-bearing EVE. This rule removes regions without direct
+viral evidence or cluster support after the earlier rescue and overlap
+selection. Cluster support alone does not prove viral origin.
 
 `ppv_subtype` comes from VP-specific and PLV-specific HMM markers, not from
 taxonomy, and is reported only for regions published as `PPV`. The v1.0.7
@@ -477,17 +682,18 @@ database labels Preplasmiviricota references `PPV__` and holds no `VP__` or
 
 ### ANI clustering and class propagation
 
-Accepted regions of one genome are compared all against all with skani
-(`triangle -E --medium -m 200 -s 80`, minimum aligned fraction 50), before any
-class is counted or persisted. Two regions join when they reach 95% average
-nucleotide identity over at least 50% of either sequence, and each connected
+Accepted regions of one genome are compared all against all with skani 0.2.0
+(`triangle -E --medium -m 200 -s 80 --min-af 50`), before class counts and
+output files are written. Two regions join when they reach 95% average
+nucleotide identity over more than 50% of at least one sequence. Each connected
 component is one cluster. Clusters are numbered by descending size, ties broken
 by lowest member EVE ID, so a rerun of one genome reproduces the numbering.
 
 A region may donate its class only when an MCP marker's own vote is the class
 that won. That is narrower than carrying an MCP: a capsid annotation, a
-structural jelly-roll call, and phylogenetic evidence also mark a region as
-MCP-bearing without casting a taxonomy vote. In a cluster holding both donors
+sequence- or structure-supported MCP classification, and phylogenetic evidence
+also mark a region as MCP-bearing without casting a taxonomy vote. In a
+cluster holding both donors
 and non-donors whose donors agree on a single lineage class, every non-donor
 takes that class and records the source EVE ID. Nothing propagates when the
 donors disagree, or when the class they agree on is `VIRAL_UNKNOWN` or
@@ -495,12 +701,21 @@ donors disagree, or when the class they agree on is `VIRAL_UNKNOWN` or
 Clustering runs on the fixed accepted set and rewrites only the class. The
 clustering confidence bonus stays 0.0, since scoring has already run.
 
+Class transfer can cross an ANI chain without a direct qualifying edge from
+donor to recipient. A shared module or host flank can supply the aligned
+sequence. The MCP override and ANI transfer rules do not resolve mixed
+insertions or capsid exchange; inspect the gene evidence and pairwise edges
+when those explanations are plausible.
+
 Every pair skani reports is written to `phase3_synthesis/eve_ani_edges.tsv` as
 `eve_a`, `eve_b`, `ani`, `af_a`, `af_b`, including pairs below the 95% ANI
 threshold, so downstream readers filter from one table. Three cases give a
 header-only edge table and no propagation: fewer than two accepted regions, no
 `skani` binary on PATH, and regions skani cannot sketch. Any other skani
 failure fails the run.
+
+A missing edge is not proof that two regions are unrelated. Very short
+sequences can lack enough sketch matches, even when they are identical.
 
 ## Output specification
 
@@ -519,7 +734,8 @@ Core synthesis files (`phase3_synthesis/`):
   when the genome has fewer than two accepted regions)
 - `virosync_tmvec_proteins.tsv` (can be header-only when TMVec is
   disabled or no hits are found)
-- optional: `virosync_jelly_roll_proteins.tsv`
+- `virosync_jelly_roll_proteins.tsv` (produced when Phase 3 has its marker
+  inputs; header-only when no MCP protein has a matching sequence)
 - `interproscan_summary.tsv` (can be header-only when InterProScan is
   disabled or no hits are found)
 
@@ -561,6 +777,21 @@ relative), `ani_cluster_size` (`1` for a singleton), `ani_max_percent` (`.` for
 a singleton), `taxonomy_class_before_ani`, and
 `taxonomy_class_propagated_from`. The last two are filled only where a cluster
 donor supplied the class.
+
+The GC columns use different units and background sequences:
+
+| Field | Calculation |
+| --- | --- |
+| `gc_deviation` | Absolute GC-fraction difference between the final region and the first 10 Mb of the genome in FASTA order. Excludes `N` from each denominator. Used in scoring. |
+| `region_gc_percent` | GC percentage of the final region. Includes all sequence characters in the denominator. |
+| `genome_gc_percent` | GC percentage of the whole genome. Includes all sequence characters in the denominator. |
+| `gc_delta` | `region_gc_percent - genome_gc_percent`, in signed percentage points, calculated before rounding. |
+
+All four fields use the pipeline's masked genome when masking is enabled.
+Do not calculate `gc_deviation` as `abs(gc_delta) / 100`.
+The scoring calculation returns zero when the region or background has fewer
+than 100 bases. With at least 100 bases but only `N` characters, its GC fraction
+defaults to 0.5. The percentage fields return zero for an empty sequence.
 
 `ppv_subtype` is `VP` or `PLV` only when subtype-specific marker evidence
 supports one subtype and not the other. It is `.` for ambiguous PPV calls and
@@ -654,7 +885,8 @@ lists the exact schema-v1 and schema-v2 EVE sets for this fixture.
 The Python genome-parallel workflow runner is the benchmarked ViroSync
 runtime. The harness in the sibling `virosync-bench` repository records
 per-tool wall time and peak resident memory for the SynEVEs-2 and real-genome
-panels. Manuscript Figure 5 summarizes those results. Its source table is
+panels. The manuscript figure titled “Runtime and peak resident memory”
+summarizes those results. Its source table is
 `manuscript/figures/benchmark_figS1_runtime_memory_with_vr30_data.tsv`.
 Runtime depends strongly on thread allocation and database caching and is
 reported for completeness rather than as an optimized comparison.

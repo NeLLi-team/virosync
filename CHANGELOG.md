@@ -1,13 +1,20 @@
 # Changelog
 
-All notable changes to ViroSync are documented in this file.
-
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
 ## [Unreleased]
 
+These changes describe the current `main` branch. The software version remains
+1.0.0; the tagged v1.0.0 release does not contain these changes.
+
 ### Added
 
+- MCP support and validation-status columns in the capsid classification
+  table, with separate `DJR`, `SJR`, `HK97`, and `UNKNOWN` fold labels.
+  CPU marker validation can support an MCP with unresolved fold or taxonomy.
+  Supported Mirus MCP markers receive an inferred HK97 label; optional
+  structural evidence must pass separate checks. A fold label alone does not establish
+  MCP support.
 - Optional TMVec2 search with Lobster-24M features and matching BFVD
   embeddings. Setup downloads and verifies the pinned database and model files,
   and the structural preflight runs a model-parity check and a real BFVD query.
@@ -87,8 +94,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   them.
 - Phase 3 now drops an accepted EVE that carries no validated marker, returned
   no identity-qualified viral gene hit, and shares no ANI cluster with a
-  marker-bearing EVE. Nothing in such a region is viral. This is the one place
-  the published set is smaller than the gate's own.
+  marker-bearing EVE. This filter removes regions without supported viral
+  evidence; it does not prove that they lack viral sequence.
 - The report notebook annotates gene-map and marker-heatmap clusters at 95%
   ANI rather than 90%, which regroups the EVEs in both figures. It reads the
   clusters from the pipeline instead of running skani itself.
@@ -101,6 +108,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   PLV peers.
 - Detailed predictions record `ppv_subtype` only when marker evidence supports
   VP or PLV without conflicting subtype evidence.
+
+### Fixed
+
+- Boundary searches and region exports retain genes that overlap the final
+  interval, including genes outside the initial selected gene range.
+- Novel-marker validation calculates HMM coverage against the full protein
+  sequence. Multiple MCP candidates do not become supported MCP evidence from
+  their count alone.
+- Composition ablation disables composition evidence throughout scoring.
+- Reports retain HK97 and supported-MCP counts without adding a DJR bonus for
+  HK97 records.
 
 ## [1.0.0] - 2026-07-28
 

@@ -150,7 +150,9 @@ When enabled, ViroSync:
    report, removes gaps, and writes literal stop codons as `X` for protein
    search. The result is not a repaired full-length ORF or CDS.
 7. Runs DIAMOND `blastp --sensitive` against the configured Tier-1 marker
-   database with `--evalue 1e-5` and ten targets per query.
+   database with `--evalue 1e-5`.
+   `phase1.marker_validation_top_k` sets `--max-target-seqs` to 10 in the
+   shipped configs.
 8. Confirms a candidate only when a validated viral reference aligns at 25%
    or greater identity, the BATH hit covers at least 50% of the VS model, and
    the qualifying DIAMOND HSP covers at least 50% of the candidate domain.

@@ -3,11 +3,15 @@
 Frameshift screening, TMVec2, Boltz, and InterProScan are opt-in. Each feature
 needs a separate runtime or data set.
 
+[MCP fold classification](METHODS.md#mcp-fold-classification)
+does not require these layers. Validated markers provide CPU-only MCP support.
+Fold labels and taxonomic assignments remain separate.
+
 | Feature | Install or data requirement | Run option |
 | --- | --- | --- |
 | Frameshift screening | Pinned BATH and Easel builds | `--frameshift-screening` |
 | TMVec2 | Structural Pixi environment and the pinned Lobster-24M/BFVD resource set | `--tmvec`. Add `--tmvec-gpu` to require CUDA. |
-| Boltz and Foldseek | Boltz runtime and a Foldseek database prefix | `--boltz --no-skip-structural` |
+| Boltz and Foldseek | Boltz runtime and a Foldseek database prefix | `--boltz` |
 | InterProScan | An external InterProScan directory with `interproscan.sh` | `--interproscan` |
 
 ## Frameshift screening
@@ -112,9 +116,8 @@ Check the runtime and database:
 pixi run -e structural check-structural-runtime --require-boltz
 ```
 
-Enable the layer with `--boltz --no-skip-structural`. The layer needs the
-runtime, database, and MSA-server setting. ViroSync disables it when one of
-these inputs is absent.
+Enable the layer with `--boltz`. The layer needs the runtime, database, and
+MSA-server setting. ViroSync disables it when one of these inputs is absent.
 
 ## InterProScan
 

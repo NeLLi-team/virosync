@@ -17,6 +17,12 @@ input, resource path, or optional analysis.
   output files.
 - [Resource bundle](RESOURCE_BUNDLE.md) records the pinned database contents.
 
-ViroSync version 1.0.0 uses database bundle v1.0.7. The software has a
-non-commercial license. Read the [license terms](https://github.com/NeLLi-team/virosync/blob/main/LICENSE)
-before use.
+## Documentation scope
+
+These pages describe the current `main` branch, which reports ViroSync version
+1.0.0 and pins database bundle v1.0.7. The `v1.0.0` Git tag pins database
+bundle v1.0.6.
+
+The software has a non-commercial license. Read the
+[license terms](https://github.com/NeLLi-team/virosync/blob/main/LICENSE) before
+use.
