@@ -8,6 +8,8 @@ region. The normal boundary and acceptance filters still apply.
 
 ## Install BATH
 
+Install a C compiler and `make` on the host before running `setup-bath`.
+
 ```bash
 pixi run setup-bath
 ```

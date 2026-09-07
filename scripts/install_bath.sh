@@ -2,9 +2,9 @@
 # Build BATH into .bath/ so the frameshift screen works through pixi.
 #
 # BATH is absent from the configured conda-forge and bioconda channels, so it
-# cannot be a pixi dependency. This builds the revisions pinned in
-# docs/FRAMESHIFT_SCREENING.md. pixi.toml puts .bath/bin on PATH for every
-# task, so `pixi run example-frameshift` works once this has run.
+# cannot be a pixi dependency. This builds the revisions pinned below.
+# pixi.toml puts .bath/bin on PATH for every task, so
+# `pixi run example-frameshift` works once this has run.
 set -euo pipefail
 
 BATH_REV=7842ebd58b96591b4b60863ee5c33e49eb79eccc

@@ -35,9 +35,9 @@ do not give a general speed ranking.
 *Per-input wall time and peak resident memory for 30 SynEVEs-2 inputs and five
 real-genome inputs. All tools used 16 threads or cores on the same 64-core
 host, but campaign concurrency differed. Wall time includes contention and
-database caching. Peak RSS is the largest single process, not the total for
-the process tree. EEfinder is absent because its campaign used a different
-load and concurrency.*
+database caching. Peak RSS is shown in decimal GB for the largest single
+process, not the process tree. EEfinder is absent because its campaign used
+different load and concurrency.*
 
 ## Real-genome output
 

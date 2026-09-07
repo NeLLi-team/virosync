@@ -8,7 +8,7 @@ eukaryotic genomes. The core workflow runs on CPUs and does not need a GPU.
 - [Command-line reference](reference/cli.md) lists commands and options.
 - [Optional analyses](optional-features.md) covers optional evidence layers.
 - [Performance](performance.md) shows benchmarks.
-- [Databases](RESOURCE_BUNDLE.md) lists the installed database contents.
+- [Databases](RESOURCE_BUNDLE.md) covers database setup and verification.
 
 ## Documentation scope
 

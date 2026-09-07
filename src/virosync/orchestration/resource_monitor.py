@@ -157,7 +157,7 @@ class ResourceMonitor:
             json.dump(metrics.__dict__, f, indent=2)
         logger = logging.getLogger(__name__)
         logger.info(
-            "Resource monitor end: task=%s phase=%s wall=%.1fs rss=%.2fGB cpu=%.1f%% out=%s",
+            "Resource monitor end: task=%s phase=%s wall=%.1fs rss=%.2fGiB cpu=%.1f%% out=%s",
             metrics.task_name,
             metrics.phase,
             metrics.wall_time_sec,
