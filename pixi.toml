@@ -103,7 +103,7 @@ setup-databases = { cmd = "echo 'ViroSync resource setup complete.'", depends-on
 check-structural-runtime = "PYTHONPATH=src python scripts/check_structural_runtime.py --config config/orchestration.yaml"
 
 # === Frameshift screening (optional) ===
-# Builds BATH from the revisions pinned in docs/FRAMESHIFT_SCREENING.md into
+# Builds BATH from the revisions pinned in scripts/install_bath.sh into
 # .bath/. Required by `example-frameshift` and any --frameshift-screening run.
 setup-bath = "bash scripts/install_bath.sh"
 

@@ -1,28 +1,20 @@
 # ViroSync
 
-ViroSync identifies candidate endogenous viral elements (EVEs) in assembled
-eukaryotic genomes. Viral markers define seed regions. Gene taxonomy and
-host-like sequence signals then refine the region boundaries. TMVec2, Boltz,
-and InterProScan can add protein evidence to the final score.
+ViroSync finds candidate endogenous viral elements (EVEs) in assembled
+eukaryotic genomes. The core workflow runs on CPUs and does not need a GPU.
 
-Start with the shipped example. Use the reference pages when you change an
-input, resource path, or optional analysis.
-
-- [Get started](getting-started.md) installs ViroSync and runs the example.
-- [Command-line reference](reference/cli.md) lists each public command and option.
-- [Optional analyses](optional-features.md) covers frameshift screening, TMVec2,
-  Boltz, and InterProScan.
-- [Performance](performance.md) shows selected benchmark results.
-- [Methods and outputs](METHODS.md) describes the code-verified workflow and
-  output files.
-- [Resource bundle](RESOURCE_BUNDLE.md) records the pinned database contents.
+- [Get started](getting-started.md) covers installation and first runs.
+- [Outputs](METHODS.md) defines the output files.
+- [Command-line reference](reference/cli.md) lists commands and options.
+- [Optional analyses](optional-features.md) covers optional evidence layers.
+- [Performance](performance.md) shows benchmarks.
+- [Databases](RESOURCE_BUNDLE.md) lists the installed database contents.
 
 ## Documentation scope
 
-These pages describe the current `main` branch, which reports ViroSync version
-1.0.0 and pins database bundle v1.0.7. The `v1.0.0` Git tag pins database
-bundle v1.0.6.
+Current `main` reports ViroSync version 1.0.0 and uses resource bundle v1.0.7.
+The `v1.0.0` tag uses resource bundle v1.0.6.
 
-The software has a non-commercial license. Read the
+ViroSync has a non-commercial license. Read the
 [license terms](https://github.com/NeLLi-team/virosync/blob/main/LICENSE) before
 use.

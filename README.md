@@ -3,31 +3,19 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
-ViroSync identifies candidate endogenous viral elements (EVEs) in assembled
-eukaryotic genomes. It searches for viral markers, refines candidate boundaries
-with gene taxonomy and host-like sequence signals, and scores the resulting
-regions.
+ViroSync finds candidate endogenous viral elements (EVEs) in assembled
+eukaryotic genomes. It detects viral markers, refines boundaries, and writes
+accepted regions with their evidence.
 
 ## Workflow
 
 ![ViroSync workflow](docs/virosync_workflow.png)
 
-ViroSync processes each genome in four phases:
-
-1. Predict proteins after optional repeat masking.
-2. Find and validate viral markers, then assemble seed regions.
-3. Refine region boundaries with gene taxonomy and host-like sequence signals.
-4. Score each candidate and write the accepted EVE set and reports.
+ViroSync runs on CPUs by default. A GPU is not required for the core workflow.
 
 ## Install ViroSync
 
-ViroSync supports Linux x86-64 and uses [Pixi](https://pixi.sh/) for its pinned
-environment.
-
-These commands install the current `main` branch. See the
-[documentation scope](docs/index.md#documentation-scope) for its software and
-resource versions. Before setup, read [Get started](docs/getting-started.md) for
-the disk requirement and installation checks.
+ViroSync supports Linux x86-64 and uses [Pixi](https://pixi.sh/).
 
 ```bash
 git clone https://github.com/NeLLi-team/virosync.git
@@ -36,62 +24,43 @@ pixi install --locked
 pixi run setup-virosync-resources
 ```
 
-Resource setup downloads and verifies `resources_v1_0_7_runtime.tar.gz`.
+Resources download about 6 GB, use about 13 GB when installed, and need about
+19 GB during setup. Allow more space for the Pixi environment and results.
 
 ## Quick start
 
-Run the shipped example:
-
 ```bash
 pixi run example
-```
-
-The task writes to `results/example/`. Check the batch summary:
-
-```bash
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`.
-The resource tree records the database version separately:
-
-```bash
-cat resources/virosync/DB_VERSION
-```
-
-It must print `v1.0.7`.
+The `test-1` row must report `status=success`, `predictions=6`, and
+`accepted=1` with resource bundle v1.0.7.
 
 ## Run your own genomes
-
-Give `-i` a single FASTA file:
-
-```bash
-pixi run virosync \
-  -i genome.fna \
-  -o results/my_genome \
-  --config config/orchestration.yaml \
-  -w 1 \
-  --threads-per-worker 16
-```
-
-Or a directory of FASTA files:
 
 ```bash
 pixi run virosync \
   -i genomes/ \
-  -o results/my_genomes \
+  -o results/my_run \
   --config config/orchestration.yaml \
   -w 4 \
   --threads-per-worker 16
 ```
 
-ViroSync accepts uncompressed `.fna`, `.fasta`, and `.fa` files. For directory
-input, it scans only top-level files with these lowercase extensions. `-i`
-also accepts a text file with one FASTA path per line. `-w` sets how many
-genomes run at the same time. `--threads-per-worker` sets the threads for each
-of those genomes.
+`-i` accepts one uncompressed `.fna`, `.fasta`, or `.fa` file, a directory of
+these files, or a text file with one FASTA path per line.
 
-The [documentation](https://nelli-team.github.io/virosync/) covers input modes,
-command-line options, outputs, performance tests, and optional analyses.
+The output root contains `batch_summary.tsv` with status and counts for each
+genome. Each genome directory contains:
 
-ViroSync is available for non-commercial use under the terms in [LICENSE](LICENSE).
+- `phase3_synthesis/virosync_predictions.tsv`: accepted EVE calls.
+- `phase3_synthesis/virosync_predictions.gff3`: accepted EVE coordinates and annotations.
+- `virosync_predictions_detailed.tsv`: all candidates and their evidence.
+
+See the [documentation](https://nelli-team.github.io/virosync/) for output
+details, command options, and optional analyses.
+
+Current `main` reports software version 1.0.0 and uses resource bundle v1.0.7.
+
+ViroSync is available for non-commercial use under [LICENSE](LICENSE).

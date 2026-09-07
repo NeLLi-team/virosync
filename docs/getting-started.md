@@ -1,8 +1,7 @@
 # Get started
 
-This tutorial installs ViroSync, verifies its resources, and runs the shipped
-example. It requires Linux x86-64, [Git](https://git-scm.com/), and
-[Pixi](https://pixi.sh/).
+ViroSync requires Linux x86-64, [Git](https://git-scm.com/), and
+[Pixi](https://pixi.sh/). The core workflow uses CPUs and does not need a GPU.
 
 ## Install ViroSync
 
@@ -12,29 +11,19 @@ cd virosync
 pixi install --locked
 ```
 
-The lock file pins the software environment. Do not use Conda or the system
-Python for this project.
-
 ## Install the core resources
 
-Core setup downloads about 6 GB and installs about 13 GB. The archive and
-extracted payload coexist during setup and use about 19 GB together. Allow
-extra space for filesystem overhead, the Pixi environment, outputs, and older
-resource bundles that remain on disk.
+Resources download about 6 GB, use about 13 GB when installed, and need about
+19 GB during setup. Allow more space for the Pixi environment and results.
 
 ```bash
 pixi run setup-virosync-resources
 ```
 
-For the first interactive install, select the core-resource location and
-confirm the download. For a non-interactive install, set
-`VIROSYNC_DB_ROOT` before setup.
+Setup installs resource bundle v1.0.7 in `resources/virosync` by default.
+See [Databases](RESOURCE_BUNDLE.md) to use another location.
 
-This command downloads `resources_v1_0_7_runtime.tar.gz`, verifies its archive
-and manifest digests, and installs the read-only v1.0.7 resource tree under
-`resources/virosync`.
-
-Run the full resource check:
+Verify the install:
 
 ```bash
 pixi run virosync orchestrate resources verify \
@@ -42,56 +31,21 @@ pixi run virosync orchestrate resources verify \
   --full
 ```
 
-The output must include:
-
-```text
-Version: v1.0.7
-Authenticated payloads: 9
-```
-
-To store the resource tree outside the repository, set `VIROSYNC_DB_ROOT`
-before setup:
-
-```bash
-export VIROSYNC_DB_ROOT=/data/virosync-db
-pixi run setup-virosync-resources
-```
-
-Keep the variable set for later runs.
+The output must include `Version: v1.0.7`.
 
 ## Run the example
 
 ```bash
 pixi run example
-```
-
-The task runs the genomes in `example/` and writes to `results/example/`. Check
-the summary:
-
-```bash
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must have `status=success`, `predictions=6`, and `accepted=1`.
-
-The task passes `--clean-run`, which ignores existing outputs and starts from
-scratch. To test resume, run the same input without that flag:
-
-```bash
-pixi run virosync \
-  -i example/ \
-  -o results/example \
-  --config config/orchestration.yaml \
-  -w 1 \
-  --threads-per-worker 8
-```
-
-ViroSync reuses the completed genome only after it validates the run state and
-all recorded output files.
+The `test-1` row must report `status=success`, `predictions=6`, and
+`accepted=1`.
 
 ## Run your genome
 
-Point `-i` at a single FASTA file:
+Use one FASTA file:
 
 ```bash
 pixi run virosync \
@@ -102,22 +56,16 @@ pixi run virosync \
   --threads-per-worker 16
 ```
 
-Or at a directory of FASTA files:
+For several genomes, set `-i` to a directory and increase `-w`. ViroSync
+accepts uncompressed `.fna`, `.fasta`, and `.fa` files. Directory input scans
+only top-level files with these lowercase extensions. You can also pass a text
+file with one FASTA path per line.
 
-```bash
-pixi run virosync \
-  -i genomes/ \
-  -o results/my_genomes \
-  --config config/orchestration.yaml \
-  -w 4 \
-  --threads-per-worker 16
-```
+The output root contains `batch_summary.tsv` and one directory per genome.
+Each genome has accepted calls in
+`phase3_synthesis/virosync_predictions.tsv` and
+`phase3_synthesis/virosync_predictions.gff3`. Use
+`virosync_predictions_detailed.tsv` to inspect all scored candidates.
 
-ViroSync accepts uncompressed `.fna`, `.fasta`, and `.fa` files. For directory
-input, it scans only top-level files with these lowercase extensions. `-i`
-also accepts a text file with one FASTA path per line. `-w` sets how many
-genomes run at the same time. `--threads-per-worker` sets the threads for each
-of those genomes.
-
-See the [command-line reference](reference/cli.md) for run controls and
-[methods and outputs](METHODS.md) for the result files.
+See [Outputs](METHODS.md#output-specification) for the other result
+files and the [command-line reference](reference/cli.md) for all options.

@@ -1,14 +1,9 @@
 # Performance
 
-The 5 September 2026 benchmark used ViroSync 1.0.0 with the v1.0.7 core
-resources. ViroSync ran at most two inputs at once, each with one worker and 16
-threads. The benchmark disabled frameshift screening, TMVec2, InterProScan
-and optional structure steps. It tested commit `85ad8ab` plus the reviewed
-fixes, which were uncommitted at run time. The tested patch SHA-256 is
-`50a3e9d645532890616d1da3fd6cd5887b1813699dce9981168ef97db1a224d0`.
-The figures use the final campaign results and unchanged comparator outputs.
-
-Select a figure to open the full-size image.
+The 5 September 2026 test used ViroSync 1.0.0 with the
+[pipeline fixes in 091cfc1](https://github.com/NeLLi-team/virosync/commit/091cfc1),
+v1.0.7 databases, and no optional analyses. ViroSync ran up to two inputs at
+once. Select a figure to open the full-size image.
 
 ## Synthetic boundary recovery
 
@@ -46,7 +41,7 @@ load and concurrency.*
 
 ## Real-genome output
 
-ViroSync accepts 523 regions across the five real genomes. These inputs have
+ViroSync accepted 523 regions across the five real genomes. These inputs have
 no complete region-level truth set. The figure describes output burden and
 gene content, not detection accuracy.
 
@@ -56,4 +51,4 @@ gene content, not detection accuracy.
 genomes. DetectEVE and EEfinder emit short homology hits. Their counts measure
 output granularity and are not direct locus-count comparisons.*
 
-See [Methods](METHODS.md) for the ViroSync workflow and output rules.
+See [Outputs](METHODS.md) for the result files and their interpretation.

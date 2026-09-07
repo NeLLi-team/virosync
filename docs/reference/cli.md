@@ -49,10 +49,10 @@ Relative paths in a list file start at the current working directory.
 | `-i PATH`, `--input PATH` | Required input. Accepts an uncompressed `.fna`, `.fasta`, or `.fa` file, a directory, or a list file. The path must exist. |
 | `-o PATH`, `--output PATH` | Required output root. ViroSync creates one subdirectory per genome. |
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
-| `--clean-run` | Start again and do not reuse completed output. Without this option, ViroSync validates run state before resume. |
-| `-w N`, `--workers N` | Set the number of genome slots. Minimum: 1. Default: `orchestration.max_concurrent_genomes`; fallback: 4. The shipped config sets 6. |
-| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`; fallback: 8. |
-| `--max-concurrent-genomes N` | Cap genomes in flight. Minimum: 1. Default: `--workers` when supplied, then `orchestration.max_concurrent_genomes`; fallback: 4. It must equal `--workers` when both options are supplied. |
+| `--clean-run` | Start again without reusing completed output. Otherwise, resume when the input, settings and saved outputs still match. |
+| `-w N`, `--workers N` | Run up to N genomes at once. Minimum: 1. The shipped config sets 6. |
+| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. |
+| `--max-concurrent-genomes N` | Set the same genome limit as `--workers`. Minimum: 1. Both values must agree if you supply both. |
 | `-v`, `--verbose` | Show the effective config and diagnostic logs instead of the progress display. |
 
 ### Database and tool paths
@@ -94,7 +94,7 @@ All path overrides in this table must exist.
 | --- | --- |
 | `--device DEVICE` | Select `cpu` or `cuda`. Default: config value or `cpu`. |
 | `--search-backend diamond` | Select the sequence search backend. `diamond` is the only accepted value. |
-| `--gpu-id N` | Select a zero-based GPU. Sets `CUDA_VISIBLE_DEVICES` and `VIROSYNC_GPU`. |
+| `--gpu-id N` | Select a GPU by its zero-based index. |
 | `--skip-masking`, `--no-skip-masking` | Force masking off or enable TRF plus RepeatMasker. `--no-skip-masking` needs exactly one `execution.masking.repeatmasker_species` or `repeatmasker_library` value. |
 | `--skip-structural`, `--no-skip-structural` | Skip or run Boltz and Foldseek structural homology. `--boltz` clears the skip unless you set it explicitly. |
 | `--boltz`, `--no-boltz` | Enable or disable Boltz and Foldseek. Missing runtime or data disables the layer with a warning. |
@@ -113,25 +113,20 @@ information, and the `run` command.
 <!-- cli-reference:virosync-orchestrate-setup -->
 ## Install resources
 
-Install core resources and optional analysis resources.
-
-An explicit TMVec2 install activates its target only after the bundle, model,
-manifest, and database checks pass. A failed TMVec2 install exits with status
-1. InterProScan setup remains optional and reports an unavailable archive as a
-warning.
+Install databases and optional analysis resources.
 
 | Option | Behavior |
 | --- | --- |
 | `--config PATH` | Read or update this config. Default: `config/orchestration.yaml`. |
-| `--db-root PATH` | Install the stable core-resource link at this path. `VIROSYNC_DB_ROOT` is also supported. |
-| `--core-resource PATH_OR_URL` | Use this core archive instead of the configured source. Custom sources do not inherit the shipped digest pins. |
+| `--db-root PATH` | Install the core databases here. You can also set `VIROSYNC_DB_ROOT`. |
+| `--core-resource PATH_OR_URL` | Use a different core archive. Supply its version, archive SHA-256 and manifest SHA-256 with the options below. |
 | `--core-version TEXT` | Set the expected core-resource version for a custom source. |
 | `--core-resource-sha256 HEX` | Set the expected SHA-256 for the full core archive. |
 | `--core-manifest-sha256 HEX` | Set the expected SHA-256 for `RESOURCE_MANIFEST.json` inside the archive. |
 | `--tmvec`, `--no-tmvec` | Install or skip the configured TMVec2 BFVD resource set. |
 | `--tmvec-url PATH_OR_URL` | Override the configured TMVec2 BFVD bundle. Use it with `--tmvec-resource-sha256`. |
 | `--tmvec-resource-sha256 HEX` | Set the SHA-256 for a custom TMVec2 BFVD bundle. |
-| `--tmvec-dir PATH` | Set the TMVec2 target. Priority: CLI path, `phase3.tmvec_database_dir`, then `resources/virosync-optional/tmvec` beside the core resource tree. |
+| `--tmvec-dir PATH` | Install TMVec2 here. Overrides `phase3.tmvec_database_dir`. If unset, setup chooses a directory beside the core databases. |
 | `--interproscan-url PATH_OR_URL` | Install a user-supplied InterProScan archive. Use it with `--interproscan-resource-sha256`. |
 | `--interproscan-resource-sha256 HEX` | Set the SHA-256 for the InterProScan archive. |
 | `--interproscan-dir PATH` | Set the InterProScan target. |
@@ -141,9 +136,6 @@ warning.
 | `--write-config`, `--no-write-config` | Enable or disable writes of resolved paths to the config. Default: write. |
 | `-v`, `--verbose` | Show source, target, config, and validation details. |
 
-`pixi run setup-virosync-resources` calls setup with
-`--no-interactive-optional --no-write-config`.
-
 <!-- cli-reference:virosync-orchestrate-resources -->
 ## Resource commands
 
@@ -152,13 +144,13 @@ The resource group contains the `verify` command.
 <!-- cli-reference:virosync-orchestrate-resources-verify -->
 ## Verify core resources
 
-Check the installed core-resource identity.
+Check the installed databases.
 
 | Option | Behavior |
 | --- | --- |
 | `--config PATH` | Read the expected version and manifest digest. Default: `config/orchestration.yaml`. |
-| `--db-root PATH` | Verify this stable resource path. `VIROSYNC_DB_ROOT` is also supported. |
-| `--full` | Hash all nine payloads and run semantic DIAMOND checks. Without `--full`, verification uses authenticated metadata and receipts. |
+| `--db-root PATH` | Check databases at this path. You can also set `VIROSYNC_DB_ROOT`. |
+| `--full` | Check file contents as well as names, sizes and version. Takes longer than the default check. |
 
 <!-- cli-reference:virosync-orchestrate-info -->
 ## Show orchestration information
@@ -166,18 +158,18 @@ Check the installed core-resource identity.
 Print the orchestration backend, ViroSync version, and input forms. This command
 has no command-specific options.
 
-## Structural preflight
+## Check optional tools
 
-`check-structural-runtime` is a Pixi task backed by
-`scripts/check_structural_runtime.py`.
+Run `pixi run -e structural check-structural-runtime` with the options below.
 
 | Option | Behavior |
 | --- | --- |
 | `--config PATH` | Read optional-feature paths and states from this config. Default: `config/orchestration.yaml`. |
-| `--require-tmvec` | Exit with status 1 unless the TMVec2 runtime, device-specific upstream vector, and real BFVD query pass. CPU is valid. `compute.device: cuda` also requires CUDA. |
+| `--require-tmvec` | Test TMVec2 and its database with a protein query. Runs on CPU unless the config selects CUDA. |
 | `--require-boltz` | Exit with status 1 unless Boltz, Foldseek, the MSA setting, and the Foldseek database pass. |
 | `--require-interproscan` | Exit with status 1 unless an executable `interproscan.sh` exists in the configured directory. |
 | `--require-all-optional` | Apply all three required checks. |
 
-With no required option, the script checks only optional layers enabled in the
-config. It does not download any model or database.
+With no required option, check only tools enabled in the config. A failed
+required check returns a nonzero exit status. This command does not download
+models or databases.

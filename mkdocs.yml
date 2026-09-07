@@ -27,14 +27,14 @@ theme:
 nav:
   - Home: index.md
   - Get started: getting-started.md
-  - Performance: performance.md
+  - Outputs: METHODS.md
   - Optional analyses:
       - Overview: optional-features.md
       - Frameshift screening: FRAMESHIFT_SCREENING.md
   - Reference:
       - Command line: reference/cli.md
-      - Methods and outputs: METHODS.md
-      - Resource bundle: RESOURCE_BUNDLE.md
+      - Databases: RESOURCE_BUNDLE.md
+  - Performance: performance.md
 
 exclude_docs: |
   DEL/

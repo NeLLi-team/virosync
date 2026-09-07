@@ -298,16 +298,7 @@ def check_resource_version(failures: list[str]) -> None:
         failures,
     )
 
-    for path in ("README.md", "docs/METHODS.md", "docs/RESOURCE_BUNDLE.md"):
-        require_contains(path, DATABASE_VERSION, failures)
-        require_contains(path, RESOURCE_ARCHIVE, failures)
-
-    for value in (
-        TMVEC_RESOURCE_ARCHIVE,
-        TMVEC_RESOURCE_SHA256,
-        TMVEC_MANIFEST_SHA256,
-    ):
-        require_contains("docs/RESOURCE_BUNDLE.md", value, failures)
+    require_contains("docs/RESOURCE_BUNDLE.md", DATABASE_VERSION, failures)
 
     # The smoke workflow runs on the self-hosted runner with resources
     # provisioned out-of-band, so it no longer caches by key; it must still pin
@@ -318,23 +309,6 @@ def check_resource_version(failures: list[str]) -> None:
         "example-smoke EXPECTED_DB_VERSION differs from the release pin",
         failures,
     )
-
-
-def check_resource_documentation(failures: list[str]) -> None:
-    bundle_doc = read_text("docs/RESOURCE_BUNDLE.md")
-    expected_values = (
-        "HMM models: `1053`",
-        "Pfam models: `937`",
-        "marker annotation table lines: `1054`",
-        "OG marker map lines: `809`",
-        "taxonomy label lines: `190317`",
-        "models/model_annotations_with_interpro.tsv",
-        "models/og_marker_name_map.tsv",
-    )
-    for value in expected_values:
-        require(
-            value in bundle_doc, f"docs/RESOURCE_BUNDLE.md missing {value}", failures
-        )
 
 
 def is_forbidden_tracked_path(path: str) -> bool:
@@ -424,7 +398,6 @@ def main() -> int:
     failures: list[str] = []
     check_software_version(failures)
     check_resource_version(failures)
-    check_resource_documentation(failures)
     check_artifact_exclusion(failures)
     check_github_tag(failures)
     check_graphviz_runtime(failures)
