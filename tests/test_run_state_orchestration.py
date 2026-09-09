@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,16 +24,19 @@ from virosync.orchestration._flows.single_genome.manifest import (
     _empty_prediction_summary,
     _write_empty_run_log,
 )
-from virosync.orchestration._flows.single_genome.phase_state import (
-    load_phase2_state,
-    write_phase2_state,
-)
+from virosync.orchestration._flows.single_genome.phase1 import Phase1Result, Phase1Terminal
 from virosync.orchestration._flows.single_genome.phase1_state import (
     load_phase1_state,
     write_phase1_state,
 )
+from virosync.orchestration._flows.single_genome.phase2 import Phase2Result, Phase2Terminal
 from virosync.orchestration._flows.single_genome.phase2_resume_state import (
     write_phase2_resume_state,
+)
+from virosync.orchestration._flows.single_genome.phase3 import Phase3Result
+from virosync.orchestration._flows.single_genome.phase_state import (
+    load_phase2_state,
+    write_phase2_state,
 )
 from virosync.orchestration._flows.single_genome.run_state import (
     PHASE_MARKER_FILENAMES,
@@ -52,22 +55,23 @@ from virosync.output_contract import (
     OUTPUT_SCHEMA_VERSION,
     normalize_effective_eve_class,
 )
+from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import (
     MaskingResult,
     load_masking_result,
     mask_genome_pipeline,
     write_masking_status,
 )
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
-from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.seed_merger import MergedSeed
-
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
 _PREDICTION_HEADER = (
     "eve_id\tscaffold\tstart\tend\tconfidence_tier\tlength\t"
     "gene_taxonomy_total\thallmark_total\tfinal_confidence\t"
     "effective_eve_class\n"
 )
+
+
 class _NullResourceMonitor:
     def __init__(self, *args, **kwargs):
         pass
@@ -178,9 +182,7 @@ class _MockPipeline:
             "coordinate_convention": "0-based, half-open [start, end)",
             "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "summary_schema_version": 3,
-            "requested_masking": orchestrator._masking_request_identity(
-                MaskingConfig()
-            ),
+            "requested_masking": orchestrator._masking_request_identity(MaskingConfig()),
             "resources": [],
         }
         return identity, compute_run_fingerprint(identity)
@@ -197,10 +199,7 @@ class _MockPipeline:
 
         def publish_phase(output_dir, record):
             assert record.artifacts
-            assert all(
-                (Path(output_dir) / artifact.relative_path).is_file()
-                for artifact in record.artifacts
-            )
+            assert all((Path(output_dir) / artifact.relative_path).is_file() for artifact in record.artifacts)
             path = original_phase(output_dir, record)
             self.events.append(f"phase{record.phase}")
             return path
@@ -209,10 +208,7 @@ class _MockPipeline:
             assert (Path(output_dir) / PHASE_MARKER_FILENAMES[-1]).is_file() or (
                 kwargs["result"]["terminal_phase"] is not None
             )
-            assert all(
-                (Path(output_dir) / artifact.relative_path).is_file()
-                for artifact in kwargs["artifacts"]
-            )
+            assert all((Path(output_dir) / artifact.relative_path).is_file() for artifact in kwargs["artifacts"])
             state = original_success(output_dir, **kwargs)
             self.events.append("success")
             return state
@@ -244,7 +240,8 @@ class _MockPipeline:
 
     def _phase1(self, **kwargs):
         self.calls["phase1"] += 1
-        self.resume_flags["phase1"].append(bool(kwargs["resume"]))
+        resumed = kwargs["config"].execution.resume
+        self.resume_flags["phase1"].append(resumed)
         phase_dir = Path(kwargs["output_dir"]) / "phase1"
         phase_dir.mkdir(parents=True, exist_ok=True)
         state_path = phase_dir / "resume_state.json"
@@ -258,7 +255,7 @@ class _MockPipeline:
             )
         ]
         host_model = HostSignatureModel()
-        if kwargs["resume"]:
+        if resumed:
             state = load_phase1_state(state_path)
             merged_seeds = state.merged_seeds
             host_model = state.host_signature_model
@@ -273,9 +270,7 @@ class _MockPipeline:
             )
         if self.terminal_phase == 1:
             self._write_predictions(Path(kwargs["output_dir"]), rows=0)
-            reports = self._generate_required_reports(
-                output_dir=kwargs["output_dir"]
-            )
+            reports = self._generate_required_reports(output_dir=kwargs["output_dir"])
             _write_empty_run_log(
                 output_dir=Path(kwargs["output_dir"]),
                 genome_id=kwargs["genome_id"],
@@ -285,27 +280,27 @@ class _MockPipeline:
                 output_files=reports,
                 fingerprint=self.fingerprint,
             )
-            return {
-                "genome_id": kwargs["genome_id"],
-                "success": True,
-                **_empty_prediction_summary(),
-                "output_files": {},
-                "elapsed_sec": 0.0,
-            }
-        return {
-            "merged_seeds": merged_seeds,
-            "validated_markers": [],
-            "host_signature_model": host_model,
-            "host_signatures": set(),
-            "background": None,
-            "gene_data": {},
-            "host_deviation_summary": {},
-            "elapsed": 0.0,
-        }
+            return Phase1Terminal(
+                {
+                    "genome_id": kwargs["genome_id"],
+                    "success": True,
+                    **_empty_prediction_summary(),
+                    "output_files": {},
+                    "elapsed_sec": 0.0,
+                }
+            )
+        return Phase1Result(
+            merged_seeds=merged_seeds,
+            validated_markers=[],
+            host_signature_model=host_model,
+            host_signatures=set(),
+            host_deviation_summary={},
+            elapsed=0.0,
+        )
 
     def _phase2(self, **kwargs):
         self.calls["phase2"] += 1
-        resumed = bool(kwargs["resume"])
+        resumed = kwargs["config"].execution.resume
         self.resume_flags["phase2"].append(resumed)
         phase_dir = Path(kwargs["output_dir"]) / "phase2"
         phase_dir.mkdir(parents=True, exist_ok=True)
@@ -325,9 +320,7 @@ class _MockPipeline:
             )
             bed_path.write_text("")
             self._write_predictions(Path(kwargs["output_dir"]), rows=0)
-            reports = self._generate_required_reports(
-                output_dir=kwargs["output_dir"]
-            )
+            reports = self._generate_required_reports(output_dir=kwargs["output_dir"])
             _write_empty_run_log(
                 output_dir=Path(kwargs["output_dir"]),
                 genome_id=kwargs["genome_id"],
@@ -337,13 +330,15 @@ class _MockPipeline:
                 output_files=reports,
                 fingerprint=self.fingerprint,
             )
-            return {
-                "genome_id": kwargs["genome_id"],
-                "success": True,
-                **_empty_prediction_summary(),
-                "output_files": {},
-                "elapsed_sec": 0.0,
-            }
+            return Phase2Terminal(
+                {
+                    "genome_id": kwargs["genome_id"],
+                    "success": True,
+                    **_empty_prediction_summary(),
+                    "output_files": {},
+                    "elapsed_sec": 0.0,
+                }
+            )
         else:
             boundaries = [
                 RefinedBoundary(
@@ -364,23 +359,21 @@ class _MockPipeline:
                 boundary_control_stats=None,
                 boundary_diamond_query=None,
             )
-            bed_path.write_text(
-                "scaffold\t0\t4\tEVE_scaffold_0-4\t910\t.\n"
-            )
-        return {
-            "refined_boundaries": boundaries,
-            "boundary_taxonomy_map": {},
-            "boundary_control_stats": None,
-            "boundary_diamond_query": None,
-            "proteome_index": {},
-            "goto_phase3": resumed,
-            "boundaries_bed": bed_path,
-            "elapsed": 0.0,
-        }
+            bed_path.write_text("scaffold\t0\t4\tEVE_scaffold_0-4\t910\t.\n")
+        return Phase2Result(
+            refined_boundaries=boundaries,
+            boundary_taxonomy_map={},
+            boundary_control_stats=None,
+            boundary_diamond_query=None,
+            proteome_index={},
+            goto_phase3=resumed,
+            boundaries_bed=bed_path,
+            elapsed=0.0,
+        )
 
     def _phase3(self, **kwargs):
         self.calls["phase3"] += 1
-        self.resume_flags["phase3"].append(bool(kwargs["resume"]))
+        self.resume_flags["phase3"].append(kwargs["config"].execution.resume)
         self.phase3_boundaries = list(kwargs["refined_boundaries"])
         phase_dir = Path(kwargs["output_dir"]) / "phase3"
         phase_dir.mkdir(parents=True, exist_ok=True)
@@ -398,18 +391,16 @@ class _MockPipeline:
             final_confidence=0.91,
         )
         accepted_results = [] if self.candidate_only else [result]
-        return {
-            "verification_results": [result],
-            "accepted_results": accepted_results,
-            "classification_stats": (
-                {}
-                if self.candidate_only
-                else {normalize_effective_eve_class(self.effective_eve_class): 1}
+        return Phase3Result(
+            verification_results=[result],
+            accepted_results=accepted_results,
+            promoted_low_results=[],
+            classification_stats=(
+                {} if self.candidate_only else {normalize_effective_eve_class(self.effective_eve_class): 1}
             ),
-            "accepted": len(accepted_results),
-            "elapsed": 0.0,
-            "precomputed_tmvec": None,
-        }
+            accepted=len(accepted_results),
+            elapsed=0.0,
+        )
 
     def _call_task(self, task_fn, *args, **kwargs):
         if task_fn is orchestrator.generate_outputs_task:
@@ -425,9 +416,7 @@ class _MockPipeline:
             )
             return {
                 "predictions_tsv": output_dir / "virosync_predictions.tsv",
-                "predictions_detailed_tsv": (
-                    output_dir / "virosync_predictions_detailed.tsv"
-                ),
+                "predictions_detailed_tsv": (output_dir / "virosync_predictions_detailed.tsv"),
                 "predictions_bed": output_dir / "virosync_predictions.bed",
                 "predictions_gff": output_dir / "virosync_predictions.gff3",
                 "summary_json": output_dir / "virosync_summary.json",
@@ -469,18 +458,13 @@ class _MockPipeline:
         if detailed_rows is None:
             detailed_rows = rows
         prediction_row = (
-            "EVE_1\tscaffold\t0\t4\t"
-            f"{confidence_tier}\t4\t1\t1\t{final_confidence}\t{effective_eve_class}\n"
+            f"EVE_1\tscaffold\t0\t4\t{confidence_tier}\t4\t1\t1\t{final_confidence}\t{effective_eve_class}\n"
         )
         canonical_content = _PREDICTION_HEADER + (prediction_row * rows)
-        detailed_content = _PREDICTION_HEADER + (
-            prediction_row * detailed_rows
-        )
+        detailed_content = _PREDICTION_HEADER + (prediction_row * detailed_rows)
         export_score = int(min(1000, final_confidence * 1000))
         (directory / "virosync_predictions.tsv").write_text(canonical_content)
-        (directory / "virosync_predictions_detailed.tsv").write_text(
-            detailed_content
-        )
+        (directory / "virosync_predictions_detailed.tsv").write_text(detailed_content)
         (directory / "virosync_predictions.bed").write_text(
             f"scaffold\t0\t4\tEVE_1\t{export_score}\t.\n" if rows else ""
         )
@@ -504,15 +488,9 @@ class _MockPipeline:
                         "canonical_predictions": rows,
                         "total_candidates": detailed_rows,
                         "total_accepted_length_bp": 4 if rows else 0,
-                        "high_confidence": (
-                            rows if confidence_tier == "HIGH" else 0
-                        ),
-                        "medium_confidence": (
-                            rows if confidence_tier == "MEDIUM" else 0
-                        ),
-                        "low_confidence": (
-                            rows if confidence_tier == "LOW" else 0
-                        ),
+                        "high_confidence": (rows if confidence_tier == "HIGH" else 0),
+                        "medium_confidence": (rows if confidence_tier == "MEDIUM" else 0),
+                        "low_confidence": (rows if confidence_tier == "LOW" else 0),
                         "promoted_low_confidence": 0,
                     },
                     "per_scaffold": {},
@@ -527,9 +505,7 @@ class _MockPipeline:
             assert (output_dir / "demo_eves.fna").is_file()
         notebook = Path(output_dir) / "notebooks" / "jupyter" / "eve_analysis.ipynb"
         notebook.parent.mkdir(parents=True, exist_ok=True)
-        notebook.write_text(
-            '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n'
-        )
+        notebook.write_text('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n')
         (output_dir / "host_signature_model.png").write_bytes(b"synthetic-png\n")
         (output_dir / "gvclass_results.tsv").write_text(
             "eve_id\tclassification\nEVE_1\tNCLDV\n",
@@ -560,9 +536,7 @@ def test_a1_publishes_nonzero_phase1_terminal_and_resumes_without_phase2_or_3(
 ) -> None:
     mocked_pipeline.require_combined_fasta_before_report = True
     mocked_pipeline.identity["config"]["ablation_id"] = "A1"
-    mocked_pipeline.fingerprint = compute_run_fingerprint(
-        mocked_pipeline.identity
-    )
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
 
     result = orchestrator.single_genome_flow(
         genome_path=mocked_pipeline.genome,
@@ -582,16 +556,10 @@ def test_a1_publishes_nonzero_phase1_terminal_and_resumes_without_phase2_or_3(
         "phase2": 0,
         "phase3": 0,
     }
-    marker = json.loads(
-        (mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[1]).read_text()
-    )
+    marker = json.loads((mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[1]).read_text())
     assert marker["outcome"] == "terminal_ablation"
-    assert "demo_eves.fna" in {
-        artifact["relative_path"] for artifact in marker["artifacts"]
-    }
-    assert not (
-        mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[2]
-    ).exists()
+    assert "demo_eves.fna" in {artifact["relative_path"] for artifact in marker["artifacts"]}
+    assert not (mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[2]).exists()
     state = load_run_state(mocked_pipeline.output_dir)
     assert state.result["terminal_phase"] == 1
     assert state.result["canonical_rows"] == 1
@@ -601,12 +569,8 @@ def test_a1_publishes_nonzero_phase1_terminal_and_resumes_without_phase2_or_3(
         "LOW": 1,
     }
     assert state.result["promoted_low_rows"] == 0
-    assert "demo_eves.fna" in {
-        artifact.relative_path for artifact in state.artifacts
-    }
-    events = validate_ablation_events_bytes(
-        (mocked_pipeline.output_dir / "ablation_events.json").read_bytes()
-    )
+    assert "demo_eves.fna" in {artifact.relative_path for artifact in state.artifacts}
+    events = validate_ablation_events_bytes((mocked_pipeline.output_dir / "ablation_events.json").read_bytes())
     assert events.ablation_id.value == "A1"
     assert (
         events.counters.total_opportunities,
@@ -721,9 +685,7 @@ def _mutate_recorded_file(path: Path, original: bytes, operation: str) -> None:
     if operation != "same-size":
         raise AssertionError(f"unknown mutation: {operation}")
     if not original:
-        raise AssertionError(
-            f"same-size mutation needs non-empty bytes: {path}"
-        )
+        raise AssertionError(f"same-size mutation needs non-empty bytes: {path}")
     changed = bytearray(original)
     changed[0] ^= 1
     path.write_bytes(changed)
@@ -836,9 +798,7 @@ def test_decreasing_ablation_fragment_counters_restart_at_first_regression(
     mocked_pipeline: _MockPipeline,
 ) -> None:
     mocked_pipeline.identity["config"]["ablation_id"] = "A2"
-    mocked_pipeline.fingerprint = compute_run_fingerprint(
-        mocked_pipeline.identity
-    )
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
     orchestrator.single_genome_flow(
         genome_path=mocked_pipeline.genome,
         output_dir=mocked_pipeline.output_dir,
@@ -857,9 +817,7 @@ def test_decreasing_ablation_fragment_counters_restart_at_first_regression(
         ),
     )
     relative_path = "phase1/ablation_events.json"
-    (mocked_pipeline.output_dir / relative_path).write_bytes(
-        phase1_events.to_bytes()
-    )
+    (mocked_pipeline.output_dir / relative_path).write_bytes(phase1_events.to_bytes())
     _rebind_phase_artifact(
         mocked_pipeline.output_dir,
         phase=1,
@@ -891,9 +849,7 @@ def test_ablation_counters_cannot_appear_before_the_owner_phase(
     mocked_pipeline: _MockPipeline,
 ) -> None:
     mocked_pipeline.identity["config"]["ablation_id"] = "A5"
-    mocked_pipeline.fingerprint = compute_run_fingerprint(
-        mocked_pipeline.identity
-    )
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
     orchestrator.single_genome_flow(
         genome_path=mocked_pipeline.genome,
         output_dir=mocked_pipeline.output_dir,
@@ -912,9 +868,7 @@ def test_ablation_counters_cannot_appear_before_the_owner_phase(
         ),
     )
     relative_path = "phase0/ablation_events.json"
-    (mocked_pipeline.output_dir / relative_path).write_bytes(
-        early_events.to_bytes()
-    )
+    (mocked_pipeline.output_dir / relative_path).write_bytes(early_events.to_bytes())
     _rebind_phase_artifact(
         mocked_pipeline.output_dir,
         phase=0,
@@ -934,9 +888,7 @@ def test_ablation_counters_cannot_change_after_the_owner_phase(
     mocked_pipeline: _MockPipeline,
 ) -> None:
     mocked_pipeline.identity["config"]["ablation_id"] = "A2"
-    mocked_pipeline.fingerprint = compute_run_fingerprint(
-        mocked_pipeline.identity
-    )
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
     orchestrator.single_genome_flow(
         genome_path=mocked_pipeline.genome,
         output_dir=mocked_pipeline.output_dir,
@@ -959,9 +911,7 @@ def test_ablation_counters_cannot_change_after_the_owner_phase(
             ),
         )
         relative_path = f"phase{phase}/ablation_events.json"
-        (mocked_pipeline.output_dir / relative_path).write_bytes(
-            events.to_bytes()
-        )
+        (mocked_pipeline.output_dir / relative_path).write_bytes(events.to_bytes())
         _rebind_phase_artifact(
             mocked_pipeline.output_dir,
             phase=phase,
@@ -989,9 +939,7 @@ def test_root_ablation_events_must_equal_the_terminal_phase_fragment(
     mocked_pipeline: _MockPipeline,
 ) -> None:
     mocked_pipeline.identity["config"]["ablation_id"] = "A6"
-    mocked_pipeline.fingerprint = compute_run_fingerprint(
-        mocked_pipeline.identity
-    )
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
     orchestrator.single_genome_flow(
         genome_path=mocked_pipeline.genome,
         output_dir=mocked_pipeline.output_dir,
@@ -1009,9 +957,7 @@ def test_root_ablation_events_must_equal_the_terminal_phase_fragment(
             changed=1,
         ),
     )
-    (mocked_pipeline.output_dir / "ablation_events.json").write_bytes(
-        root_events.to_bytes()
-    )
+    (mocked_pipeline.output_dir / "ablation_events.json").write_bytes(root_events.to_bytes())
     _rebind_phase_artifact(
         mocked_pipeline.output_dir,
         phase=3,
@@ -1042,10 +988,7 @@ def test_fresh_run_publishes_artifact_backed_state_in_order(
         "success",
     ]
     assert load_run_state(mocked_pipeline.output_dir).status == "success"
-    assert all(
-        (mocked_pipeline.output_dir / marker).is_file()
-        for marker in PHASE_MARKER_FILENAMES
-    )
+    assert all((mocked_pipeline.output_dir / marker).is_file() for marker in PHASE_MARKER_FILENAMES)
 
 
 @pytest.mark.parametrize(
@@ -1059,10 +1002,7 @@ def test_every_required_final_artifact_class_is_content_authenticated(
     path_choices: tuple[str, ...],
 ) -> None:
     mocked_pipeline.run()
-    recorded = {
-        artifact.relative_path
-        for artifact in load_run_state(mocked_pipeline.output_dir).artifacts
-    }
+    recorded = {artifact.relative_path for artifact in load_run_state(mocked_pipeline.output_dir).artifacts}
     relative_path = next(
         (choice for choice in path_choices if choice in recorded),
         None,
@@ -1079,10 +1019,7 @@ def test_every_required_final_artifact_class_is_content_authenticated(
 @pytest.mark.parametrize(
     ("phase", "relative_path"),
     _REQUIRED_PHASE_ARTIFACTS,
-    ids=[
-        f"phase{phase}-{Path(path).name}"
-        for phase, path in _REQUIRED_PHASE_ARTIFACTS
-    ],
+    ids=[f"phase{phase}-{Path(path).name}" for phase, path in _REQUIRED_PHASE_ARTIFACTS],
 )
 def test_every_required_phase_artifact_is_content_authenticated(
     mocked_pipeline: _MockPipeline,
@@ -1104,9 +1041,7 @@ def test_every_recorded_artifact_rejects_all_content_mutations(
     mocked_pipeline.run()
     recorded: dict[str, int] = {}
     for phase, marker_name in enumerate(PHASE_MARKER_FILENAMES):
-        record = run_state_module._load_phase_record(
-            mocked_pipeline.output_dir / marker_name
-        )
+        record = run_state_module._load_phase_record(mocked_pipeline.output_dir / marker_name)
         for artifact in record.artifacts:
             recorded.setdefault(artifact.relative_path, phase)
     state = load_run_state(mocked_pipeline.output_dir)
@@ -1166,11 +1101,7 @@ def test_dynamic_masked_fasta_is_recorded_and_content_authenticated(
         masking_dir,
     )
     artifacts = orchestrator._phase_artifacts(output_dir, 0)
-    identity = next(
-        artifact
-        for artifact in artifacts
-        if artifact.relative_path == "phase0/masking/masked.fasta"
-    )
+    identity = next(artifact for artifact in artifacts if artifact.relative_path == "phase0/masking/masked.fasta")
     original = masked_fasta.read_bytes()
 
     for operation in ("same-size", "delete", "truncate"):
@@ -1238,20 +1169,12 @@ def test_scaffold_lengths_are_reused_only_within_one_validation_scope(
 
     monkeypatch.setattr(run_state_module.hashlib, "sha256", tracked_sha256)
     with run_state_module._validation_cache_scope():
-        assert run_state_module._authenticated_scaffold_lengths(identities) == {
-            "contig": 4
-        }
-        assert run_state_module._authenticated_scaffold_lengths(identities) == {
-            "contig": 4
-        }
+        assert run_state_module._authenticated_scaffold_lengths(identities) == {"contig": 4}
+        assert run_state_module._authenticated_scaffold_lengths(identities) == {"contig": 4}
     assert calls == 1
 
-    assert run_state_module._authenticated_scaffold_lengths(identities) == {
-        "contig": 4
-    }
-    assert run_state_module._authenticated_scaffold_lengths(identities) == {
-        "contig": 4
-    }
+    assert run_state_module._authenticated_scaffold_lengths(identities) == {"contig": 4}
+    assert run_state_module._authenticated_scaffold_lengths(identities) == {"contig": 4}
     assert calls == 3
 
 
@@ -1311,9 +1234,7 @@ def test_phase_artifacts_support_relative_output_directory(
     artifacts = orchestrator._phase_artifacts(output_dir, 0)
     identities = {artifact.relative_path: artifact for artifact in artifacts}
 
-    assert identities["phase0/proteome.fasta"].sha256 == hashlib.sha256(
-        proteome.read_bytes()
-    ).hexdigest()
+    assert identities["phase0/proteome.fasta"].sha256 == hashlib.sha256(proteome.read_bytes()).hexdigest()
     assert identities["phase0/masking/masked.fasta"].sha256 == masked_sha256
 
 
@@ -1341,9 +1262,7 @@ def test_duplicate_final_outputs_must_agree(
             if source_relative.startswith("phase3_synthesis/")
             else "phase3_synthesis/virosync_predictions.tsv"
         )
-        content = (
-            mocked_pipeline.output_dir / source_relative
-        ).read_text().replace("0.91", "0.92")
+        content = (mocked_pipeline.output_dir / source_relative).read_text().replace("0.91", "0.92")
         schema = "canonical-predictions-v6"
         expected_error = "duplicate canonical prediction tables disagree"
     else:
@@ -1360,9 +1279,7 @@ def test_duplicate_final_outputs_must_agree(
             if source_relative.startswith("phase3_synthesis/")
             else "phase3_synthesis/virosync_summary.json"
         )
-        payload = json.loads(
-            (mocked_pipeline.output_dir / source_relative).read_text()
-        )
+        payload = json.loads((mocked_pipeline.output_dir / source_relative).read_text())
         payload["per_scaffold"] = {"different": {}}
         content = json.dumps(payload, sort_keys=True) + "\n"
         schema = "virosync-summary-v3"
@@ -1495,8 +1412,7 @@ def test_checkpoint_json_reader_reports_observed_and_allowed_size(
         handle.truncate(run_state_module._MAX_CHECKPOINT_BYTES + 1)
 
     expected = (
-        f"observed={run_state_module._MAX_CHECKPOINT_BYTES + 1}, "
-        f"allowed=1-{run_state_module._MAX_CHECKPOINT_BYTES}"
+        f"observed={run_state_module._MAX_CHECKPOINT_BYTES + 1}, allowed=1-{run_state_module._MAX_CHECKPOINT_BYTES}"
     )
     with pytest.raises(ValueError, match=expected):
         run_state_module._read_artifact_json(
@@ -1564,10 +1480,9 @@ def test_terminal_zero_publishes_exact_prefix_and_zero_success(
     assert state.result["accepted_bp"] == 0
     assert not any(state.result["class_counts"].values())
     assert not any(state.result["tier_counts"].values())
-    assert {
-        path.name
-        for path in mocked_pipeline.output_dir.glob("phase*.complete.json")
-    } == set(PHASE_MARKER_FILENAMES[: terminal_phase + 1])
+    assert {path.name for path in mocked_pipeline.output_dir.glob("phase*.complete.json")} == set(
+        PHASE_MARKER_FILENAMES[: terminal_phase + 1]
+    )
 
 
 def test_terminal_zero_rejects_dangling_downstream_marker_symlink(
@@ -1604,9 +1519,7 @@ def test_terminal_marker_promotes_after_crash_without_phase_rerun(
     with pytest.raises(RuntimeError, match="after terminal marker"):
         mocked_pipeline.run()
 
-    assert (
-        mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[terminal_phase]
-    ).is_file()
+    assert (mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[terminal_phase]).is_file()
     calls_before = dict(mocked_pipeline.calls)
     monkeypatch.setattr(orchestrator, "publish_run_success", original_success)
 
@@ -1648,11 +1561,7 @@ def test_completed_run_phase3_artifact_mutation_reuses_phase0_to_phase2(
 ) -> None:
     mocked_pipeline.run()
     calls_after_fresh = dict(mocked_pipeline.calls)
-    (
-        mocked_pipeline.output_dir
-        / "phase3_synthesis"
-        / "virosync_predictions.tsv"
-    ).write_text("mutated\n")
+    (mocked_pipeline.output_dir / "phase3_synthesis" / "virosync_predictions.tsv").write_text("mutated\n")
 
     stale = plan_resume(
         mocked_pipeline.output_dir,
@@ -1674,9 +1583,7 @@ def test_unowned_phase3_diagnostic_mutation_does_not_invalidate_success(
     mocked_pipeline: _MockPipeline,
 ) -> None:
     mocked_pipeline.run()
-    (mocked_pipeline.output_dir / "phase3" / "state.tsv").write_text(
-        "mutated diagnostic\n"
-    )
+    (mocked_pipeline.output_dir / "phase3" / "state.tsv").write_text("mutated diagnostic\n")
 
     plan = plan_resume(
         mocked_pipeline.output_dir,
@@ -1696,9 +1603,7 @@ def test_fresh_and_completed_resume_return_identical_summary_counts(
     resumed = mocked_pipeline.run()
 
     summary_fields = set(_empty_prediction_summary())
-    assert {field: fresh[field] for field in summary_fields} == {
-        field: resumed[field] for field in summary_fields
-    }
+    assert {field: fresh[field] for field in summary_fields} == {field: resumed[field] for field in summary_fields}
     assert fresh["accepted"] == 1
     assert fresh["predictions"] == 1
     assert fresh["accepted_bp"] == 4
@@ -1749,10 +1654,7 @@ def _result_with_promoted_low(value: object = 1) -> dict[str, object]:
         "canonical_rows": 2,
         "detailed_rows": 2,
         "accepted_bp": 8,
-        "class_counts": {
-            eve_class: 2 if eve_class == "NCLDV" else 0
-            for eve_class in EFFECTIVE_EVE_CLASSES
-        },
+        "class_counts": {eve_class: 2 if eve_class == "NCLDV" else 0 for eve_class in EFFECTIVE_EVE_CLASSES},
         "tier_counts": {"HIGH": 0, "MEDIUM": 0, "LOW": 2},
         "promoted_low_rows": value,
         "benchmark_eligible": True,
@@ -1785,9 +1687,7 @@ def test_success_validation_rejects_independent_low_summary_mismatch(
     mocked_pipeline.run()
     state = load_run_state(mocked_pipeline.output_dir)
     summary_artifact = next(
-        artifact
-        for artifact in state.artifacts
-        if artifact.relative_path.endswith("virosync_summary.json")
+        artifact for artifact in state.artifacts if artifact.relative_path.endswith("virosync_summary.json")
     )
     summary_path = mocked_pipeline.output_dir / summary_artifact.relative_path
     summary = json.loads(summary_path.read_text())
@@ -1826,11 +1726,7 @@ def test_candidates_without_acceptance_publish_and_resume_exactly(
     assert fresh["success"] is True
     assert fresh["predictions"] == resumed["predictions"] == 1
     assert fresh["accepted"] == resumed["accepted"] == 0
-    assert (
-        fresh["quality_gate_dropped"]
-        == resumed["quality_gate_dropped"]
-        == 1
-    )
+    assert fresh["quality_gate_dropped"] == resumed["quality_gate_dropped"] == 1
     assert state.result is not None
     assert state.result["canonical_rows"] == 0
     assert state.result["detailed_rows"] == 1
@@ -1864,9 +1760,7 @@ def test_output_files_are_identical_for_fresh_resumed_and_recovered_success(
     assert set(fresh["output_files"]) == {"run_state", "artifacts"}
     state = load_run_state(mocked_pipeline.output_dir)
     assert fresh["output_files"]["artifacts"] == {
-        artifact.relative_path: str(
-            mocked_pipeline.output_dir / artifact.relative_path
-        )
+        artifact.relative_path: str(mocked_pipeline.output_dir / artifact.relative_path)
         for artifact in sorted(
             state.artifacts,
             key=lambda item: item.relative_path,

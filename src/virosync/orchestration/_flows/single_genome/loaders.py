@@ -9,9 +9,9 @@ import csv
 import json
 from pathlib import Path
 
-from virosync.utils.atomic_write import atomic_write_context
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
+from virosync.utils.atomic_write import atomic_write_context
 
 
 def _count_fasta_records(fasta_path: Path) -> int:
@@ -64,9 +64,7 @@ def _build_merged_seeds_from_regions(
             end=end,
             seed_id=f"seed_{idx}_{scaffold}_{start}",
             sources=["hhg", "marker_validation"],
-            confidence="high"
-            if any(is_mcp_gene(a.hallmark_gene) for a in anchors)
-            else "medium",
+            confidence="high" if any(is_mcp_gene(a.hallmark_gene) for a in anchors) else "medium",
             hhg_score=len(anchors) * 10.0,
             novelty_score=0.0,
             compositional_score=0.0,

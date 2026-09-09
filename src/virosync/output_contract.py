@@ -280,10 +280,7 @@ def normalize_effective_eve_class_counts(
         "UNKNOWN",
     }
     if set(counts) not in (current_keys, schema4_keys, legacy_keys):
-        raise ValueError(
-            "class_counts must contain the current or legacy complete "
-            "effective EVE class partition"
-        )
+        raise ValueError("class_counts must contain the current or legacy complete effective EVE class partition")
     for eve_class, count in counts.items():
         normalized[normalize_effective_eve_class(eve_class)] += int(count)
     return normalized

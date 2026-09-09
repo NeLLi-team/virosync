@@ -43,10 +43,7 @@ def _write_proteome(path: Path) -> None:
     records = []
     for index, start in enumerate(range(1, 602, 100), start=1):
         end = start + 89
-        records.append(
-            f">contig_{index} # {start} # {end} # + # "
-            f"ID=contig_{index};\nMPEPTIDE\n"
-        )
+        records.append(f">contig_{index} # {start} # {end} # + # ID=contig_{index};\nMPEPTIDE\n")
     path.write_text("".join(records))
 
 
@@ -60,9 +57,7 @@ def test_full_proteome_search_is_one_unchunked_raw_id_pass(
 
     def fake_search(**kwargs) -> None:
         calls.append(kwargs)
-        Path(kwargs["output"]).write_text(
-            "contig_1\tNCLDV__virus\t1e-20\t100\t80\t90\n"
-        )
+        Path(kwargs["output"]).write_text("contig_1\tNCLDV__virus\t1e-20\t100\t80\t90\n")
 
     monkeypatch.setattr(boundary_diamond, "run_diamond_blastp", fake_search)
 
@@ -87,10 +82,7 @@ def test_cached_phase2a_reconstructs_overlaps_no_hits_and_top10(
     proteome = tmp_path / "proteome.faa"
     _write_proteome(proteome)
     hits = {
-        "contig_1": [
-            _hit("contig_1", f"NCLDV__virus_{index}", 100.0 - index)
-            for index in range(12)
-        ],
+        "contig_1": [_hit("contig_1", f"NCLDV__virus_{index}", 100.0 - index) for index in range(12)],
         "contig_3": [_hit("contig_3", "EUK__host", 80.0)],
     }
     regions = [
@@ -100,18 +92,13 @@ def test_cached_phase2a_reconstructs_overlaps_no_hits_and_top10(
 
     def fake_region_search(**kwargs) -> None:
         query_ids = [
-            line[1:].strip()
-            for line in Path(kwargs["query_fasta"]).read_text().splitlines()
-            if line.startswith(">")
+            line[1:].strip() for line in Path(kwargs["query_fasta"]).read_text().splitlines() if line.startswith(">")
         ]
         lines = []
         for query_id in query_ids:
             raw_porf_id = query_id.split("|", 1)[1]
             for hit in hits.get(raw_porf_id, []):
-                lines.append(
-                    f"{query_id}\t{hit.target}\t{hit.evalue}\t{hit.bits}\t"
-                    f"{hit.pident}\t{hit.qcov}\n"
-                )
+                lines.append(f"{query_id}\t{hit.target}\t{hit.evalue}\t{hit.bits}\t{hit.pident}\t{hit.qcov}\n")
         Path(kwargs["output_file"]).write_text("".join(lines))
 
     monkeypatch.setattr(
@@ -151,12 +138,8 @@ def test_cached_phase2a_reconstructs_overlaps_no_hits_and_top10(
     assert left_records[2].top1_prefix == "UNKNOWN"
     assert left_records[2].porf_start == 100
     assert left_summary["total"] == overlap_summary["total"] == 4
-    assert (tmp_path / "cached" / "left.tsv").read_text() == (
-        tmp_path / "legacy" / "left.tsv"
-    ).read_text()
-    assert (tmp_path / "cached" / "overlap.tsv").read_text() == (
-        tmp_path / "legacy" / "overlap.tsv"
-    ).read_text()
+    assert (tmp_path / "cached" / "left.tsv").read_text() == (tmp_path / "legacy" / "left.tsv").read_text()
+    assert (tmp_path / "cached" / "overlap.tsv").read_text() == (tmp_path / "legacy" / "overlap.tsv").read_text()
 
 
 def test_cached_phase2b_slices_exact_query_and_preserves_controls(
@@ -187,10 +170,7 @@ def test_cached_phase2b_slices_exact_query_and_preserves_controls(
         ]
     }
     hits = {
-        "p1": [
-            _hit("p1", f"NCLDV__virus_{index}", 100.0 - index)
-            for index in range(12)
-        ],
+        "p1": [_hit("p1", f"NCLDV__virus_{index}", 100.0 - index) for index in range(12)],
         "p2": [_hit("p2", "EUK__host", 90.0)],
     }
 
@@ -219,10 +199,7 @@ def test_cached_phase2b_slices_exact_query_and_preserves_controls(
         lines = []
         for porf_id in query.all_porf_ids:
             for hit in hits.get(porf_id, [])[: kwargs["max_target_seqs"]]:
-                lines.append(
-                    f"{porf_id}\t{hit.target}\t{hit.evalue}\t{hit.bits}\t"
-                    f"{hit.pident}\t{hit.qcov}\n"
-                )
+                lines.append(f"{porf_id}\t{hit.target}\t{hit.evalue}\t{hit.bits}\t{hit.pident}\t{hit.qcov}\n")
         Path(kwargs["output"]).write_text("".join(lines))
 
     monkeypatch.setattr(
@@ -248,7 +225,28 @@ def _run_phase2(
     proteome: Path,
     database: Path,
     prototype_enabled: bool,
-) -> dict:
+) -> phase2.Phase2Result:
+    config = PipelineConfig().with_overrides(
+        resume=False,
+        gene_taxonomy_faa_db=database,
+        host_prefixes=["EUK__"],
+        boundary_host_trim_window_bp=100,
+        boundary_host_trim_step_bp=50,
+        boundary_host_trim_max_host_fraction=0.5,
+        boundary_host_trim_min_viral_fraction=0.0,
+        boundary_host_trim_score_threshold=0.5,
+        boundary_host_trim_buffer_kb=0,
+        boundary_host_trim_min_overlap_score=0.2,
+        boundary_taxonomy_ml_neighbor_window=1,
+        threads=1,
+        gene_taxonomy_threads=1,
+        extended_output=False,
+    )
+    config.phase2.diamond_flank_genes = 1
+    config.phase2.diamond_control_sample_size = 1
+    config.phase2.diamond_control_min_distance = 1
+    config.phase2.diamond_chunk_size = 2
+    config.phase2.diamond_superset_prototype_enabled = prototype_enabled
     return phase2._run_phase2_subflow(
         masked_path=masked,
         proteome_path=proteome,
@@ -266,41 +264,9 @@ def _run_phase2(
         host_signature_model=HostSignatureModel(token_weights={"host": 1.0}),
         output_dir=output_dir,
         genome_id="genome",
-        resume=False,
-        refined_bed=output_dir / "phase2" / "refined_boundaries.bed",
-        gene_taxonomy_faa_db=database,
-        marker_db=None,
-        taxonomy_labels_file=None,
-        host_prefixes=["EUK__"],
-        host_label="EUK",
-        high_pident_host_threshold=70.0,
-        boundary_host_trim_enabled=True,
-        boundary_host_trim_window_bp=100,
-        boundary_host_trim_step_bp=50,
-        boundary_host_trim_max_host_fraction=0.5,
-        boundary_host_trim_min_viral_fraction=0.0,
-        boundary_host_trim_score_threshold=0.5,
-        boundary_host_trim_buffer_kb=0,
-        boundary_host_trim_min_overlap_score=0.2,
-        boundary_host_signature_min_token_len=3,
-        taxonomy_weight_mode="rank",
-        boundary_taxonomy_ml_enabled=False,
-        boundary_taxonomy_ml_model="logreg",
-        boundary_taxonomy_ml_threshold=0.5,
-        boundary_taxonomy_ml_neighbor_window=1,
-        boundary_diamond_flank_genes=1,
-        boundary_diamond_control_sample_size=1,
-        boundary_diamond_control_min_distance=1,
-        boundary_diamond_top_k=10,
-        boundary_diamond_chunk_size=2,
-        boundary_diamond_random_seed=42,
-        threads=1,
-        gene_taxonomy_threads=1,
-        extended_output=False,
-        search_backend="diamond",
+        config=config,
         genome_start_time=time.time(),
         logger=logging.getLogger(__name__),
-        boundary_diamond_superset_prototype_enabled=prototype_enabled,
     )
 
 
@@ -316,10 +282,7 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
     database.write_bytes(b"database")
     raw_hits = {
         "contig_2": [_hit("contig_2", "EUK__host", 100.0)],
-        "contig_3": [
-            _hit("contig_3", f"NCLDV__virus_{index}", 90.0 - index)
-            for index in range(12)
-        ],
+        "contig_3": [_hit("contig_3", f"NCLDV__virus_{index}", 90.0 - index) for index in range(12)],
     }
     search_counts = {"legacy": 0, "prototype": 0}
 
@@ -347,9 +310,7 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
         search_counts["prototype"] += 1
         output_dir = Path(kwargs["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "full_proteome.tsv").write_text(
-            "contig_2\tEUK__host\t1e-20\t100\t80\t90\n"
-        )
+        (output_dir / "full_proteome.tsv").write_text("contig_2\tEUK__host\t1e-20\t100\t80\t90\n")
         return raw_hits
 
     monkeypatch.setattr(phase2, "call_task", fake_call_task)
@@ -372,19 +333,17 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
     )
 
     assert search_counts == {"legacy": 2, "prototype": 1}
-    assert phase2_state_to_document(legacy["refined_boundaries"]) == (
-        phase2_state_to_document(prototype["refined_boundaries"])
+    assert phase2_state_to_document(legacy.refined_boundaries) == (
+        phase2_state_to_document(prototype.refined_boundaries)
     )
-    assert legacy["boundary_taxonomy_map"] == prototype["boundary_taxonomy_map"]
-    assert legacy["boundary_control_stats"] == prototype["boundary_control_stats"]
-    assert legacy["boundary_diamond_query"] == prototype["boundary_diamond_query"]
+    assert legacy.boundary_taxonomy_map == prototype.boundary_taxonomy_map
+    assert legacy.boundary_control_stats == prototype.boundary_control_stats
+    assert legacy.boundary_diamond_query == prototype.boundary_diamond_query
     prototype_artifacts = orchestrator._phase_artifacts(
         tmp_path / "prototype",
         2,
     )
-    assert "phase2/superset_diamond/full_proteome.tsv" in {
-        artifact.relative_path for artifact in prototype_artifacts
-    }
+    assert "phase2/superset_diamond/full_proteome.tsv" in {artifact.relative_path for artifact in prototype_artifacts}
 
 
 def test_superset_opt_in_round_trips_and_changes_provenance_fingerprint() -> None:
@@ -401,12 +360,7 @@ def test_superset_opt_in_round_trips_and_changes_provenance_fingerprint() -> Non
 
     assert default.phase2.diamond_superset_prototype_enabled is False
     assert enabled.phase2.diamond_superset_prototype_enabled is True
-    assert (
-        enabled.to_flow_kwargs()[
-            "boundary_diamond_superset_prototype_enabled"
-        ]
-        is True
-    )
+    assert enabled.to_flow_kwargs()["boundary_diamond_superset_prototype_enabled"] is True
     assert _compute_config_fingerprint(default.to_flow_kwargs()) != (
         _compute_config_fingerprint(enabled.to_flow_kwargs())
     )

@@ -1,5 +1,4 @@
-"""
-InterProScan annotation for EVE candidate regions.
+"""InterProScan annotation for EVE candidate regions.
 
 Runs InterProScan on prodigal-gv proteins overlapping candidate regions,
 then summarizes viral/hallmark-related annotations to boost confidence.
@@ -10,8 +9,8 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
 from Bio import SeqIO
 
@@ -77,8 +76,6 @@ INTERPRO_FAMILY_KEYWORDS = {
 }
 
 
-
-
 def _keyword_match(text: str, keywords: Iterable[str]) -> bool:
     text = text.lower()
     return any(k.lower() in text for k in keywords)
@@ -108,11 +105,10 @@ def run_interproscan_batch(
     interproscan_dir: Path,
     output_dir: Path,
     threads: int = 4,
-    keywords: Optional[list[str]] = None,
-    applications: Optional[list[str]] = None,
+    keywords: list[str] | None = None,
+    applications: list[str] | None = None,
 ) -> dict[str, dict]:
-    """
-    Run InterProScan on all candidate regions in one batch.
+    """Run InterProScan on all candidate regions in one batch.
 
     Returns:
         Mapping of eve_id -> summary dict with counts and keyword hits.
@@ -169,10 +165,14 @@ def run_interproscan_batch(
     output_tsv = output_dir / "interproscan_batch.tsv"
     cmd = [
         str(interproscan_exec),
-        "-i", str(tmp_faa_path),
-        "-f", "tsv",
-        "-o", str(output_tsv),
-        "--cpu", str(threads),
+        "-i",
+        str(tmp_faa_path),
+        "-f",
+        "tsv",
+        "-o",
+        str(output_tsv),
+        "--cpu",
+        str(threads),
     ]
 
     if applications:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -79,10 +80,7 @@ def _invoke_batch(
         "_resolve_optional_features",
         lambda config: (
             config,
-            {
-                name: FeatureResolution(False, False, False)
-                for name in ("boltz", "tmvec", "interproscan")
-            },
+            {name: FeatureResolution(False, False, False) for name in ("boltz", "tmvec", "interproscan")},
         ),
     )
     monkeypatch.setattr(
@@ -222,8 +220,6 @@ def test_all_success_including_zero_call_exits_zero(
     assert "Batch Processing Failed" not in result.output
     assert all(row["status"] == "success" for row in _summary_rows(output_root))
     assert all(
-        row["benchmark_eligible"] == "true"
-        and row["legacy_resume"] == "false"
-        for row in _summary_rows(output_root)
+        row["benchmark_eligible"] == "true" and row["legacy_resume"] == "false" for row in _summary_rows(output_root)
     )
     assert (output_root / "batch_report.md").exists()

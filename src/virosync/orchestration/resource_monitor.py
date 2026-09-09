@@ -1,6 +1,4 @@
-"""
-Lightweight per-task resource monitoring for Python orchestration runs.
-"""
+"""Lightweight per-task resource monitoring for Python orchestration runs."""
 
 from __future__ import annotations
 
@@ -11,7 +9,6 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import psutil
 
@@ -36,9 +33,7 @@ class ResourceMetrics:
 
 
 class ResourceMonitor:
-    """
-    Track wall time, CPU time, peak RSS, and CPU utilization for a task.
-    """
+    """Track wall time, CPU time, peak RSS, and CPU utilization for a task."""
 
     def __init__(
         self,
@@ -47,7 +42,7 @@ class ResourceMonitor:
         phase: str,
         output_dir: Path,
         threads: int,
-        task_id: Optional[str] = None,
+        task_id: str | None = None,
         sample_interval: float = 0.5,
     ) -> None:
         self.task_name = task_name
@@ -59,14 +54,14 @@ class ResourceMonitor:
         self.sample_interval = sample_interval
         self._proc = psutil.Process()
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._max_rss = 0
         self._max_cpu_percent = 0.0
         self._start_time = 0.0
         self._start_cpu_user = 0.0
         self._start_cpu_system = 0.0
 
-    def __enter__(self) -> "ResourceMonitor":
+    def __enter__(self) -> ResourceMonitor:
         logger = logging.getLogger(__name__)
         logger.info(
             "Resource monitor start: task=%s phase=%s genome=%s threads=%s",
@@ -161,7 +156,7 @@ class ResourceMonitor:
             metrics.task_name,
             metrics.phase,
             metrics.wall_time_sec,
-            metrics.max_rss_bytes / (1024 ** 3),
+            metrics.max_rss_bytes / (1024**3),
             metrics.max_cpu_percent,
             out_path,
         )

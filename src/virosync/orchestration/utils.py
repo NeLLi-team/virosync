@@ -1,5 +1,4 @@
-"""
-ViroSync Orchestration Utilities.
+"""ViroSync Orchestration Utilities.
 
 Helper functions for data wiring between orchestration task functions.
 Shared helpers keep task inputs on disk instead of serializing large objects.
@@ -7,15 +6,16 @@ Shared helpers keep task inputs on disk instead of serializing large objects.
 
 from bisect import bisect_left
 from collections import defaultdict
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Optional
+from typing import Any
 
 from Bio import SeqIO
-from virosync.pipeline.phase0.prodigal import parse_prodigal_header
-from virosync.orchestration.resource_monitor import ResourceMonitor
 
+from virosync.orchestration.resource_monitor import ResourceMonitor
+from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 
 _ProteomeRecord = tuple[str, str, int, int, str]
 _ScaffoldIndex = tuple[
@@ -29,9 +29,7 @@ _ProteomeData = tuple[
 ]
 
 
-def _parse_proteome_records(
-    proteome_path: str, _size: int, _mtime: int
-) -> tuple[_ProteomeRecord, ...]:
+def _parse_proteome_records(proteome_path: str, _size: int, _mtime: int) -> tuple[_ProteomeRecord, ...]:
     """Parse a proteome FASTA once into (id, scaffold, start, end, seq) tuples.
 
     The loader caches these records by (path, size, mtime), so per-boundary
@@ -72,17 +70,12 @@ def _build_proteome_index(
 
     index = {}
     for scaffold, file_ordered in by_scaffold.items():
-        coordinate_ordered = tuple(
-            sorted(file_ordered, key=lambda item: (item[1][2], item[0]))
-        )
+        coordinate_ordered = tuple(sorted(file_ordered, key=lambda item: (item[1][2], item[0])))
         index[scaffold] = (
             tuple(record[2] for _file_index, record in coordinate_ordered),
             coordinate_ordered,
             max(
-                (
-                    max(0, record[3] - record[2])
-                    for _file_index, record in file_ordered
-                ),
+                (max(0, record[3] - record[2]) for _file_index, record in file_ordered),
                 default=0,
             ),
         )
@@ -90,9 +83,7 @@ def _build_proteome_index(
 
 
 @lru_cache(maxsize=4)
-def _load_proteome_data(
-    proteome_path: str, size: int, mtime: int
-) -> _ProteomeData:
+def _load_proteome_data(proteome_path: str, size: int, mtime: int) -> _ProteomeData:
     records = _parse_proteome_records(proteome_path, size, mtime)
     return records, _build_proteome_index(records)
 
@@ -119,12 +110,11 @@ def _cached_proteome_data(
 
 def get_overlapping_genes(
     proteome_path: Path,
-    boundary_scaffold: Optional[str] = None,
-    boundary_start: Optional[int] = None,
-    boundary_end: Optional[int] = None,
+    boundary_scaffold: str | None = None,
+    boundary_start: int | None = None,
+    boundary_end: int | None = None,
 ) -> dict[str, list[tuple[str, str]]]:
-    """
-    Get gene sequences grouped by scaffold.
+    """Get gene sequences grouped by scaffold.
 
     If boundary coordinates are provided, filters to genes overlapping that region.
 
@@ -149,11 +139,7 @@ def get_overlapping_genes(
             # Every overlapping record starts after this exact lower bound.
             left = bisect_left(starts, boundary_start - max_gene_length)
             right = bisect_left(starts, boundary_end)
-            selected = [
-                item
-                for item in coordinate_ordered[left:right]
-                if item[1][3] > boundary_start
-            ]
+            selected = [item for item in coordinate_ordered[left:right] if item[1][3] > boundary_start]
             selected.sort(key=lambda item: item[0])
             records = tuple(record for _file_index, record in selected)
 
@@ -179,8 +165,7 @@ def get_genes_for_boundary(
     end: int,
     max_porfs: int = 10000,
 ) -> list[tuple[str, str]]:
-    """
-    Get gene sequences overlapping a specific boundary.
+    """Get gene sequences overlapping a specific boundary.
 
     Args:
         proteome_path: Path to proteome FASTA file
@@ -216,14 +201,12 @@ def run_with_monitor(
     monitor_output_dir: Path,
     threads: int,
     phase: str = "phase3",
-    task_id: Optional[str] = None,
-    genome_path: Optional[Path] = None,
-    genome_fasta: Optional[Path] = None,
+    task_id: str | None = None,
+    genome_path: Path | None = None,
+    genome_fasta: Path | None = None,
     **kwargs: Any,
 ) -> Any:
-    """
-    Run a function under ResourceMonitor with best-effort genome context.
-    """
+    """Run a function under ResourceMonitor with best-effort genome context."""
     genome_source = genome_path or genome_fasta
     genome_id = Path(genome_source).stem if genome_source else "unknown_genome"
     monitor_output_dir = Path(monitor_output_dir)

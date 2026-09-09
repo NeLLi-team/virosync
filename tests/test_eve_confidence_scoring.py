@@ -8,6 +8,8 @@ must outscore a bare candidate, and a bare candidate must not reach HIGH).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     assign_confidence_tier,
@@ -58,9 +60,7 @@ def test_strong_viral_evidence_outscores_bare() -> None:
     strong.marker_family_hits = ["NCLDV", "MIRUS"]
     strong.vp_completeness_ratio = 1.0
     strong.gene_count = 20
-    strong_score = calculate_eve_confidence(
-        strong, crf_confidence=0.9, tmvec_score=0.85, use_crf_score=True
-    )
+    strong_score = calculate_eve_confidence(strong, crf_confidence=0.9, tmvec_score=0.85, use_crf_score=True)
 
     assert 0.0 <= strong_score <= 1.0
     assert strong_score > weak_score
@@ -82,3 +82,26 @@ def test_priority_marker_floor_applies() -> None:
     )
     assert score >= 0.0  # floor logic must not error and stays in range
     assert score <= 1.0
+
+
+def test_taxonomy_object_and_dictionary_records_score_identically() -> None:
+    record = {
+        "is_flanking": False,
+        "has_hit": True,
+        "has_viral": False,
+        "top10_prefixes": ["EUK", "EUK", "EUK"],
+        "top10_pidents": [80.0, 75.0, 70.0],
+    }
+    dictionary_result = _bare()
+    dictionary_result.gene_count = 4
+    dictionary_result.gene_taxonomy_records = [record]
+    object_result = _bare()
+    object_result.gene_count = 4
+    object_result.gene_taxonomy_records = [SimpleNamespace(**record)]
+
+    dictionary_score = calculate_eve_confidence(dictionary_result, crf_confidence=0.0)
+    object_score = calculate_eve_confidence(object_result, crf_confidence=0.0)
+
+    assert object_score == dictionary_score
+    assert object_result.high_confidence_euk_genes == dictionary_result.high_confidence_euk_genes == 1
+    assert object_result.score_components == dictionary_result.score_components

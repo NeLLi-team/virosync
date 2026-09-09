@@ -1,5 +1,4 @@
-"""
-Internal orchestration implementations for ViroSync.
+"""Internal orchestration implementations for ViroSync.
 
 This package contains the actual orchestration implementations. Import from
 virosync.orchestration.flows for the public interface.

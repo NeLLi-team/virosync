@@ -1,5 +1,4 @@
-"""
-Gene-level taxonomy via Diamond for final EVE confidence scoring.
+"""Gene-level taxonomy via Diamond for final EVE confidence scoring.
 
 After candidate EVE regions are identified, this module runs Diamond on ALL genes
 within each region to provide per-gene taxonomy. This enables:
@@ -17,7 +16,6 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from Bio import SeqIO
 
@@ -37,9 +35,7 @@ MIN_VIRAL_HIT_PIDENT = 25.0
 # Reference namespaces that name a viral lineage. GVMAG and PHAGE are namespaces
 # rather than published classes, so callers that need a class fold them via
 # viral_hit_categories().
-PUBLISHED_VIRAL_PREFIXES = frozenset(
-    {"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"}
-)
+PUBLISHED_VIRAL_PREFIXES = frozenset({"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"})
 _PREPLASMIVIRICOTA_TOKEN = "preplasmiviricota"
 
 
@@ -101,8 +97,7 @@ def extract_raw_prefix(target_id: str) -> str:
 
 
 def extract_prefix(target_id: str) -> str:
-    """
-    Extract taxonomic prefix from target ID.
+    """Extract taxonomic prefix from target ID.
 
     Prefixes:
     - EUK__: Eukaryote
@@ -154,8 +149,7 @@ def extract_prefix(target_id: str) -> str:
 def summarize_dominant_family(
     taxonomies: list[GeneTaxonomy],
 ) -> tuple[str, float]:
-    """
-    Return the dominant viral family for a region and the fraction of genes supporting it.
+    """Return the dominant viral family for a region and the fraction of genes supporting it.
 
     Families are counted by top-10 prefix membership. A region whose genes carry no
     viral prefix has no dominant family, so it reports ("UNKNOWN", 0.0) rather than the
@@ -164,9 +158,7 @@ def summarize_dominant_family(
     """
     if not taxonomies:
         return "UNKNOWN", 0.0
-    family_counts = {
-        family: 0 for family in ("NCLDV", "MIRUS", "PPV", "CRESS")
-    }
+    family_counts = {family: 0 for family in ("NCLDV", "MIRUS", "PPV", "CRESS")}
     for taxonomy in taxonomies:
         supported = {
             canonical_family(prefix.rstrip("_"))
@@ -214,10 +206,7 @@ def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
             pidents.append(float(value))
         except (TypeError, ValueError):
             pidents.append(0.0)
-    targets = [
-        str(target).strip()
-        for target in _split_top10_field(record.get("top10_targets"))
-    ]
+    targets = [str(target).strip() for target in _split_top10_field(record.get("top10_targets"))]
     hits: list[tuple[str, str]] = []
     for index, (prefix, pident) in enumerate(zip(prefixes, pidents)):
         if prefix not in PUBLISHED_VIRAL_PREFIXES:
@@ -230,7 +219,7 @@ def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
 
 def viral_hit_categories(
     record: dict,
-    taxonomy_lookup: Optional[dict] = None,
+    taxonomy_lookup: dict | None = None,
 ) -> list[str]:
     """Return the published viral class of each qualified top-10 hit.
 
@@ -245,17 +234,13 @@ def viral_hit_categories(
         if prefix == "GVMAG":
             categories.append("NCLDV")
         elif prefix == "PHAGE":
-            categories.append(
-                "PPV"
-                if _is_preplasmiviricota(target, taxonomy_lookup)
-                else "PHAGE"
-            )
+            categories.append("PPV" if _is_preplasmiviricota(target, taxonomy_lookup) else "PHAGE")
         else:
             categories.append(prefix)
     return categories
 
 
-def _is_preplasmiviricota(target: str, taxonomy_lookup: Optional[dict]) -> bool:
+def _is_preplasmiviricota(target: str, taxonomy_lookup: dict | None) -> bool:
     if not target or not taxonomy_lookup:
         return False
     org_id = resolve_org_id(target, taxonomy_lookup)
@@ -264,8 +249,7 @@ def _is_preplasmiviricota(target: str, taxonomy_lookup: Optional[dict]) -> bool:
 
 
 def _resolve_diamond_db_prefix(target_path: Path) -> Path:
-    """
-    Resolve a Diamond database prefix from a provided path.
+    """Resolve a Diamond database prefix from a provided path.
 
     Accepts:
     - A .dmnd path
@@ -303,8 +287,7 @@ def run_diamond_blastp(
     min_threads_per_chunk: int = 4,
     search_backend: str = "diamond",
 ) -> Path:
-    """
-    Run Diamond blastp with top-10 hits.
+    """Run Diamond blastp with top-10 hits.
 
     For large query sets (>chunk_size), queries are chunked and processed in parallel.
     Parallelism is determined by: max_parallel = threads // min_threads_per_chunk
@@ -339,7 +322,11 @@ def run_diamond_blastp(
 
     logger.info(
         "Chunking %d queries into %d batches of %d, running %d in parallel with %d threads each",
-        query_count, total_chunks, chunk_size, max_parallel, threads_per_chunk,
+        query_count,
+        total_chunks,
+        chunk_size,
+        max_parallel,
+        threads_per_chunk,
     )
 
     with tempfile.TemporaryDirectory(dir=output_file.parent) as tmp_dir:
@@ -420,8 +407,7 @@ def _run_single_diamond_blastp(
 
 
 def parse_diamond_top10(diamond_output: Path) -> dict[str, list[GeneDiamondHit]]:
-    """
-    Parse Diamond output and extract top-10 hits per query.
+    """Parse Diamond output and extract top-10 hits per query.
 
     Args:
         diamond_output: Path to Diamond output TSV
@@ -466,9 +452,8 @@ def parse_diamond_top10(diamond_output: Path) -> dict[str, list[GeneDiamondHit]]
     return hits_by_porf
 
 
-def extract_porf_info(porf_id: str, description: Optional[str] = None) -> tuple[int, int]:
-    """
-    Extract start/end coordinates from pORF ID.
+def extract_porf_info(porf_id: str, description: str | None = None) -> tuple[int, int]:
+    """Extract start/end coordinates from pORF ID.
 
     Expected format: scaffold_start_end_strand_frame
 
@@ -487,11 +472,10 @@ def classify_gene_taxonomy(
     porf_id: str,
     hits: list[GeneDiamondHit],
     high_pident_euk_threshold: float = 70.0,
-    start: Optional[int] = None,
-    end: Optional[int] = None,
+    start: int | None = None,
+    end: int | None = None,
 ) -> GeneTaxonomy:
-    """
-    Classify gene taxonomy based on top-10 Diamond hits.
+    """Classify gene taxonomy based on top-10 Diamond hits.
 
     Args:
         porf_id: pORF identifier
@@ -530,17 +514,13 @@ def classify_gene_taxonomy(
     has_ncldv = "NCLDV" in top10_prefixes
     has_mirus = "MIRUS" in top10_prefixes
     has_viral = any(
-        prefix in VIRAL_PREFIXES
-        and idx < len(top10_pidents)
-        and top10_pidents[idx] >= MIN_VIRAL_HIT_PIDENT
+        prefix in VIRAL_PREFIXES and idx < len(top10_pidents) and top10_pidents[idx] >= MIN_VIRAL_HIT_PIDENT
         for idx, prefix in enumerate(top10_prefixes)
     )
     has_ncldv_mirus = has_ncldv or has_mirus
 
     # Check for high-identity EUK gene
-    is_high_pident_euk = (
-        top1_prefix == "EUK" and top1_pident >= high_pident_euk_threshold
-    )
+    is_high_pident_euk = top1_prefix == "EUK" and top1_pident >= high_pident_euk_threshold
 
     return GeneTaxonomy(
         porf_id=porf_id,
@@ -576,7 +556,6 @@ def materialize_gene_taxonomy_batch_from_cached_hits(
     same pORF, matching the legacy region-prefixed query behavior without a
     second DIAMOND search.
     """
-
     filename_components = safe_filename_components(
         (region["eve_id"] for region in regions),
         label="EVE ID",
@@ -589,12 +568,8 @@ def materialize_gene_taxonomy_batch_from_cached_hits(
     for scaffold_regions in regions_by_scaffold.values():
         scaffold_regions.sort(key=lambda region: region["start"])
 
-    results_with_hits: dict[str, list[GeneTaxonomy]] = {
-        region["eve_id"]: [] for region in regions
-    }
-    results_without_hits: dict[str, list[GeneTaxonomy]] = {
-        region["eve_id"]: [] for region in regions
-    }
+    results_with_hits: dict[str, list[GeneTaxonomy]] = {region["eve_id"]: [] for region in regions}
+    results_without_hits: dict[str, list[GeneTaxonomy]] = {region["eve_id"]: [] for region in regions}
     for record in SeqIO.parse(proteome_fasta, "fasta"):
         parsed = parse_prodigal_header(record.description, record.id)
         if not parsed:
@@ -616,10 +591,7 @@ def materialize_gene_taxonomy_batch_from_cached_hits(
     # Match the legacy two-pass layout: hit-bearing records first, then no-hit
     # genes. The legacy hit group follows DIAMOND output order, while this
     # cached path follows proteome order; downstream logic keys records by ID.
-    results = {
-        eve_id: results_with_hits[eve_id] + results_without_hits[eve_id]
-        for eve_id in results_with_hits
-    }
+    results = {eve_id: results_with_hits[eve_id] + results_without_hits[eve_id] for eve_id in results_with_hits}
 
     summaries: dict[str, dict] = {}
     for eve_id, taxonomies in results.items():
@@ -673,10 +645,7 @@ def materialize_gene_taxonomy_batch_from_cached_hits(
         sum(len(taxonomies) for taxonomies in results.values()),
         len(results),
     )
-    return {
-        eve_id: (results[eve_id], summaries[eve_id])
-        for eve_id in results
-    }
+    return {eve_id: (results[eve_id], summaries[eve_id]) for eve_id in results}
 
 
 def run_gene_taxonomy_diamond_batch(
@@ -688,8 +657,7 @@ def run_gene_taxonomy_diamond_batch(
     high_pident_euk_threshold: float = 70.0,
     search_backend: str = "diamond",
 ) -> dict[str, tuple[list[GeneTaxonomy], dict]]:
-    """
-    Run Diamond gene taxonomy for all candidate regions in one batch.
+    """Run Diamond gene taxonomy for all candidate regions in one batch.
 
     Uses genome-wide prodigal-gv genes from Phase 0 (no re-running prodigal).
 
@@ -746,17 +714,20 @@ def run_gene_taxonomy_diamond_batch(
         if total_queries == 0:
             logger.warning("Gene taxonomy batch: no prodigal genes found in any region")
             return {
-                region["eve_id"]: ([], {
-                    "total": 0,
-                "ncldv_mirus": 0,
-                "vp_plv": 0,
-                "viral_top10": 0,
-                "high_pident_euk": 0,
-                "has_ncldv_mirus": False,
-                "has_vp_plv": False,
-                "dominant_family": "UNKNOWN",
-                "dominant_fraction": 0.0,
-            })
+                region["eve_id"]: (
+                    [],
+                    {
+                        "total": 0,
+                        "ncldv_mirus": 0,
+                        "vp_plv": 0,
+                        "viral_top10": 0,
+                        "high_pident_euk": 0,
+                        "has_ncldv_mirus": False,
+                        "has_vp_plv": False,
+                        "dominant_family": "UNKNOWN",
+                        "dominant_fraction": 0.0,
+                    },
+                )
                 for region in regions
             }
 
@@ -831,15 +802,11 @@ def run_gene_taxonomy_diamond_batch(
             has_plv = "PLV" in top10_prefixes
             has_vp_plv = has_vp or has_plv or ("PPV" in top10_prefixes)
             has_viral = any(
-                prefix in VIRAL_PREFIXES
-                and idx < len(top10_pidents)
-                and top10_pidents[idx] >= MIN_VIRAL_HIT_PIDENT
+                prefix in VIRAL_PREFIXES and idx < len(top10_pidents) and top10_pidents[idx] >= MIN_VIRAL_HIT_PIDENT
                 for idx, prefix in enumerate(top10_prefixes)
             )
             has_ncldv_mirus = "NCLDV" in top10_prefixes or "MIRUS" in top10_prefixes
-            is_high_pident_euk = (
-                top1_prefix == "EUK" and top1_pident >= high_pident_euk_threshold
-            )
+            is_high_pident_euk = top1_prefix == "EUK" and top1_pident >= high_pident_euk_threshold
             taxonomy = GeneTaxonomy(
                 porf_id=porf_id,
                 porf_start=start,

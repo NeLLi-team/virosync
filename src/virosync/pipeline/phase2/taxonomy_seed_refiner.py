@@ -1,13 +1,11 @@
-"""
-Taxonomy-based seed refinement.
+"""Taxonomy-based seed refinement.
 
 Refines seed boundaries using Diamond taxonomy calls from seed interior and
 flanking genes collected in Phase 2b.
 """
 
-from dataclasses import dataclass, replace
 import logging
-from typing import Optional
+from dataclasses import dataclass, replace
 
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.pipeline.host_signatures import HostSignatureModel, score_host_signature_record
@@ -37,7 +35,6 @@ def validate_taxonomy_refinement_mode(
     taxonomy_ml_enabled: bool,
 ) -> None:
     """Fail closed when A4 would enter the host-feature-dependent ML refiner."""
-
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
     if type(taxonomy_ml_enabled) is not bool:
@@ -60,7 +57,7 @@ def _has_strong_viral_signal(tax) -> bool:
 def _is_host_like_gene(
     tax,
     host_prefix: str,
-    host_signature_model: Optional[HostSignatureModel],
+    host_signature_model: HostSignatureModel | None,
     host_signature_threshold: float,
 ) -> bool:
     """Classify a gene as host-like using host prefix + optional Phase 1 model."""
@@ -88,12 +85,10 @@ def _trim_seed_host_edges(
     eve_porf_ids: list[str],
     taxonomy_map: dict,
     host_prefix: str,
-    host_signature_model: Optional[HostSignatureModel],
+    host_signature_model: HostSignatureModel | None,
     host_signature_threshold: float,
 ) -> tuple[int, int, bool, bool]:
-    """
-    Trim host-like genes from both edges of the seed interior until non-host is reached.
-    """
+    """Trim host-like genes from both edges of the seed interior until non-host is reached."""
     eve_genes = []
     for porf_id in eve_porf_ids:
         tax = taxonomy_map.get(porf_id)
@@ -143,14 +138,13 @@ def _refine_seeds_by_taxonomy_mode(
     seed_gene_mappings: dict,  # seed_id -> SeedGeneMapping
     host_prefix: str = "EUK__",
     expansion_kb: int = 5,
-    host_signature_model: Optional[HostSignatureModel] = None,
+    host_signature_model: HostSignatureModel | None = None,
     host_signature_threshold: float = 0.5,
     *,
     host_coordinate_paths_enabled: bool,
     emit_log: bool,
 ) -> list[MergedSeed]:
-    """
-    Refine seed boundaries around viral-positive genes while stopping at host-like edges.
+    """Refine seed boundaries around viral-positive genes while stopping at host-like edges.
 
     Strategy:
     - trim host-like genes from seed interior edges until a non-host gene is reached
@@ -290,7 +284,7 @@ def evaluate_taxonomy_seed_refinement(
     seed_gene_mappings: dict,
     host_prefix: str = "EUK__",
     expansion_kb: int = 5,
-    host_signature_model: Optional[HostSignatureModel] = None,
+    host_signature_model: HostSignatureModel | None = None,
     host_signature_threshold: float = 0.5,
     *,
     ablation_id: AblationID = AblationID.A0,
@@ -303,7 +297,6 @@ def evaluate_taxonomy_seed_refinement(
     Counter units are input seeds; a seed counts as intervened/changed when its
     selected A4 coordinates differ from the normal host-aware coordinates.
     """
-
     validate_taxonomy_refinement_mode(
         ablation_id=ablation_id,
         taxonomy_ml_enabled=taxonomy_ml_enabled,

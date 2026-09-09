@@ -1,5 +1,4 @@
-"""
-Phase 2a: Trim boundaries using host-signature density.
+"""Phase 2a: Trim boundaries using host-signature density.
 
 Uses gene taxonomy records + weighted host-signature model to identify
 windows with strong host-like signal and trims regions inward.
@@ -16,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.pipeline.host_signatures import (
@@ -42,9 +41,8 @@ class HostTrimParams:
     use_control_baseline: bool = True
 
 
-def _convert_gene_taxonomy_to_record(tax: "GeneTaxonomy") -> dict:
-    """
-    Convert a GeneTaxonomy object to record dict format.
+def _convert_gene_taxonomy_to_record(tax: GeneTaxonomy) -> dict:
+    """Convert a GeneTaxonomy object to record dict format.
 
     This bridges the GeneTaxonomy dataclass from boundary_diamond.py
     to the dict format expected by the trimming functions.
@@ -107,12 +105,11 @@ def _trim_seed_by_host_signature_normal(
     seed: MergedSeed,
     gene_records: list,
     host_model: HostSignatureModel,
-    validated_markers: Optional[list] = None,
-    params: Optional[HostTrimParams] = None,
-    precomputed_taxonomy: Optional[dict[str, "GeneTaxonomy"]] = None,
+    validated_markers: list | None = None,
+    params: HostTrimParams | None = None,
+    precomputed_taxonomy: dict[str, GeneTaxonomy] | None = None,
 ) -> tuple[MergedSeed, dict]:
-    """
-    Trim a single seed based on host-like window density.
+    """Trim a single seed based on host-like window density.
 
     Args:
         seed: MergedSeed to trim
@@ -135,11 +132,7 @@ def _trim_seed_by_host_signature_normal(
         gene_records = [
             _convert_gene_taxonomy_to_record(tax)
             for tax in precomputed_taxonomy.values()
-            if (
-                tax.scaffold == seed.scaffold
-                and tax.start < seed.end
-                and tax.end > seed.start
-            )
+            if (tax.scaffold == seed.scaffold and tax.start < seed.end and tax.end > seed.start)
         ]
 
     if not gene_records:
@@ -270,9 +263,9 @@ def trim_seed_by_host_signature(
     seed: MergedSeed,
     gene_records: list,
     host_model: HostSignatureModel,
-    validated_markers: Optional[list] = None,
-    params: Optional[HostTrimParams] = None,
-    precomputed_taxonomy: Optional[dict[str, "GeneTaxonomy"]] = None,
+    validated_markers: list | None = None,
+    params: HostTrimParams | None = None,
+    precomputed_taxonomy: dict[str, GeneTaxonomy] | None = None,
     ablation_id: AblationID = AblationID.A0,
 ) -> tuple[MergedSeed, dict]:
     """Evaluate normal host trimming and select the configured arm's coordinates.
@@ -282,7 +275,6 @@ def trim_seed_by_host_signature(
     and a normal coordinate change is both an intervention and a changed output.
     Other arms execute normal production behavior and expose zero A4 counters.
     """
-
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
 
@@ -312,10 +304,7 @@ def trim_seed_by_host_signature(
         params=params,
         precomputed_taxonomy=precomputed_taxonomy,
     )
-    counterfactual_changed = (
-        counterfactual_seed.start != seed.start
-        or counterfactual_seed.end != seed.end
-    )
+    counterfactual_changed = counterfactual_seed.start != seed.start or counterfactual_seed.end != seed.end
     bypassed = ablation_id is AblationID.A4 and counterfactual_changed
     counts = (
         InterventionCounts(
@@ -349,15 +338,14 @@ def trim_seed_by_host_signature(
 
 def trim_seeds_by_host_signature(
     seeds: list[MergedSeed],
-    gene_taxonomy_map: Optional[dict[str, tuple[list, dict]]] = None,
-    host_model: Optional[HostSignatureModel] = None,
-    validated_markers: Optional[list] = None,
-    params: Optional[HostTrimParams] = None,
-    precomputed_taxonomy: Optional[dict[str, "GeneTaxonomy"]] = None,
+    gene_taxonomy_map: dict[str, tuple[list, dict]] | None = None,
+    host_model: HostSignatureModel | None = None,
+    validated_markers: list | None = None,
+    params: HostTrimParams | None = None,
+    precomputed_taxonomy: dict[str, GeneTaxonomy] | None = None,
     ablation_id: AblationID = AblationID.A0,
 ) -> tuple[list[MergedSeed], list[dict]]:
-    """
-    Trim multiple seeds based on host-like window density.
+    """Trim multiple seeds based on host-like window density.
 
     Supports two modes:
     1. Traditional: Use gene_taxonomy_map with pre-formatted records per EVE

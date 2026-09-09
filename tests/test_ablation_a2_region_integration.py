@@ -42,11 +42,7 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     genome = tmp_path / "genome.fna"
     genome.write_text(">ctg\n" + "ACGT" * 250 + "\n")
     proteome = tmp_path / "proteome.faa"
-    proteome.write_text(
-        ">ctg_1 # 100 # 300 # 1 # ID=1_1;partial=00\n"
-        "M" * 67
-        + "\n"
-    )
+    proteome.write_text(">ctg_1 # 100 # 300 # 1 # ID=1_1;partial=00\nM" * 67 + "\n")
     return genome, proteome
 
 
@@ -120,9 +116,7 @@ def test_counterfactual_region_assembly_does_not_write_artifacts(
 
 
 def test_a2_bypass_label_survives_hallmark_evidence_synthesis() -> None:
-    synthesizer = EvidenceSynthesizer(
-        config=EvidenceSynthesizerConfig(ablation_id=AblationID.A2)
-    )
+    synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig(ablation_id=AblationID.A2))
     result = VerificationResult(
         eve_id="EVE_ctg_99-300",
         scaffold="ctg",

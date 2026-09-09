@@ -1,5 +1,4 @@
-"""
-Phase 1: Unified Seeding.
+"""Phase 1: Unified Seeding.
 
 HHG Seeding (the only active path):
     Uses HMM search against viral hallmark genes to find anchor pORFs,
@@ -13,37 +12,34 @@ surface.
 """
 
 from .hhg_seeding import (
-    HMMHit,
     Anchor,
     HHGSeed,
-    load_hmm_profiles,
-    run_hmmsearch,
-    identify_anchors,
+    HMMHit,
     calculate_neighbor_scores,
     form_seeds,
     hhg_seeding_pipeline,
+    identify_anchors,
+    load_hmm_profiles,
+    run_hmmsearch,
 )
-
-from .seed_merger import (
-    MergedSeed,
-)
-
 from .marker_validation import (
-    ValidationStatus,
     NovelMarkerCriteria,
     ValidatedMarkerHit,
-    validate_hmm_hit,
+    ValidationStatus,
     extract_hmm_hit_sequences,
-    run_diamond_on_hmm_hits,
     filter_validated_markers,
+    run_diamond_on_hmm_hits,
+    validate_hmm_hit,
 )
-
 from .region_assembly import (
     CandidateRegion,
     assemble_candidate_regions,
     initial_clustering,
     iterative_extension,
     merge_overlapping_regions,
+)
+from .seed_merger import (
+    MergedSeed,
 )
 
 __all__ = [

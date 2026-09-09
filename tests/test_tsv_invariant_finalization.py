@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from virosync.config import MaskingConfig
+from virosync.orchestration._flows.single_genome import orchestrator
 from virosync.orchestration._flows.single_genome.manifest import (
     _write_completion_manifest,
     _write_empty_run_log,
@@ -14,20 +15,26 @@ from virosync.orchestration._flows.single_genome.manifest import (
 from virosync.orchestration._flows.single_genome.orchestrator import (
     _revalidate_completed_run,
 )
-from virosync.orchestration._flows.single_genome import orchestrator
+from virosync.orchestration._flows.single_genome.phase1 import Phase1Result
+from virosync.orchestration._flows.single_genome.phase1_state import (
+    write_phase1_state,
+)
+from virosync.orchestration._flows.single_genome.phase2 import Phase2Result
+from virosync.orchestration._flows.single_genome.phase2_resume_state import (
+    write_phase2_resume_state,
+)
+from virosync.orchestration._flows.single_genome.phase3 import Phase3Result
+from virosync.orchestration._flows.single_genome.phase_state import (
+    write_phase2_state,
+)
 from virosync.orchestration._flows.single_genome.resume import (
     _completed_run_artifacts,
 )
 from virosync.orchestration._flows.single_genome.run_state import load_run_state
-from virosync.orchestration._flows.single_genome.phase1_state import (
-    write_phase1_state,
-)
-from virosync.orchestration._flows.single_genome.phase2_resume_state import (
-    write_phase2_resume_state,
-)
-from virosync.orchestration._flows.single_genome.phase_state import (
-    write_phase2_state,
-)
+from virosync.pipeline.host_signatures import HostSignatureModel
+from virosync.pipeline.phase0.masking import mask_genome_pipeline
+from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.validation import tsv_invariants
 from virosync.validation.tsv_invariants import (
     InvariantIssue,
@@ -35,10 +42,6 @@ from virosync.validation.tsv_invariants import (
     TSVInvariantError,
     enforce_tsv_invariants,
 )
-from virosync.pipeline.phase0.masking import mask_genome_pipeline
-from virosync.pipeline.host_signatures import HostSignatureModel
-from virosync.pipeline.phase1.seed_merger import MergedSeed
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
 
 def _report_summary(path: Path) -> dict[str, str]:
@@ -49,9 +52,7 @@ def _report_summary(path: Path) -> dict[str, str]:
 
 def _seed_success_markers(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n"
-    )
+    (output_dir / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n")
     _seed_masking_status(output_dir)
     _write_completion_manifest(output_dir, genome_id="demo", status="success")
 
@@ -69,10 +70,7 @@ def _seed_masking_status(output_dir: Path) -> None:
 
 def test_fatal_invariant_writes_report_before_raising(tmp_path: Path) -> None:
     detailed = tmp_path / "virosync_predictions_detailed.tsv"
-    detailed.write_text(
-        "eve_id\ttotal_proteins\tncldv_top10_proteins\n"
-        "EVE_1\t1\t2\n"
-    )
+    detailed.write_text("eve_id\ttotal_proteins\tncldv_top10_proteins\nEVE_1\t1\t2\n")
     report_path = tmp_path / "virosync_tsv_invariant_report.tsv"
 
     with pytest.raises(TSVInvariantError, match="ncldv_top_count_out_of_range"):
@@ -219,10 +217,7 @@ def test_zero_result_missing_detailed_removes_stale_success_markers(
 def test_cached_success_is_revalidated_and_invalidated(tmp_path: Path) -> None:
     _seed_success_markers(tmp_path)
     detailed = tmp_path / "virosync_predictions_detailed.tsv"
-    detailed.write_text(
-        "eve_id\ttotal_proteins\tncldv_top10_proteins\n"
-        "EVE_1\t1\t2\n"
-    )
+    detailed.write_text("eve_id\ttotal_proteins\tncldv_top10_proteins\nEVE_1\t1\t2\n")
     artifacts = {"predictions_detailed": detailed}
 
     with pytest.raises(TSVInvariantError):
@@ -299,16 +294,14 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
             host_signatures=set(),
             host_deviation_summary=None,
         )
-        return {
-            "merged_seeds": merged_seeds,
-            "validated_markers": [],
-            "host_signature_model": host_signature_model,
-            "host_signatures": {},
-            "background": None,
-            "gene_data": {},
-            "host_deviation_summary": {},
-            "elapsed": 0.0,
-        }
+        return Phase1Result(
+            merged_seeds=merged_seeds,
+            validated_markers=[],
+            host_signature_model=host_signature_model,
+            host_signatures=set(),
+            host_deviation_summary={},
+            elapsed=0.0,
+        )
 
     monkeypatch.setattr(orchestrator, "_run_phase1_subflow", _fake_phase1)
 
@@ -331,52 +324,38 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
             boundary_control_stats=None,
             boundary_diamond_query=None,
         )
-        boundaries_bed.write_text(
-            "scaffold\t0\t4\tEVE_scaffold_0-4\t900\t.\n"
+        boundaries_bed.write_text("scaffold\t0\t4\tEVE_scaffold_0-4\t900\t.\n")
+        return Phase2Result(
+            refined_boundaries=[boundary],
+            boundary_taxonomy_map={},
+            boundary_control_stats=None,
+            boundary_diamond_query=None,
+            proteome_index={},
+            goto_phase3=True,
+            boundaries_bed=boundaries_bed,
+            elapsed=0.0,
         )
-        return {
-            "refined_boundaries": [boundary],
-            "boundary_taxonomy_map": {},
-            "boundary_control_stats": None,
-            "boundary_diamond_query": None,
-            "proteome_index": {},
-            "goto_phase3": True,
-            "boundaries_bed": boundaries_bed,
-            "elapsed": 0.0,
-        }
 
     monkeypatch.setattr(orchestrator, "_run_phase2_subflow", _fake_phase2)
     monkeypatch.setattr(
         orchestrator,
         "_run_phase3_subflow",
-        lambda **kwargs: {
-            "verification_results": [],
-            "accepted_results": [],
-            "tier_counts": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
-            "candidate_tier_counts": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
-            "classification_stats": {},
-            "accepted": 0,
-            "accepted_bp": 0,
-            "total_genes": 0,
-            "total_hallmarks": 0,
-            "quality_gate_dropped": 0,
-            "elapsed": 0.0,
-            "precomputed_tmvec": None,
-        },
+        lambda **kwargs: Phase3Result(
+            verification_results=[],
+            accepted_results=[],
+            promoted_low_results=[],
+            classification_stats={},
+            accepted=0,
+            elapsed=0.0,
+        ),
     )
     monkeypatch.setattr(orchestrator, "_generate_required_reports", lambda **kwargs: {})
 
     def _fake_call_task(task_fn, *args, **kwargs):
         if task_fn is orchestrator.generate_outputs_task:
-            detailed = (
-                Path(kwargs["output_dir"])
-                / "virosync_predictions_detailed.tsv"
-            )
+            detailed = Path(kwargs["output_dir"]) / "virosync_predictions_detailed.tsv"
             detailed.parent.mkdir(parents=True, exist_ok=True)
-            detailed.write_text(
-                "eve_id\ttotal_proteins\tncldv_top10_proteins\n"
-                "EVE_1\t1\t2\n"
-            )
+            detailed.write_text("eve_id\ttotal_proteins\tncldv_top10_proteins\nEVE_1\t1\t2\n")
             return {}
         return None
 

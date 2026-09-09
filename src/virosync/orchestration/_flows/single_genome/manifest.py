@@ -9,10 +9,9 @@ import csv
 import hashlib
 import json
 from dataclasses import fields, is_dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import virosync.output_contract as output_contract
 from virosync.utils.atomic_write import atomic_write_context
@@ -57,9 +56,9 @@ def _write_empty_run_log(
     genome_id: str,
     reason: str,
     elapsed_sec: float,
-    input_path: Optional[Path] = None,
-    output_files: Optional[dict] = None,
-    fingerprint: Optional[str] = None,
+    input_path: Path | None = None,
+    output_files: dict | None = None,
+    fingerprint: str | None = None,
 ) -> Path:
     """Write a minimal run.log so resume treats a zero-result run as complete.
 
@@ -84,7 +83,7 @@ def _write_empty_run_log(
     run_log_path = output_dir / "run.log"
     with atomic_write_context(run_log_path, "w") as f:
         f.write(f"# ViroSync Run Log: {genome_id}\n")
-        f.write(f"# Generated: {datetime.now(timezone.utc).isoformat()}\n")
+        f.write(f"# Generated: {datetime.now(UTC).isoformat()}\n")
         if input_path is not None:
             f.write(f"# Input: {input_path}\n")
         f.write(f"# Output: {output_dir}\n")
@@ -242,8 +241,7 @@ _FINGERPRINT_SCALAR_FIELDS = (
 )
 _FINGERPRINT_CONFIG_FIELDS = frozenset(_FINGERPRINT_SCALAR_FIELDS)
 _FINGERPRINT_RESOURCE_FIELDS = frozenset(
-    _FINGERPRINT_RESOURCE_FIELDS
-    + tuple(field for field, _gate in _FINGERPRINT_RESOURCE_GATED)
+    _FINGERPRINT_RESOURCE_FIELDS + tuple(field for field, _gate in _FINGERPRINT_RESOURCE_GATED)
 )
 _FINGERPRINT_ENVIRONMENT_FIELDS = frozenset({"device"})
 
@@ -266,15 +264,12 @@ _FINGERPRINT_RUNTIME_ONLY_FIELDS = frozenset(
 # Flat locals needed to build every schema-v3 identity.  This compatibility
 # alias remains the orchestrator's explicit locals filter.
 _FINGERPRINT_INPUT_FIELDS = frozenset(
-    _FINGERPRINT_CONFIG_FIELDS
-    | _FINGERPRINT_RESOURCE_FIELDS
-    | _FINGERPRINT_ENVIRONMENT_FIELDS
+    _FINGERPRINT_CONFIG_FIELDS | _FINGERPRINT_RESOURCE_FIELDS | _FINGERPRINT_ENVIRONMENT_FIELDS
 )
 
 
 def _canonical_config_value(value):
     """Return a typed, unambiguous JSON value for config fingerprinting."""
-
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, Enum):
@@ -282,19 +277,14 @@ def _canonical_config_value(value):
     if isinstance(value, Path):
         return str(value)
     if is_dataclass(value):
-        payload = {
-            item.name: getattr(value, item.name)
-            for item in fields(value)
-        }
+        payload = {item.name: getattr(value, item.name) for item in fields(value)}
         library = payload.get("repeatmasker_library")
         if library is not None:
             library_path = Path(library)
             payload["repeatmasker_library"] = {
                 "path": str(library_path),
                 "sha256": (
-                    hashlib.sha256(library_path.read_bytes()).hexdigest()
-                    if library_path.is_file()
-                    else "missing"
+                    hashlib.sha256(library_path.read_bytes()).hexdigest() if library_path.is_file() else "missing"
                 ),
             }
         return _canonical_config_value(payload)
@@ -318,8 +308,7 @@ def _compute_config_fingerprint(flat_config: dict) -> str:
     document = {
         "schema_version": 1,
         "fields": {
-            field: _canonical_config_value(flat_config.get(field))
-            for field in sorted(_FINGERPRINT_SCALAR_FIELDS)
+            field: _canonical_config_value(flat_config.get(field)) for field in sorted(_FINGERPRINT_SCALAR_FIELDS)
         },
     }
     encoded = json.dumps(
@@ -356,9 +345,7 @@ def _effective_masking_fingerprint(
     status_sha256: str,
 ) -> str:
     """Bind the pre-run requested identity to the post-mask status file."""
-    return hashlib.sha256(
-        f"{requested_fingerprint}|{status_sha256}".encode()
-    ).hexdigest()
+    return hashlib.sha256(f"{requested_fingerprint}|{status_sha256}".encode()).hexdigest()
 
 
 def _write_completion_manifest(
@@ -378,7 +365,7 @@ def _write_completion_manifest(
         "genome_id": genome_id,
         "status": status,
         "reason": reason or "",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         **output_contract.coordinate_contract_metadata(),
     }
     if output_files is not None:
@@ -392,23 +379,19 @@ def _write_completion_manifest(
         except (KeyError, OSError, TypeError, ValueError) as exc:
             _clear_success_markers(output_dir)
             raise ValueError(
-                "cannot write success completion manifest without a valid "
-                "phase0/masking/masking_status.json"
+                "cannot write success completion manifest without a valid phase0/masking/masking_status.json"
             ) from exc
         if masking_status is None:
             _clear_success_markers(output_dir)
             raise ValueError(
-                "cannot write success completion manifest without a valid "
-                "phase0/masking/masking_status.json"
+                "cannot write success completion manifest without a valid phase0/masking/masking_status.json"
             )
     if masking_status is not None:
         payload["masking_status"] = masking_status
         if fingerprint is not None:
-            payload["effective_masking_fingerprint"] = (
-                _effective_masking_fingerprint(
-                    fingerprint,
-                    masking_status["sha256"],
-                )
+            payload["effective_masking_fingerprint"] = _effective_masking_fingerprint(
+                fingerprint,
+                masking_status["sha256"],
             )
     with atomic_write_context(manifest_path, "w") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -475,9 +458,7 @@ def _summarize_predictions_tsv(
                 if hallmark_field is not None:
                     stats["total_hallmarks"] += _safe_int(row.get(hallmark_field))
                 if has_persisted_class:
-                    effective_class = output_contract.normalize_effective_eve_class(
-                        row.get("effective_eve_class")
-                    )
+                    effective_class = output_contract.normalize_effective_eve_class(row.get("effective_eve_class"))
                 else:
                     # The resolver answers in the GATE vocabulary, which still
                     # carries MIXED, so a legacy tree without a persisted class
@@ -490,14 +471,10 @@ def _summarize_predictions_tsv(
                             likely_family=row.get("likely_family"),
                         )
                     )
-                class_key = output_contract.EFFECTIVE_EVE_CLASS_COUNT_KEYS[
-                    effective_class
-                ]
+                class_key = output_contract.EFFECTIVE_EVE_CLASS_COUNT_KEYS[effective_class]
                 stats[class_key] += 1
     if canonical and output_contract.effective_eve_class_count_total(stats) != stats["accepted"]:
-        raise ValueError(
-            "exclusive effective-class counts do not sum to accepted predictions"
-        )
+        raise ValueError("exclusive effective-class counts do not sum to accepted predictions")
     return stats
 
 

@@ -1,5 +1,4 @@
-"""
-Iterative Marker-Driven Region Assembly.
+"""Iterative Marker-Driven Region Assembly.
 
 Step 4 of Phase 1 Rewrite: Assembles candidate EVE regions from validated marker hits
 using iterative extension until no more markers can be captured.
@@ -26,7 +25,6 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from virosync.ablation import AblationID
 from virosync.pipeline.phase0.prodigal import GenePrediction, load_gene_predictions
@@ -98,6 +96,7 @@ class ValidatedMarkerHit:
             True if marker is an MCP marker
         """
         from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
+
         return is_mcp_gene(self.hmm_target)
 
     @property
@@ -153,7 +152,7 @@ class CandidateRegion:
     # Region classification based on seed markers (NCLDV, VP, PLV, MIRUS, MIXED, UNKNOWN)
     predicted_family: str = ""
     # Confidence from taxonomy expansion (LOW, MEDIUM, HIGH, or None for auto-accepted)
-    taxonomy_expansion_confidence: Optional[str] = None
+    taxonomy_expansion_confidence: str | None = None
 
     @property
     def length(self) -> int:
@@ -185,8 +184,7 @@ def count_genes_between(
     marker2: ValidatedMarkerHit,
     gene_order: dict[str, list[GenePrediction]],
 ) -> int:
-    """
-    Count the number of genes between two markers on the same scaffold.
+    """Count the number of genes between two markers on the same scaffold.
 
     Args:
         marker1: First marker hit
@@ -220,8 +218,7 @@ def initial_clustering(
     min_markers_initial: int,
     gene_order: dict[str, list[GenePrediction]],
 ) -> list[list[ValidatedMarkerHit]]:
-    """
-    Group validated markers within initial clustering windows.
+    """Group validated markers within initial clustering windows.
 
     Markers are clustered if they are within initial_window_bp (bp distance)
     OR within initial_window_genes (gene distance).
@@ -296,8 +293,7 @@ def find_validated_markers_in_range(
     end: int,
     exclude_ids: set[str],
 ) -> list[ValidatedMarkerHit]:
-    """
-    Find validated markers within a genomic range, excluding already-included markers.
+    """Find validated markers within a genomic range, excluding already-included markers.
 
     Args:
         all_hits: All validated marker hits
@@ -330,8 +326,7 @@ def iterative_extension(
     extension_kb: int,
     scaffold_length: int,
 ) -> CandidateRegion:
-    """
-    Iteratively extend a marker cluster until no more markers can be captured.
+    """Iteratively extend a marker cluster until no more markers can be captured.
 
     Algorithm:
     1. Start with initial cluster markers
@@ -443,7 +438,6 @@ def assemble_compact_cress_regions(
     max_intervening_genes: int = 1,
 ) -> list[CandidateRegion]:
     """Build exact gene-bounded regions for compact CRESS insertions."""
-
     best_by_gene: dict[str, ValidatedMarkerHit] = {}
     for hit in cress_hits:
         if not is_identity_qualified_cress_marker(hit):
@@ -469,10 +463,7 @@ def assemble_compact_cress_regions(
                 hit,
                 gene_order,
             )
-            if (
-                gap_bp <= max_gap_bp
-                and intervening_genes <= max_intervening_genes
-            ):
+            if gap_bp <= max_gap_bp and intervening_genes <= max_intervening_genes:
                 cluster.append(hit)
                 continue
             regions.append(
@@ -502,8 +493,7 @@ def merge_overlapping_regions(
     regions: list[CandidateRegion],
     merge_distance: int = 1000,
 ) -> list[CandidateRegion]:
-    """
-    Merge overlapping or adjacent regions on the same scaffold.
+    """Merge overlapping or adjacent regions on the same scaffold.
 
     Args:
         regions: List of candidate regions
@@ -553,8 +543,7 @@ def merge_overlapping_regions(
 
 
 def load_scaffold_lengths(genome_fasta: Path) -> dict[str, int]:
-    """
-    Load scaffold lengths from genome FASTA.
+    """Load scaffold lengths from genome FASTA.
 
     Args:
         genome_fasta: Path to genome FASTA file
@@ -585,8 +574,7 @@ def assemble_candidate_regions(
     single_marker_min_score: float = 50.0,
     write_outputs: bool = True,
 ) -> list[CandidateRegion]:
-    """
-    Assemble candidate EVE regions from validated marker hits using iterative extension.
+    """Assemble candidate EVE regions from validated marker hits using iterative extension.
 
     This is the main pipeline function implementing Step 4 of Phase 1.
 
@@ -689,11 +677,7 @@ def assemble_candidate_regions(
 
     candidate_regions = []
     compact_cress_regions = assemble_compact_cress_regions(
-        [
-            hit
-            for scaffold_hits in hits_by_scaffold.values()
-            for hit in scaffold_hits
-        ],
+        [hit for scaffold_hits in hits_by_scaffold.values() for hit in scaffold_hits],
         gene_order,
     )
     cress_gene_keys = {
@@ -724,11 +708,11 @@ def assemble_candidate_regions(
         clusters = initial_clustering(
             validated_hits=scaffold_hits,
             scaffold=scaffold,
-        initial_window_bp=initial_window_bp,
-        initial_window_genes=initial_window_genes,
-        min_markers_initial=min_markers_initial,
-        gene_order=gene_order,
-    )
+            initial_window_bp=initial_window_bp,
+            initial_window_genes=initial_window_genes,
+            min_markers_initial=min_markers_initial,
+            gene_order=gene_order,
+        )
 
         cluster_marker_ids = {m.query_porf for cluster in clusters for m in cluster}
         single_marker_clusters = []
@@ -839,16 +823,15 @@ def assemble_candidate_regions(
         logger.info("Region Assembly Statistics:")
         logger.info(f"  Initial clusters: {total_clusters}")
         logger.info(
-            f"  Extended clusters (±{extension_kb}kb): {extended_clusters} "
-            f"(added markers: {extension_added_markers})"
+            f"  Extended clusters (±{extension_kb}kb): {extended_clusters} (added markers: {extension_added_markers})"
         )
         logger.info(f"  Total regions: {len(candidate_regions)}")
         logger.info(f"  Total coverage: {total_length:,} bp")
         logger.info(f"  Total markers: {total_markers}")
         logger.info(f"  Unique marker types: {len(unique_marker_types)}")
-        logger.info(f"  Regions with MCP: {mcp_regions} ({100*mcp_regions/len(candidate_regions):.1f}%)")
-        logger.info(f"  Mean markers per region: {total_markers/len(candidate_regions):.1f}")
-        logger.info(f"  Mean region length: {total_length/len(candidate_regions):,.0f} bp")
+        logger.info(f"  Regions with MCP: {mcp_regions} ({100 * mcp_regions / len(candidate_regions):.1f}%)")
+        logger.info(f"  Mean markers per region: {total_markers / len(candidate_regions):.1f}")
+        logger.info(f"  Mean region length: {total_length / len(candidate_regions):,.0f} bp")
         logger.info("=" * 60)
 
     return candidate_regions

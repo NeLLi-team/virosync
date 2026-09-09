@@ -16,7 +16,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from virosync.output_contract import coordinate_contract_metadata
 
-
 METADATA_FILENAMES = (
     "virosync_run_state.json",
     "virosync_run_complete.json",
@@ -33,10 +32,7 @@ COORDINATE_OUTPUT_FILENAMES = (
     "marker_seed_regions.tsv",
     "validated_marker_hits.tsv",
 )
-CLEAN_RUN_GUIDANCE = (
-    "Regenerate ViroSync outputs from raw inputs with --clean-run before "
-    "R4 validation."
-)
+CLEAN_RUN_GUIDANCE = "Regenerate ViroSync outputs from raw inputs with --clean-run before R4 validation."
 _MISSING = object()
 
 
@@ -45,23 +41,13 @@ def _metadata_paths(root: Path) -> list[Path]:
         return [root] if root.name in METADATA_FILENAMES else []
     if not root.is_dir():
         return []
-    return sorted(
-        path
-        for filename in METADATA_FILENAMES
-        for path in root.rglob(filename)
-        if path.is_file()
-    )
+    return sorted(path for filename in METADATA_FILENAMES for path in root.rglob(filename) if path.is_file())
 
 
 def _coordinate_output_paths(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
-    return sorted(
-        path
-        for filename in COORDINATE_OUTPUT_FILENAMES
-        for path in root.rglob(filename)
-        if path.is_file()
-    )
+    return sorted(path for filename in COORDINATE_OUTPUT_FILENAMES for path in root.rglob(filename) if path.is_file())
 
 
 def _owning_run_dir(path: Path, run_dirs: set[Path]) -> Path | None:
@@ -75,19 +61,13 @@ def _metadata_errors(path: Path) -> list[str]:
     except (OSError, json.JSONDecodeError) as exc:
         return [f"{path}: invalid JSON ({exc}). {CLEAN_RUN_GUIDANCE}"]
     if not isinstance(payload, dict):
-        return [
-            f"{path}: metadata root must be a JSON object. "
-            f"{CLEAN_RUN_GUIDANCE}"
-        ]
+        return [f"{path}: metadata root must be a JSON object. {CLEAN_RUN_GUIDANCE}"]
 
     errors = []
     contract_payload = payload
     if path.name == "virosync_run_state.json":
         if payload.get("schema_version") != 3 or payload.get("status") != "success":
-            errors.append(
-                f"{path}: authoritative run state is not schema-v3 success. "
-                f"{CLEAN_RUN_GUIDANCE}"
-            )
+            errors.append(f"{path}: authoritative run state is not schema-v3 success. {CLEAN_RUN_GUIDANCE}")
         identities = payload.get("identities")
         contract_payload = identities if isinstance(identities, dict) else {}
     for field, expected in coordinate_contract_metadata().items():
@@ -95,10 +75,7 @@ def _metadata_errors(path: Path) -> list[str]:
         if type(actual) is type(expected) and actual == expected:
             continue
         rendered = "<missing>" if actual is _MISSING else repr(actual)
-        errors.append(
-            f"{path}: {field}={rendered}; expected {expected!r}. "
-            f"{CLEAN_RUN_GUIDANCE}"
-        )
+        errors.append(f"{path}: {field}={rendered}; expected {expected!r}. {CLEAN_RUN_GUIDANCE}")
     return errors
 
 
@@ -110,38 +87,23 @@ def check_coordinate_output_roots(roots: Iterable[Path]) -> list[str]:
         metadata_paths = _metadata_paths(root)
         coordinate_paths = _coordinate_output_paths(root)
         if not metadata_paths:
-            errors.append(
-                f"{root}: no completion or summary metadata found. "
-                f"{CLEAN_RUN_GUIDANCE}"
-            )
+            errors.append(f"{root}: no completion or summary metadata found. {CLEAN_RUN_GUIDANCE}")
         for path in metadata_paths:
             errors.extend(_metadata_errors(path))
 
         manifest_paths = [
-            path
-            for path in metadata_paths
-            if path.name in {"virosync_run_state.json", "virosync_run_complete.json"}
+            path for path in metadata_paths if path.name in {"virosync_run_state.json", "virosync_run_complete.json"}
         ]
-        summary_paths = [
-            path
-            for path in metadata_paths
-            if path.name == "virosync_summary.json"
-        ]
+        summary_paths = [path for path in metadata_paths if path.name == "virosync_summary.json"]
         run_dirs = {path.parent for path in manifest_paths}
-        owned_summaries: dict[Path, list[Path]] = {
-            run_dir: [] for run_dir in run_dirs
-        }
-        owned_coordinates: dict[Path, list[Path]] = {
-            run_dir: [] for run_dir in run_dirs
-        }
+        owned_summaries: dict[Path, list[Path]] = {run_dir: [] for run_dir in run_dirs}
+        owned_coordinates: dict[Path, list[Path]] = {run_dir: [] for run_dir in run_dirs}
 
         for path in summary_paths:
             owner = _owning_run_dir(path, run_dirs)
             if owner is None:
                 errors.append(
-                    f"{path}: no enclosing ViroSync completion metadata "
-                    "for this summary. "
-                    f"{CLEAN_RUN_GUIDANCE}"
+                    f"{path}: no enclosing ViroSync completion metadata for this summary. {CLEAN_RUN_GUIDANCE}"
                 )
             else:
                 owned_summaries[owner].append(path)
@@ -160,9 +122,7 @@ def check_coordinate_output_roots(roots: Iterable[Path]) -> list[str]:
         for run_dir, paths in owned_coordinates.items():
             if paths and not owned_summaries[run_dir]:
                 errors.append(
-                    f"{run_dir}: coordinate outputs exist but "
-                    "virosync_summary.json is missing. "
-                    f"{CLEAN_RUN_GUIDANCE}"
+                    f"{run_dir}: coordinate outputs exist but virosync_summary.json is missing. {CLEAN_RUN_GUIDANCE}"
                 )
     return errors
 
@@ -182,10 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
-    print(
-        "Coordinate output metadata contract verified for "
-        f"{len(args.roots)} root(s)."
-    )
+    print(f"Coordinate output metadata contract verified for {len(args.roots)} root(s).")
     return 0
 
 

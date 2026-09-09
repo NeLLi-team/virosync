@@ -2,28 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
 import logging
 import os
-from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from virosync.utils.ssl_env import sanitized_ssl_env
 from virosync.utils.resource_manifest import RESOURCE_MANIFEST_NAME, load_resource_manifest
-
+from virosync.utils.ssl_env import sanitized_ssl_env
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +205,7 @@ def copy_or_download_archive(
     progress_callback: Callable[[float], None] | None = None,
 ) -> None:
     """Copy a local archive or download one with bounded retries and timeouts."""
-    normalized_source = (
-        source.replace("file://", "", 1) if source.startswith("file://") else source
-    )
+    normalized_source = source.replace("file://", "", 1) if source.startswith("file://") else source
     local_path = Path(normalized_source).expanduser()
     if local_path.exists():
         if not local_path.is_file():
@@ -280,11 +277,7 @@ def copy_or_download_archive(
                 )
         except FileNotFoundError:
             result = subprocess.CompletedProcess(command, 127)
-        if (
-            result.returncode == 0
-            and archive_path.is_file()
-            and archive_path.stat().st_size > 0
-        ):
+        if result.returncode == 0 and archive_path.is_file() and archive_path.stat().st_size > 0:
             return
         archive_path.unlink(missing_ok=True)
         detail = _download_error_detail(result.stderr)
@@ -306,9 +299,7 @@ def _archive_member_path(
                 raise ArchiveSafetyError("Archive root must be a directory entry")
             return None
         if not raw_name.startswith("./"):
-            raise ArchiveSafetyError(
-                f"Unexpected archive root for {raw_name!r}; expected './'"
-            )
+            raise ArchiveSafetyError(f"Unexpected archive root for {raw_name!r}; expected './'")
         raw_name = raw_name[2:]
     raw_parts = raw_name.rstrip("/").split("/")
     if any(part in {"", ".", ".."} for part in raw_parts):
@@ -317,9 +308,7 @@ def _archive_member_path(
     if archive_root == ".":
         return path
     if path.is_absolute() or not path.parts or path.parts[0] != archive_root:
-        raise ArchiveSafetyError(
-            f"Unexpected archive root for {member.name!r}; expected {archive_root!r}"
-        )
+        raise ArchiveSafetyError(f"Unexpected archive root for {member.name!r}; expected {archive_root!r}")
     if len(path.parts) == 1:
         if not member.isdir():
             raise ArchiveSafetyError("Archive root must be a directory entry")
@@ -342,13 +331,9 @@ def _preflight_archive(
             raise ArchiveSafetyError(f"Duplicate archive member: {normalized}")
         seen.add(normalized)
         if member.issym() or member.islnk():
-            raise ArchiveSafetyError(
-                f"Archive links are not permitted in core resources: {normalized}"
-            )
+            raise ArchiveSafetyError(f"Archive links are not permitted in core resources: {normalized}")
         if not (member.isdir() or member.isreg()):
-            raise ArchiveSafetyError(
-                f"Archive special-file member is not permitted: {normalized}"
-            )
+            raise ArchiveSafetyError(f"Archive special-file member is not permitted: {normalized}")
         members.append((member, relative))
     if not members:
         raise ArchiveSafetyError("Archive contains no core-resource payloads")
@@ -361,10 +346,7 @@ def _discover_single_archive_root(handle: tarfile.TarFile) -> str:
     if dot_roots:
         if len(dot_roots) != 1 or not dot_roots[0].isdir():
             raise ArchiveSafetyError("Archive root must be one directory entry")
-        if any(
-            member.name.rstrip("/") != "." and not member.name.startswith("./")
-            for member in members
-        ):
+        if any(member.name.rstrip("/") != "." and not member.name.startswith("./") for member in members):
             raise ArchiveSafetyError("Archive mixes './' and named top-level roots")
         return "."
 
@@ -372,17 +354,13 @@ def _discover_single_archive_root(handle: tarfile.TarFile) -> str:
     for member in members:
         raw_name = member.name
         if not raw_name or "\\" in raw_name or raw_name.startswith("/"):
-            raise ArchiveSafetyError(
-                f"Unsafe absolute or malformed archive path: {raw_name!r}"
-            )
+            raise ArchiveSafetyError(f"Unsafe absolute or malformed archive path: {raw_name!r}")
         raw_parts = raw_name.rstrip("/").split("/")
         if any(part in {"", ".", ".."} for part in raw_parts):
             raise ArchiveSafetyError(f"Unsafe archive traversal path: {raw_name!r}")
         roots.add(raw_parts[0])
     if len(roots) != 1:
-        raise ArchiveSafetyError(
-            f"Archive must have exactly one top-level root; found {sorted(roots)}"
-        )
+        raise ArchiveSafetyError(f"Archive must have exactly one top-level root; found {sorted(roots)}")
     return roots.pop()
 
 
@@ -412,9 +390,7 @@ def _safe_extract_archive(
                     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
                     source_handle = handle.extractfile(member)
                     if source_handle is None:
-                        raise ArchiveSafetyError(
-                            f"Could not read archive member: {relative.as_posix()}"
-                        )
+                        raise ArchiveSafetyError(f"Could not read archive member: {relative.as_posix()}")
                     with source_handle, destination.open("xb") as output_handle:
                         shutil.copyfileobj(source_handle, output_handle, 1024 * 1024)
                     executable = preserve_executable and bool(member.mode & 0o111)
@@ -469,9 +445,7 @@ def _validate_extracted_inventory(root: Path, required_files: list[str]) -> None
         elif stat.S_ISDIR(metadata.st_mode):
             actual_directories.add(relative)
         else:
-            raise ResourceInstallError(
-                f"Extracted resource tree contains a special file: {relative}"
-            )
+            raise ResourceInstallError(f"Extracted resource tree contains a special file: {relative}")
     if actual_files != expected_files or not actual_directories.issubset(expected_directories):
         raise ResourceInstallError(
             "Extracted resource payload set is incomplete or unexpected; "
@@ -501,18 +475,12 @@ def _fsync_tree(root: Path) -> None:
             continue
         if not stat.S_ISREG(metadata.st_mode):
             raise ResourceInstallError(f"Durable core tree contains a special file: {path}")
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
         try:
             opened = os.fstat(descriptor)
             if not stat.S_ISREG(opened.st_mode):
-                raise ResourceInstallError(
-                    f"Durable core payload changed type while opening: {path}"
-                )
+                raise ResourceInstallError(f"Durable core payload changed type while opening: {path}")
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -551,9 +519,7 @@ def _remove_journal(
             raise ResourceInstallError(f"Resource recovery journal disappeared: {path}")
         return
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-        raise ResourceInstallError(
-            f"Resource recovery journal must be a single-link regular file: {path}"
-        )
+        raise ResourceInstallError(f"Resource recovery journal must be a single-link regular file: {path}")
     if expected_identity is not None and (metadata.st_dev, metadata.st_ino) != expected_identity:
         raise ResourceInstallError(f"Resource recovery journal changed while reading: {path}")
     path.unlink()
@@ -574,24 +540,15 @@ def sibling_install_lock(target: Path) -> Iterator[None]:
     """Serialize all setup/recovery work for one stable resource pointer."""
     target.parent.mkdir(parents=True, exist_ok=True)
     lock_path = _lock_path(target)
-    flags = (
-        os.O_RDWR
-        | os.O_CREAT
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(lock_path, flags, 0o600)
     except OSError as exc:
-        raise ResourceInstallError(
-            f"Could not open regular sibling install lock: {lock_path}"
-        ) from exc
+        raise ResourceInstallError(f"Could not open regular sibling install lock: {lock_path}") from exc
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-            raise ResourceInstallError(
-                f"Sibling install lock must be a single-link regular file: {lock_path}"
-            )
+            raise ResourceInstallError(f"Sibling install lock must be a single-link regular file: {lock_path}")
         os.fchmod(descriptor, 0o600)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         current = lock_path.lstat()
@@ -600,9 +557,7 @@ def sibling_install_lock(target: Path) -> Iterator[None]:
             or current.st_nlink != 1
             or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
         ):
-            raise ResourceInstallError(
-                f"Sibling install lock changed while acquiring it: {lock_path}"
-            )
+            raise ResourceInstallError(f"Sibling install lock changed while acquiring it: {lock_path}")
         yield
     finally:
         try:
@@ -654,13 +609,9 @@ def _restore_from_journal(target: Path, journal: dict[str, Any]) -> None:
             f"Unsafe temporary pointer in recovery journal: {journal.get('temporary_pointer')!r}"
         )
     candidate = _safe_sibling(parent, journal.get("candidate"), "candidate")
-    candidate_pattern = re.compile(
-        re.escape(f"{target.name}-") + r"[A-Za-z0-9._-]+-[0-9a-f]{16}"
-    )
+    candidate_pattern = re.compile(re.escape(f"{target.name}-") + r"[A-Za-z0-9._-]+-[0-9a-f]{16}")
     if candidate is None or candidate_pattern.fullmatch(candidate.name) is None:
-        raise ResourceInstallError(
-            f"Unsafe candidate in recovery journal: {journal.get('candidate')!r}"
-        )
+        raise ResourceInstallError(f"Unsafe candidate in recovery journal: {journal.get('candidate')!r}")
     protected_names = {
         target.name,
         candidate.name,
@@ -668,19 +619,13 @@ def _restore_from_journal(target: Path, journal: dict[str, Any]) -> None:
         _lock_path(target).name,
     }
     if temporary.name in protected_names:
-        raise ResourceInstallError(
-            f"Unsafe temporary pointer alias in recovery journal: {temporary.name!r}"
-        )
+        raise ResourceInstallError(f"Unsafe temporary pointer alias in recovery journal: {temporary.name!r}")
     if temporary.is_symlink():
         if os.readlink(temporary) != candidate.name:
-            raise ResourceInstallError(
-                f"Recovery temporary pointer selects an unexpected target: {temporary}"
-            )
+            raise ResourceInstallError(f"Recovery temporary pointer selects an unexpected target: {temporary}")
         temporary.unlink()
     elif temporary.exists():
-        raise ResourceInstallError(
-            f"Recovery temporary pointer is not a symlink: {temporary}"
-        )
+        raise ResourceInstallError(f"Recovery temporary pointer is not a symlink: {temporary}")
     prior_kind = journal.get("prior_kind")
     if prior_kind == "directory":
         retained = _safe_sibling(parent, journal.get("prior"), "retained directory")
@@ -694,29 +639,21 @@ def _restore_from_journal(target: Path, journal: dict[str, Any]) -> None:
         retained_ready = retained.is_dir() and not retained.is_symlink()
         if target.is_symlink():
             if not retained_ready:
-                raise ResourceInstallError(
-                    f"Retained resource directory is unavailable: {retained}"
-                )
+                raise ResourceInstallError(f"Retained resource directory is unavailable: {retained}")
             active_link = os.readlink(target)
             if active_link == retained.name:
                 return
             if active_link != candidate.name:
-                raise ResourceInstallError(
-                    f"Active resource pointer is unrelated to recovery journal: {target}"
-                )
+                raise ResourceInstallError(f"Active resource pointer is unrelated to recovery journal: {target}")
         if target.exists():
             if target.is_symlink():
                 pass
             elif retained.exists():
-                raise ResourceInstallError(
-                    "Both active and retained real directories exist during recovery"
-                )
+                raise ResourceInstallError("Both active and retained real directories exist during recovery")
             elif target.is_dir():
                 return
             else:
-                raise ResourceInstallError(
-                    f"Refusing to replace non-directory resource path during recovery: {target}"
-                )
+                raise ResourceInstallError(f"Refusing to replace non-directory resource path during recovery: {target}")
         if not retained_ready:
             raise ResourceInstallError(f"Retained resource directory is unavailable: {retained}")
         _atomic_relative_pointer(target, retained.name, "recover")
@@ -736,21 +673,15 @@ def _restore_from_journal(target: Path, journal: dict[str, Any]) -> None:
         if resolved_prior.parent != parent.resolve():
             raise ResourceInstallError("Recovery journal prior pointer escapes resource parent")
         if not resolved_prior.is_dir() or resolved_prior.is_symlink():
-            raise ResourceInstallError(
-                f"Recovery journal prior resource directory is unavailable: {resolved_prior}"
-            )
+            raise ResourceInstallError(f"Recovery journal prior resource directory is unavailable: {resolved_prior}")
         if target.is_symlink():
             active_link = os.readlink(target)
             if active_link == prior_link:
                 return
             if active_link != candidate.name:
-                raise ResourceInstallError(
-                    f"Active resource pointer is unrelated to recovery journal: {target}"
-                )
+                raise ResourceInstallError(f"Active resource pointer is unrelated to recovery journal: {target}")
         elif target.exists():
-            raise ResourceInstallError(
-                f"Refusing to replace non-pointer resource path during recovery: {target}"
-            )
+            raise ResourceInstallError(f"Refusing to replace non-pointer resource path during recovery: {target}")
         _atomic_relative_pointer(target, prior_link, "recover")
         return
 
@@ -759,19 +690,13 @@ def _restore_from_journal(target: Path, journal: dict[str, Any]) -> None:
             raise ResourceInstallError("Recovery journal has a prior path for missing state")
         if target.is_symlink():
             if os.readlink(target) != candidate.name:
-                raise ResourceInstallError(
-                    f"Active resource pointer is unrelated to recovery journal: {target}"
-                )
+                raise ResourceInstallError(f"Active resource pointer is unrelated to recovery journal: {target}")
             if candidate.is_symlink() or not candidate.is_dir():
-                raise ResourceInstallError(
-                    f"Activated recovery candidate is unavailable: {candidate}"
-                )
+                raise ResourceInstallError(f"Activated recovery candidate is unavailable: {candidate}")
             _fsync_directory(parent)
             return
         elif target.exists():
-            raise ResourceInstallError(
-                f"Refusing to remove non-pointer resource path during recovery: {target}"
-            )
+            raise ResourceInstallError(f"Refusing to remove non-pointer resource path during recovery: {target}")
         return
     raise ResourceInstallError(f"Unknown prior resource state in journal: {prior_kind!r}")
 
@@ -780,19 +705,13 @@ def recover_pending_install(target: Path) -> bool:
     """Roll back an interrupted activation while retaining every resource tree."""
     target = Path(target)
     journal_path = _journal_path(target)
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(journal_path, flags)
     except FileNotFoundError:
         return False
     except OSError as exc:
-        raise ResourceInstallError(
-            f"Could not open regular resource recovery journal: {journal_path}"
-        ) from exc
+        raise ResourceInstallError(f"Could not open regular resource recovery journal: {journal_path}") from exc
     try:
         opened = os.fstat(descriptor)
         current = journal_path.lstat()
@@ -913,9 +832,7 @@ def _make_tree_immutable(root: Path, *, finalize_root: bool = True) -> None:
     for path in paths:
         metadata = path.lstat()
         if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
-            raise ResourceInstallError(
-                f"Immutable core tree contains a multiply linked file: {path}"
-            )
+            raise ResourceInstallError(f"Immutable core tree contains a multiply linked file: {path}")
     _chmod_if_needed(root, 0o755)
     for path in paths:
         if path.is_symlink():
@@ -959,7 +876,7 @@ def _write_install_metadata(
     payload = {
         "component": "virosync_core",
         "version": source.version,
-        "installed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "installed_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "source": source.source,
         "archive_sha256": source.archive_sha256,
         "manifest_sha256": source.manifest_sha256,
@@ -988,9 +905,7 @@ def verified_install_receipt(
         metadata_path = resource_root / "DB_METADATA.json"
         descriptor = os.open(
             metadata_path,
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         opened = os.fstat(descriptor)
         current = metadata_path.lstat()
@@ -1020,10 +935,7 @@ def verified_install_receipt(
         or payload.get("manifest_sha256") != manifest.manifest_sha256
         or payload.get("version") != manifest.version
         or payload.get("required_files") != list(expected_paths)
-        or (
-            expected_archive_sha256 is not None
-            and payload.get("archive_sha256") != expected_archive_sha256
-        )
+        or (expected_archive_sha256 is not None and payload.get("archive_sha256") != expected_archive_sha256)
     ):
         return False
     verified_files = payload.get("verified_files")
@@ -1039,10 +951,7 @@ def verified_install_receipt(
     }
     try:
         root_metadata = resource_root.lstat()
-        if (
-            not stat.S_ISDIR(root_metadata.st_mode)
-            or root_metadata.st_mode & 0o222
-        ):
+        if not stat.S_ISDIR(root_metadata.st_mode) or root_metadata.st_mode & 0o222:
             return False
         actual_files: set[str] = set()
         actual_directories: set[str] = set()
@@ -1114,8 +1023,7 @@ def _load_core_install_manifest(root: Path, source: ResourceSource) -> Any:
     )
     if manifest.bundle_kind == "source":
         raise ResourceInstallError(
-            "A schema-v2 source/repair bundle cannot be installed as "
-            "ViroSync core runtime resources"
+            "A schema-v2 source/repair bundle cannot be installed as ViroSync core runtime resources"
         )
     return manifest
 
@@ -1216,11 +1124,7 @@ def install_core_resources(
                 _fsync_directory(target.parent)
                 report(100, "core resources ready")
                 return target
-            if (
-                reject_invalid_existing
-                and target.exists()
-                and not target.is_symlink()
-            ):
+            if reject_invalid_existing and target.exists() and not target.is_symlink():
                 verify_tree(
                     target,
                     expected_version=source.version,
@@ -1235,9 +1139,7 @@ def install_core_resources(
                 "use the fast verify command only for an existing active release"
             )
 
-        stage_root = Path(
-            tempfile.mkdtemp(prefix=f".{target.name}.stage-", dir=target.parent)
-        )
+        stage_root = Path(tempfile.mkdtemp(prefix=f".{target.name}.stage-", dir=target.parent))
         payload_root = stage_root / "payload"
         archive_path = stage_root / source.filename
         promoted = False
@@ -1267,9 +1169,7 @@ def install_core_resources(
 
             if candidate.exists() or candidate.is_symlink():
                 if candidate.is_symlink() or not candidate.is_dir():
-                    raise ResourceInstallError(
-                        f"Immutable candidate path has an invalid type: {candidate}"
-                )
+                    raise ResourceInstallError(f"Immutable candidate path has an invalid type: {candidate}")
                 verification_kwargs["verify_hashes"] = True
                 verify_tree(candidate, **verification_kwargs)
                 receipt_is_current = _install_receipt_is_current(

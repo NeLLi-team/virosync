@@ -7,13 +7,12 @@ it records why that original evidence is retained downstream.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
-import math
 from typing import Final, Protocol
 
 from virosync.ablation import AblationID
-
 
 DEFAULT_A2_SINGLE_MARKER_MIN_SCORE: Final = 50.0
 A2_MAX_HMM_EVALUE: Final = 1e-5
@@ -48,13 +47,11 @@ class MarkerRoleDecision:
     @property
     def is_production_validated(self) -> bool:
         """Return whether normal Tier-1 validation assigned this role."""
-
         return self.role is MarkerRole.PRODUCTION_VALIDATED
 
     @property
     def is_tier1_bypassed(self) -> bool:
         """Return whether A2 retained a marker rejected by normal Tier 1."""
-
         return self.role is MarkerRole.TIER1_BYPASSED
 
     @property
@@ -64,7 +61,6 @@ class MarkerRoleDecision:
         Historical A0 behavior still permits rejected overlapping HMM hits to
         annotate a seed created by production-validated markers.
         """
-
         return self.role is MarkerRole.REJECTED
 
     @property
@@ -75,7 +71,6 @@ class MarkerRoleDecision:
         restrictions, such as the MCP requirement for ``validated_novel``,
         still apply independently.
         """
-
         return not self.is_rejected
 
 
@@ -124,7 +119,6 @@ def decide_marker_role(
     Only A2 can retain ``supported`` or ``unvalidated`` markers, and then only
     when both the score floor and the fixed ``1e-5`` E-value ceiling pass.
     """
-
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
     if not isinstance(validation_status, str):
@@ -160,7 +154,6 @@ def decide_marker_hit_role(
     single_marker_min_score: float = DEFAULT_A2_SINGLE_MARKER_MIN_SCORE,
 ) -> MarkerRoleDecision:
     """Assign a role from either existing ``ValidatedMarkerHit`` shape."""
-
     return decide_marker_role(
         ablation_id=ablation_id,
         validation_status=hit.validation_status,

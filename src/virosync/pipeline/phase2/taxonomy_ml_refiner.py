@@ -8,7 +8,7 @@ import logging
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 from virosync.pipeline.host_signatures import HostSignatureModel, score_host_signature_record
 from virosync.pipeline.phase1.seed_merger import MergedSeed
@@ -25,11 +25,23 @@ logger = logging.getLogger(__name__)
 
 TaxonomyMLModelType = Literal["logreg", "gbdt", "xgboost"]
 FEATURE_COLUMNS = [
-    "has_hit", "has_viral", "has_ncldv_mirus", "has_vp_plv", "top1_pident",
-    "top1_evalue_log10", "top1_is_host", "host_rank_score", "viral_rank_score",
-    "host_signature_score", "top10_hit_count", "mean_top10_bits",
-    "viral_top10_fraction", "host_top10_fraction",
-    "neighbor_viral_fraction_mean", "neighbor_host_score_mean", "neighbor_host_top1_fraction",
+    "has_hit",
+    "has_viral",
+    "has_ncldv_mirus",
+    "has_vp_plv",
+    "top1_pident",
+    "top1_evalue_log10",
+    "top1_is_host",
+    "host_rank_score",
+    "viral_rank_score",
+    "host_signature_score",
+    "top10_hit_count",
+    "mean_top10_bits",
+    "viral_top10_fraction",
+    "host_top10_fraction",
+    "neighbor_viral_fraction_mean",
+    "neighbor_host_score_mean",
+    "neighbor_host_top1_fraction",
 ]
 
 
@@ -48,14 +60,14 @@ class GeneFeatureRow:
 
 def refine_seeds_by_taxonomy_ml(
     merged_seeds: list[MergedSeed],
-    taxonomy_map: dict[str, "GeneTaxonomy"],
-    boundary_query: "GenomeDiamondQuery",
-    host_signature_model: Optional[HostSignatureModel] = None,
+    taxonomy_map: dict[str, GeneTaxonomy],
+    boundary_query: GenomeDiamondQuery,
+    host_signature_model: HostSignatureModel | None = None,
     model_type: TaxonomyMLModelType = "logreg",
     host_prefix: str = "EUK__",
     probability_threshold: float = 0.5,
     neighbor_window: int = 3,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
     random_state: int = 42,
     taxonomy_weight_mode: str = "rank",
     host_signature_threshold: float = 0.5,
@@ -119,9 +131,9 @@ def refine_seeds_by_taxonomy_ml(
 
 
 def _build_rows(
-    boundary_query: "GenomeDiamondQuery",
-    taxonomy_map: dict[str, "GeneTaxonomy"],
-    host_model: Optional[HostSignatureModel],
+    boundary_query: GenomeDiamondQuery,
+    taxonomy_map: dict[str, GeneTaxonomy],
+    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
     neighbor_window: int,
@@ -199,8 +211,8 @@ def _add_seed_role_rows(
     role: str,
     label: int,
     seen: set[str],
-    taxonomy_map: dict[str, "GeneTaxonomy"],
-    host_model: Optional[HostSignatureModel],
+    taxonomy_map: dict[str, GeneTaxonomy],
+    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
 ) -> None:
@@ -210,8 +222,14 @@ def _add_seed_role_rows(
         seen.add(porf_id)
         rows.append(
             _build_row(
-                seed_id, porf_id, role, label, taxonomy_map[porf_id],
-                host_model, host_prefix, taxonomy_weight_mode,
+                seed_id,
+                porf_id,
+                role,
+                label,
+                taxonomy_map[porf_id],
+                host_model,
+                host_prefix,
+                taxonomy_weight_mode,
             )
         )
 
@@ -221,8 +239,8 @@ def _build_row(
     porf_id: str,
     role: str,
     label: int,
-    tax: "GeneTaxonomy",
-    host_model: Optional[HostSignatureModel],
+    tax: GeneTaxonomy,
+    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
 ) -> GeneFeatureRow:
@@ -237,18 +255,13 @@ def _build_row(
         sum(
             1
             for idx, prefix in enumerate(prefixes)
-            if prefix in VIRAL_PREFIXES
-            and idx < len(pidents)
-            and pidents[idx] >= MIN_VIRAL_HIT_PIDENT
-        ) / top10_count
+            if prefix in VIRAL_PREFIXES and idx < len(pidents) and pidents[idx] >= MIN_VIRAL_HIT_PIDENT
+        )
+        / top10_count
         if top10_count > 0
         else 0.0
     )
-    host_fraction = (
-        sum(1 for prefix in prefixes if prefix == host_prefix) / top10_count
-        if top10_count > 0
-        else 0.0
-    )
+    host_fraction = sum(1 for prefix in prefixes if prefix == host_prefix) / top10_count if top10_count > 0 else 0.0
     features = {
         "has_hit": float(bool(getattr(tax, "has_hit", False))),
         "has_viral": float(bool(getattr(tax, "has_viral", False))),
@@ -281,7 +294,7 @@ def _build_row(
     )
 
 
-def _ranked_prefix_scores(tax: "GeneTaxonomy", host_prefix: str, mode: str) -> tuple[float, float]:
+def _ranked_prefix_scores(tax: GeneTaxonomy, host_prefix: str, mode: str) -> tuple[float, float]:
     prefixes = getattr(tax, "top10_prefixes", []) or []
     if not prefixes:
         host = 1.0 if getattr(tax, "top1_prefix", "") == host_prefix else 0.0
@@ -347,7 +360,7 @@ def _fit_model(
     training_rows: list[GeneFeatureRow],
     model_type: TaxonomyMLModelType,
     random_state: int,
-) -> tuple[Optional[object], dict[str, object]]:
+) -> tuple[object | None, dict[str, object]]:
     labels = [row.label for row in training_rows]
     n_pos = sum(1 for v in labels if v == 1)
     n_neg = sum(1 for v in labels if v == 0)
@@ -427,7 +440,7 @@ def _build_estimator(
     return GradientBoostingClassifier(random_state=random_state), "gbdt", fallback
 
 
-def _predict_scores(model: Optional[object], rows: list[GeneFeatureRow]) -> dict[tuple[str, str], float]:
+def _predict_scores(model: object | None, rows: list[GeneFeatureRow]) -> dict[tuple[str, str], float]:
     if model is None:
         return {(row.seed_id, row.porf_id): _heuristic_probability(row) for row in rows}
     matrix = [[row.features[name] for name in FEATURE_COLUMNS] for row in rows]
@@ -446,17 +459,14 @@ def _heuristic_probability(row: GeneFeatureRow) -> float:
 
 def _refine_seed_boundaries(
     merged_seeds: list[MergedSeed],
-    seed_mappings: dict[str, "SeedGeneMapping"],
+    seed_mappings: dict[str, SeedGeneMapping],
     prediction_rows: list[GeneFeatureRow],
     scores: dict[tuple[str, str], float],
     threshold: float,
     host_signature_threshold: float = 0.5,
     host_guard_viral_rank_min: float = 8.0,
 ) -> tuple[list[MergedSeed], dict[str, int]]:
-    mapping_by_coords = {
-        (m.scaffold, int(m.seed_start), int(m.seed_end)): key
-        for key, m in seed_mappings.items()
-    }
+    mapping_by_coords = {(m.scaffold, int(m.seed_start), int(m.seed_end)): key for key, m in seed_mappings.items()}
 
     rows_by_seed: dict[str, list[GeneFeatureRow]] = {}
     for row in prediction_rows:
@@ -513,9 +523,7 @@ def _passes_host_guard(
     host_signature_threshold: float,
     host_guard_viral_rank_min: float,
 ) -> bool:
-    """
-    Block host-like positives unless they also have strong viral evidence.
-    """
+    """Block host-like positives unless they also have strong viral evidence."""
     host_score = float(row.features.get("host_signature_score", 0.0))
     if host_score < host_signature_threshold:
         return True

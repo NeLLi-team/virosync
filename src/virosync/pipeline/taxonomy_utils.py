@@ -1,11 +1,9 @@
-"""
-Shared taxonomy utilities for fingerprinting and aggregation.
+"""Shared taxonomy utilities for fingerprinting and aggregation.
 
 Used by both phase1 (marker validation) and phase2 (boundary refinement).
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -17,14 +15,10 @@ class TaxonomyFingerprint:
 
     def to_string(self) -> tuple[str, str]:
         """Serialize to comma-separated format."""
-        sorted_weighted = sorted(
-            self.weighted_tokens.items(), key=lambda x: x[1], reverse=True
-        )[:20]
+        sorted_weighted = sorted(self.weighted_tokens.items(), key=lambda x: x[1], reverse=True)[:20]
         weighted_str = ",".join(f"{t}:{w:.2f}" for t, w in sorted_weighted)
 
-        sorted_raw = sorted(self.raw_tokens.items(), key=lambda x: x[1], reverse=True)[
-            :20
-        ]
+        sorted_raw = sorted(self.raw_tokens.items(), key=lambda x: x[1], reverse=True)[:20]
         raw_str = ",".join(f"{t}:{c}" for t, c in sorted_raw)
 
         return weighted_str, raw_str
@@ -108,8 +102,7 @@ def resolve_org_id(target: str, taxonomy_lookup: dict) -> str:
 
 
 def compute_hit_weight(rank: int, bits: float, weight_mode: str) -> float:
-    """
-    Compute per-hit weight based on rank or bitscore.
+    """Compute per-hit weight based on rank or bitscore.
 
     Args:
         rank: 0-based rank in the top-10 list.
@@ -127,12 +120,11 @@ def compute_hit_weight(rank: int, bits: float, weight_mode: str) -> float:
 
 def aggregate_taxonomy_substrings(
     top10_hits: list[tuple[str, float, float, float]],
-    taxonomy_lookup: Optional[dict],
+    taxonomy_lookup: dict | None,
     min_token_length: int = 3,
     weight_mode: str = "rank",
 ) -> TaxonomyFingerprint:
-    """
-    Aggregate taxonomy substring counts across all top-10 Diamond hits.
+    """Aggregate taxonomy substring counts across all top-10 Diamond hits.
 
     Algorithm:
     1. For each hit: lookup full taxonomy lineage
@@ -186,8 +178,7 @@ def calculate_fingerprint_overlap(
     baseline_fingerprint: dict[str, float],
     min_overlap_score: float = 0.40,
 ) -> tuple[bool, float]:
-    """
-    Calculate weighted Jaccard-like overlap between gene and baseline.
+    """Calculate weighted Jaccard-like overlap between gene and baseline.
 
     Uses min/max normalization for each token across gene and baseline weights,
     then computes overlap_sum / union_sum.
@@ -208,9 +199,7 @@ def calculate_fingerprint_overlap(
     if gene_total <= 0 or host_total <= 0:
         return False, 0.0
 
-    gene_norm = {
-        k: v / gene_total for k, v in gene_fingerprint.weighted_tokens.items()
-    }
+    gene_norm = {k: v / gene_total for k, v in gene_fingerprint.weighted_tokens.items()}
     host_norm = {k: v / host_total for k, v in baseline_fingerprint.items()}
 
     all_tokens = set(gene_norm.keys()) | set(host_norm.keys())

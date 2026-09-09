@@ -3,6 +3,5 @@
 
 from virosync.validation.tsv_invariants import main
 
-
 if __name__ == "__main__":
     raise SystemExit(main())

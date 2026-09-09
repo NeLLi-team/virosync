@@ -7,13 +7,11 @@ never reach a published bundle, a project resource tree, or an external tool.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import hashlib
 import inspect
 import io
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import stat
@@ -21,15 +19,17 @@ import subprocess
 import tarfile
 import threading
 import time
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
 import virosync.utils.database_manager as database_manager
-from virosync.utils.database_manager import ViroSyncDatabaseManager
 import virosync.utils.resource_installer as resource_installer
 import virosync.utils.resource_manifest as resource_manifest
+from virosync.utils.database_manager import ViroSyncDatabaseManager
 
 _REAL_SETUP_DATABASE = ViroSyncDatabaseManager.setup_database.__func__
 _REAL_RESOLVE_CONFIG_PATHS = ViroSyncDatabaseManager.resolve_config_paths.__func__
@@ -80,9 +80,7 @@ INSTALL_FAULT_PHASES = (
     "after_journal_clear",
 )
 
-PRE_ACTIVATION_PHASES = frozenset(
-    INSTALL_FAULT_PHASES[: INSTALL_FAULT_PHASES.index("after_pointer_activate")]
-)
+PRE_ACTIVATION_PHASES = frozenset(INSTALL_FAULT_PHASES[: INSTALL_FAULT_PHASES.index("after_pointer_activate")])
 
 
 class UnexpectedExternalActivity(AssertionError):
@@ -99,7 +97,6 @@ def restore_real_installer(
     _block_database_auto_download: None,
 ) -> None:
     """Override the suite-wide download guard for this installer-only module."""
-
     monkeypatch.setattr(
         ViroSyncDatabaseManager,
         "setup_database",
@@ -123,9 +120,7 @@ def forbid_network_and_processes(monkeypatch: pytest.MonkeyPatch) -> None:
         command_runner: Callable[..., object] = _REAL_SUBPROCESS_RUN,
     ) -> int:
         if command_runner is _REAL_SUBPROCESS_RUN:
-            raise UnexpectedExternalActivity(
-                "resource test attempted DIAMOND without its injected runner"
-            )
+            raise UnexpectedExternalActivity("resource test attempted DIAMOND without its injected runner")
         return _REAL_DIAMOND_SEQUENCE_COUNT(
             database,
             command_runner=command_runner,
@@ -161,9 +156,7 @@ def _payloads(version: str = VERSION) -> dict[str, bytes]:
         "models/combined.hmm.h3i": b"synthetic-h3i\n",
         "models/combined.hmm.h3m": b"synthetic-h3m\n",
         "models/combined.hmm.h3p": b"synthetic-h3p\n",
-        "models/model_annotations_with_interpro.tsv": (
-            b"model\tannotation\nVS000001\tsynthetic\n"
-        ),
+        "models/model_annotations_with_interpro.tsv": (b"model\tannotation\nVS000001\tsynthetic\n"),
         "models/og_marker_name_map.tsv": b"model\tmarker\nVS000001\tMCP\n",
         "marker/marker.faa": b">synthetic_marker\nMPEP\n",
         "marker/marker.dmnd": b"synthetic-marker-diamond\n",
@@ -234,9 +227,7 @@ def _write_tree(
         destination.write_bytes(content)
     if include_manifest:
         document = _manifest_document(payloads)
-        (root / "RESOURCE_MANIFEST.json").write_bytes(
-            manifest if manifest is not None else _manifest_bytes(document)
-        )
+        (root / "RESOURCE_MANIFEST.json").write_bytes(manifest if manifest is not None else _manifest_bytes(document))
     return root
 
 
@@ -290,9 +281,7 @@ def _build_schema2_archive(
     bundle_kind: str,
 ) -> tuple[Path, bytes, resource_manifest.ResourceManifest]:
     payloads = _payloads()
-    payloads["models/pfam_virosync_screening.hmm"] = (
-        b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
-    )
+    payloads["models/pfam_virosync_screening.hmm"] = b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
     resources = _write_tree(
         tmp_path / "schema2-resources",
         payloads,
@@ -404,9 +393,7 @@ def _expect_rejected(
         pytest.fail(f"installer attempted external activity: {exc}")
     except BaseException as exc:
         message = str(exc).lower()
-        assert any(
-            keyword in message for keyword in keywords
-        ), f"wrong rejection {type(exc).__name__}: {exc}"
+        assert any(keyword in message for keyword in keywords), f"wrong rejection {type(exc).__name__}: {exc}"
         return exc
     pytest.fail("invalid resource input was accepted")
 
@@ -509,9 +496,7 @@ def _assert_no_visible_members(target: Path) -> None:
 
 
 def test_installer_api_exposes_authentication_and_verification_controls() -> None:
-    setup_parameters = inspect.signature(
-        ViroSyncDatabaseManager.setup_database
-    ).parameters
+    setup_parameters = inspect.signature(ViroSyncDatabaseManager.setup_database).parameters
     verify = getattr(ViroSyncDatabaseManager, "verify_database", None)
     extractor = getattr(ViroSyncDatabaseManager, "_safe_extract_archive", None)
 
@@ -524,9 +509,7 @@ def test_installer_api_exposes_authentication_and_verification_controls() -> Non
     } <= set(setup_parameters)
     assert callable(verify)
     assert callable(extractor)
-    assert {"expected_version", "manifest_sha256", "full"} <= set(
-        inspect.signature(verify).parameters
-    )
+    assert {"expected_version", "manifest_sha256", "full"} <= set(inspect.signature(verify).parameters)
 
 
 def test_shipped_source_and_configs_pin_the_same_two_digests() -> None:
@@ -652,9 +635,7 @@ def test_safe_extractor_rejects_unsafe_archive_shapes_before_visibility(
             _add_bytes(handle, "virosync/source.txt", b"source\n")
             member = tarfile.TarInfo(f"virosync/{case}.txt")
             member.type = tarfile.SYMTYPE if case == "symlink" else tarfile.LNKTYPE
-            member.linkname = (
-                "../../outside" if case == "symlink" else "virosync/source.txt"
-            )
+            member.linkname = "../../outside" if case == "symlink" else "virosync/source.txt"
             member.mode = 0o777
             _add_member(handle, member)
         elif case == "duplicate":
@@ -786,9 +767,7 @@ def test_invalid_bundle_never_becomes_active(
         manifest_document = _manifest_document(payloads, version=PRIOR_VERSION)
     elif case == "same_size_corruption":
         original = payloads["models/og_marker_name_map.tsv"]
-        payloads["models/og_marker_name_map.tsv"] = (
-            bytes([original[0] ^ 1]) + original[1:]
-        )
+        payloads["models/og_marker_name_map.tsv"] = bytes([original[0] ^ 1]) + original[1:]
 
     manifest = _manifest_bytes(manifest_document)
     archive, embedded_manifest = _build_archive(
@@ -937,11 +916,7 @@ def test_valid_install_is_relative_immutable_idempotent_and_retains_prior(
         if path.is_file() and path.stat().st_mode & stat.S_IWUSR
     ]
     assert writable == []
-    retained = [
-        path
-        for path in target.parent.rglob("prior-sentinel.txt")
-        if not path.is_relative_to(resolved)
-    ]
+    retained = [path for path in target.parent.rglob("prior-sentinel.txt") if not path.is_relative_to(resolved)]
     assert retained, "successful migration discarded the prior real directory"
 
     before = _snapshot(target)
@@ -970,17 +945,11 @@ def test_rehardening_preserves_payload_ctimes_and_verified_receipt(
         expected_version=VERSION,
         expected_manifest_sha256=_sha256_bytes(manifest_bytes),
     )
-    before = {
-        relative: (candidate / relative).lstat().st_ctime_ns
-        for relative in CORE_PAYLOADS
-    }
+    before = {relative: (candidate / relative).lstat().st_ctime_ns for relative in CORE_PAYLOADS}
 
     resource_installer._make_tree_immutable(candidate)
 
-    after = {
-        relative: (candidate / relative).lstat().st_ctime_ns
-        for relative in CORE_PAYLOADS
-    }
+    after = {relative: (candidate / relative).lstat().st_ctime_ns for relative in CORE_PAYLOADS}
     assert after == before
     assert resource_installer.verified_install_receipt(candidate, manifest)
 
@@ -1047,19 +1016,13 @@ def test_schema2_runtime_bundle_installs_and_reuses_its_full_receipt(
 
     candidate = installed.resolve(strict=True)
     expected_payloads = list(resource_manifest.RUNTIME_RESOURCE_FILES)
-    installed_files = {
-        path.relative_to(candidate).as_posix()
-        for path in candidate.rglob("*")
-        if path.is_file()
-    }
+    installed_files = {path.relative_to(candidate).as_posix() for path in candidate.rglob("*") if path.is_file()}
     assert installed_files == {
         *expected_payloads,
         resource_manifest.RESOURCE_MANIFEST_NAME,
         "DB_METADATA.json",
     }
-    metadata = json.loads(
-        (candidate / "DB_METADATA.json").read_text(encoding="utf-8")
-    )
+    metadata = json.loads((candidate / "DB_METADATA.json").read_text(encoding="utf-8"))
     assert metadata["required_files"] == expected_payloads
     assert set(metadata["verified_files"]) == set(expected_payloads)
     assert resource_installer.verified_install_receipt(
@@ -1217,9 +1180,7 @@ def test_schema3_identity_and_reuse_reject_same_size_installed_payload_corruptio
 
     assert not resource_installer.verified_install_receipt(candidate, manifest)
     with pytest.raises(resource_manifest.ResourceManifestError, match="SHA-256 mismatch"):
-        _enabled_resource_identities(
-            {"hmm_database": candidate / "models/combined.hmm"}
-        )
+        _enabled_resource_identities({"hmm_database": candidate / "models/combined.hmm"})
     events: list[str] = []
     _record_reuse_checks(monkeypatch, events)
     with pytest.raises(Exception, match="SHA-256 mismatch"):
@@ -1253,10 +1214,13 @@ def test_fast_identity_and_reuse_reject_same_size_manifest_mutation(
         _sha256_bytes(manifest_bytes),
     )
 
-    assert ViroSyncDatabaseManager._trusted_database_root(
-        target,
-        source=source,
-    ) is None
+    assert (
+        ViroSyncDatabaseManager._trusted_database_root(
+            target,
+            source=source,
+        )
+        is None
+    )
     with pytest.raises(Exception, match="manifest SHA-256 mismatch"):
         _setup(target, archive, manifest_bytes, force=False, full=False)
 
@@ -1291,16 +1255,14 @@ def test_resolve_config_paths_uses_only_a_verified_install_receipt(
             "hmm_db": None,
             "marker_db": None,
             "gene_taxonomy_faa_db": None,
-        }
+        },
     )
 
     assert setup_calls == []
     candidate = target.resolve(strict=True)
     assert resolved["hmm_db"] == str(candidate / "models/combined.hmm")
     assert resolved["marker_db"] == str(candidate / "marker/marker.dmnd")
-    assert resolved["gene_taxonomy_faa_db"] == str(
-        candidate / "genomes/combined_proteome.dmnd"
-    )
+    assert resolved["gene_taxonomy_faa_db"] == str(candidate / "genomes/combined_proteome.dmnd")
 
 
 def test_resolve_config_paths_rejects_a_stale_install_receipt(
@@ -1337,7 +1299,7 @@ def test_resolve_config_paths_rejects_a_stale_install_receipt(
             "hmm_db": None,
             "marker_db": None,
             "gene_taxonomy_faa_db": None,
-        }
+        },
     )
 
     assert len(setup_calls) == 1
@@ -1494,9 +1456,7 @@ def test_implicit_setup_rejects_invalid_existing_before_download(
     )
     if case == "wrong_version":
         payloads = _payloads(PRIOR_VERSION)
-        manifest = _manifest_bytes(
-            _manifest_document(payloads, version=PRIOR_VERSION)
-        )
+        manifest = _manifest_bytes(_manifest_document(payloads, version=PRIOR_VERSION))
     else:
         payloads = _payloads()
         manifest = _manifest_bytes(_manifest_document(payloads))
@@ -1562,14 +1522,9 @@ def test_existing_valid_real_tree_is_migrated_to_an_immutable_pointer(
     candidate = installed.resolve(strict=True)
     assert candidate.parent == installed.parent
     assert os.readlink(installed) == candidate.name
-    assert all(
-        path.stat().st_mode & 0o222 == 0
-        for path in (candidate, *candidate.rglob("*"))
-    )
+    assert all(path.stat().st_mode & 0o222 == 0 for path in (candidate, *candidate.rglob("*")))
     retained = [
-        path
-        for path in target.parent.iterdir()
-        if path.name.startswith(f".{target.name}.legacy-") and path.is_dir()
+        path for path in target.parent.iterdir() if path.name.startswith(f".{target.name}.legacy-") and path.is_dir()
     ]
     assert len(retained) == 1
     assert _snapshot(retained[0]) == before
@@ -1686,11 +1641,7 @@ def test_candidate_data_and_modes_are_fsynced_before_activation(
         if phase != "after_candidate_promote":
             return
         candidate = target.parent / f"{target.name}-{VERSION}-{_sha256_bytes(manifest)[:16]}"
-        files = {
-            path
-            for path in candidate.rglob("*")
-            if path.is_file() and not path.is_symlink()
-        }
+        files = {path for path in candidate.rglob("*") if path.is_file() and not path.is_symlink()}
         assert files
         assert files <= set(synced_modes)
         assert all(synced_modes[path] & 0o222 == 0 for path in files)
@@ -1704,11 +1655,7 @@ def test_candidate_data_and_modes_are_fsynced_before_activation(
     )
 
     candidate = target.resolve(strict=True)
-    installed_files = {
-        path
-        for path in candidate.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    }
+    installed_files = {path for path in candidate.rglob("*") if path.is_file() and not path.is_symlink()}
     assert installed_files
     assert installed_files <= set(synced_modes)
     assert all(synced_modes[path] & 0o222 == 0 for path in installed_files)
@@ -2126,9 +2073,5 @@ def test_concurrent_setup_serializes_and_leaves_one_valid_active_bundle(
     assert target.is_symlink()
     assert ViroSyncDatabaseManager.get_database_version(target) == VERSION
     _verify(target, manifest, full=True, semantic_runner=SemanticProbe())
-    sibling_locks = [
-        path
-        for path in target.parent.iterdir()
-        if path.is_file() and path.name.endswith(".lock")
-    ]
+    sibling_locks = [path for path in target.parent.iterdir() if path.is_file() and path.name.endswith(".lock")]
     assert sibling_locks, "setup did not leave a stable sibling lock file"

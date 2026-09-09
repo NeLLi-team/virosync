@@ -1,5 +1,4 @@
-"""
-Seed Merger for Phase 1.
+"""Seed Merger for Phase 1.
 
 Defines the MergedSeed dataclass consumed by Phase 2.
 The active pipeline produces HHG seeds only; the legacy novelty and
@@ -9,7 +8,6 @@ zero placeholders but are no longer populated in the main flow.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .hhg_seeding import Anchor
 
@@ -18,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MergedSeed:
-    """
-    Seed record consumed by Phase 2.
+    """Seed record consumed by Phase 2.
 
     The active workflow populates marker-derived HHG/validation fields. Legacy
     novelty/compositional fields remain for output and compatibility schemas.
@@ -51,10 +48,10 @@ class MergedSeed:
     region_classification_ncldv_markers: int = 0
     region_classification_vp_plv_markers: int = 0
     region_classification_mirus_markers: int = 0
-    host_trim_original_start: Optional[int] = None
-    host_trim_original_end: Optional[int] = None
-    host_trimmed_start: Optional[int] = None
-    host_trimmed_end: Optional[int] = None
+    host_trim_original_start: int | None = None
+    host_trim_original_end: int | None = None
+    host_trimmed_start: int | None = None
+    host_trimmed_end: int | None = None
     host_trim_reason: str = ""
     host_trim_common_euk_taxonomy: str = ""
 
@@ -66,12 +63,12 @@ class MergedSeed:
     def has_mcp(self) -> bool:
         """True if seed contains a Major Capsid Protein anchor (most diagnostic marker)."""
         from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
+
         all_anchors = self.anchors + self.hhg_anchors
         return any(is_mcp_gene(a.hallmark_gene) for a in all_anchors)
 
     def compute_classification(self, seed_marker_allowlist: list[str] | None = None) -> None:
-        """
-        Compute region classification based on hallmark genes.
+        """Compute region classification based on hallmark genes.
 
         Sets predicted_family and marker count fields based on
         the classify_region_by_markers function.

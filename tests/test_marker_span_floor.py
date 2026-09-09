@@ -23,14 +23,14 @@ from virosync.features.compositional import (
 from virosync.orchestration._flows.single_genome.phase2 import (
     _recalculate_boundary_composition,
 )
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _is_marker_floor_recovery_candidate,
+)
+from virosync.pipeline.phase2.boundary_diamond import pORF
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     annotate_boundaries_with_marker_floor,
     merge_adjacent_viral_boundaries,
-)
-from virosync.pipeline.phase2.boundary_diamond import pORF
-from virosync.orchestration._flows.single_genome.phase3 import (
-    _is_marker_floor_recovery_candidate,
 )
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 
@@ -114,10 +114,11 @@ def test_floor_index_scopes_multiple_boundaries_and_scaffolds():
     ]
 
     assert annotate_boundaries_with_marker_floor(boundaries, markers) == 3
-    assert [
-        (boundary.marker_floor_start, boundary.marker_floor_end)
-        for boundary in boundaries
-    ] == [(95, 205), (295, 405), (495, 605)]
+    assert [(boundary.marker_floor_start, boundary.marker_floor_end) for boundary in boundaries] == [
+        (95, 205),
+        (295, 405),
+        (495, 605),
+    ]
 
 
 def test_floor_requires_two_validated_markers():
@@ -260,9 +261,7 @@ def test_marker_floor_alternative_recalculates_composition(
     assert alternative.gc_deviation == pytest.approx(
         calculate_gc_deviation(alternative_sequence, background.gc_content)
     )
-    assert alternative.max_kfd == pytest.approx(
-        calculate_kfd(alternative_sequence, background.kmer_freqs, k=4)
-    )
+    assert alternative.max_kfd == pytest.approx(calculate_kfd(alternative_sequence, background.kmer_freqs, k=4))
     assert alternative.gc_deviation != 0.91
     assert alternative.max_kfd != 0.92
 

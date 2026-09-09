@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virosync"
-version = "1.0.0"
+version = "1.0.1"
 description = "Framework for discovering and characterizing ancient viral elements in eukaryotic genomes"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -29,9 +29,7 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# High-signal correctness rules enforced in CI (real bugs: syntax errors,
-# undefined names, bad __all__, use-before-assignment, return-outside-function).
-# Broader style rules (unused imports/vars, redefinitions, f-string nits) are
-# intentionally not gated yet to avoid churn across the existing codebase; they can be
-# enabled incrementally.
-select = ["E9", "F821", "F822", "F823", "F706"]
+# Check correctness, import order, modern syntax and docstring spacing.
+select = ["E9", "F", "I", "UP", "D202", "D212"]
+# StrEnum changes str(member), which is observable for existing public enums.
+ignore = ["UP042"]

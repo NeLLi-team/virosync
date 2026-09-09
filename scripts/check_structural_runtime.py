@@ -115,8 +115,7 @@ def _check_tmvec_real_query(
         if runtime_embedding.shape != reference_embedding.shape:
             return (
                 False,
-                f"runtime shape {runtime_embedding.shape} != reference shape "
-                f"{reference_embedding.shape}",
+                f"runtime shape {runtime_embedding.shape} != reference shape {reference_embedding.shape}",
                 False,
                 "not run",
             )
@@ -129,8 +128,7 @@ def _check_tmvec_real_query(
             max_error = float(np.max(np.abs(runtime_embedding - reference_embedding)))
             return (
                 False,
-                f"runtime embedding differs from the upstream reference "
-                f"(max_abs_error={max_error:.6g})",
+                f"runtime embedding differs from the upstream reference (max_abs_error={max_error:.6g})",
                 False,
                 "not run",
             )
@@ -214,9 +212,7 @@ def main(argv: list[str] | None = None) -> int:
 
     phase3 = _load_phase3(config_path)
     compute = _load_compute(config_path)
-    tmvec_dir = phase3.get("tmvec_database_dir") or str(
-        ViroSyncDatabaseManager.default_tmvec_path()
-    )
+    tmvec_dir = phase3.get("tmvec_database_dir") or str(ViroSyncDatabaseManager.default_tmvec_path())
     tmvec_databases = phase3.get("tmvec_databases") or ["bfvd"]
     tmvec_require_gpu = bool(phase3.get("tmvec_require_gpu"))
     tmvec_device = str(compute.get("device") or ("cuda" if tmvec_require_gpu else "cpu"))
@@ -247,10 +243,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if check_tmvec:
         if tmvec_device not in {"cpu", "cuda"}:
-            print(
-                "[FAIL] compute.device must be cpu or cuda for TMVec2; "
-                f"found {tmvec_device}"
-            )
+            print(f"[FAIL] compute.device must be cpu or cuda for TMVec2; found {tmvec_device}")
             failures += 1
             tmvec_ready_for_model_smoke = False
         required_modules = [
@@ -321,10 +314,7 @@ def main(argv: list[str] | None = None) -> int:
             if ViroSyncDatabaseManager.interproscan_available(interpro_path):
                 print(f"[OK] interproscan.sh: {interpro_exec}")
             else:
-                print(
-                    "[FAIL] interproscan.sh missing or not executable: "
-                    f"{interpro_exec}"
-                )
+                print(f"[FAIL] interproscan.sh missing or not executable: {interpro_exec}")
                 failures += 1
         else:
             print("[FAIL] phase3.interproscan_dir is not configured")

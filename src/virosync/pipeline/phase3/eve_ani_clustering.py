@@ -126,8 +126,7 @@ def unsupported_eve_ids(accepted_results: list) -> set[str]:
     }
     if unsupported:
         logger.info(
-            "Phase 3: dropping %d accepted EVE(s) with no viral evidence and no "
-            "marker-bearing ANI relative: %s",
+            "Phase 3: dropping %d accepted EVE(s) with no viral evidence and no marker-bearing ANI relative: %s",
             len(unsupported),
             ", ".join(sorted(unsupported)),
         )
@@ -167,14 +166,10 @@ def _accepted_region_sequences(
     accepted EVEs would read as a genome with fewer relatives than it has.
     """
     wanted = {result.scaffold for result in accepted_results}
-    scaffolds = {
-        record.id: str(record.seq)
-        for record in SeqIO.parse(genome_fasta, "fasta")
-        if record.id in wanted
-    }
+    scaffolds = {record.id: str(record.seq) for record in SeqIO.parse(genome_fasta, "fasta") if record.id in wanted}
     sequences = {}
     for result in accepted_results:
-        sequence = scaffolds.get(result.scaffold, "")[result.start:result.end]
+        sequence = scaffolds.get(result.scaffold, "")[result.start : result.end]
         if not sequence:
             raise RuntimeError(
                 "accepted EVE has no sequence in the genome used for ANI "
@@ -216,14 +211,20 @@ def _run_skani_triangle(
             [
                 skani_bin,
                 "triangle",
-                "-l", str(list_path),
-                "-E",                       # sparse row-per-pair output
-                "--medium",                 # accuracy mode for short sequences
-                "-m", "200",                # low marker compression
-                "-s", "80",                 # screen threshold
-                "--min-af", str(int(MIN_CLUSTER_ALIGNED_FRACTION)),
-                "-t", str(max(1, int(threads))),
-                "-o", str(ani_path),
+                "-l",
+                str(list_path),
+                "-E",  # sparse row-per-pair output
+                "--medium",  # accuracy mode for short sequences
+                "-m",
+                "200",  # low marker compression
+                "-s",
+                "80",  # screen threshold
+                "--min-af",
+                str(int(MIN_CLUSTER_ALIGNED_FRACTION)),
+                "-t",
+                str(max(1, int(threads))),
+                "-o",
+                str(ani_path),
             ],
             capture_output=True,
             text=True,
@@ -231,10 +232,7 @@ def _run_skani_triangle(
         if completed.returncode != 0:
             if _UNSKETCHABLE_STDERR in (completed.stderr or ""):
                 return None
-            raise RuntimeError(
-                "skani triangle failed for accepted EVE clustering: "
-                f"{completed.stderr}"
-            )
+            raise RuntimeError(f"skani triangle failed for accepted EVE clustering: {completed.stderr}")
         return _parse_skani_pairs(ani_path, eve_by_file)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -255,9 +253,7 @@ def _parse_skani_pairs(
         for line in handle:
             fields = line.rstrip("\n").split("\t")
             if len(fields) < 5 or fields[0] not in eve_by_file or fields[1] not in eve_by_file:
-                raise RuntimeError(
-                    f"unreadable skani pair in {ani_path}: {line.rstrip()!r}"
-                )
+                raise RuntimeError(f"unreadable skani pair in {ani_path}: {line.rstrip()!r}")
             pairs.append(
                 (
                     eve_by_file[fields[0]],
@@ -275,10 +271,7 @@ def _write_edges(
     pairs: list[tuple[str, str, float, float, float]],
 ) -> None:
     """Write the edge table, sorted so two runs of one genome agree byte for byte."""
-    rows = [
-        f"{eve_a}\t{eve_b}\t{ani:.4f}\t{af_a:.4f}\t{af_b:.4f}\n"
-        for eve_a, eve_b, ani, af_a, af_b in sorted(pairs)
-    ]
+    rows = [f"{eve_a}\t{eve_b}\t{ani:.4f}\t{af_a:.4f}\t{af_b:.4f}\n" for eve_a, eve_b, ani, af_a, af_b in sorted(pairs)]
     atomic_write(edges_path, _EDGE_HEADER + "".join(rows))
 
 
@@ -362,16 +355,11 @@ def _propagate_mcp_class(members: list) -> int:
         (result for result in members if result.taxonomy_class_from_mcp),
         key=lambda result: result.eve_id,
     )
-    without_mcp = [
-        result for result in members if not result.taxonomy_class_from_mcp
-    ]
+    without_mcp = [result for result in members if not result.taxonomy_class_from_mcp]
     if not with_mcp or not without_mcp:
         return 0
 
-    inherited_classes = {
-        normalize_effective_eve_class(result.taxonomy_class)
-        for result in with_mcp
-    }
+    inherited_classes = {normalize_effective_eve_class(result.taxonomy_class) for result in with_mcp}
     if len(inherited_classes) != 1:
         return 0
     inherited = next(iter(inherited_classes))

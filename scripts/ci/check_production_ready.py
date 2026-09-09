@@ -23,19 +23,14 @@ from virosync.utils.resource_manifest import (
     ResourceManifestError,
     load_resource_manifest,
 )
-SOFTWARE_VERSION = "1.0.0"
+
+SOFTWARE_VERSION = "1.0.1"
 DATABASE_VERSION = "v1.0.7"
 RESOURCE_ARCHIVE = "resources_v1_0_7_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
-RESOURCE_ARCHIVE_SHA256 = (
-    "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
-)
-RESOURCE_MANIFEST_SHA256 = (
-    "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
-)
-RELEASE_MANIFEST_PATH = Path(
-    "release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json"
-)
+RESOURCE_ARCHIVE_SHA256 = "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
+RESOURCE_MANIFEST_SHA256 = "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
+RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json")
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
     DATABASE_VERSION,
@@ -43,15 +38,9 @@ RESOURCE_IDENTITY = (
     RESOURCE_MANIFEST_SHA256,
 )
 TMVEC_RESOURCE_ARCHIVE = "virosync_tmvec2_resources_v1.0.0.tar.gz"
-TMVEC_RESOURCE_URL = (
-    f"https://dl.newlineages.com/virosync/{TMVEC_RESOURCE_ARCHIVE}"
-)
-TMVEC_RESOURCE_SHA256 = (
-    "2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6"
-)
-TMVEC_MANIFEST_SHA256 = (
-    "a137f821b06fea727c625a52f5fa776d3ad75a66a90b59ee82d903ff0e034456"
-)
+TMVEC_RESOURCE_URL = f"https://dl.newlineages.com/virosync/{TMVEC_RESOURCE_ARCHIVE}"
+TMVEC_RESOURCE_SHA256 = "2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6"
+TMVEC_MANIFEST_SHA256 = "a137f821b06fea727c625a52f5fa776d3ad75a66a90b59ee82d903ff0e034456"
 TMVEC_RESOURCE_IDENTITY = (TMVEC_RESOURCE_URL, TMVEC_RESOURCE_SHA256)
 
 FORBIDDEN_TRACKED_PATTERNS = (
@@ -94,9 +83,7 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
 
 def require_contains(path: str, needle: str, failures: list[str]) -> None:
     text = read_text(path)
-    require(
-        needle in text, f"{path} does not contain expected text: {needle}", failures
-    )
+    require(needle in text, f"{path} does not contain expected text: {needle}", failures)
 
 
 def require_regex(path: str, pattern: str, message: str, failures: list[str]) -> None:
@@ -133,14 +120,16 @@ def check_software_version(failures: list[str]) -> None:
         f"https://img.shields.io/badge/version-{SOFTWARE_VERSION}-blue",
         failures,
     )
+    for path in ("README.md", "docs/index.md"):
+        require_contains(
+            path,
+            f"ViroSync {SOFTWARE_VERSION} uses resource bundle {DATABASE_VERSION}.",
+            failures,
+        )
 
     changelog = read_text("CHANGELOG.md")
-    first_release = re.search(
-        r"^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}$", changelog, re.MULTILINE
-    )
-    require(
-        first_release is not None, "CHANGELOG.md is missing a release header", failures
-    )
+    first_release = re.search(r"^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}$", changelog, re.MULTILINE)
+    require(first_release is not None, "CHANGELOG.md is missing a release header", failures)
     if first_release is not None:
         require(
             first_release.group(1) == SOFTWARE_VERSION,
@@ -151,7 +140,6 @@ def check_software_version(failures: list[str]) -> None:
 
 def resource_identity(config: ApplicationConfig) -> tuple[object, ...]:
     """Return the typed core-resource identity from one shipped config."""
-
     orchestration = config.orchestration
     return (
         orchestration.core_resources_url,
@@ -163,7 +151,6 @@ def resource_identity(config: ApplicationConfig) -> tuple[object, ...]:
 
 def tmvec_resource_identity(config: ApplicationConfig) -> tuple[object, ...]:
     """Return the typed TMVec2-resource identity from one shipped config."""
-
     orchestration = config.orchestration
     return (
         orchestration.tmvec_resources_url,
@@ -196,8 +183,7 @@ def check_resource_version(failures: list[str]) -> None:
         )
     if set(parsed_configs) == set(config_paths):
         require(
-            resource_identity(parsed_configs[config_paths[0]])
-            == resource_identity(parsed_configs[config_paths[1]]),
+            resource_identity(parsed_configs[config_paths[0]]) == resource_identity(parsed_configs[config_paths[1]]),
             "shipped configs disagree on the core-resource identity",
             failures,
         )
@@ -313,7 +299,6 @@ def check_resource_version(failures: list[str]) -> None:
 
 def is_forbidden_tracked_path(path: str) -> bool:
     """Return whether *path* is outside the curated release allowlist."""
-
     # The benchmark harness, its results, and the manuscript live in the
     # virosync-bench repository; nothing under these prefixes belongs here.
     if path.startswith("benchmarking/"):
@@ -321,10 +306,10 @@ def is_forbidden_tracked_path(path: str) -> bool:
     if path.startswith("docs/ms/"):
         return True
 
-    return any(
-        path == pattern.rstrip("/") or path.startswith(pattern)
-        for pattern in FORBIDDEN_TRACKED_PATTERNS
-    ) or re.fullmatch(r"resources_v.*\.tar\.gz", path) is not None
+    return (
+        any(path == pattern.rstrip("/") or path.startswith(pattern) for pattern in FORBIDDEN_TRACKED_PATTERNS)
+        or re.fullmatch(r"resources_v.*\.tar\.gz", path) is not None
+    )
 
 
 def check_artifact_exclusion(failures: list[str]) -> None:
@@ -359,15 +344,10 @@ def check_artifact_exclusion(failures: list[str]) -> None:
         "Forbidden generated/private paths are tracked: " + ", ".join(forbidden),
         failures,
     )
-    unsafe_modes = [
-        f"{path} ({mode})"
-        for mode, path in tracked_entries
-        if mode not in {"100644", "100755"}
-    ]
+    unsafe_modes = [f"{path} ({mode})" for mode, path in tracked_entries if mode not in {"100644", "100755"}]
     require(
         not unsafe_modes,
-        "Benchmark/manuscript source contains a symlink or submodule: "
-        + ", ".join(unsafe_modes),
+        "Benchmark/manuscript source contains a symlink or submodule: " + ", ".join(unsafe_modes),
         failures,
     )
 
@@ -388,7 +368,6 @@ def check_github_tag(failures: list[str]) -> None:
 
 def check_graphviz_runtime(failures: list[str]) -> None:
     """Require the locked environment to render the report's PNG format."""
-
     error = graphviz_runtime_error()
     if error is not None:
         failures.append(error)
@@ -408,9 +387,7 @@ def main() -> int:
             print(f"- {failure}", file=sys.stderr)
         return 1
 
-    print(
-        f"Production readiness checks passed for ViroSync {SOFTWARE_VERSION} / DB {DATABASE_VERSION}."
-    )
+    print(f"Production readiness checks passed for ViroSync {SOFTWARE_VERSION} / DB {DATABASE_VERSION}.")
     return 0
 
 

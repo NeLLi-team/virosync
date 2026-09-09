@@ -1,5 +1,4 @@
-"""
-Boundary Refiner for EVE Detection.
+"""Boundary Refiner for EVE Detection.
 
 This module contains the older two-tier CRF boundary-refinement implementation:
 1. Tier 1: binary screening on 1kb windows to identify a region of interest
@@ -12,8 +11,8 @@ experiments and artifacts.
 
 import logging
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass, field
-from typing import Optional
+from collections import defaultdict
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -25,14 +24,14 @@ from virosync.pipeline.host_signatures import (
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
-    SeedGeneMapping,
     VIRAL_PREFIXES,
+    GeneTaxonomy,
+    SeedGeneMapping,
     has_identity_qualified_viral_hit,
     missing_boundary_taxonomy_ids,
     pORF,
 )
 from virosync.pipeline.taxonomy_utils import calculate_fingerprint_overlap, compute_hit_weight
-
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +59,6 @@ def extend_seeds_by_genes(
     Returns:
         List of (possibly merged) extended MergedSeed objects
     """
-    from dataclasses import replace
-    from collections import defaultdict
-
     if not seeds:
         return []
 
@@ -98,7 +94,8 @@ def extend_seeds_by_genes(
                 extended_scaffold.append(seed)
                 logger.debug(
                     "Seed %s has no overlapping genes on %s; keeping original bounds",
-                    seed.seed_id, scaffold,
+                    seed.seed_id,
+                    scaffold,
                 )
                 continue
 
@@ -126,49 +123,36 @@ def extend_seeds_by_genes(
         current = extended_scaffold[0]
 
         for next_seed in extended_scaffold[1:]:
-            cress_in_pair = (
-                current.predicted_family == "CRESS"
-                or next_seed.predicted_family == "CRESS"
-            )
-            mixed_rescue_pair = (
-                "frameshift_rescue" in current.sources
-            ) != (
-                "frameshift_rescue" in next_seed.sources
-            )
-            if (
-                next_seed.start < current.end
-                and not cress_in_pair
-                and not mixed_rescue_pair
-            ):
+            cress_in_pair = current.predicted_family == "CRESS" or next_seed.predicted_family == "CRESS"
+            mixed_rescue_pair = ("frameshift_rescue" in current.sources) != ("frameshift_rescue" in next_seed.sources)
+            if next_seed.start < current.end and not cress_in_pair and not mixed_rescue_pair:
                 # Overlapping — merge
                 combined_sources = sorted(set(current.sources) | set(next_seed.sources))
-                combined_anchors = current.anchors + [
-                    a for a in next_seed.anchors if a not in current.anchors
-                ]
-                combined_hhg = current.hhg_anchors + [
-                    a for a in next_seed.hhg_anchors if a not in current.hhg_anchors
-                ]
+                combined_anchors = current.anchors + [a for a in next_seed.anchors if a not in current.anchors]
+                combined_hhg = current.hhg_anchors + [a for a in next_seed.hhg_anchors if a not in current.hhg_anchors]
                 combined_ncldv = (
-                    current.region_classification_ncldv_markers
-                    + next_seed.region_classification_ncldv_markers
+                    current.region_classification_ncldv_markers + next_seed.region_classification_ncldv_markers
                 )
                 combined_vp_plv = (
-                    current.region_classification_vp_plv_markers
-                    + next_seed.region_classification_vp_plv_markers
+                    current.region_classification_vp_plv_markers + next_seed.region_classification_vp_plv_markers
                 )
                 combined_mirus = (
-                    current.region_classification_mirus_markers
-                    + next_seed.region_classification_mirus_markers
+                    current.region_classification_mirus_markers + next_seed.region_classification_mirus_markers
                 )
                 logger.info(
                     "Merging overlapping extended seeds on %s: [%d-%d] + [%d-%d] -> [%d-%d]",
-                    scaffold, current.start, current.end,
-                    next_seed.start, next_seed.end,
-                    current.start, max(current.end, next_seed.end),
+                    scaffold,
+                    current.start,
+                    current.end,
+                    next_seed.start,
+                    next_seed.end,
+                    current.start,
+                    max(current.end, next_seed.end),
                 )
                 _conf_rank = {"high": 3, "medium": 2, "low": 1}
                 best_conf = max(
-                    current.confidence, next_seed.confidence,
+                    current.confidence,
+                    next_seed.confidence,
                     key=lambda c: _conf_rank.get(c, 0),
                 )
                 current = replace(
@@ -196,7 +180,9 @@ def extend_seeds_by_genes(
 
     logger.info(
         "Gene extension: %d seeds -> %d extended/merged seeds (±%d genes)",
-        len(seeds), len(extended_all), extension_genes,
+        len(seeds),
+        len(extended_all),
+        extension_genes,
     )
 
     return extended_all
@@ -204,8 +190,7 @@ def extend_seeds_by_genes(
 
 @dataclass
 class RefinedBoundary:
-    """
-    Refined EVE boundary from Phase 2 boundary processing.
+    """Refined EVE boundary from Phase 2 boundary processing.
 
     Contains precise coordinates and confidence metrics.
     """
@@ -218,8 +203,8 @@ class RefinedBoundary:
     seed_id: str = ""  # Stable ID from MergedSeed for boundary-to-seed mapping
     original_start: int = 0
     original_end: int = 0
-    candidate_start: Optional[int] = None
-    candidate_end: Optional[int] = None
+    candidate_start: int | None = None
+    candidate_end: int | None = None
     host_trim_reason: str = ""
     host_trim_common_euk_taxonomy: str = ""
 
@@ -230,8 +215,8 @@ class RefinedBoundary:
     # alternative span. The Phase-3 re-admit pass (which fires only on REJECTED
     # boundaries) may synthesize and gate this floored alternative without ever
     # mutating an accepted boundary.
-    marker_floor_start: Optional[int] = None
-    marker_floor_end: Optional[int] = None
+    marker_floor_start: int | None = None
+    marker_floor_end: int | None = None
 
     # Seed evidence metadata (passed from Phase 1)
     seed_sources: list[str] = field(default_factory=list)  # ["hhg", "novelty", "compositional"]
@@ -251,12 +236,12 @@ class RefinedBoundary:
     posterior_probability: float = 0.0
 
     # Anatomical breakdown
-    core_viral_start: Optional[int] = None
-    core_viral_end: Optional[int] = None
-    flank_5_start: Optional[int] = None
-    flank_5_end: Optional[int] = None
-    flank_3_start: Optional[int] = None
-    flank_3_end: Optional[int] = None
+    core_viral_start: int | None = None
+    core_viral_end: int | None = None
+    flank_5_start: int | None = None
+    flank_5_end: int | None = None
+    flank_3_start: int | None = None
+    flank_3_end: int | None = None
 
     # CRF state sequence
     state_sequence: list[int] = field(default_factory=list)
@@ -298,15 +283,14 @@ class RefinedBoundary:
         if self.hallmark_genes:
             attrs.append(f"hallmarks={','.join(self.hallmark_genes)}")
 
-        return f"{self.scaffold}\tViroSync\tEVE\t{self.start+1}\t{self.end}\t{score}\t.\t.\t{';'.join(attrs)}"
+        return f"{self.scaffold}\tViroSync\tEVE\t{self.start + 1}\t{self.end}\t{score}\t.\t.\t{';'.join(attrs)}"
 
 
 def constrain_to_seed_bounds(
     boundary: RefinedBoundary,
     seed_mapping: SeedGeneMapping,
 ) -> RefinedBoundary:
-    """
-    Constrain refined boundary to not extend beyond ±N genes from original seed.
+    """Constrain refined boundary to not extend beyond ±N genes from original seed.
 
     This enforces the hard cap on boundary extension to ensure all genes
     within the final boundary have Diamond taxonomy data from Phase 2b.
@@ -330,13 +314,11 @@ def constrain_to_seed_bounds(
         constraint_msg = []
         if start_constrained:
             constraint_msg.append(
-                f"start {boundary.start} -> {constrained_start} "
-                f"(capped at -{seed_mapping.flank_genes_config} genes)"
+                f"start {boundary.start} -> {constrained_start} (capped at -{seed_mapping.flank_genes_config} genes)"
             )
         if end_constrained:
             constraint_msg.append(
-                f"end {boundary.end} -> {constrained_end} "
-                f"(capped at +{seed_mapping.flank_genes_config} genes)"
+                f"end {boundary.end} -> {constrained_end} (capped at +{seed_mapping.flank_genes_config} genes)"
             )
 
         logger.info(
@@ -364,8 +346,6 @@ def constrain_to_seed_bounds(
     # Create new RefinedBoundary with constrained coordinates
     # Use dataclasses.replace to preserve nested objects (like WindowFeatures)
     # instead of asdict which deep-converts them to dicts
-    from dataclasses import replace
-
     return replace(boundary, start=constrained_start, end=constrained_end)
 
 
@@ -440,16 +420,9 @@ def annotate_boundaries_with_marker_floor(
             span_markers = scaffold_markers[lower:upper]
         # Count distinct marker-bearing proteins. One ordinary pORF can produce
         # several HMM hits, so raw hit count must not satisfy the floor.
-        rescue_boundary = "frameshift_rescue" in (
-            getattr(boundary, "seed_sources", []) or []
-        )
-        has_rescue_marker = any(
-            is_rescued_protein_id(m.query_porf) for m in span_markers
-        )
-        if (
-            len({m.query_porf for m in span_markers}) < 2
-            and not (rescue_boundary and has_rescue_marker)
-        ):
+        rescue_boundary = "frameshift_rescue" in (getattr(boundary, "seed_sources", []) or [])
+        has_rescue_marker = any(is_rescued_protein_id(m.query_porf) for m in span_markers)
+        if len({m.query_porf for m in span_markers}) < 2 and not (rescue_boundary and has_rescue_marker):
             continue
         marker_lo = min(m.start for m in span_markers)
         marker_hi = max(m.end for m in span_markers)
@@ -461,11 +434,15 @@ def annotate_boundaries_with_marker_floor(
             boundary.marker_floor_start = floor_start
             boundary.marker_floor_end = floor_end
             logger.info(
-                "Validated-marker floor recorded: %s %d-%d (current) -> floor %d-%d "
-                "(%d validated markers, span %d-%d)",
+                "Validated-marker floor recorded: %s %d-%d (current) -> floor %d-%d (%d validated markers, span %d-%d)",
                 boundary.seed_id or boundary.scaffold,
-                boundary.start, boundary.end, floor_start, floor_end,
-                len(span_markers), marker_lo, marker_hi,
+                boundary.start,
+                boundary.end,
+                floor_start,
+                floor_end,
+                len(span_markers),
+                marker_lo,
+                marker_hi,
             )
             n_annotated += 1
     return n_annotated
@@ -478,8 +455,7 @@ def merge_adjacent_viral_boundaries(
     max_gap_bp: int = 10000,
     min_viral_fraction: float = 0.3,
 ) -> list[RefinedBoundary]:
-    """
-    Merge adjacent EVE boundaries if the gap between them contains viral genes.
+    """Merge adjacent EVE boundaries if the gap between them contains viral genes.
 
     After boundary constraints are applied, two EVEs might be separated by
     a small gap that contains viral genes (from the flanking regions).
@@ -498,37 +474,23 @@ def merge_adjacent_viral_boundaries(
     if not boundaries or len(boundaries) < 2:
         return boundaries
 
-    from collections import defaultdict
-
-    # Group by scaffold
     scaffold_boundaries: dict[str, list[RefinedBoundary]] = defaultdict(list)
-    for b in boundaries:
-        scaffold_boundaries[b.scaffold].append(b)
+    for boundary in boundaries:
+        scaffold_boundaries[boundary.scaffold].append(boundary)
 
-    merged_all = []
+    merged_all: list[RefinedBoundary] = []
     total_merges = 0
 
     for scaffold, scaffold_list in scaffold_boundaries.items():
-        # Sort by start position
-        scaffold_list.sort(key=lambda b: b.start)
+        scaffold_list.sort(key=lambda boundary: boundary.start)
 
-        merged_scaffold = []
+        merged_scaffold: list[RefinedBoundary] = []
         current = scaffold_list[0]
 
         for next_boundary in scaffold_list[1:]:
             gap_start = current.end
             gap_end = next_boundary.start
-            cress_in_pair = (
-                getattr(current, "predicted_family", "") == "CRESS"
-                or getattr(next_boundary, "predicted_family", "") == "CRESS"
-            )
-            current_sources = getattr(current, "seed_sources", []) or []
-            next_sources = getattr(next_boundary, "seed_sources", []) or []
-            mixed_rescue_pair = (
-                "frameshift_rescue" in current_sources
-            ) != (
-                "frameshift_rescue" in next_sources
-            )
+            has_incompatible_provenance = _has_incompatible_merge_provenance(current, next_boundary)
             merged_start = min(current.start, next_boundary.start)
             merged_end = max(current.end, next_boundary.end)
             taxonomy_complete = not missing_boundary_taxonomy_ids(
@@ -539,33 +501,9 @@ def merge_adjacent_viral_boundaries(
                 proteome_index=proteome_index,
             )
 
-            # Strictly overlapping same-provenance boundaries merge. Touching
-            # half-open intervals continue through the evidence-aware gap path.
-            if (
-                gap_end < gap_start
-                and not cress_in_pair
-                and not mixed_rescue_pair
-                and taxonomy_complete
-            ):
-                from dataclasses import replace
-
-                combined_ncldv = (
-                    getattr(current, "region_classification_ncldv_markers", 0)
-                    + getattr(next_boundary, "region_classification_ncldv_markers", 0)
-                )
-                combined_vp_plv = (
-                    getattr(current, "region_classification_vp_plv_markers", 0)
-                    + getattr(next_boundary, "region_classification_vp_plv_markers", 0)
-                )
-                combined_mirus = (
-                    getattr(current, "region_classification_mirus_markers", 0)
-                    + getattr(next_boundary, "region_classification_mirus_markers", 0)
-                )
-                combined_sources = sorted(set(current_sources) | set(next_sources))
-
+            if gap_end < gap_start and not has_incompatible_provenance and taxonomy_complete:
                 logger.info(
-                    "Merging overlapping EVEs on %s: [%d-%d] + [%d-%d] "
-                    "(overlap=%dbp)",
+                    "Merging overlapping EVEs on %s: [%d-%d] + [%d-%d] (overlap=%dbp)",
                     scaffold,
                     current.start,
                     current.end,
@@ -573,106 +511,20 @@ def merge_adjacent_viral_boundaries(
                     next_boundary.end,
                     gap_start - gap_end,
                 )
-                current = replace(
-                    current,
-                    end=max(current.end, next_boundary.end),
-                    original_start=min(
-                        current.original_start, next_boundary.original_start
-                    ),
-                    original_end=max(
-                        current.original_end, next_boundary.original_end
-                    ),
-                    confidence=max(current.confidence, next_boundary.confidence),
-                    region_classification_ncldv_markers=combined_ncldv,
-                    region_classification_vp_plv_markers=combined_vp_plv,
-                    region_classification_mirus_markers=combined_mirus,
-                    seed_sources=combined_sources,
-                )
+                current = _merge_refined_boundaries(current, next_boundary)
                 total_merges += 1
                 continue
 
-            # Check if gap is within merge distance
-            if (
-                not cress_in_pair
-                and not mixed_rescue_pair
-                and taxonomy_complete
-                and gap_end - gap_start <= max_gap_bp
-            ):
-                # Find genes in the gap and check their taxonomy
-                gap_genes = []
-                for porf_id, tax in taxonomy_map.items():
-                    if (
-                        hasattr(tax, "scaffold")
-                        and tax.scaffold == scaffold
-                        and hasattr(tax, "start")
-                        and hasattr(tax, "end")
-                        and tax.start >= gap_start
-                        and tax.end <= gap_end
-                    ):
-                        gap_genes.append(tax)
-
-                should_merge = False
-                merge_reason = ""
-
-                # Calculate viral fraction in gap
-                if gap_genes:
-                    n_viral = sum(
-                        1
-                        for g in gap_genes
-                        if getattr(g, "has_ncldv_mirus", False)
-                        or getattr(g, "has_vp_plv", False)
-                    )
-                    viral_fraction = n_viral / len(gap_genes)
-                    if viral_fraction >= min_viral_fraction:
-                        should_merge = True
-                        merge_reason = (
-                            f"gap=%dbp, %d/%d genes viral"
-                            % (gap_end - gap_start, n_viral, len(gap_genes))
-                        )
-
-                # Flanking viral context: if both sides of the gap have
-                # viral genes within the nearest N genes, merge even when
-                # the gap itself contains no-hit or host genes.
-                if not should_merge:
-                    _flank_n = 5
-                    _is_viral = lambda g: (
-                        getattr(g, "has_ncldv_mirus", False)
-                        or getattr(g, "has_vp_plv", False)
-                    )
-                    upstream_flank = sorted(
-                        (
-                            tax for tax in taxonomy_map.values()
-                            if getattr(tax, "scaffold", None) == scaffold
-                            and hasattr(tax, "end") and tax.end <= gap_start
-                            and hasattr(tax, "start") and tax.start >= current.start
-                        ),
-                        key=lambda g: g.start,
-                        reverse=True,
-                    )[:_flank_n]
-                    downstream_flank = sorted(
-                        (
-                            tax for tax in taxonomy_map.values()
-                            if getattr(tax, "scaffold", None) == scaffold
-                            and hasattr(tax, "start") and tax.start >= gap_end
-                            and hasattr(tax, "end") and tax.end <= next_boundary.end
-                        ),
-                        key=lambda g: g.start,
-                    )[:_flank_n]
-                    if (
-                        upstream_flank
-                        and downstream_flank
-                        and any(_is_viral(g) for g in upstream_flank)
-                        and any(_is_viral(g) for g in downstream_flank)
-                    ):
-                        should_merge = True
-                        merge_reason = (
-                            "gap=%dbp, flanking viral context (%d+%d flank genes)"
-                            % (gap_end - gap_start, len(upstream_flank), len(downstream_flank))
-                        )
-
-                if should_merge:
-                    from dataclasses import replace
-
+            gap_size = gap_end - gap_start
+            if not has_incompatible_provenance and taxonomy_complete and gap_size <= max_gap_bp:
+                merge_reason = _viral_gap_merge_reason(
+                    scaffold,
+                    current,
+                    next_boundary,
+                    taxonomy_map,
+                    min_viral_fraction,
+                )
+                if merge_reason is not None:
                     logger.info(
                         "Merging adjacent EVEs on %s: [%d-%d] + [%d-%d] (%s)",
                         scaffold,
@@ -682,43 +534,13 @@ def merge_adjacent_viral_boundaries(
                         next_boundary.end,
                         merge_reason,
                     )
-                    combined_ncldv = (
-                        getattr(current, "region_classification_ncldv_markers", 0)
-                        + getattr(next_boundary, "region_classification_ncldv_markers", 0)
-                    )
-                    combined_vp_plv = (
-                        getattr(current, "region_classification_vp_plv_markers", 0)
-                        + getattr(next_boundary, "region_classification_vp_plv_markers", 0)
-                    )
-                    combined_mirus = (
-                        getattr(current, "region_classification_mirus_markers", 0)
-                        + getattr(next_boundary, "region_classification_mirus_markers", 0)
-                    )
-                    combined_sources = sorted(set(current_sources) | set(next_sources))
-
-                    current = replace(
-                        current,
-                        end=max(current.end, next_boundary.end),
-                        original_start=min(
-                            current.original_start, next_boundary.original_start
-                        ),
-                        original_end=max(
-                            current.original_end, next_boundary.original_end
-                        ),
-                        confidence=max(current.confidence, next_boundary.confidence),
-                        region_classification_ncldv_markers=combined_ncldv,
-                        region_classification_vp_plv_markers=combined_vp_plv,
-                        region_classification_mirus_markers=combined_mirus,
-                        seed_sources=combined_sources,
-                    )
+                    current = _merge_refined_boundaries(current, next_boundary)
                     total_merges += 1
                     continue
 
-            # No merge - finalize current and move to next
             merged_scaffold.append(current)
             current = next_boundary
 
-        # Don't forget last boundary
         merged_scaffold.append(current)
         merged_all.extend(merged_scaffold)
 
@@ -731,20 +553,111 @@ def merge_adjacent_viral_boundaries(
     return merged_all
 
 
+def _has_incompatible_merge_provenance(
+    current: RefinedBoundary,
+    next_boundary: RefinedBoundary,
+) -> bool:
+    """Return whether CRESS or rescue provenance requires separate boundaries."""
+    if current.predicted_family == "CRESS" or next_boundary.predicted_family == "CRESS":
+        return True
+    current_sources = current.seed_sources or []
+    next_sources = next_boundary.seed_sources or []
+    return ("frameshift_rescue" in current_sources) != ("frameshift_rescue" in next_sources)
+
+
+def _merge_refined_boundaries(
+    current: RefinedBoundary,
+    next_boundary: RefinedBoundary,
+) -> RefinedBoundary:
+    """Combine the fields that post-taxonomy merging carries forward."""
+    current_sources = current.seed_sources or []
+    next_sources = next_boundary.seed_sources or []
+    return replace(
+        current,
+        end=max(current.end, next_boundary.end),
+        original_start=min(current.original_start, next_boundary.original_start),
+        original_end=max(current.original_end, next_boundary.original_end),
+        confidence=max(current.confidence, next_boundary.confidence),
+        region_classification_ncldv_markers=(
+            current.region_classification_ncldv_markers + next_boundary.region_classification_ncldv_markers
+        ),
+        region_classification_vp_plv_markers=(
+            current.region_classification_vp_plv_markers + next_boundary.region_classification_vp_plv_markers
+        ),
+        region_classification_mirus_markers=(
+            current.region_classification_mirus_markers + next_boundary.region_classification_mirus_markers
+        ),
+        seed_sources=sorted(set(current_sources) | set(next_sources)),
+    )
+
+
+def _viral_gap_merge_reason(
+    scaffold: str,
+    current: RefinedBoundary,
+    next_boundary: RefinedBoundary,
+    taxonomy_map: dict[str, GeneTaxonomy],
+    min_viral_fraction: float,
+) -> str | None:
+    """Return the first viral-taxonomy rule that supports merging a gap."""
+    gap_start = current.end
+    gap_end = next_boundary.start
+    gap_size = gap_end - gap_start
+    gap_genes = [
+        taxonomy
+        for taxonomy in taxonomy_map.values()
+        if taxonomy.scaffold == scaffold and taxonomy.start >= gap_start and taxonomy.end <= gap_end
+    ]
+    if gap_genes:
+        viral_genes = sum(_has_viral_taxonomy(gene) for gene in gap_genes)
+        if viral_genes / len(gap_genes) >= min_viral_fraction:
+            return f"gap={gap_size}bp, {viral_genes}/{len(gap_genes)} genes viral"
+
+    flank_genes = 5
+    upstream_flank = sorted(
+        (
+            taxonomy
+            for taxonomy in taxonomy_map.values()
+            if taxonomy.scaffold == scaffold and taxonomy.end <= gap_start and taxonomy.start >= current.start
+        ),
+        key=lambda taxonomy: taxonomy.start,
+        reverse=True,
+    )[:flank_genes]
+    downstream_flank = sorted(
+        (
+            taxonomy
+            for taxonomy in taxonomy_map.values()
+            if taxonomy.scaffold == scaffold and taxonomy.start >= gap_end and taxonomy.end <= next_boundary.end
+        ),
+        key=lambda taxonomy: taxonomy.start,
+    )[:flank_genes]
+    if (
+        upstream_flank
+        and downstream_flank
+        and any(_has_viral_taxonomy(gene) for gene in upstream_flank)
+        and any(_has_viral_taxonomy(gene) for gene in downstream_flank)
+    ):
+        return f"gap={gap_size}bp, flanking viral context ({len(upstream_flank)}+{len(downstream_flank)} flank genes)"
+    return None
+
+
+def _has_viral_taxonomy(gene: GeneTaxonomy) -> bool:
+    """Return whether a gap gene has large-virus taxonomy support."""
+    return gene.has_ncldv_mirus or gene.has_vp_plv
+
+
 def should_trim_gene_as_host(
     gene_taxonomy,
     control_stats,
     host_prefix: str,
     host_baseline_fingerprint: dict = None,
     min_overlap_score: float = 0.40,
-    neighbor_context: Optional[dict] = None,
+    neighbor_context: dict | None = None,
     unknown_host_penalty: float = 2.0,
     unknown_viral_bonus: float = 2.0,
-    host_signature_model: Optional[HostSignatureModel] = None,
+    host_signature_model: HostSignatureModel | None = None,
     host_signature_threshold: float = 0.5,
 ) -> tuple[bool, float]:
-    """
-    Decide if gene should be trimmed as host-like using fingerprint matching.
+    """Decide if gene should be trimmed as host-like using fingerprint matching.
 
     Args:
         gene_taxonomy: GeneTaxonomy for the gene
@@ -781,8 +694,7 @@ def should_trim_gene_as_host(
 
     top10_prefixes = getattr(gene_taxonomy, "top10_prefixes", []) or []
     has_host_prefix = bool(
-        gene_taxonomy.top1_prefix == host_prefix
-        or any(prefix == host_prefix for prefix in top10_prefixes)
+        gene_taxonomy.top1_prefix == host_prefix or any(prefix == host_prefix for prefix in top10_prefixes)
     )
 
     phase1_score = 0.0
@@ -823,7 +735,9 @@ def _build_seed_gene_order(seed_mapping: SeedGeneMapping, taxonomy_map: dict) ->
     return [item[2] for item in with_pos]
 
 
-def _compute_ranked_host_viral_scores(gene_taxonomy, host_prefix: str, taxonomy_weight_mode: str) -> tuple[float, float]:
+def _compute_ranked_host_viral_scores(
+    gene_taxonomy, host_prefix: str, taxonomy_weight_mode: str
+) -> tuple[float, float]:
     """Compute host and viral support from ranked top-k prefixes."""
     prefixes = gene_taxonomy.top10_prefixes or []
     if not prefixes:
@@ -860,7 +774,7 @@ def _build_unknown_neighbor_context(
     min_overlap_score: float,
     taxonomy_weight_mode: str,
     neighbor_window: int,
-) -> Optional[dict]:
+) -> dict | None:
     """Summarize host/viral neighborhood support for a no-hit gene."""
     center_idx = gene_index.get(porf_id)
     if center_idx is None or neighbor_window < 1:
@@ -979,7 +893,7 @@ def _should_continue_trimming(
             return False
 
     # Look ahead: remaining genes AFTER current in walk direction
-    ahead = labels[current_idx + 1: current_idx + 1 + _DENSITY_LOOKAHEAD]
+    ahead = labels[current_idx + 1 : current_idx + 1 + _DENSITY_LOOKAHEAD]
 
     # No V in next 5 → host territory, continue trimming
     if "V" not in ahead:
@@ -1010,11 +924,7 @@ def _select_host_taxonomy_trim(
     ablation_id: AblationID,
 ) -> tuple[int, int, dict]:
     """Select Phase-2f coordinates and attach candidate-level A4 evidence."""
-
-    counterfactual_changed = (
-        counterfactual_start != boundary.start
-        or counterfactual_end != boundary.end
-    )
+    counterfactual_changed = counterfactual_start != boundary.start or counterfactual_end != boundary.end
     counts = (
         InterventionCounts(
             opportunities=1,
@@ -1036,10 +946,7 @@ def _select_host_taxonomy_trim(
             "counterfactual_start": counterfactual_start,
             "counterfactual_end": counterfactual_end,
             "counterfactual_trimmed": counterfactual_changed,
-            "trimmed": (
-                selected_start != boundary.start
-                or selected_end != boundary.end
-            ),
+            "trimmed": (selected_start != boundary.start or selected_end != boundary.end),
             "host_coordinate_change_opportunities": counts.opportunities,
             "host_coordinate_change_interventions": counts.interventions,
             "host_coordinate_change_changed": counts.changed,
@@ -1057,7 +964,7 @@ def trim_boundary_by_host_taxonomy(
     control_stats,
     host_prefix: str,
     host_baseline_fingerprint: dict = None,
-    host_signature_model: Optional[HostSignatureModel] = None,
+    host_signature_model: HostSignatureModel | None = None,
     host_signature_threshold: float = 0.5,
     min_overlap_score: float = 0.40,
     taxonomy_weight_mode: str = "rank",
@@ -1066,8 +973,7 @@ def trim_boundary_by_host_taxonomy(
     unknown_viral_bonus: float = 2.0,
     ablation_id: AblationID = AblationID.A0,
 ) -> tuple:
-    """
-    Trim boundary inward from flanks AND inside EVE region based on host taxonomy.
+    """Trim boundary inward from flanks AND inside EVE region based on host taxonomy.
 
     Strategy:
     - Start from boundary edges, move inward
@@ -1144,7 +1050,10 @@ def trim_boundary_by_host_taxonomy(
     label_str = "".join(gene_labels.get(pid, "?") for pid in gene_order)
     logger.debug(
         "Density labels for %s (%d-%d): %s (upstream=%d, eve=%d, downstream=%d)",
-        boundary.scaffold, boundary.start, boundary.end, label_str,
+        boundary.scaffold,
+        boundary.start,
+        boundary.end,
+        label_str,
         len(seed_mapping.upstream_porf_ids),
         len(seed_mapping.eve_porf_ids),
         len(seed_mapping.downstream_porf_ids),
@@ -1176,22 +1085,21 @@ def trim_boundary_by_host_taxonomy(
             # Host-like gene → trim it away
             new_start = max(trimmed_start, tax.end)
             if new_start > trimmed_start:
-                upstream_trimmed += (new_start - trimmed_start)
+                upstream_trimmed += new_start - trimmed_start
                 trimmed_start = new_start
-                logger.debug(
-                    "Trimming upstream gene %s (label=%s)", porf_id, label
-                )
+                logger.debug("Trimming upstream gene %s (label=%s)", porf_id, label)
         else:
             # Non-host gene → check density rules before stopping
             if _should_continue_trimming(upstream_walk_labels, walk_i):
                 # Host territory despite this gene — trim it anyway
                 new_start = max(trimmed_start, tax.end)
                 if new_start > trimmed_start:
-                    upstream_trimmed += (new_start - trimmed_start)
+                    upstream_trimmed += new_start - trimmed_start
                     trimmed_start = new_start
                     logger.debug(
                         "Trimming upstream gene %s (label=%s, density override)",
-                        porf_id, label,
+                        porf_id,
+                        label,
                     )
             else:
                 upstream_stopped_by = f"{porf_id}:{tax.top1_prefix}"
@@ -1214,21 +1122,20 @@ def trim_boundary_by_host_taxonomy(
             # Host-like gene → trim it away
             new_end = min(trimmed_end, tax.start)
             if new_end < trimmed_end:
-                downstream_trimmed += (trimmed_end - new_end)
+                downstream_trimmed += trimmed_end - new_end
                 trimmed_end = new_end
-                logger.debug(
-                    "Trimming downstream gene %s (label=%s)", porf_id, label
-                )
+                logger.debug("Trimming downstream gene %s (label=%s)", porf_id, label)
         else:
             # Non-host gene → check density rules before stopping
             if _should_continue_trimming(downstream_walk_labels, walk_i):
                 new_end = min(trimmed_end, tax.start)
                 if new_end < trimmed_end:
-                    downstream_trimmed += (trimmed_end - new_end)
+                    downstream_trimmed += trimmed_end - new_end
                     trimmed_end = new_end
                     logger.debug(
                         "Trimming downstream gene %s (label=%s, density override)",
-                        porf_id, label,
+                        porf_id,
+                        label,
                     )
             else:
                 downstream_stopped_by = f"{porf_id}:{tax.top1_prefix}"
@@ -1263,20 +1170,19 @@ def trim_boundary_by_host_taxonomy(
             if label == "H":
                 new_start = max(trimmed_start, end)
                 if new_start > trimmed_start:
-                    eve_upstream_trimmed += (new_start - trimmed_start)
+                    eve_upstream_trimmed += new_start - trimmed_start
                     trimmed_start = new_start
-                    logger.debug(
-                        "Trimming EVE upstream gene %s (label=%s)", porf_id, label
-                    )
+                    logger.debug("Trimming EVE upstream gene %s (label=%s)", porf_id, label)
             else:
                 if _should_continue_trimming(eve_left_walk_labels, walk_i):
                     new_start = max(trimmed_start, end)
                     if new_start > trimmed_start:
-                        eve_upstream_trimmed += (new_start - trimmed_start)
+                        eve_upstream_trimmed += new_start - trimmed_start
                         trimmed_start = new_start
                         logger.debug(
                             "Trimming EVE upstream gene %s (label=%s, density override)",
-                            porf_id, label,
+                            porf_id,
+                            label,
                         )
                 else:
                     eve_upstream_stopped_by = f"{porf_id}:{tax.top1_prefix}"
@@ -1295,20 +1201,19 @@ def trim_boundary_by_host_taxonomy(
             if label == "H":
                 new_end = min(trimmed_end, start)
                 if new_end < trimmed_end:
-                    eve_downstream_trimmed += (trimmed_end - new_end)
+                    eve_downstream_trimmed += trimmed_end - new_end
                     trimmed_end = new_end
-                    logger.debug(
-                        "Trimming EVE downstream gene %s (label=%s)", porf_id, label
-                    )
+                    logger.debug("Trimming EVE downstream gene %s (label=%s)", porf_id, label)
             else:
                 if _should_continue_trimming(eve_right_walk_labels, walk_i):
                     new_end = min(trimmed_end, start)
                     if new_end < trimmed_end:
-                        eve_downstream_trimmed += (trimmed_end - new_end)
+                        eve_downstream_trimmed += trimmed_end - new_end
                         trimmed_end = new_end
                         logger.debug(
                             "Trimming EVE downstream gene %s (label=%s, density override)",
-                            porf_id, label,
+                            porf_id,
+                            label,
                         )
                 else:
                     eve_downstream_stopped_by = f"{porf_id}:{tax.top1_prefix}"

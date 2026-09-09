@@ -12,7 +12,6 @@ from virosync.ablation import (
     AblationEvents,
     AblationID,
 )
-
 from virosync.config import MaskingConfig
 from virosync.orchestration import python_runner
 from virosync.orchestration._flows.single_genome import (
@@ -21,11 +20,11 @@ from virosync.orchestration._flows.single_genome import (
     _summarize_predictions_tsv,
     _write_completion_manifest,
 )
-from virosync.orchestration._flows.single_genome.manifest import (
-    _summarize_prediction_outputs,
-)
 from virosync.orchestration._flows.single_genome.loaders import (
     _build_merged_seeds_from_regions,
+)
+from virosync.orchestration._flows.single_genome.manifest import (
+    _summarize_prediction_outputs,
 )
 from virosync.orchestration._flows.single_genome.orchestrator import (
     _masking_request_identity,
@@ -64,10 +63,8 @@ from virosync.pipeline.phase0.masking import mask_genome_pipeline
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
-
 _ZERO_PREDICTION_HEADER = (
-    "eve_id\tscaffold\tstart\tend\tlength\tconfidence_tier\t"
-    "final_confidence\teffective_eve_class\n"
+    "eve_id\tscaffold\tstart\tend\tlength\tconfidence_tier\tfinal_confidence\teffective_eve_class\n"
 )
 
 
@@ -92,9 +89,7 @@ def _closed_schema3_identity(
     input_fasta = output_dir / "input.fna"
     input_fasta.write_text(">demo\nACGT\n")
     lock_sha256 = canonical_sha256({"fixture": identity_seed, "kind": "lock"})
-    runtime_sha256 = canonical_sha256(
-        {"fixture": identity_seed, "kind": "runtime"}
-    )
+    runtime_sha256 = canonical_sha256({"fixture": identity_seed, "kind": "runtime"})
     environment_payload = {
         "lock_sha256": lock_sha256,
         "runtime_sha256": runtime_sha256,
@@ -107,17 +102,13 @@ def _closed_schema3_identity(
         "output_dir": str(output_dir.resolve()),
         "input": asdict(build_input_identity(input_fasta)),
         "config": {
-            "sha256": canonical_sha256(
-                {"fixture": identity_seed, "kind": "config"}
-            ),
+            "sha256": canonical_sha256({"fixture": identity_seed, "kind": "config"}),
             "ablation_id": "A0",
             "ablation_contract_sha256": ABLATION_CONTRACT_SHA256,
         },
         "code": {
             "version": "test",
-            "source_sha256": canonical_sha256(
-                {"fixture": identity_seed, "kind": "source"}
-            ),
+            "source_sha256": canonical_sha256({"fixture": identity_seed, "kind": "source"}),
         },
         "environment": {
             **environment_payload,
@@ -178,9 +169,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         )
     )
     status_identity = next(
-        artifact
-        for artifact in phase0_artifacts
-        if artifact.relative_path == "phase0/masking/masking_status.json"
+        artifact for artifact in phase0_artifacts if artifact.relative_path == "phase0/masking/masking_status.json"
     )
     publish_phase_completion(
         output_dir,
@@ -212,9 +201,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     )
     phase1_ablation = output_dir / "phase1" / "ablation_events.json"
     phase1_ablation.write_bytes(ablation_content)
-    frameshift_hits = (
-        output_dir / "phase1" / "frameshift_screening" / "frameshift_hits.tsv"
-    )
+    frameshift_hits = output_dir / "phase1" / "frameshift_screening" / "frameshift_hits.tsv"
     frameshift_hits.parent.mkdir(parents=True, exist_ok=True)
     frameshift_hits.write_text("annotation_class\n")
     phase1_artifacts = tuple(
@@ -312,9 +299,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     )
     run_log = output_dir / "run.log"
     if not run_log.is_file():
-        run_log.write_text(
-            "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-        )
+        run_log.write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     invariant = output_dir / "virosync_tsv_invariant_report.tsv"
     invariant.write_text(
         "status\trows_checked\tissue_count\terror_count\twarning_count\n"
@@ -323,9 +308,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     )
     notebook = output_dir / "notebooks" / "jupyter" / "eve_analysis.ipynb"
     notebook.parent.mkdir(parents=True, exist_ok=True)
-    notebook.write_text(
-        '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n'
-    )
+    notebook.write_text('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n')
     completion = _write_completion_manifest(
         output_dir,
         genome_id="demo",
@@ -380,9 +363,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
             "canonical_rows": 0,
             "detailed_rows": 0,
             "accepted_bp": 0,
-            "class_counts": {
-                eve_class: 0 for eve_class in EFFECTIVE_EVE_CLASS_COUNT_KEYS
-            },
+            "class_counts": {eve_class: 0 for eve_class in EFFECTIVE_EVE_CLASS_COUNT_KEYS},
             "tier_counts": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
             "benchmark_eligible": True,
         },
@@ -400,9 +381,7 @@ def test_completed_run_artifacts_require_root_outputs(tmp_path: Path) -> None:
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
     assert _completed_run_artifacts(tmp_path) is None
 
-    (tmp_path / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (tmp_path / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     assert _completed_run_artifacts(tmp_path) is None
 
     _publish_schema3_success(tmp_path, run_fingerprint)
@@ -422,9 +401,7 @@ def test_completed_run_artifacts_reject_mutated_run_log(tmp_path: Path) -> None:
     phase3_dir.mkdir()
     (phase3_dir / "virosync_predictions.tsv").write_text("eve_id\n")
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (tmp_path / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (tmp_path / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     _publish_schema3_success(tmp_path, run_fingerprint)
     (tmp_path / "run.log").write_text("complete\n")
 
@@ -438,9 +415,7 @@ def test_completed_run_artifacts_reject_missing_completion_manifest(
     phase3_dir.mkdir()
     (phase3_dir / "virosync_predictions.tsv").write_text("eve_id\n")
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (tmp_path / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (tmp_path / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
 
     assert _completed_run_artifacts(tmp_path) is None
 
@@ -452,9 +427,7 @@ def test_completed_run_artifacts_reject_corrupt_completion_manifest(
     phase3_dir.mkdir()
     (phase3_dir / "virosync_predictions.tsv").write_text("eve_id\n")
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (tmp_path / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (tmp_path / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     (tmp_path / "virosync_run_complete.json").write_text("{not-json")
 
     assert _completed_run_artifacts(tmp_path) is None
@@ -466,9 +439,7 @@ def test_completed_run_artifacts_accept_zero_result_root_outputs(
     run_fingerprint = _start_schema3_run(tmp_path)
     (tmp_path / "virosync_predictions.tsv").write_text("eve_id\n")
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (tmp_path / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n"
-    )
+    (tmp_path / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n")
     _publish_schema3_success(tmp_path, run_fingerprint)
 
     artifacts = _completed_run_artifacts(tmp_path)
@@ -702,14 +673,8 @@ def test_fresh_persisted_summary_fails_closed_on_in_memory_count_drift(
 ) -> None:
     canonical = tmp_path / "virosync_predictions.tsv"
     detailed = tmp_path / "virosync_predictions_detailed.tsv"
-    canonical.write_text(
-        "eve_id\tconfidence_tier\tlength\teffective_eve_class\n"
-        "ppv\tHIGH\t3001\tPPV\n"
-    )
-    detailed.write_text(
-        "eve_id\tconfidence_tier\tlength\teffective_eve_class\n"
-        "ppv\tHIGH\t3001\tPPV\n"
-    )
+    canonical.write_text("eve_id\tconfidence_tier\tlength\teffective_eve_class\nppv\tHIGH\t3001\tPPV\n")
+    detailed.write_text("eve_id\tconfidence_tier\tlength\teffective_eve_class\nppv\tHIGH\t3001\tPPV\n")
 
     with pytest.raises(ValueError, match="persisted accepted count disagrees"):
         _summarize_prediction_outputs(

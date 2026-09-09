@@ -1,8 +1,8 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
-from Bio import SeqIO
 import pytest
+from Bio import SeqIO
 
 from virosync.pipeline.phase0 import prodigal
 
@@ -27,10 +27,7 @@ def test_long_scaffold_tiles_are_rebased_and_renumbered(
     monkeypatch,
 ) -> None:
     genome = tmp_path / "genome.fasta"
-    genome.write_text(
-        ">long_scaffold\nACGTACGTACGTA\n"
-        ">short_scaffold\nACGT\n"
-    )
+    genome.write_text(">long_scaffold\nACGTACGTACGTA\n>short_scaffold\nACGT\n")
     monkeypatch.setattr(prodigal, "_LONG_SCAFFOLD_BP", 6)
     monkeypatch.setattr(prodigal, "_TILE_CORE_BP", 4)
     monkeypatch.setattr(prodigal, "_TILE_OVERLAP_BP", 2)
@@ -42,10 +39,7 @@ def test_long_scaffold_tiles_are_rebased_and_renumbered(
     ) -> str:
         with Path(chunk_out).open("w") as handle:
             for record in SeqIO.parse(chunk_fasta, "fasta"):
-                handle.write(
-                    f">{record.id}_1 # 2 # 4 # 1 # "
-                    "ID=1_1;partial=00;genetic_code=11\nMKK\n"
-                )
+                handle.write(f">{record.id}_1 # 2 # 4 # 1 # ID=1_1;partial=00;genetic_code=11\nMKK\n")
         return chunk_out
 
     monkeypatch.setattr(prodigal, "_run_prodigal_on_chunk", fake_prodigal)
@@ -64,9 +58,7 @@ def test_long_scaffold_tiles_are_rebased_and_renumbered(
         "long_scaffold_4",
         "short_scaffold_1",
     ]
-    assert [
-        (gene.scaffold, gene.start, gene.end) for gene in genes
-    ] == [
+    assert [(gene.scaffold, gene.start, gene.end) for gene in genes] == [
         ("long_scaffold", 1, 4),
         ("long_scaffold", 2, 5),
         ("long_scaffold", 5, 8),
@@ -77,13 +69,8 @@ def test_long_scaffold_tiles_are_rebased_and_renumbered(
     loaded = prodigal.load_gene_predictions(proteins)
     assert sum(len(items) for items in loaded.values()) == len(genes)
     assert [
-        (gene.scaffold, gene.start, gene.end, gene.strand)
-        for scaffold in loaded.values()
-        for gene in scaffold
-    ] == [
-        (gene.scaffold, gene.start, gene.end, gene.strand)
-        for gene in genes
-    ]
+        (gene.scaffold, gene.start, gene.end, gene.strand) for scaffold in loaded.values() for gene in scaffold
+    ] == [(gene.scaffold, gene.start, gene.end, gene.strand) for gene in genes]
 
 
 def test_tiled_chunk_retries_each_record_after_nonzero_exit(
@@ -104,13 +91,10 @@ def test_tiled_chunk_retries_each_record_after_nonzero_exit(
             return subprocess.CompletedProcess(cmd, -6)
         output = Path(cmd[cmd.index("-a") + 1])
         gff = Path(cmd[cmd.index("-o") + 1])
-        output.write_text(
-            f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 3 # 1 # "
-            "ID=1_1;partial=00\nM\n"
-        )
+        output.write_text(f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 3 # 1 # ID=1_1;partial=00\nM\n")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=4;seqhdr=\"{prodigal._TILE_ID_PREFIX}0\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=4;seqhdr="{prodigal._TILE_ID_PREFIX}0"\n'
             f"{prodigal._TILE_ID_PREFIX}0\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         )
         kwargs["stderr"].write("free(): invalid pointer\n")
@@ -125,14 +109,8 @@ def test_tiled_chunk_retries_each_record_after_nonzero_exit(
         {f"{prodigal._TILE_ID_PREFIX}0": (0, 4)},
     ) == str(chunk_out)
     assert calls == 2
-    assert chunk_out.read_text().startswith(
-        f">{prodigal._TILE_ID_PREFIX}0_1"
-    )
-    assert (
-        tmp_path
-        / "accepted_cleanup_aborts"
-        / f"{prodigal._TILE_ID_PREFIX}0.json"
-    ).exists()
+    assert chunk_out.read_text().startswith(f">{prodigal._TILE_ID_PREFIX}0_1")
+    assert (tmp_path / "accepted_cleanup_aborts" / f"{prodigal._TILE_ID_PREFIX}0.json").exists()
 
 
 def test_tiled_chunk_accepts_only_incomplete_unowned_suffix(
@@ -154,13 +132,10 @@ def test_tiled_chunk_accepts_only_incomplete_unowned_suffix(
             return subprocess.CompletedProcess(cmd, -6)
         output = Path(cmd[cmd.index("-a") + 1])
         gff = Path(cmd[cmd.index("-o") + 1])
-        output.write_text(
-            f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-            f">{record_id}_2 # 7 # 12 # 1 # ID=1_2\nM"
-        )
+        output.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>{record_id}_2 # 7 # 12 # 1 # ID=1_2\nM")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=18;seqhdr=\"{record_id}\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=18;seqhdr="{record_id}"\n'
             f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
             f"{record_id}\tProdigal\tCDS\t7\t12\t.\t+\t0\tID=1_2\n"
             f"{record_id}\tProdigal\tCDS\t13\t18\t.\t+\t0\tID=1_3\n"
@@ -176,9 +151,7 @@ def test_tiled_chunk_accepts_only_incomplete_unowned_suffix(
         True,
         {record_id: (0, 6)},
     ) == str(chunk_out)
-    audit = (
-        tmp_path / "accepted_cleanup_aborts" / f"{record_id}.json"
-    ).read_text()
+    audit = (tmp_path / "accepted_cleanup_aborts" / f"{record_id}.json").read_text()
     assert '"start_0based": 6' in audit
     assert '"start_0based": 12' in audit
     assert chunk_out.read_text().endswith("M\n")
@@ -207,7 +180,7 @@ def test_tiled_chunk_rejects_owned_loss_without_gff_core_coverage(
         output.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=10;seqhdr=\"{record_id}\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=10;seqhdr="{record_id}"\n'
             f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
             f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
         )
@@ -233,9 +206,7 @@ def _write_reconstruction_fixture(
     input_fasta = tmp_path / "input.fasta"
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
-    input_fasta.write_text(
-        f">{record_id}\nGTGTAATTACATTTACACATGTAA\n"
-    )
+    input_fasta.write_text(f">{record_id}\nGTGTAATTACATTTACACATGTAA\n")
     proteins_faa.write_text(
         f">{record_id}_1 # 1 # 6 # 1 # "
         "ID=1_1;partial=00;start_type=GTG;genetic_code=11;gc_cont=0.5\n"
@@ -249,7 +220,7 @@ def _write_reconstruction_fixture(
     genes_gff.write_text(
         "##gff-version 3\n"
         f'# Sequence Data: seqnum=1;seqlen=24;seqhdr="{record_id}"\n'
-        '# Model Data: version=Prodigal.v2.11.0-gv;transl_table=11;uses_sd=1\n'
+        "# Model Data: version=Prodigal.v2.11.0-gv;transl_table=11;uses_sd=1\n"
         f"{record_id}\tProdigal\tCDS\t1\t6\t.\t+\t0\t"
         f"ID=1_1;partial=00;start_type=GTG;genetic_code=11;gc_cont=0.5;\n"
         f"{record_id}\tProdigal\tCDS\t7\t12\t.\t-\t0\t"
@@ -265,9 +236,7 @@ def _write_reconstruction_fixture(
 def test_cleanup_abort_reconstructs_owned_suffix_from_complete_gff(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
         proteins_faa,
@@ -276,12 +245,8 @@ def test_cleanup_abort_reconstructs_owned_suffix_from_complete_gff(
         allow_cleanup_recovery=True,
     )
 
-    assert validation.reconstructed_coordinates == (
-        (record_id, 12, 18, "-"),
-    )
-    assert validation.discarded_coordinates == (
-        (record_id, 18, 24, "+"),
-    )
+    assert validation.reconstructed_coordinates == ((record_id, 12, 18, "-"),)
+    assert validation.discarded_coordinates == ((record_id, 18, 24, "+"),)
     assert (
         prodigal._repair_cleanup_abort_proteins(
             input_fasta,
@@ -298,19 +263,13 @@ def test_cleanup_abort_reconstructs_owned_suffix_from_complete_gff(
         f"{record_id}_3",
     ]
     assert [str(record.seq) for record in records] == ["M*", "M*", "M*"]
-    assert all(
-        prodigal.parse_prodigal_header(record.description, record.id)[0]
-        == record_id
-        for record in records
-    )
+    assert all(prodigal.parse_prodigal_header(record.description, record.id)[0] == record_id for record in records)
 
 
 def test_cleanup_abort_reconstruction_rejects_survivor_mismatch(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path, first_protein="A*")
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path, first_protein="A*")
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
         proteins_faa,
@@ -331,9 +290,7 @@ def test_cleanup_abort_reconstruction_rejects_survivor_mismatch(
 def test_cleanup_abort_reconstruction_accepts_matching_ambiguous_survivor(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path, first_protein="MX")
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path, first_protein="MX")
     input_fasta.write_text(f">{record_id}\nGTGNNNTTACATTTACACATGTAA\n")
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
@@ -358,9 +315,7 @@ def test_cleanup_abort_reconstruction_accepts_matching_ambiguous_survivor(
 def test_cleanup_abort_reconstruction_rejects_ambiguous_reconstructed_cds(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     input_fasta.write_text(f">{record_id}\nGTGTAATTACATNNNNNNATGTAA\n")
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
@@ -382,9 +337,7 @@ def test_cleanup_abort_reconstruction_rejects_ambiguous_reconstructed_cds(
 def test_cleanup_abort_reconstruction_rejects_unordered_gff(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     lines = genes_gff.read_text().splitlines()
     lines[-2], lines[-1] = lines[-1], lines[-2]
     genes_gff.write_text("\n".join(lines) + "\n")
@@ -402,9 +355,7 @@ def test_cleanup_abort_reconstruction_rejects_unordered_gff(
 def test_cleanup_abort_reconstruction_requires_gff_final_newline(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     genes_gff.write_text(genes_gff.read_text().rstrip("\n"))
 
     with pytest.raises(RuntimeError, match="GFF lacks a final newline"):
@@ -420,9 +371,7 @@ def test_cleanup_abort_reconstruction_requires_gff_final_newline(
 def test_cleanup_abort_reconstruction_requires_intact_survivor(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     proteins_faa.write_text(">__virosync_til\nM")
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
@@ -444,9 +393,7 @@ def test_cleanup_abort_reconstruction_requires_intact_survivor(
 def test_cleanup_abort_reconstruction_requires_complete_gff_metadata(
     tmp_path: Path,
 ) -> None:
-    input_fasta, proteins_faa, genes_gff, record_id = (
-        _write_reconstruction_fixture(tmp_path)
-    )
+    input_fasta, proteins_faa, genes_gff, record_id = _write_reconstruction_fixture(tmp_path)
     genes_gff.write_text(genes_gff.read_text().replace(";gc_cont=0.5", ""))
     validation = prodigal._validate_tiled_prodigal_output(
         input_fasta,
@@ -471,9 +418,7 @@ def test_tiled_chunk_reconstructs_owned_suffix_and_audits(
 ) -> None:
     fixture_dir = tmp_path / "fixture"
     fixture_dir.mkdir()
-    source_input, source_faa, source_gff, record_id = (
-        _write_reconstruction_fixture(fixture_dir)
-    )
+    source_input, source_faa, source_gff, record_id = _write_reconstruction_fixture(fixture_dir)
     work_dir = tmp_path / "temporary"
     work_dir.mkdir()
     chunk_fasta = work_dir / "chunk.fasta"
@@ -507,9 +452,7 @@ def test_tiled_chunk_reconstructs_owned_suffix_and_audits(
         f"{record_id}_2",
         f"{record_id}_3",
     ]
-    audit = (
-        tmp_path / "accepted_cleanup_aborts" / f"{record_id}.json"
-    ).read_text()
+    audit = (tmp_path / "accepted_cleanup_aborts" / f"{record_id}.json").read_text()
     assert '"survivor_check_count": 2' in audit
     assert '"start_0based": 12' in audit
     assert '"start_0based": 18' in audit
@@ -536,12 +479,10 @@ def test_tiled_chunk_rejects_cleanup_abort_for_untiled_record(
         input_record = next(SeqIO.parse(cmd[cmd.index("-i") + 1], "fasta"))
         output = Path(cmd[cmd.index("-a") + 1])
         gff = Path(cmd[cmd.index("-o") + 1])
-        output.write_text(
-            f">{input_record.id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-        )
+        output.write_text(f">{input_record.id}_1 # 1 # 3 # 1 # ID=1_1\nM\n")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=6;seqhdr=\"{input_record.id}\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=6;seqhdr="{input_record.id}"\n'
             f"{input_record.id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         )
         if input_record.id == short_id:
@@ -566,13 +507,10 @@ def test_cleanup_abort_rejects_noncontiguous_gff_loss(tmp_path: Path) -> None:
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
     input_fasta.write_text(f">{record_id}\n{'A' * 18}\n")
-    proteins_faa.write_text(
-        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-        f">{record_id}_3 # 13 # 15 # 1 # ID=1_3\nM\n"
-    )
+    proteins_faa.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>{record_id}_3 # 13 # 15 # 1 # ID=1_3\nM\n")
     genes_gff.write_text(
         "##gff-version 3\n"
-        f"# Sequence Data: seqnum=1;seqlen=18;seqhdr=\"{record_id}\"\n"
+        f'# Sequence Data: seqnum=1;seqlen=18;seqhdr="{record_id}"\n'
         f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
         f"{record_id}\tProdigal\tCDS\t13\t15\t.\t+\t0\tID=1_3\n"
@@ -604,13 +542,10 @@ def test_cleanup_abort_discards_malformed_final_header(
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
     input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
-    proteins_faa.write_text(
-        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-        f"{truncated_header}\nM"
-    )
+    proteins_faa.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n{truncated_header}\nM")
     genes_gff.write_text(
         "##gff-version 3\n"
-        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f'# Sequence Data: seqnum=1;seqlen=12;seqhdr="{record_id}"\n'
         f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
     )
@@ -628,9 +563,7 @@ def test_cleanup_abort_discards_malformed_final_header(
         proteins_faa,
         validation.discarded_coordinates,
     )
-    assert proteins_faa.read_text() == (
-        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-    )
+    assert proteins_faa.read_text() == (f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n")
 
 
 def test_strict_validation_rejects_no_delimiter_final_header(
@@ -641,12 +574,10 @@ def test_strict_validation_rejects_no_delimiter_final_header(
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
     input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
-    proteins_faa.write_text(
-        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM"
-    )
+    proteins_faa.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM")
     genes_gff.write_text(
         "##gff-version 3\n"
-        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f'# Sequence Data: seqnum=1;seqlen=12;seqhdr="{record_id}"\n'
         f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
     )
@@ -667,13 +598,10 @@ def test_cleanup_abort_rejects_no_delimiter_nonfinal_header(
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
     input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
-    proteins_faa.write_text(
-        ">__virosync_til\nM\n"
-        f">{record_id}_2 # 7 # 9 # 1 # ID=1_2\nM\n"
-    )
+    proteins_faa.write_text(f">__virosync_til\nM\n>{record_id}_2 # 7 # 9 # 1 # ID=1_2\nM\n")
     genes_gff.write_text(
         "##gff-version 3\n"
-        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f'# Sequence Data: seqnum=1;seqlen=12;seqhdr="{record_id}"\n'
         f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
         f"{record_id}\tProdigal\tCDS\t7\t9\t.\t+\t0\tID=1_2\n"
     )
@@ -696,12 +624,10 @@ def test_cleanup_abort_rejects_malformed_final_without_missing_suffix(
     proteins_faa = tmp_path / "proteins.faa"
     genes_gff = tmp_path / "genes.gff"
     input_fasta.write_text(f">{record_id}\n{'A' * 12}\n")
-    proteins_faa.write_text(
-        f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM"
-    )
+    proteins_faa.write_text(f">{record_id}_1 # 1 # 3 # 1 # ID=1_1\nM\n>__virosync_til\nM")
     genes_gff.write_text(
         "##gff-version 3\n"
-        f"# Sequence Data: seqnum=1;seqlen=12;seqhdr=\"{record_id}\"\n"
+        f'# Sequence Data: seqnum=1;seqlen=12;seqhdr="{record_id}"\n'
         f"{record_id}\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n"
     )
 
@@ -751,12 +677,10 @@ def test_tiled_chunk_retains_mismatched_faa_and_gff(
     def mismatched_output(cmd, **kwargs):
         output = Path(cmd[cmd.index("-a") + 1])
         gff = Path(cmd[cmd.index("-o") + 1])
-        output.write_text(
-            f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 3 # 1 # ID=1_1\nM\n"
-        )
+        output.write_text(f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 3 # 1 # ID=1_1\nM\n")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=4;seqhdr=\"{prodigal._TILE_ID_PREFIX}0\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=4;seqhdr="{prodigal._TILE_ID_PREFIX}0"\n'
             f"{prodigal._TILE_ID_PREFIX}0\tProdigal\tCDS\t2\t4\t.\t+\t0\tID=1_1\n"
         )
         return subprocess.CompletedProcess(cmd, 0)
@@ -785,12 +709,10 @@ def test_tiled_chunk_rejects_truncated_protein(
     def truncated_output(cmd, **kwargs):
         output = Path(cmd[cmd.index("-a") + 1])
         gff = Path(cmd[cmd.index("-o") + 1])
-        output.write_text(
-            f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 6 # 1 # ID=1_1\nM\n"
-        )
+        output.write_text(f">{prodigal._TILE_ID_PREFIX}0_1 # 1 # 6 # 1 # ID=1_1\nM\n")
         gff.write_text(
             "##gff-version 3\n"
-            f"# Sequence Data: seqnum=1;seqlen=6;seqhdr=\"{prodigal._TILE_ID_PREFIX}0\"\n"
+            f'# Sequence Data: seqnum=1;seqlen=6;seqhdr="{prodigal._TILE_ID_PREFIX}0"\n'
             f"{prodigal._TILE_ID_PREFIX}0\tProdigal\tCDS\t1\t6\t.\t+\t0\tID=1_1\n"
         )
         return subprocess.CompletedProcess(cmd, 0)
@@ -816,9 +738,7 @@ def test_tiled_merge_rejects_unmapped_scaffold_ids(
         chunk_out: str,
         *_args,
     ) -> str:
-        Path(chunk_out).write_text(
-            ">rogue_1 # 1 # 3 # 1 # ID=1_1;partial=00\nMKK\n"
-        )
+        Path(chunk_out).write_text(">rogue_1 # 1 # 3 # 1 # ID=1_1;partial=00\nMKK\n")
         return chunk_out
 
     monkeypatch.setattr(prodigal, "_run_prodigal_on_chunk", fake_prodigal)

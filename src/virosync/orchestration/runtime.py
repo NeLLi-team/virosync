@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def get_orchestration_logger(name: str = "virosync.orchestration") -> logging.Logger:

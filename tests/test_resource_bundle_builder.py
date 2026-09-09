@@ -3,24 +3,22 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import tarfile
+from pathlib import Path
 
 import pytest
 
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
-    RUNTIME_RESOURCE_FILES,
     RESOURCE_MANIFEST_NAME,
+    RUNTIME_RESOURCE_FILES,
     SOURCE_RESOURCE_FILES,
     ResourceManifestError,
 )
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts/build_resource_bundle.py"
-_SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "build_resource_bundle", _SCRIPT_PATH
-)
+_SCRIPT_SPEC = importlib.util.spec_from_file_location("build_resource_bundle", _SCRIPT_PATH)
 assert _SCRIPT_SPEC is not None and _SCRIPT_SPEC.loader is not None
 _SCRIPT_MODULE = importlib.util.module_from_spec(_SCRIPT_SPEC)
 sys.modules[_SCRIPT_SPEC.name] = _SCRIPT_MODULE
@@ -39,9 +37,7 @@ def _resource_tree(root: Path) -> Path:
         "models/combined.hmm.h3i": b"h3i\n",
         "models/combined.hmm.h3m": b"h3m\n",
         "models/combined.hmm.h3p": b"h3p\n",
-        "models/pfam_virosync_screening.hmm": (
-            b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
-        ),
+        "models/pfam_virosync_screening.hmm": (b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"),
         "models/model_annotations_with_interpro.tsv": (
             b"model_name\tsource\tdescription\tmajority_annotation\tpfam_signature\t"
             b"pfam_top_domains\tpfam_n_sampled\tpfam_n_with_pfam\tsource_marker\t"
@@ -174,9 +170,7 @@ def test_output_inside_source_tree_is_rejected_before_writing(tmp_path: Path) ->
 
 
 def test_builder_accepts_the_stable_virosync_symlink(tmp_path: Path) -> None:
-    versioned = _resource_tree(
-        tmp_path / "resources" / "virosync-v1.0.6-0123456789abcdef"
-    )
+    versioned = _resource_tree(tmp_path / "resources" / "virosync-v1.0.6-0123456789abcdef")
     stable = versioned.parent / "virosync"
     stable.symlink_to(versioned.name)
     before = _snapshot(versioned)
@@ -286,16 +280,12 @@ def test_split_builder_is_deterministic_exact_and_bound(tmp_path: Path) -> None:
             expected_names = [f"virosync/{relative}" for relative in expected_payloads]
             expected_names.append(f"virosync/{RESOURCE_MANIFEST_NAME}")
             assert [member.name for member in archive.getmembers()] == expected_names
-            manifests[kind] = json.load(
-                archive.extractfile(f"virosync/{RESOURCE_MANIFEST_NAME}")
-            )
+            manifests[kind] = json.load(archive.extractfile(f"virosync/{RESOURCE_MANIFEST_NAME}"))
 
     runtime_manifest = manifests["runtime"]
     source_manifest = manifests["source"]
     with tarfile.open(first_runtime, "r:gz") as archive:
-        runtime_readme = archive.extractfile(
-            "virosync/DATABASE_README.txt"
-        ).read()
+        runtime_readme = archive.extractfile("virosync/DATABASE_README.txt").read()
     assert b"Source/repair artifact:" in runtime_readme
     assert runtime_manifest["schema_version"] == 2
     assert runtime_manifest["bundle_kind"] == "runtime"
@@ -313,15 +303,15 @@ def test_split_builder_is_deterministic_exact_and_bound(tmp_path: Path) -> None:
     ("mutation", "message"),
     [
         (
-            lambda resources: (
-                resources / "models/pfam_virosync_screening.hmm"
-            ).write_bytes(b"HMMER3/f\nNAME  PfamOne\n//\n"),
+            lambda resources: (resources / "models/pfam_virosync_screening.hmm").write_bytes(
+                b"HMMER3/f\nNAME  PfamOne\n//\n"
+            ),
             "has no GA cutoff",
         ),
         (
-            lambda resources: (
-                resources / "models/model_annotations_with_interpro.tsv"
-            ).write_bytes(b"model_name\tsource\nVS000001\ttest\n"),
+            lambda resources: (resources / "models/model_annotations_with_interpro.tsv").write_bytes(
+                b"model_name\tsource\nVS000001\ttest\n"
+            ),
             "missing required Pfam columns",
         ),
     ],

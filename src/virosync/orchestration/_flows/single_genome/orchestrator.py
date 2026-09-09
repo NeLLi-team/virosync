@@ -12,10 +12,11 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import asdict
+from collections.abc import Callable
+from dataclasses import asdict, replace
+from datetime import UTC
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Optional
 
 import virosync
 from virosync.ablation import (
@@ -27,27 +28,26 @@ from virosync.ablation import (
     validate_ablation_events_bytes,
 )
 from virosync.config import MaskingBackend, MaskingConfig, PipelineConfig
-from virosync.output_contract import (
-    COORDINATE_CONVENTION,
-    COORDINATE_SCHEMA_VERSION,
-    OUTPUT_SCHEMA_VERSION,
-    EFFECTIVE_EVE_CLASS_COUNT_KEYS,
+from virosync.orchestration._flows.utils import (
+    _detect_explicit_overrides,
+    _merge_config_with_kwargs,
 )
 from virosync.orchestration.runtime import call_task, get_orchestration_logger
 from virosync.orchestration.tasks import (
-    mask_genome_task,
-    generate_proteome_task,
-    generate_outputs_task,
     create_summary_artifact_task,
+    generate_outputs_task,
+    generate_proteome_task,
+    mask_genome_task,
+)
+from virosync.output_contract import (
+    COORDINATE_CONVENTION,
+    COORDINATE_SCHEMA_VERSION,
+    EFFECTIVE_EVE_CLASS_COUNT_KEYS,
+    OUTPUT_SCHEMA_VERSION,
 )
 from virosync.pipeline.phase0.masking import (
     MaskingResult,
     load_masking_result,
-)
-from virosync.orchestration._flows.utils import (
-    _detect_explicit_overrides,
-    _filter_kwargs_to_signature,
-    _merge_config_with_kwargs,
 )
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, validate_path_component
@@ -61,7 +61,6 @@ from .loaders import (
     _count_fasta_records,
 )
 from .manifest import (
-    _FINGERPRINT_INPUT_FIELDS,
     _FINGERPRINT_RESOURCE_FIELDS,
     _FINGERPRINT_RESOURCE_GATED,
     _clear_success_markers,
@@ -70,15 +69,21 @@ from .manifest import (
     _summarize_prediction_outputs,
     _write_completion_manifest,
 )
+from .phase1 import Phase1Result, Phase1Terminal, _run_phase1_subflow
+from .phase1_state import PHASE1_STATE_SCHEMA
+from .phase2 import Phase2Result, Phase2Terminal, _run_phase2_subflow
+from .phase2_resume_state import PHASE2_RESUME_STATE_SCHEMA
+from .phase3 import Phase3Result, _run_phase3_subflow
+from .phase_state import PHASE2_STATE_SCHEMA
 from .reports import _generate_required_reports
 from .resume import (
     _completed_run_artifacts,
 )
 from .run_state import (
-    ConfigIdentity,
-    EnvironmentIdentity,
     PHASE_MARKER_FILENAMES,
     RUN_STATE_FILENAME,
+    ConfigIdentity,
+    EnvironmentIdentity,
     ResourceIdentity,
     build_artifact_identity,
     build_code_identity,
@@ -100,12 +105,6 @@ from .run_state import (
     runtime_environment_sha256,
     sibling_run_lock,
 )
-from .phase_state import PHASE2_STATE_SCHEMA
-from .phase1_state import PHASE1_STATE_SCHEMA
-from .phase2_resume_state import PHASE2_RESUME_STATE_SCHEMA
-from .phase1 import _run_phase1_subflow
-from .phase2 import _run_phase2_subflow
-from .phase3 import _run_phase3_subflow
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +129,11 @@ _FINAL_ROOT_NAMES = frozenset(
 
 
 def _is_owned_root_final(path: Path) -> bool:
-    return (
-        path.name in _FINAL_ROOT_NAMES
-        or path.name.endswith("_eves.fna")
-    )
+    return path.name in _FINAL_ROOT_NAMES or path.name.endswith("_eves.fna")
 
 
 def _masking_request_identity(masking: MaskingConfig) -> dict[str, object]:
     """Return the canonical pre-run masking request."""
-
     library = masking.repeatmasker_library
     library_sha256 = None
     if library is not None and Path(library).is_file():
@@ -146,11 +141,7 @@ def _masking_request_identity(masking: MaskingConfig) -> dict[str, object]:
     return {
         "backend": masking.backend.value,
         "failure_policy": masking.failure_policy.value,
-        "fallback_backend": (
-            masking.fallback_backend.value
-            if masking.fallback_backend is not None
-            else None
-        ),
+        "fallback_backend": (masking.fallback_backend.value if masking.fallback_backend is not None else None),
         "repeatmasker_species": masking.repeatmasker_species,
         "repeatmasker_library": str(library) if library is not None else None,
         "repeatmasker_library_sha256": library_sha256,
@@ -159,7 +150,6 @@ def _masking_request_identity(masking: MaskingConfig) -> dict[str, object]:
 
 def _project_lock_path() -> Path | None:
     """Find the Pixi lock for a source checkout, if one is installed."""
-
     candidates: list[Path] = []
     pixi_project_root = os.environ.get("PIXI_PROJECT_ROOT")
     if pixi_project_root:
@@ -179,7 +169,6 @@ def _project_lock_path() -> Path | None:
 
 def _environment_identity(device: str) -> EnvironmentIdentity:
     """Bind Pixi when available, with an installed-distribution fallback."""
-
     import platform
 
     effective_device = f"cpu:{platform.machine() or 'unknown'}"
@@ -209,13 +198,7 @@ def _environment_identity(device: str) -> EnvironmentIdentity:
                     except (OSError, subprocess.SubprocessError):
                         pass
                     else:
-                        versions = sorted(
-                            {
-                                line.strip()
-                                for line in probe.stdout.splitlines()
-                                if line.strip()
-                            }
-                        )
+                        versions = sorted({line.strip() for line in probe.stdout.splitlines() if line.strip()})
                         if versions:
                             driver_version = "+".join(versions)
                 cudnn_version = torch.backends.cudnn.version() or "unavailable"
@@ -246,9 +229,7 @@ def _environment_identity(device: str) -> EnvironmentIdentity:
         )
         for distribution in distributions()
     )
-    lock_sha256 = canonical_sha256(
-        {"schema_version": 1, "installed_distributions": installed}
-    )
+    lock_sha256 = canonical_sha256({"schema_version": 1, "installed_distributions": installed})
     payload = {
         "lock_sha256": lock_sha256,
         "runtime_sha256": runtime_environment_sha256(),
@@ -275,7 +256,6 @@ def _nearest_resource_version(path: Path) -> str:
 
 def _authenticated_core_manifest(path: Path):
     """Return the R7 manifest only when *path* is one authenticated payload."""
-
     from virosync.utils.resource_manifest import (
         RESOURCE_MANIFEST_NAME,
         ResourceManifestError,
@@ -344,7 +324,6 @@ def _verify_core_manifest_payload(root: Path, manifest_path: Path, manifest) -> 
 
 def _enabled_resource_identities(flat_config: dict) -> list:
     """Build identities for every enabled resource-valued configuration field."""
-
     gated = dict(_FINGERPRINT_RESOURCE_GATED)
     marker_source_fields = {"faa_dir", "marker_faa_db", "marker_faa_dir"}
     prebuilt_marker_selected = bool(flat_config.get("marker_db"))
@@ -452,17 +431,11 @@ def _enabled_executable_identities(
         names.add("gvclass")
     if bool(flat_config.get("frameshift_screening_enabled")):
         names.update({"bathconvert", "bathsearch"})
-    identities = [
-        identity
-        for name in sorted(names)
-        if (identity := _executable_resource_identity(name)) is not None
-    ]
+    identities = [identity for name in sorted(names) if (identity := _executable_resource_identity(name)) is not None]
     if bool(flat_config.get("run_gvclass")) and flat_config.get("gvclass_path"):
         gvclass = Path(flat_config["gvclass_path"]) / "gvclass"
         if gvclass.is_file() and not gvclass.is_symlink():
-            identities.append(
-                _executable_path_identity("gvclass-batch", gvclass)
-            )
+            identities.append(_executable_path_identity("gvclass-batch", gvclass))
     if bool(flat_config.get("use_boltz")):
         from virosync.utils.executables import resolve_boltz_executable
 
@@ -533,7 +506,6 @@ def _build_run_identity(
     device: str,
 ) -> tuple[dict[str, object], str]:
     """Build the complete immutable identity and its full run fingerprint."""
-
     ablation_id = AblationID(flat_config["ablation_id"])
     if flat_config["ablation_contract_sha256"] != ABLATION_CONTRACT_SHA256:
         raise ValueError("ablation contract SHA-256 differs from this ViroSync build")
@@ -679,9 +651,7 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             masking_result = load_masking_result(status_path)
             masked_path = Path(masking_result.output_path)
             try:
-                relative_masked_path = masked_path.resolve(strict=True).relative_to(
-                    output_dir.resolve(strict=True)
-                )
+                relative_masked_path = masked_path.resolve(strict=True).relative_to(output_dir.resolve(strict=True))
             except (OSError, ValueError):
                 pass
             else:
@@ -700,7 +670,6 @@ def _write_ablation_events(
     phase: int | None = None,
 ) -> Path:
     """Atomically write one canonical cumulative ablation event document."""
-
     if counters is None:
         counters = AblationCounters.for_ablation(ablation_id)
     events = AblationEvents(ablation_id=ablation_id, counters=counters)
@@ -718,7 +687,6 @@ def _merge_ablation_counts(
     additional: InterventionCounts | None,
 ) -> AblationCounters:
     """Add one phase-local count group to the selected cumulative arm."""
-
     if additional is None:
         return current
     if not isinstance(additional, InterventionCounts):
@@ -737,12 +705,9 @@ def _validate_ablation_events_file(
     expected_ablation_id: AblationID,
 ) -> AblationEvents:
     """Validate canonical event bytes and their selected benchmark arm."""
-
     events = validate_ablation_events_bytes(path.read_bytes())
     if events.ablation_id is not expected_ablation_id:
-        raise ValueError(
-            "ablation event ID differs from the authenticated run identity"
-        )
+        raise ValueError("ablation event ID differs from the authenticated run identity")
     return events
 
 
@@ -790,14 +755,8 @@ def _result_identity(
     promoted_low_rows: int,
 ) -> dict:
     low_rows = int(summary.get("low_tier", 0) or 0)
-    if (
-        type(promoted_low_rows) is not int
-        or promoted_low_rows < 0
-        or promoted_low_rows > low_rows
-    ):
-        raise ValueError(
-            "promoted_low_rows must count a subset of canonical LOW rows"
-        )
+    if type(promoted_low_rows) is not int or promoted_low_rows < 0 or promoted_low_rows > low_rows:
+        raise ValueError("promoted_low_rows must count a subset of canonical LOW rows")
     return {
         "terminal_phase": terminal_phase,
         "canonical_rows": int(summary.get("accepted", 0) or 0),
@@ -824,7 +783,6 @@ def _run_benchmark_eligible(output_dir: Path) -> bool:
 
 def _authenticated_output_files(output_dir: Path) -> dict[str, object]:
     """Return the canonical public mapping from a published schema-v3 success."""
-
     output_dir = Path(output_dir)
     state = load_run_state(output_dir)
     if state.status != "success":
@@ -851,11 +809,7 @@ def _publish_phase_state(
     masking_result: MaskingResult | None = None,
     requested_masking: dict[str, object] | None = None,
 ) -> Path:
-    dependency = (
-        run_fingerprint
-        if phase == 0
-        else marker_sha256(output_dir, phase - 1)
-    )
+    dependency = run_fingerprint if phase == 0 else marker_sha256(output_dir, phase - 1)
     kwargs = {}
     if phase == 0:
         if masking_result is None or requested_masking is None:
@@ -972,25 +926,20 @@ def _write_combined_eve_fasta(
     results: list | tuple,
 ) -> Path | None:
     """Write the root combined EVE FASTA shared by terminal output paths."""
-
     if not genome_path.is_file() or not results:
         return None
 
     from Bio import SeqIO
+
     from virosync.pipeline.phase3.output_generator import OutputGenerator
 
-    genome_seqs = {
-        str(record.id): str(record.seq)
-        for record in SeqIO.parse(genome_path, "fasta")
-    }
+    genome_seqs = {str(record.id): str(record.seq) for record in SeqIO.parse(genome_path, "fasta")}
     eve_fasta = output_dir / f"{genome_id}_eves.fna"
     generator = OutputGenerator(output_dir, genome_fasta=genome_path)
     generator.genome_sequences = genome_seqs
     generator.write_combined_eve_fasta(list(results), eve_fasta)
     if not eve_fasta.is_file():
-        raise RuntimeError(
-            "combined EVE FASTA writer produced no file for nonempty results"
-        )
+        raise RuntimeError("combined EVE FASTA writer produced no file for nonempty results")
     return eve_fasta
 
 
@@ -1010,7 +959,6 @@ def _publish_a1_seed_surface(
     current_counters: AblationCounters,
 ) -> dict:
     """Publish A1's nonzero Phase-1 seed surface without Phase 2 or 3."""
-
     from virosync.pipeline.phase3.phase1_surface import (
         build_phase1_seed_surface,
     )
@@ -1072,12 +1020,8 @@ def _publish_a1_seed_surface(
         handle.write(f"# ViroSync Run Log: {genome_id}\n\n")
         handle.write("## Results Summary\n")
         handle.write("Prediction stage: Phase-1 seed surface (A1)\n")
-        handle.write(
-            f"Canonical EVEs: {persisted_summary['accepted']}\n"
-        )
-        handle.write(
-            f"Detailed candidates: {persisted_summary['predictions']}\n"
-        )
+        handle.write(f"Canonical EVEs: {persisted_summary['accepted']}\n")
+        handle.write(f"Detailed candidates: {persisted_summary['predictions']}\n")
         handle.write("Confidence kind: not_scored\n")
     output_files["run_log"] = run_log_path
     completion = _write_completion_manifest(
@@ -1155,8 +1099,7 @@ def _validate_clean_run_target(output_dir: Path, genome_id: str) -> Path:
         raise ValueError(f"refusing to use symlink output directory: {output_dir}")
     if output_dir.name != genome_id:
         raise ValueError(
-            "output directory final component must exactly match genome ID: "
-            f"{output_dir.name!r} != {genome_id!r}"
+            f"output directory final component must exactly match genome ID: {output_dir.name!r} != {genome_id!r}"
         )
     require_strict_child(output_dir.parent, output_dir)
     return output_dir
@@ -1175,9 +1118,7 @@ def _revalidate_completed_run(
     """Recheck cached detailed output before returning a resumed success."""
     output_dir = Path(output_dir)
     invariant_report_path = output_dir / "virosync_tsv_invariant_report.tsv"
-    gene_taxonomy = (
-        output_dir / "phase3_synthesis" / "gene_taxonomy" / "gene_taxonomy_all.tsv"
-    )
+    gene_taxonomy = output_dir / "phase3_synthesis" / "gene_taxonomy" / "gene_taxonomy_all.tsv"
     try:
         report = enforce_tsv_invariants(
             detailed_tsv=completed_artifacts["predictions_detailed"],
@@ -1197,6 +1138,7 @@ def _pin_cuda_device(device: str, logger) -> None:
         return
     try:
         import os
+
         import torch
     except Exception:
         return
@@ -1204,7 +1146,7 @@ def _pin_cuda_device(device: str, logger) -> None:
         return
     visible = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
     requested = (os.environ.get("VIROSYNC_GPU") or "").strip()
-    target_idx: Optional[int] = None
+    target_idx: int | None = None
     if visible:
         first = visible.split(",", 1)[0].strip()
         if torch.cuda.device_count() == 1:
@@ -1231,13 +1173,12 @@ def _run_phase0_subflow(
     output_dir: Path,
     genome_id: str,
     threads: int,
-    skip_masking: Optional[bool],
+    skip_masking: bool | None,
     resume: bool,
     logger,
-    masking: Optional[MaskingConfig] = None,
+    masking: MaskingConfig | None = None,
 ) -> dict:
-    """
-    Phase 0: Preprocessing (repeat masking + gene prediction).
+    """Phase 0: Preprocessing (repeat masking + gene prediction).
 
     Args:
         genome_path: Path to input genome FASTA
@@ -1265,8 +1206,7 @@ def _run_phase0_subflow(
     cached_genes = phase0_dir / "genes.gff"
     if resume and cached_proteome.exists() and cached_genes.exists():
         logger.info(
-            "Phase 0 partial-cache reuse is disabled until schema-v3 run state; "
-            "recomputing masking and proteome"
+            "Phase 0 partial-cache reuse is disabled until schema-v3 run state; recomputing masking and proteome"
         )
 
     masking = masking or MaskingConfig()
@@ -1290,9 +1230,7 @@ def _run_phase0_subflow(
                 masking_task_result.status_path is None
                 or masking_task_result.status_path.resolve() != status_path.resolve()
             ):
-                raise ValueError(
-                    "returned status path is not phase0/masking/masking_status.json"
-                )
+                raise ValueError("returned status path is not phase0/masking/masking_status.json")
             masking_result = load_masking_result(
                 status_path,
                 repeat_regions=masking_task_result.repeat_regions,
@@ -1300,10 +1238,8 @@ def _run_phase0_subflow(
                 expected_input=genome_path,
             )
             if (
-                masking_result.to_status_payload()
-                != masking_task_result.to_status_payload()
-                or masking_task_result.status_sha256
-                != masking_result.status_sha256
+                masking_result.to_status_payload() != masking_task_result.to_status_payload()
+                or masking_task_result.status_sha256 != masking_result.status_sha256
             ):
                 raise ValueError("returned result disagrees with persisted status")
         except (OSError, ValueError, KeyError) as exc:
@@ -1312,9 +1248,7 @@ def _run_phase0_subflow(
         try:
             masked_path, repeat_regions = masking_task_result
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "masking task returned neither MaskingResult nor a legacy path tuple"
-            ) from exc
+            raise ValueError("masking task returned neither MaskingResult nor a legacy path tuple") from exc
         try:
             masking_result = load_masking_result(
                 status_path,
@@ -1325,9 +1259,7 @@ def _run_phase0_subflow(
         except (OSError, ValueError, KeyError) as exc:
             raise ValueError(f"masking status mismatch: {exc}") from exc
         if masking_result.output_path.resolve() != Path(masked_path).resolve():
-            raise ValueError(
-                "masking status output path mismatch with the sequence passed to Prodigal"
-            )
+            raise ValueError("masking status output path mismatch with the sequence passed to Prodigal")
 
     masked_path = masking_result.output_path
     repeat_regions = list(masking_result.repeat_regions)
@@ -1360,137 +1292,34 @@ def _single_genome_flow_impl(
     genome_path: Path,
     output_dir: Path,
     genome_id: str,
-    ablation_id: str,
-    ablation_contract_sha256: str,
-    # Configuration object (recommended - use instead of individual kwargs)
-    # Database paths (can override config)
-    hmm_database: Optional[Path],
-    hmm_allowlist: Optional[Path],
-    seed_marker_allowlist: Optional[list[str]],
-    marker_faa_db: Optional[Path],
-    marker_db: Optional[Path],
-    gene_taxonomy_faa_db: Optional[Path],
-    marker_faa_dir: Optional[Path],
-    faa_dir: Optional[Path],
-    gvclass_db: Optional[Path],
-    diamond_db: Optional[Path],
-    enable_phylogenetic: bool,
-    # Taxonomy lookup for host signature comparison
-    taxonomy_labels_file: Optional[Path],
-    # Host taxonomy configuration
-    host_prefixes: Optional[list[str]],
-    host_label: str,
-    high_pident_host_threshold: float,
-    # Parameters
-    threads: int,
-    max_threads: Optional[int],
-    device: str,
-    masking: MaskingConfig,
-    skip_structural: bool,
-    use_boltz: bool,
-    boltz_mcp_only: bool,
-    boltz_use_msa_server: bool,
-    boltz_min_seq_len: int,
-    boltz_max_seq_len: int,
-    boltz_no_kernels: bool,
-    use_tmvec_database: bool,
-    tmvec_require_gpu: bool,
-    tmvec_databases: Optional[list[str]],
-    tmvec_database_dir: Optional[Path],
-    tmvec_min_score: float,
-    viral_structure_db: Optional[Path],
-    assembly_mode: str,
-    high_tier_threshold: float,
-    low_tier_threshold: float,
-    use_crf_in_final_score: bool,
-    priority_marker_list: Optional[list[str]],
-    marker_floor_priority_only: float,
-    marker_floor_priority_plus_family: float,
-    marker_floor_priority_multi_family: float,
-    marker_family_bonus_per_family: float,
-    marker_multi_family_bonus: float,
-    hmm_chunk_size: Optional[int],
-    frameshift_screening_enabled: bool,
-    gene_taxonomy_threads: Optional[int],
-    interproscan_enabled: bool,
-    interproscan_dir: Optional[Path],
-    interproscan_keywords: Optional[list[str]],
-    interproscan_threads: Optional[int],
-    interproscan_applications: Optional[list[str]],
-    extended_output: bool,
-    export_all_eve_sequences: bool,
-    # GVClass batch classification
-    run_gvclass: bool,
-    gvclass_path: Optional[Path],
-    # HMM-gated workflow options
-    rebuild_db: bool,
-    initial_window_bp: int,
-    initial_window_genes: int,
-    min_markers_initial: int,
-    extension_kb: int,
-    merge_distance: int,
-    host_taxonomy_deviation_enabled: bool,
-    host_taxonomy_deviation_allow_seeds: bool,
-    host_taxonomy_deviation_min_token_len: int,
-    host_taxonomy_deviation_min_tokens: int,
-    host_taxonomy_deviation_overlap_threshold: float,
-    host_taxonomy_deviation_max_pident: float,
-    host_taxonomy_deviation_max_hits: int,
-    host_taxonomy_deviation_window_bp: int,
-    host_taxonomy_deviation_window_count: int,
-    host_taxonomy_deviation_window_seed: int,
-    host_taxonomy_deviation_window_min_markers: int,
-    host_taxonomy_deviation_seed_window_bp: int,
-    host_taxonomy_deviation_seed_min_markers: int,
-    marker_validation_top_k: int,
-    novel_marker_min_score: float,
-    novel_marker_min_coverage: float,
-    novel_marker_require_cluster: bool,
-    boundary_host_trim_enabled: bool,
-    boundary_host_trim_window_bp: int,
-    boundary_host_trim_step_bp: int,
-    boundary_host_trim_max_host_fraction: float,
-    boundary_host_trim_min_viral_fraction: float,
-    boundary_host_trim_score_threshold: float,
-    host_signature_evidence_threshold: float,
-    boundary_host_trim_buffer_kb: int,
-    boundary_host_signature_min_token_len: int,
-    boundary_host_trim_min_overlap_score: float,
-    boundary_taxonomy_ml_enabled: bool,
-    boundary_taxonomy_ml_model: str,
-    boundary_taxonomy_ml_threshold: float,
-    boundary_taxonomy_ml_neighbor_window: int,
-    taxonomy_weight_mode: str,
-    # Batched Diamond configuration (Phase 2)
-    # Note: Batched Diamond is always enabled (use_batched_boundary_diamond removed Jan 2026)
-    boundary_diamond_flank_genes: int,
-    boundary_diamond_control_sample_size: int,
-    boundary_diamond_control_min_distance: int,
-    boundary_diamond_top_k: int,
-    boundary_diamond_chunk_size: int,
-    boundary_diamond_random_seed: int,
-    boundary_diamond_superset_prototype_enabled: bool,
-    resume: bool,
-    # Search backend (diamond -- sole backend)
-    search_backend: str = "diamond",
-    progress_callback: Optional[Callable[[float, str, bool], None]] = None,
+    config: PipelineConfig,
+    progress_callback: Callable[[float, str, bool], None] | None = None,
 ) -> dict:
-    """
-    Implementation of single genome flow (internal).
-
-    Called by the public wrapper only.
-    All parameters passed explicitly (no defaults, no config merging).
-    """
+    """Run one genome with a fully resolved nested configuration."""
     import time
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    selected_ablation = AblationID(ablation_id)
-    ablation_id = selected_ablation.value
-    if ablation_contract_sha256 != ABLATION_CONTRACT_SHA256:
+    databases = config.databases
+    compute = config.compute
+    host = config.host
+    phase3 = config.phase3
+    execution = config.execution
+    selected_ablation = config.ablation.id
+    if config.ablation.contract_sha256 != ABLATION_CONTRACT_SHA256:
         raise ValueError("ablation contract SHA-256 differs from this ViroSync build")
-    if host_prefixes is None:
-        host_prefixes = ["EUK__", "MITO__", "PLASTID__"]
-    host_label = (host_label or "EUK").upper()
+    host_prefixes = host.prefixes or ["EUK__", "MITO__", "PLASTID__"]
+    host_label = (host.label or "EUK").upper()
+    threads = compute.effective_threads()
+    config = replace(
+        config,
+        compute=replace(compute, threads=threads),
+        host=replace(host, prefixes=host_prefixes, label=host_label),
+    )
+    compute = config.compute
+    host = config.host
+    device = compute.device.value
+    masking = execution.masking
+    resume = execution.resume
 
     logger = get_orchestration_logger(__name__)
 
@@ -1505,7 +1334,7 @@ def _single_genome_flow_impl(
     logger.info(f"GENOME: {genome_id}")
     logger.info("=" * 60)
     logger.info(f"Input: {genome_path}")
-    if (gvclass_db or diamond_db) and not enable_phylogenetic:
+    if (databases.gvclass_db or databases.diamond_db) and not phase3.enable_phylogenetic:
         logger.info("Phylogenetic validation disabled; GVClass/Diamond inputs ignored.")
 
     # Ensure paths are Path objects
@@ -1521,17 +1350,12 @@ def _single_genome_flow_impl(
         _remove_output_dir(output_dir, genome_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if max_threads:
-        threads = min(threads, max_threads)
-
-    background = None
-    gene_data = None
-
-    flat_identity_config = {
-        key: value
-        for key, value in locals().items()
-        if key in _FINGERPRINT_INPUT_FIELDS
-    }
+    flat_identity_config = config.to_flow_kwargs()
+    flat_identity_config.update(
+        host_prefixes=host_prefixes,
+        host_label=host_label,
+        threads=threads,
+    )
     run_identity, run_fingerprint = _build_run_identity(
         genome_path=genome_path,
         genome_id=genome_id,
@@ -1551,8 +1375,6 @@ def _single_genome_flow_impl(
             expected_fingerprint=run_fingerprint,
             expected_input=genome_path,
         )
-    phase3_predictions = output_dir / "phase3_synthesis" / "virosync_predictions.tsv"
-    refined_bed = output_dir / "phase2" / "refined_boundaries.bed"
     validated_hits_tsv = output_dir / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 
     if resume and completed_artifacts is not None:
@@ -1586,14 +1408,9 @@ def _single_genome_flow_impl(
             "promoted_low_rows",
             resume_counts["low_tier"],
         )
-        observed_result = {
-            key: observed_result.get(key) for key in expected_result
-        }
+        observed_result = {key: observed_result.get(key) for key in expected_result}
         if observed_result != expected_result:
-            logger.warning(
-                "Resume: persisted result counts disagree with authenticated "
-                "outputs; invalidating the run."
-            )
+            logger.warning("Resume: persisted result counts disagree with authenticated outputs; invalidating the run.")
             invalidate_from_phase(output_dir, from_phase=0)
             completed_artifacts = None
         if completed_artifacts is not None:
@@ -1609,16 +1426,11 @@ def _single_genome_flow_impl(
                 **resume_counts,
             }
 
-    resume_plan = (
-        plan_resume(output_dir, expected_run_fingerprint=run_fingerprint)
-        if resume
-        else None
-    )
+    resume_plan = plan_resume(output_dir, expected_run_fingerprint=run_fingerprint) if resume else None
     reusable_phases = set(resume_plan.reusable_phases if resume_plan else ())
     restart_phase = resume_plan.restart_phase if resume_plan else 0
     recoverable_completion = resume_plan is not None and (
-        resume_plan.terminal_phase is not None
-        or restart_phase == len(PHASE_MARKER_FILENAMES)
+        resume_plan.terminal_phase is not None or restart_phase == len(PHASE_MARKER_FILENAMES)
     )
     if not recoverable_completion and restart_phase < len(PHASE_MARKER_FILENAMES):
         invalidate_from_phase(output_dir, from_phase=restart_phase)
@@ -1649,18 +1461,13 @@ def _single_genome_flow_impl(
             output_dir,
             ablation_id=selected_ablation,
         )
-        final_paths = {
-            artifact.relative_path: output_dir / artifact.relative_path
-            for artifact in final_artifacts
-        }
+        final_paths = {artifact.relative_path: output_dir / artifact.relative_path for artifact in final_artifacts}
 
         def _recovered_path(*relative_paths: str) -> Path:
             for relative_path in relative_paths:
                 if relative_path in final_paths:
                     return final_paths[relative_path]
-            raise ValueError(
-                f"recovered completion is missing one of {relative_paths!r}"
-            )
+            raise ValueError(f"recovered completion is missing one of {relative_paths!r}")
 
         recovered_canonical = _recovered_path(
             "phase3_synthesis/virosync_predictions.tsv",
@@ -1683,13 +1490,9 @@ def _single_genome_flow_impl(
         recovered_statistics = recovered_summary_document.get("statistics")
         if not isinstance(recovered_statistics, dict):
             raise ValueError("recovered ViroSync summary has no statistics object")
-        recovered_promoted_low = recovered_statistics.get(
-            "promoted_low_confidence"
-        )
+        recovered_promoted_low = recovered_statistics.get("promoted_low_confidence")
         if type(recovered_promoted_low) is not int:
-            raise ValueError(
-                "recovered ViroSync summary has no promoted LOW count"
-            )
+            raise ValueError("recovered ViroSync summary has no promoted LOW count")
         benchmark_eligible = _run_benchmark_eligible(output_dir)
         publish_run_success(
             output_dir,
@@ -1735,9 +1538,7 @@ def _single_genome_flow_impl(
 
     # Extract Phase 0 outputs
     masked_path = phase0_result["masked_path"]
-    repeat_regions = phase0_result["repeat_regions"]
     proteome_path = phase0_result["proteome_path"]
-    n_genes = phase0_result["n_genes"]
     phase0_elapsed = phase0_result["elapsed"]
     masking_result = phase0_result["masking_result"]
     if 0 not in reusable_phases:
@@ -1759,78 +1560,27 @@ def _single_genome_flow_impl(
 
     # === PHASE 1: Seeding ===
     phase1_result = _run_phase1_subflow(
-        # Core inputs from Phase 0
         masked_path=masked_path,
         proteome_path=proteome_path,
-        repeat_regions=repeat_regions,
-        # Core identifiers
         output_dir=output_dir,
         genome_id=genome_id,
-        # HMM & Database parameters
-        hmm_database=hmm_database,
-        hmm_allowlist=hmm_allowlist,
-        hmm_chunk_size=hmm_chunk_size,
-        frameshift_screening_enabled=frameshift_screening_enabled,
-        marker_faa_db=marker_faa_db,
-        marker_faa_dir=marker_faa_dir,
-        marker_db=marker_db,
-        faa_dir=faa_dir,
-        gene_taxonomy_faa_db=gene_taxonomy_faa_db,
-        # Taxonomy parameters
-        taxonomy_labels_file=taxonomy_labels_file,
-        host_prefixes=host_prefixes,
-        host_label=host_label,
-        taxonomy_weight_mode=taxonomy_weight_mode,
-        # Host taxonomy deviation parameters
-        host_taxonomy_deviation_enabled=host_taxonomy_deviation_enabled,
-        host_taxonomy_deviation_allow_seeds=host_taxonomy_deviation_allow_seeds,
-        host_taxonomy_deviation_min_token_len=host_taxonomy_deviation_min_token_len,
-        host_taxonomy_deviation_min_tokens=host_taxonomy_deviation_min_tokens,
-        host_taxonomy_deviation_overlap_threshold=host_taxonomy_deviation_overlap_threshold,
-        host_taxonomy_deviation_max_pident=host_taxonomy_deviation_max_pident,
-        host_taxonomy_deviation_max_hits=host_taxonomy_deviation_max_hits,
-        host_taxonomy_deviation_window_bp=host_taxonomy_deviation_window_bp,
-        host_taxonomy_deviation_window_count=host_taxonomy_deviation_window_count,
-        host_taxonomy_deviation_window_seed=host_taxonomy_deviation_window_seed,
-        host_taxonomy_deviation_window_min_markers=host_taxonomy_deviation_window_min_markers,
-        host_taxonomy_deviation_seed_window_bp=host_taxonomy_deviation_seed_window_bp,
-        host_taxonomy_deviation_seed_min_markers=host_taxonomy_deviation_seed_min_markers,
-        marker_validation_top_k=marker_validation_top_k,
-        novel_marker_min_score=novel_marker_min_score,
-        novel_marker_min_coverage=novel_marker_min_coverage,
-        novel_marker_require_cluster=novel_marker_require_cluster,
-        # Region assembly parameters
-        initial_window_bp=initial_window_bp,
-        initial_window_genes=initial_window_genes,
-        min_markers_initial=min_markers_initial,
-        extension_kb=extension_kb,
-        merge_distance=merge_distance,
-        boundary_host_signature_min_token_len=boundary_host_signature_min_token_len,
-        # Workflow configuration
-        rebuild_db=rebuild_db,
-        assembly_mode=assembly_mode,
-        extended_output=extended_output,
-        resume=1 in reusable_phases,
-        # Threading
-        threads=threads,
-        # Search backend
-        search_backend=search_backend,
-        # Logger
+        config=replace(
+            config,
+            execution=replace(config.execution, resume=1 in reusable_phases),
+        ),
         logger=logger,
-        # Resume fingerprint for early-exit completion manifests
         config_fingerprint=config_fingerprint,
         resume_authorized=1 in reusable_phases,
-        ablation_id=selected_ablation,
     )
     report_progress(45, "phase 1 complete")
 
-    # Handle Phase 1 early exit (error or no predictions)
-    if "success" in phase1_result:
-        if phase1_result.get("success") is True:
+    if isinstance(phase1_result, Phase1Terminal):
+        terminal_result = phase1_result.result
+        if terminal_result.get("success") is True:
             ablation_counters = _merge_ablation_counts(
                 ablation_id=selected_ablation,
                 current=ablation_counters,
-                additional=phase1_result.get("ablation_counts"),
+                additional=terminal_result.get("ablation_counts"),
             )
             _write_ablation_events(
                 output_dir,
@@ -1841,26 +1591,25 @@ def _single_genome_flow_impl(
                 output_dir=output_dir,
                 phase=1,
                 run_fingerprint=run_fingerprint,
-                result=phase1_result,
+                result=terminal_result,
                 ablation_id=selected_ablation,
             )
-        return phase1_result
+        return terminal_result
 
-    # Extract Phase 1 outputs
-    merged_seeds = phase1_result["merged_seeds"]
-    validated_markers = phase1_result["validated_markers"]
-    host_signature_model = phase1_result["host_signature_model"]
-    host_signatures = phase1_result["host_signatures"]
-    background = phase1_result["background"]
-    gene_data = phase1_result["gene_data"]
-    host_deviation_summary = phase1_result["host_deviation_summary"]
-    phase1_elapsed = phase1_result["elapsed"]
+    if not isinstance(phase1_result, Phase1Result):
+        raise TypeError(f"unexpected Phase 1 outcome: {type(phase1_result).__name__}")
+    merged_seeds = phase1_result.merged_seeds
+    validated_markers = phase1_result.validated_markers
+    host_signature_model = phase1_result.host_signature_model
+    host_signatures = phase1_result.host_signatures
+    host_deviation_summary = phase1_result.host_deviation_summary
+    phase1_elapsed = phase1_result.elapsed
     host_signature_model_payload = host_signature_model.to_dict() if host_signature_model else None
     if 1 not in reusable_phases:
         ablation_counters = _merge_ablation_counts(
             ablation_id=selected_ablation,
             current=ablation_counters,
-            additional=phase1_result.get("ablation_counts"),
+            additional=phase1_result.ablation_counts,
         )
         _write_ablation_events(
             output_dir,
@@ -1875,10 +1624,10 @@ def _single_genome_flow_impl(
             merged_seeds=merged_seeds,
             masked_path=masked_path,
             proteome_path=proteome_path,
-            taxonomy_labels_file=taxonomy_labels_file,
-            seed_marker_allowlist=seed_marker_allowlist,
-            extended_output=extended_output,
-            export_all_eve_sequences=export_all_eve_sequences,
+            taxonomy_labels_file=databases.taxonomy_labels_file,
+            seed_marker_allowlist=databases.seed_marker_allowlist,
+            extended_output=phase3.extended_output,
+            export_all_eve_sequences=phase3.export_all_eve_sequences,
             logger=logger,
             current_counters=ablation_counters,
         )
@@ -1907,77 +1656,31 @@ def _single_genome_flow_impl(
         threads=threads,
     ):
         phase2_result = _run_phase2_subflow(
-            # Core inputs from Phase 0
             masked_path=masked_path,
             proteome_path=proteome_path,
-            # Core inputs from Phase 1
             merged_seeds=merged_seeds,
             validated_markers=validated_markers,
             host_signature_model=host_signature_model,
-            # Core identifiers
             output_dir=output_dir,
             genome_id=genome_id,
-            # Resume configuration
-            resume=2 in reusable_phases,
-            refined_bed=refined_bed,
-            # Database parameters
-            gene_taxonomy_faa_db=gene_taxonomy_faa_db,
-            marker_db=marker_db,
-            taxonomy_labels_file=taxonomy_labels_file,
-            # Host configuration
-            host_prefixes=host_prefixes,
-            host_label=host_label,
-            high_pident_host_threshold=high_pident_host_threshold,
-            # Phase 2a: Host-signature trimming parameters
-            boundary_host_trim_enabled=boundary_host_trim_enabled,
-            boundary_host_trim_window_bp=boundary_host_trim_window_bp,
-            boundary_host_trim_step_bp=boundary_host_trim_step_bp,
-            boundary_host_trim_max_host_fraction=boundary_host_trim_max_host_fraction,
-            boundary_host_trim_min_viral_fraction=boundary_host_trim_min_viral_fraction,
-            boundary_host_trim_score_threshold=boundary_host_trim_score_threshold,
-            boundary_host_trim_buffer_kb=boundary_host_trim_buffer_kb,
-            boundary_host_trim_min_overlap_score=boundary_host_trim_min_overlap_score,
-            boundary_host_signature_min_token_len=boundary_host_signature_min_token_len,
-            taxonomy_weight_mode=taxonomy_weight_mode,
-            boundary_taxonomy_ml_enabled=boundary_taxonomy_ml_enabled,
-            boundary_taxonomy_ml_model=boundary_taxonomy_ml_model,
-            boundary_taxonomy_ml_threshold=boundary_taxonomy_ml_threshold,
-            boundary_taxonomy_ml_neighbor_window=boundary_taxonomy_ml_neighbor_window,
-            # Phase 2b: Batched Diamond parameters
-            boundary_diamond_flank_genes=boundary_diamond_flank_genes,
-            boundary_diamond_control_sample_size=boundary_diamond_control_sample_size,
-            boundary_diamond_control_min_distance=boundary_diamond_control_min_distance,
-            boundary_diamond_top_k=boundary_diamond_top_k,
-            boundary_diamond_chunk_size=boundary_diamond_chunk_size,
-            boundary_diamond_random_seed=boundary_diamond_random_seed,
-            boundary_diamond_superset_prototype_enabled=(
-                boundary_diamond_superset_prototype_enabled
+            config=replace(
+                config,
+                execution=replace(config.execution, resume=2 in reusable_phases),
             ),
-            # Threading
-            threads=threads,
-            gene_taxonomy_threads=gene_taxonomy_threads,
-            # Output configuration
-            extended_output=extended_output,
-            # Search backend
-            search_backend=search_backend,
-            # Timing reference
             genome_start_time=genome_start_time,
-            # Logger
             logger=logger,
-            # Resume fingerprint for early-exit completion manifests
             config_fingerprint=config_fingerprint,
             resume_authorized=2 in reusable_phases,
-            ablation_id=selected_ablation,
         )
     report_progress(75, "phase 2 complete")
 
-    # Handle Phase 2 early exit (no seeds or no boundaries)
-    if "success" in phase2_result:
-        if phase2_result.get("success") is True:
+    if isinstance(phase2_result, Phase2Terminal):
+        terminal_result = phase2_result.result
+        if terminal_result.get("success") is True:
             ablation_counters = _merge_ablation_counts(
                 ablation_id=selected_ablation,
                 current=ablation_counters,
-                additional=phase2_result.get("ablation_counts"),
+                additional=terminal_result.get("ablation_counts"),
             )
             _write_ablation_events(
                 output_dir,
@@ -1988,25 +1691,24 @@ def _single_genome_flow_impl(
                 output_dir=output_dir,
                 phase=2,
                 run_fingerprint=run_fingerprint,
-                result=phase2_result,
+                result=terminal_result,
                 ablation_id=selected_ablation,
             )
-        return phase2_result
+        return terminal_result
 
-    # Extract Phase 2 outputs
-    refined_boundaries = phase2_result["refined_boundaries"]
-    boundary_taxonomy_map = phase2_result["boundary_taxonomy_map"]
-    boundary_control_stats = phase2_result["boundary_control_stats"]
-    boundary_diamond_query = phase2_result["boundary_diamond_query"]
-    proteome_index = phase2_result["proteome_index"]
-    goto_phase3 = phase2_result["goto_phase3"]
-    boundaries_bed = phase2_result["boundaries_bed"]
-    phase2_elapsed = phase2_result["elapsed"]
+    if not isinstance(phase2_result, Phase2Result):
+        raise TypeError(f"unexpected Phase 2 outcome: {type(phase2_result).__name__}")
+    refined_boundaries = phase2_result.refined_boundaries
+    boundary_taxonomy_map = phase2_result.boundary_taxonomy_map
+    boundary_diamond_query = phase2_result.boundary_diamond_query
+    proteome_index = phase2_result.proteome_index
+    boundaries_bed = phase2_result.boundaries_bed
+    phase2_elapsed = phase2_result.elapsed
     if 2 not in reusable_phases:
         ablation_counters = _merge_ablation_counts(
             ablation_id=selected_ablation,
             current=ablation_counters,
-            additional=phase2_result.get("ablation_counts"),
+            additional=phase2_result.ablation_counts,
         )
         _write_ablation_events(
             output_dir,
@@ -2024,121 +1726,57 @@ def _single_genome_flow_impl(
             phase=2,
             run_fingerprint=run_fingerprint,
             artifacts=_phase_artifacts(output_dir, 2),
-            outcome=phase2_result.get("phase_outcome", "complete"),
+            outcome=phase2_result.phase_outcome,
         )
 
     # === PHASE 3: Evidence Synthesis ===
     phase3_result = _run_phase3_subflow(
-        # Core inputs from Phase 0
         masked_path=masked_path,
         proteome_path=proteome_path,
-        # Core inputs from Phase 1
         validated_markers=validated_markers,
         host_signatures=host_signatures,
-        host_signature_model=host_signature_model,
         host_signature_model_payload=host_signature_model_payload,
-        # Core inputs from Phase 2
         refined_boundaries=refined_boundaries,
         boundary_taxonomy_map=boundary_taxonomy_map,
-        boundary_control_stats=boundary_control_stats,
         boundary_diamond_query=boundary_diamond_query,
         proteome_index=proteome_index,
-        boundaries_bed=boundaries_bed,
         merged_seeds=merged_seeds,
-        # Core identifiers
         output_dir=output_dir,
-        genome_id=genome_id,
-        # Resume configuration
-        resume=False,
+        config=replace(
+            config,
+            execution=replace(config.execution, resume=False),
+        ),
         validated_hits_tsv=validated_hits_tsv,
-        # Database parameters
-        gene_taxonomy_faa_db=gene_taxonomy_faa_db,
-        marker_db=marker_db,
-        marker_faa_db=marker_faa_db,
-        marker_faa_dir=marker_faa_dir,
-        faa_dir=faa_dir,
-        diamond_db=diamond_db,
-        gvclass_db=gvclass_db,
-        hmm_database=hmm_database,
-        viral_structure_db=viral_structure_db,
-        taxonomy_labels_file=taxonomy_labels_file,
-        # Host configuration
-        host_prefixes=host_prefixes,
-        host_label=host_label,
-        high_pident_host_threshold=high_pident_host_threshold,
-        boundary_host_trim_score_threshold=boundary_host_trim_score_threshold,
-        host_signature_evidence_threshold=host_signature_evidence_threshold,
-        boundary_diamond_flank_genes=boundary_diamond_flank_genes,
-        # Verification parameters
-        high_tier_threshold=high_tier_threshold,
-        low_tier_threshold=low_tier_threshold,
-        use_crf_in_final_score=use_crf_in_final_score,
-        priority_marker_list=priority_marker_list,
-        marker_floor_priority_only=marker_floor_priority_only,
-        marker_floor_priority_plus_family=marker_floor_priority_plus_family,
-        marker_floor_priority_multi_family=marker_floor_priority_multi_family,
-        marker_family_bonus_per_family=marker_family_bonus_per_family,
-        marker_multi_family_bonus=marker_multi_family_bonus,
-        enable_phylogenetic=enable_phylogenetic,
-        # Structural analysis parameters
-        skip_structural=skip_structural,
-        use_boltz=use_boltz,
-        boltz_mcp_only=boltz_mcp_only,
-        boltz_use_msa_server=boltz_use_msa_server,
-        boltz_min_seq_len=boltz_min_seq_len,
-        boltz_max_seq_len=boltz_max_seq_len,
-        boltz_no_kernels=boltz_no_kernels,
-        use_tmvec_database=use_tmvec_database,
-        tmvec_require_gpu=tmvec_require_gpu,
-        tmvec_databases=tmvec_databases,
-        tmvec_database_dir=tmvec_database_dir,
-        tmvec_min_score=tmvec_min_score,
-        device=device,
-        # InterProScan parameters
-        interproscan_enabled=interproscan_enabled,
-        interproscan_dir=interproscan_dir,
-        interproscan_keywords=interproscan_keywords,
-        interproscan_threads=interproscan_threads,
-        interproscan_applications=interproscan_applications,
-        # Database rebuild (for Phase 3 fallback)
-        rebuild_db=rebuild_db,
-        # Threading
-        threads=threads,
-        gene_taxonomy_threads=gene_taxonomy_threads,
-        # Logger
         logger=logger,
         resume_authorized=False,
-        ablation_id=selected_ablation,
-        assembly_mode=assembly_mode,
     )
     report_progress(90, "phase 3 complete")
 
     # Release model memory after Phase 3.
     try:
         from virosync.utils.gpu import release_gpu_memory
+
         release_gpu_memory()
     except Exception:
         pass  # Non-critical; best-effort cleanup
 
-    # Extract Phase 3 outputs
-    verification_results = phase3_result["verification_results"]
-    accepted_results = phase3_result["accepted_results"]
-    promoted_low_results = phase3_result.get("promoted_low_results", [])
-    classification_stats = phase3_result["classification_stats"]
-    phase3_elapsed = phase3_result["elapsed"]
-    precomputed_tmvec = phase3_result["precomputed_tmvec"]
+    if not isinstance(phase3_result, Phase3Result):
+        raise TypeError(f"unexpected Phase 3 outcome: {type(phase3_result).__name__}")
+    verification_results = phase3_result.verification_results
+    accepted_results = phase3_result.accepted_results
+    promoted_low_results = phase3_result.promoted_low_results
+    classification_stats = phase3_result.classification_stats
+    phase3_elapsed = phase3_result.elapsed
     ablation_counters = _merge_ablation_counts(
         ablation_id=selected_ablation,
         current=ablation_counters,
-        additional=phase3_result.get("ablation_counts"),
+        additional=phase3_result.ablation_counts,
     )
 
     # Write evidence_graph.json with coherence analyses from all candidates
     from virosync.pipeline.phase3.evidence_graph import write_evidence_graph_json
 
-    coherence_analyses = [
-        r.coherence_analysis for r in verification_results if r.coherence_analysis
-    ]
+    coherence_analyses = [r.coherence_analysis for r in verification_results if r.coherence_analysis]
     if coherence_analyses:
         evidence_graph_path = output_dir / "phase3_synthesis" / "evidence_graph.json"
         evidence_graph_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2182,9 +1820,9 @@ def _single_genome_flow_impl(
         genome_path=masked_path,
         proteome_path=proteome_path,
         accepted_only=False,
-        extended_output=extended_output,
-        seed_marker_allowlist=seed_marker_allowlist,
-        export_all_eve_sequences=export_all_eve_sequences,
+        extended_output=phase3.extended_output,
+        seed_marker_allowlist=databases.seed_marker_allowlist,
+        export_all_eve_sequences=phase3.export_all_eve_sequences,
         canonical_results=accepted_results,
         promoted_low_results=promoted_low_results,
     )
@@ -2203,9 +1841,7 @@ def _single_genome_flow_impl(
         final_outputs["predictions_detailed"] = str(dst)
 
     gene_taxonomy_all = output_files_all.get("gene_taxonomy_all")
-    gene_taxonomy_all_path = (
-        Path(gene_taxonomy_all) if isinstance(gene_taxonomy_all, (str, Path)) else None
-    )
+    gene_taxonomy_all_path = Path(gene_taxonomy_all) if isinstance(gene_taxonomy_all, (str, Path)) else None
     if gene_taxonomy_all_path is not None and not gene_taxonomy_all_path.exists():
         gene_taxonomy_all_path = None
 
@@ -2224,13 +1860,9 @@ def _single_genome_flow_impl(
     final_outputs["tsv_invariant_report"] = str(invariant_report_path)
 
     if invariant_report.warning_count:
-        preview = "; ".join(
-            f"{issue.eve_id}:{issue.check}"
-            for issue in invariant_report.warning_issues[:5]
-        )
+        preview = "; ".join(f"{issue.eve_id}:{issue.check}" for issue in invariant_report.warning_issues[:5])
         logger.warning(
-            "Detailed TSV invariant check passed with warnings: "
-            "rows=%d warnings=%d (%s)",
+            "Detailed TSV invariant check passed with warnings: rows=%d warnings=%d (%s)",
             invariant_report.rows_checked,
             invariant_report.warning_count,
             preview if preview else "no preview",
@@ -2242,7 +1874,7 @@ def _single_genome_flow_impl(
             invariant_report.issue_count,
         )
 
-    in_memory_accepted = int(phase3_result["accepted"])
+    in_memory_accepted = phase3_result.accepted
     if in_memory_accepted != len(accepted_results):
         raise RuntimeError(
             "in-memory Phase 3 accepted count disagrees with accepted results: "
@@ -2287,31 +1919,31 @@ def _single_genome_flow_impl(
         final_outputs["eve_fasta"] = str(eve_fasta)
 
     # 3. GVClass results (if enabled)
-    gvclass_results_path = None
-    if run_gvclass and gvclass_path:
+    if phase3.run_gvclass and phase3.gvclass_path:
         from virosync.pipeline.phase3.gvclass_runner import (
             load_gvclass_id_map,
             parse_gvclass_results,
             run_gvclass_batch,
             write_gvclass_results_tsv,
         )
+
         gvclass_input = candidate_output_dir / "gvclass_input" / "nucleotide"
         if gvclass_input.exists() and list(gvclass_input.glob("*.fna")):
             logger.info(f"Running GVClass on {len(list(gvclass_input.glob('*.fna')))} EVE sequences")
             gvclass_out = candidate_output_dir / "gvclass_output"
             summary = run_gvclass_batch(
-                gvclass_input, gvclass_out, Path(gvclass_path),
-                threads=threads, gvclass_db=gvclass_db
+                gvclass_input,
+                gvclass_out,
+                phase3.gvclass_path,
+                threads=threads,
+                gvclass_db=databases.gvclass_db,
             )
             if summary:
-                id_map = load_gvclass_id_map(
-                    candidate_output_dir / "gvclass_input" / "manifest.tsv"
-                )
+                id_map = load_gvclass_id_map(candidate_output_dir / "gvclass_input" / "manifest.tsv")
                 results_dict = parse_gvclass_results(summary, id_map=id_map)
                 gvclass_tsv = output_dir / "gvclass_results.tsv"
                 write_gvclass_results_tsv(results_dict, gvclass_tsv)
                 final_outputs["gvclass_results"] = str(gvclass_tsv)
-                gvclass_results_path = gvclass_tsv
                 logger.info(f"GVClass results written: {gvclass_tsv}")
         else:
             logger.warning("GVClass skipped: no EVE sequences found in gvclass_input/nucleotide/")
@@ -2328,7 +1960,7 @@ def _single_genome_flow_impl(
         _generate_required_reports(
             output_dir=output_dir,
             genome_id=genome_id,
-            taxonomy_labels_file=taxonomy_labels_file,
+            taxonomy_labels_file=databases.taxonomy_labels_file,
             logger=logger,
         )
     )
@@ -2354,7 +1986,7 @@ def _single_genome_flow_impl(
     run_log_path = output_dir / "run.log"
     with atomic_write_context(run_log_path, "w") as f:
         f.write(f"# ViroSync Run Log: {genome_id}\n")
-        f.write(f"# Generated: {datetime.now(timezone.utc).isoformat()}\n")
+        f.write(f"# Generated: {datetime.now(UTC).isoformat()}\n")
         f.write(f"# Input: {genome_path}\n")
         f.write(f"# Output: {output_dir}\n")
         f.write(f"# Total time: {total_elapsed:.1f}s\n")
@@ -2395,9 +2027,7 @@ def _single_genome_flow_impl(
                 f.write(f"Report: {invariant_report_path}\n")
             if invariant_report.issue_count:
                 for issue in invariant_report.issues[:10]:
-                    f.write(
-                        f"  {issue.eve_id}\t{issue.check}\t{issue.message}\n"
-                    )
+                    f.write(f"  {issue.eve_id}\t{issue.check}\t{issue.message}\n")
             f.write("\n")
         if host_deviation_summary:
             f.write("## Phase 1 Host-Taxonomy Deviation\n")
@@ -2434,7 +2064,7 @@ def _single_genome_flow_impl(
                 f.write(f"\n### {tier} Confidence ({len(tier_results)})\n")
                 for vr in tier_results:
                     region_bp = vr.end - vr.start
-                    genes = getattr(vr, 'gene_count', 0)
+                    genes = getattr(vr, "gene_count", 0)
                     f.write(f"  {vr.eve_id}: {vr.start}-{vr.end} ({region_bp:,} bp, {genes} genes)\n")
                     f.write(f"    confidence: {vr.final_confidence:.3f}\n")
     logger.info(f"Run log written: {run_log_path}")
@@ -2442,15 +2072,18 @@ def _single_genome_flow_impl(
     # Capture tool/DB/input provenance for reproducibility (best-effort).
     try:
         from virosync.utils.provenance import write_provenance
+
         write_provenance(
             output_dir,
             {
-                "hmm_database": str(hmm_database) if hmm_database else None,
-                "marker_db": str(marker_db) if marker_db else None,
-                "gene_taxonomy_faa_db": str(gene_taxonomy_faa_db) if gene_taxonomy_faa_db else None,
-                "taxonomy_labels": str(taxonomy_labels_file) if taxonomy_labels_file else None,
-                "use_tmvec_database": use_tmvec_database,
-                "use_interproscan": interproscan_enabled,
+                "hmm_database": str(databases.hmm_database) if databases.hmm_database else None,
+                "marker_db": str(databases.marker_db) if databases.marker_db else None,
+                "gene_taxonomy_faa_db": (
+                    str(databases.gene_taxonomy_faa_db) if databases.gene_taxonomy_faa_db else None
+                ),
+                "taxonomy_labels": (str(databases.taxonomy_labels_file) if databases.taxonomy_labels_file else None),
+                "use_tmvec_database": phase3.use_tmvec_database,
+                "use_interproscan": phase3.interproscan_enabled,
                 "masking": masking,
                 "masking_status_path": str(masking_result.status_path),
                 "masking_status_sha256": masking_result.status_sha256,
@@ -2486,17 +2119,13 @@ def _single_genome_flow_impl(
         ablation_id=selected_ablation,
     )
     phase3_artifacts_by_path = {
-        artifact.relative_path: artifact
-        for artifact in (*_phase_artifacts(output_dir, 3), *final_artifacts)
+        artifact.relative_path: artifact for artifact in (*_phase_artifacts(output_dir, 3), *final_artifacts)
     }
     _publish_phase_state(
         output_dir=output_dir,
         phase=3,
         run_fingerprint=run_fingerprint,
-        artifacts=tuple(
-            phase3_artifacts_by_path[path]
-            for path in sorted(phase3_artifacts_by_path)
-        ),
+        artifacts=tuple(phase3_artifacts_by_path[path] for path in sorted(phase3_artifacts_by_path)),
     )
     publish_run_success(
         output_dir,
@@ -2543,33 +2172,33 @@ def single_genome_flow(
     output_dir: Path,
     genome_id: str,
     # Configuration object (recommended - use instead of individual kwargs)
-    config: Optional[PipelineConfig] = None,
+    config: PipelineConfig | None = None,
     ablation_id: str = "A0",
     # Database paths (can override config)
-    hmm_database: Optional[Path] = None,
-    hmm_allowlist: Optional[Path] = None,
-    seed_marker_allowlist: Optional[list[str]] = None,
-    marker_faa_db: Optional[Path] = None,
-    marker_db: Optional[Path] = None,
-    gene_taxonomy_faa_db: Optional[Path] = None,
-    marker_faa_dir: Optional[Path] = None,
-    faa_dir: Optional[Path] = None,
-    gvclass_db: Optional[Path] = None,
-    diamond_db: Optional[Path] = None,
+    hmm_database: Path | None = None,
+    hmm_allowlist: Path | None = None,
+    seed_marker_allowlist: list[str] | None = None,
+    marker_faa_db: Path | None = None,
+    marker_db: Path | None = None,
+    gene_taxonomy_faa_db: Path | None = None,
+    marker_faa_dir: Path | None = None,
+    faa_dir: Path | None = None,
+    gvclass_db: Path | None = None,
+    diamond_db: Path | None = None,
     enable_phylogenetic: bool = False,
     # Taxonomy lookup for host signature comparison
-    taxonomy_labels_file: Optional[Path] = None,
+    taxonomy_labels_file: Path | None = None,
     # Host taxonomy configuration
-    host_prefixes: Optional[list[str]] = None,
+    host_prefixes: list[str] | None = None,
     host_label: str = "EUK",
     high_pident_host_threshold: float = 70.0,
     # Parameters
     threads: int = 8,
-    max_threads: Optional[int] = None,
+    max_threads: int | None = None,
     device: str = "cpu",
     search_backend: str = "diamond",
-    masking: Optional[MaskingConfig] = None,
-    skip_masking: Optional[bool] = None,
+    masking: MaskingConfig | None = None,
+    skip_masking: bool | None = None,
     skip_structural: bool = True,
     use_boltz: bool = False,
     boltz_mcp_only: bool = True,
@@ -2579,33 +2208,33 @@ def single_genome_flow(
     boltz_no_kernels: bool = True,
     use_tmvec_database: bool = False,
     tmvec_require_gpu: bool = False,
-    tmvec_databases: Optional[list[str]] = None,
-    tmvec_database_dir: Optional[Path] = None,
+    tmvec_databases: list[str] | None = None,
+    tmvec_database_dir: Path | None = None,
     tmvec_min_score: float = 0.5,
-    viral_structure_db: Optional[Path] = None,
+    viral_structure_db: Path | None = None,
     assembly_mode: str = "default",
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
     use_crf_in_final_score: bool = False,
-    priority_marker_list: Optional[list[str]] = None,
+    priority_marker_list: list[str] | None = None,
     marker_floor_priority_only: float = 0.55,
     marker_floor_priority_plus_family: float = 0.70,
     marker_floor_priority_multi_family: float = 0.80,
     marker_family_bonus_per_family: float = 0.06,
     marker_multi_family_bonus: float = 0.08,
-    hmm_chunk_size: Optional[int] = None,
+    hmm_chunk_size: int | None = None,
     frameshift_screening_enabled: bool = False,
-    gene_taxonomy_threads: Optional[int] = None,
+    gene_taxonomy_threads: int | None = None,
     interproscan_enabled: bool = False,
-    interproscan_dir: Optional[Path] = None,
-    interproscan_keywords: Optional[list[str]] = None,
-    interproscan_threads: Optional[int] = None,
-    interproscan_applications: Optional[list[str]] = None,
+    interproscan_dir: Path | None = None,
+    interproscan_keywords: list[str] | None = None,
+    interproscan_threads: int | None = None,
+    interproscan_applications: list[str] | None = None,
     extended_output: bool = True,
     export_all_eve_sequences: bool = True,
     # GVClass batch classification
     run_gvclass: bool = False,
-    gvclass_path: Optional[Path] = None,
+    gvclass_path: Path | None = None,
     # HMM-gated workflow options
     rebuild_db: bool = False,
     initial_window_bp: int = 10000,
@@ -2655,10 +2284,9 @@ def single_genome_flow(
     boundary_diamond_random_seed: int = 42,
     boundary_diamond_superset_prototype_enabled: bool = False,
     resume: bool = True,
-    progress_callback: Optional[Callable[[float, str, bool], None]] = None,
+    progress_callback: Callable[[float, str, bool], None] | None = None,
 ) -> dict:
-    """
-    Process a single genome through all ViroSync phases.
+    """Process a single genome through all ViroSync phases.
 
     This function orchestrates:
     - Phase 0: Preprocessing (masking + proteome generation)
@@ -2676,180 +2304,55 @@ def single_genome_flow(
     Returns:
         Dictionary with results summary
     """
-    # Fast path: no config, pass params directly
+    flow_arguments = locals().copy()
+    excluded_arguments = {
+        "config",
+        "genome_path",
+        "output_dir",
+        "genome_id",
+        "progress_callback",
+        "skip_masking",
+    }
+
     if config is None:
         effective_masking = masking or MaskingConfig()
         if skip_masking is not None:
             effective_masking = (
                 effective_masking.with_backend(MaskingBackend.OFF)
                 if skip_masking
-                else effective_masking.with_backend(
-                    MaskingBackend.TRF_REPEATMASKER
-                )
+                else effective_masking.with_backend(MaskingBackend.TRF_REPEATMASKER)
                 if effective_masking.backend is MaskingBackend.OFF
                 else effective_masking
             )
-        return _single_genome_flow_impl(
-            genome_path=genome_path,
-            output_dir=output_dir,
-            genome_id=genome_id,
-            ablation_id=ablation_id,
-            ablation_contract_sha256=ABLATION_CONTRACT_SHA256,
-            hmm_database=hmm_database,
-            hmm_allowlist=hmm_allowlist,
-            seed_marker_allowlist=seed_marker_allowlist,
-            marker_faa_db=marker_faa_db,
-            marker_db=marker_db,
-            gene_taxonomy_faa_db=gene_taxonomy_faa_db,
-            marker_faa_dir=marker_faa_dir,
-            faa_dir=faa_dir,
-            gvclass_db=gvclass_db,
-            diamond_db=diamond_db,
-            enable_phylogenetic=enable_phylogenetic,
-            taxonomy_labels_file=taxonomy_labels_file,
-            host_prefixes=host_prefixes,
-            host_label=host_label,
-            high_pident_host_threshold=high_pident_host_threshold,
-            threads=threads,
-            max_threads=max_threads,
-            device=device,
-            search_backend=search_backend,
-            masking=effective_masking,
-            skip_structural=skip_structural,
-            use_boltz=use_boltz,
-            boltz_mcp_only=boltz_mcp_only,
-            boltz_use_msa_server=boltz_use_msa_server,
-            boltz_min_seq_len=boltz_min_seq_len,
-            boltz_max_seq_len=boltz_max_seq_len,
-            boltz_no_kernels=boltz_no_kernels,
-            use_tmvec_database=use_tmvec_database,
-            tmvec_require_gpu=tmvec_require_gpu,
-            tmvec_databases=tmvec_databases,
-            tmvec_database_dir=tmvec_database_dir,
-            tmvec_min_score=tmvec_min_score,
-            viral_structure_db=viral_structure_db,
-            assembly_mode=assembly_mode,
-            high_tier_threshold=high_tier_threshold,
-            low_tier_threshold=low_tier_threshold,
-            use_crf_in_final_score=use_crf_in_final_score,
-            priority_marker_list=priority_marker_list,
-            marker_floor_priority_only=marker_floor_priority_only,
-            marker_floor_priority_plus_family=marker_floor_priority_plus_family,
-            marker_floor_priority_multi_family=marker_floor_priority_multi_family,
-            marker_family_bonus_per_family=marker_family_bonus_per_family,
-            marker_multi_family_bonus=marker_multi_family_bonus,
-            hmm_chunk_size=hmm_chunk_size,
-            frameshift_screening_enabled=frameshift_screening_enabled,
-            gene_taxonomy_threads=gene_taxonomy_threads,
-            interproscan_enabled=interproscan_enabled,
-            interproscan_dir=interproscan_dir,
-            interproscan_keywords=interproscan_keywords,
-            interproscan_threads=interproscan_threads,
-            interproscan_applications=interproscan_applications,
-            extended_output=extended_output,
-            export_all_eve_sequences=export_all_eve_sequences,
-            run_gvclass=run_gvclass,
-            gvclass_path=gvclass_path,
-            rebuild_db=rebuild_db,
-            initial_window_bp=initial_window_bp,
-            initial_window_genes=initial_window_genes,
-            min_markers_initial=min_markers_initial,
-            extension_kb=extension_kb,
-            merge_distance=merge_distance,
-            host_taxonomy_deviation_enabled=host_taxonomy_deviation_enabled,
-            host_taxonomy_deviation_allow_seeds=host_taxonomy_deviation_allow_seeds,
-            host_taxonomy_deviation_min_token_len=host_taxonomy_deviation_min_token_len,
-            host_taxonomy_deviation_min_tokens=host_taxonomy_deviation_min_tokens,
-            host_taxonomy_deviation_overlap_threshold=host_taxonomy_deviation_overlap_threshold,
-            host_taxonomy_deviation_max_pident=host_taxonomy_deviation_max_pident,
-            host_taxonomy_deviation_max_hits=host_taxonomy_deviation_max_hits,
-            host_taxonomy_deviation_window_bp=host_taxonomy_deviation_window_bp,
-            host_taxonomy_deviation_window_count=host_taxonomy_deviation_window_count,
-            host_taxonomy_deviation_window_seed=host_taxonomy_deviation_window_seed,
-            host_taxonomy_deviation_window_min_markers=host_taxonomy_deviation_window_min_markers,
-            host_taxonomy_deviation_seed_window_bp=host_taxonomy_deviation_seed_window_bp,
-            host_taxonomy_deviation_seed_min_markers=host_taxonomy_deviation_seed_min_markers,
-            marker_validation_top_k=marker_validation_top_k,
-            novel_marker_min_score=novel_marker_min_score,
-            novel_marker_min_coverage=novel_marker_min_coverage,
-            novel_marker_require_cluster=novel_marker_require_cluster,
-            boundary_host_trim_enabled=boundary_host_trim_enabled,
-            boundary_host_trim_window_bp=boundary_host_trim_window_bp,
-            boundary_host_trim_step_bp=boundary_host_trim_step_bp,
-            boundary_host_trim_max_host_fraction=boundary_host_trim_max_host_fraction,
-            boundary_host_trim_min_viral_fraction=boundary_host_trim_min_viral_fraction,
-            boundary_host_trim_score_threshold=boundary_host_trim_score_threshold,
-            host_signature_evidence_threshold=host_signature_evidence_threshold,
-            boundary_host_trim_buffer_kb=boundary_host_trim_buffer_kb,
-            boundary_host_signature_min_token_len=boundary_host_signature_min_token_len,
-            boundary_host_trim_min_overlap_score=boundary_host_trim_min_overlap_score,
-            boundary_taxonomy_ml_enabled=boundary_taxonomy_ml_enabled,
-            boundary_taxonomy_ml_model=boundary_taxonomy_ml_model,
-            boundary_taxonomy_ml_threshold=boundary_taxonomy_ml_threshold,
-            boundary_taxonomy_ml_neighbor_window=boundary_taxonomy_ml_neighbor_window,
-            taxonomy_weight_mode=taxonomy_weight_mode,
-            boundary_diamond_flank_genes=boundary_diamond_flank_genes,
-            boundary_diamond_control_sample_size=boundary_diamond_control_sample_size,
-            boundary_diamond_control_min_distance=boundary_diamond_control_min_distance,
-            boundary_diamond_top_k=boundary_diamond_top_k,
-            boundary_diamond_chunk_size=boundary_diamond_chunk_size,
-            boundary_diamond_random_seed=boundary_diamond_random_seed,
-            boundary_diamond_superset_prototype_enabled=(
-                boundary_diamond_superset_prototype_enabled
-            ),
-            resume=resume,
-            progress_callback=progress_callback,
+        flow_arguments["masking"] = effective_masking
+        effective_config = _merge_config_with_kwargs(
+            PipelineConfig(),
+            flow_arguments,
+            excluded_arguments,
+            include_none=True,
+        )
+    else:
+        explicit_overrides = _detect_explicit_overrides(
+            signature=inspect.signature(single_genome_flow),
+            passed_kwargs=flow_arguments,
+            exclude_keys=excluded_arguments,
+        )
+        if skip_masking is not None:
+            if "masking" in explicit_overrides:
+                config = config.with_overrides(masking=explicit_overrides.pop("masking"))
+            config = config.with_overrides(skip_masking=skip_masking)
+        effective_config = _merge_config_with_kwargs(
+            config,
+            explicit_overrides,
+            excluded_arguments,
         )
 
-    # Detect explicit overrides (values different from signature defaults)
-    explicit_overrides = _detect_explicit_overrides(
-        signature=inspect.signature(single_genome_flow),
-        passed_kwargs=locals().copy(),
-        exclude_keys={
-            'config',
-            'genome_path',
-            'output_dir',
-            'genome_id',
-            'progress_callback',
-        },
-    )
-    if "skip_masking" in explicit_overrides:
-        if "masking" in explicit_overrides:
-            config = config.with_overrides(
-                masking=explicit_overrides.pop("masking")
-            )
-        config = config.with_overrides(
-            skip_masking=explicit_overrides.pop("skip_masking")
-        )
-
-    # Merge config with explicit overrides
-    merged = _merge_config_with_kwargs(
-        config=config,
-        explicit_kwargs=explicit_overrides,
-        exclude_keys={
-            'config',
-            'genome_path',
-            'output_dir',
-            'genome_id',
-            'progress_callback',
-        },
-    )
-
-    # Filter merged kwargs to match impl signature and fill missing params with defaults
-    filtered = _filter_kwargs_to_signature(
-        kwargs=merged,
-        target_signature=inspect.signature(_single_genome_flow_impl),
-        defaults_signature=inspect.signature(single_genome_flow),
-    )
-    filtered.pop("progress_callback", None)
-
-    # Call implementation with filtered values
     return _single_genome_flow_impl(
         genome_path=genome_path,
         output_dir=output_dir,
         genome_id=genome_id,
+        config=effective_config,
         progress_callback=progress_callback,
-        **filtered,
     )
 
 

@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 
 from virosync.ablation import AblationID, InterventionCounts
+from virosync.orchestration._flows.single_genome.orchestrator import (
+    _write_combined_eve_fasta,
+)
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationStatus
 from virosync.pipeline.phase3.phase1_surface import build_phase1_seed_surface
-from virosync.orchestration._flows.single_genome.orchestrator import (
-    _write_combined_eve_fasta,
-)
 
 
 def _anchor(
@@ -143,10 +143,14 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
     result_b = build_phase1_seed_surface([seed_b]).results[0]
 
     assert result_a.eve_id == result_b.eve_id == "EVE_ctg_5-100"
-    assert result_a.hallmark_genes == result_b.hallmark_genes == [
-        "GVOGm0004",
-        "plv_mcp_1",
-    ]
+    assert (
+        result_a.hallmark_genes
+        == result_b.hallmark_genes
+        == [
+            "GVOGm0004",
+            "plv_mcp_1",
+        ]
+    )
     assert result_a.mcp_gene_ids == result_b.mcp_gene_ids == ["gene-b"]
 
 

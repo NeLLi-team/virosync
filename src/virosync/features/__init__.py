@@ -1,5 +1,4 @@
-"""
-ViroSync Features Module.
+"""ViroSync Features Module.
 
 Provides sequence-based features for EVE detection and characterization.
 
@@ -10,9 +9,9 @@ Modules:
 from .compositional import (
     BackgroundModel,
     WindowFeatures,
-    calculate_kfd,
     calculate_gc_content,
     calculate_gc_deviation,
+    calculate_kfd,
 )
 
 __all__ = [

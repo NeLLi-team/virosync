@@ -19,7 +19,6 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
 )
 from virosync.utils.path_safety import safe_filename_component
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "classify_jelly_roll.py"
 sys.path.insert(0, str(SCRIPT_PATH.parent))
@@ -35,15 +34,10 @@ def _write_inputs(
     marker_hits_path = tmp_path / "validated_marker_hits.tsv"
     marker_hits_path.write_text(
         "query_porf\thmm_target\tvalidation_status\n"
-        + "".join(
-            f"{porf_id}\t{marker}\t{status}\n"
-            for porf_id, marker, status in hits
-        )
+        + "".join(f"{porf_id}\t{marker}\t{status}\n" for porf_id, marker, status in hits)
     )
     sequences_path = tmp_path / "hmm_hit_porfs.faa"
-    sequences_path.write_text(
-        "".join(f">{porf_id}\n{sequence}\n" for porf_id, sequence in sequences)
-    )
+    sequences_path.write_text("".join(f">{porf_id}\n{sequence}\n" for porf_id, sequence in sequences))
     return marker_hits_path, sequences_path
 
 
@@ -175,18 +169,11 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
     assert combined["supported_mcp_count"] == 1
     assert combined["total_mcp"] == 2
     supported_confidence = float(output_rows["valid_djr"]["confidence"])
-    all_confidences = [
-        float(output_rows[porf_id]["confidence"])
-        for porf_id in ("valid_djr", "long_candidate")
-    ]
+    all_confidences = [float(output_rows[porf_id]["confidence"]) for porf_id in ("valid_djr", "long_candidate")]
     assert combined["avg_confidence"] == pytest.approx(sum(all_confidences) / 2)
-    assert combined["confidence_bonus"] == pytest.approx(
-        0.05 * supported_confidence * (1 / combined["total_mcp"])
-    )
+    assert combined["confidence_bonus"] == pytest.approx(0.05 * supported_confidence * (1 / combined["total_mcp"]))
 
-    preexisting = VerificationResult(
-        eve_id="preexisting", scaffold="scaf", start=0, end=1000, has_mcp=True
-    )
+    preexisting = VerificationResult(eve_id="preexisting", scaffold="scaf", start=0, end=1000, has_mcp=True)
     weak_summary = _build_jelly_roll_summary_for_boundary([("weak_mirus", "A")], loaded)
     synthesizer._apply_jelly_roll_summary(preexisting, weak_summary)
     assert preexisting.has_mcp is True
@@ -368,9 +355,7 @@ def test_cli_loads_base_id_and_prefers_exact_nonempty_domain_sequence(tmp_path: 
         "sequence",
     ]
     assert header[7:] == ["mcp_support", "validation_status"]
-    sequence_rows = {
-        row["protein_id"]: row for row in _read_rows(output_path.with_suffix(".with_sequences.tsv"))
-    }
+    sequence_rows = {row["protein_id"]: row for row in _read_rows(output_path.with_suffix(".with_sequences.tsv"))}
     assert sequence_rows["base_only|aa101-480"]["sequence"] == "F" * 520
     assert sequence_rows["both|aa101-480"]["sequence"] == "D" * 80
     assert sequence_rows["both|aa101-480"]["mcp_support"] == "sequence_supported"

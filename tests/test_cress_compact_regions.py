@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.prodigal import GenePrediction
 from virosync.pipeline.phase1.region_assembly import (
     ValidatedMarkerHit,
@@ -19,7 +20,6 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.pipeline.phase2.host_signature_trim import (
     trim_seed_by_host_signature,
 )
-from virosync.pipeline.host_signatures import HostSignatureModel
 
 
 def _marker(
@@ -71,9 +71,7 @@ def _gene(gene: int, start: int, end: int) -> GenePrediction:
 
 def test_cress_marker_requires_paired_identity_support() -> None:
     assert is_identity_qualified_cress_marker(_marker(1, 100, 400))
-    assert not is_identity_qualified_cress_marker(
-        _marker(1, 100, 400, pidents="24.96,70.0")
-    )
+    assert not is_identity_qualified_cress_marker(_marker(1, 100, 400, pidents="24.96,70.0"))
     assert not is_identity_qualified_cress_marker(
         _marker(
             1,
@@ -83,9 +81,7 @@ def test_cress_marker_requires_paired_identity_support() -> None:
             pidents="70.0,24.9",
         )
     )
-    assert not is_identity_qualified_cress_marker(
-        _marker(1, 100, 400, model="VS000791")
-    )
+    assert not is_identity_qualified_cress_marker(_marker(1, 100, 400, model="VS000791"))
 
 
 def test_single_gene_specificity_uses_the_top_hit_target() -> None:
@@ -203,9 +199,7 @@ def test_phase2_does_not_pad_or_cross_merge_cress_seed() -> None:
         extension_genes=5,
     )
 
-    cress_observed = next(
-        seed for seed in observed if seed.predicted_family == "CRESS"
-    )
+    cress_observed = next(seed for seed in observed if seed.predicted_family == "CRESS")
     assert (cress_observed.start, cress_observed.end) == (100, 400)
     assert len(observed) == 2
 
@@ -308,10 +302,7 @@ def test_post_taxonomy_merge_preserves_cress_boundary() -> None:
         proteome_index={},
     )
 
-    assert [
-        (boundary.start, boundary.end, boundary.predicted_family)
-        for boundary in observed
-    ] == [
+    assert [(boundary.start, boundary.end, boundary.predicted_family) for boundary in observed] == [
         (0, 250, "NCLDV"),
         (100, 400, "CRESS"),
     ]

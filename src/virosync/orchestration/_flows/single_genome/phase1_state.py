@@ -20,13 +20,10 @@ from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.utils.atomic_write import atomic_write
 
-
 PHASE1_STATE_FILENAME = "resume_state.json"
 PHASE1_STATE_SCHEMA_VERSION = 1
 PHASE1_STATE_ARTIFACT_TYPE = "virosync.phase1.resume_state"
-PHASE1_STATE_SCHEMA = (
-    f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
-)
+PHASE1_STATE_SCHEMA = f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
 
 _TOP_LEVEL_FIELDS = {
     "artifact_type",
@@ -224,19 +221,13 @@ def _require_boolean(value: object, context: str) -> bool:
 def _require_string_list(value: object, context: str) -> list[str]:
     if not isinstance(value, list):
         raise Phase1StateError(f"{context} must be a list")
-    return [
-        _require_string(item, f"{context}[{index}]")
-        for index, item in enumerate(value)
-    ]
+    return [_require_string(item, f"{context}[{index}]") for index, item in enumerate(value)]
 
 
 def _require_integer_list(value: object, context: str) -> list[int]:
     if not isinstance(value, list):
         raise Phase1StateError(f"{context} must be a list")
-    return [
-        _require_integer(item, f"{context}[{index}]")
-        for index, item in enumerate(value)
-    ]
+    return [_require_integer(item, f"{context}[{index}]") for index, item in enumerate(value)]
 
 
 def _require_string_number_map(
@@ -270,9 +261,7 @@ def _validate_model_fields() -> None:
     for model_type, expected, name in model_fields:
         actual = {item.name for item in fields(model_type)}
         if actual != expected:
-            raise Phase1StateError(
-                f"{name} fields changed without a Phase-1 state schema update"
-            )
+            raise Phase1StateError(f"{name} fields changed without a Phase-1 state schema update")
 
 
 def _marker_to_document(marker: object, index: int) -> dict[str, object]:
@@ -426,8 +415,7 @@ def _host_model_to_document(model: object) -> dict[str, object]:
         if not isinstance(raw_bits, list):
             raise Phase1StateError(f"{context}.token_bits[{key!r}] must be a list")
         token_bits[key] = [
-            _require_finite_float(bit, f"{context}.token_bits[{key!r}][{index}]")
-            for index, bit in enumerate(raw_bits)
+            _require_finite_float(bit, f"{context}.token_bits[{key!r}][{index}]") for index, bit in enumerate(raw_bits)
         ]
     return {
         "token_weights": _require_string_number_map(
@@ -472,8 +460,7 @@ def _host_model_from_document(value: object) -> HostSignatureModel:
         if not isinstance(bits, list):
             raise Phase1StateError(f"{context}.token_bits[{key!r}] must be a list")
         token_bits[key] = [
-            _require_finite_float(bit, f"{context}.token_bits[{key!r}][{index}]")
-            for index, bit in enumerate(bits)
+            _require_finite_float(bit, f"{context}.token_bits[{key!r}][{index}]") for index, bit in enumerate(bits)
         ]
     return HostSignatureModel(
         token_weights=dict(
@@ -518,10 +505,7 @@ def _json_safe_value(value: object, context: str) -> object:
     if isinstance(value, Real):
         return _require_finite_float(value, context)
     if isinstance(value, list):
-        return [
-            _json_safe_value(item, f"{context}[{index}]")
-            for index, item in enumerate(value)
-        ]
+        return [_json_safe_value(item, f"{context}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, dict):
         result: dict[str, object] = {}
         for key, item in value.items():
@@ -566,7 +550,6 @@ def phase1_state_to_document(
     host_deviation_summary: dict[str, object] | None,
 ) -> dict[str, object]:
     """Convert Phase-1 values to the closed JSON-compatible schema."""
-
     _validate_model_fields()
     if isinstance(validated_markers, (str, bytes)) or not isinstance(
         validated_markers,
@@ -580,32 +563,20 @@ def phase1_state_to_document(
         raise Phase1StateError("merged_seeds must be a sequence")
     if not isinstance(host_signatures, set):
         raise Phase1StateError("host_signatures must be a set")
-    signatures = sorted(
-        _require_string(item, "host_signatures item")
-        for item in host_signatures
-    )
+    signatures = sorted(_require_string(item, "host_signatures item") for item in host_signatures)
     return {
         "artifact_type": PHASE1_STATE_ARTIFACT_TYPE,
         "schema_version": PHASE1_STATE_SCHEMA_VERSION,
-        "validated_markers": [
-            _marker_to_document(marker, index)
-            for index, marker in enumerate(validated_markers)
-        ],
-        "merged_seeds": [
-            _seed_to_document(seed, index)
-            for index, seed in enumerate(merged_seeds)
-        ],
+        "validated_markers": [_marker_to_document(marker, index) for index, marker in enumerate(validated_markers)],
+        "merged_seeds": [_seed_to_document(seed, index) for index, seed in enumerate(merged_seeds)],
         "host_signature_model": _host_model_to_document(host_signature_model),
         "host_signatures": signatures,
-        "host_deviation_summary": _host_deviation_to_document(
-            host_deviation_summary
-        ),
+        "host_deviation_summary": _host_deviation_to_document(host_deviation_summary),
     }
 
 
 def phase1_state_from_document(document: object) -> Phase1ResumeState:
     """Validate a decoded JSON document and reconstruct Phase-1 values."""
-
     _validate_model_fields()
     payload = _require_exact_fields(document, _TOP_LEVEL_FIELDS, "phase1 state")
     schema_version = payload["schema_version"]
@@ -614,17 +585,13 @@ def phase1_state_from_document(document: object) -> Phase1ResumeState:
         or not isinstance(schema_version, int)
         or schema_version != PHASE1_STATE_SCHEMA_VERSION
     ):
-        raise Phase1StateError(
-            f"unsupported Phase-1 state schema_version: {schema_version!r}"
-        )
+        raise Phase1StateError(f"unsupported Phase-1 state schema_version: {schema_version!r}")
     artifact_type = _require_string(
         payload["artifact_type"],
         "phase1 state.artifact_type",
     )
     if artifact_type != PHASE1_STATE_ARTIFACT_TYPE:
-        raise Phase1StateError(
-            f"unsupported Phase-1 state artifact_type: {artifact_type!r}"
-        )
+        raise Phase1StateError(f"unsupported Phase-1 state artifact_type: {artifact_type!r}")
     raw_markers = payload["validated_markers"]
     if not isinstance(raw_markers, list):
         raise Phase1StateError("phase1 state.validated_markers must be a list")
@@ -637,25 +604,13 @@ def phase1_state_from_document(document: object) -> Phase1ResumeState:
         "phase1 state.host_signatures",
     )
     if signatures != sorted(set(signatures)):
-        raise Phase1StateError(
-            "phase1 state.host_signatures must be sorted and unique"
-        )
+        raise Phase1StateError("phase1 state.host_signatures must be sorted and unique")
     return Phase1ResumeState(
-        validated_markers=[
-            _marker_from_document(marker, index)
-            for index, marker in enumerate(raw_markers)
-        ],
-        merged_seeds=[
-            _seed_from_document(seed, index)
-            for index, seed in enumerate(raw_seeds)
-        ],
-        host_signature_model=_host_model_from_document(
-            payload["host_signature_model"]
-        ),
+        validated_markers=[_marker_from_document(marker, index) for index, marker in enumerate(raw_markers)],
+        merged_seeds=[_seed_from_document(seed, index) for index, seed in enumerate(raw_seeds)],
+        host_signature_model=_host_model_from_document(payload["host_signature_model"]),
         host_signatures=set(signatures),
-        host_deviation_summary=_host_deviation_to_document(
-            payload["host_deviation_summary"]
-        ),
+        host_deviation_summary=_host_deviation_to_document(payload["host_deviation_summary"]),
     )
 
 
@@ -684,7 +639,6 @@ def write_phase1_state(
     host_deviation_summary: dict[str, object] | None,
 ) -> None:
     """Atomically write exact Phase-1 resume state as canonical JSON."""
-
     document = phase1_state_to_document(
         validated_markers=validated_markers,
         merged_seeds=merged_seeds,
@@ -707,7 +661,6 @@ def write_phase1_state(
 
 def load_phase1_state(path: str | Path) -> Phase1ResumeState:
     """Load and strictly validate a Phase-1 resume-state JSON artifact."""
-
     state_path = Path(path)
     try:
         content = state_path.read_text(encoding="utf-8")

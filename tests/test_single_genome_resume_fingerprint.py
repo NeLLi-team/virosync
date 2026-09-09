@@ -15,12 +15,17 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from test_single_genome_resume import (
+    _publish_schema3_success as _publish_closed_schema3_success,
+)
+from test_single_genome_resume import (
+    _start_schema3_run,
+)
 
 import virosync.output_contract as output_contract
 from virosync.ablation import ABLATION_CONTRACT_SHA256
-from virosync.config import MaskingBackend, MaskingConfig
+from virosync.config import MaskingBackend, MaskingConfig, PipelineConfig
 from virosync.config.pipeline_config import FIELD_SPECS
-from virosync.pipeline.phase0.masking import mask_genome_pipeline
 from virosync.orchestration._flows.single_genome import (
     orchestrator as orchestrator_module,
 )
@@ -53,10 +58,7 @@ from virosync.orchestration._flows.single_genome.run_state import (
     canonical_sha256,
     compute_run_fingerprint,
 )
-from test_single_genome_resume import (
-    _publish_schema3_success as _publish_closed_schema3_success,
-    _start_schema3_run,
-)
+from virosync.pipeline.phase0.masking import mask_genome_pipeline
 
 
 def _seed_outputs(output_dir: Path) -> None:
@@ -64,9 +66,7 @@ def _seed_outputs(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "virosync_predictions.tsv").write_text("eve_id\n")
     (output_dir / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (output_dir / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n"
-    )
+    (output_dir / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nGEVEs detected: 0\n")
     _seed_masking_status(output_dir)
 
 
@@ -103,9 +103,7 @@ def _run_identity(
     if environment is None:
         environment_payload = {
             "lock_sha256": digest,
-            "runtime_sha256": canonical_sha256(
-                {"seed": seed, "kind": "runtime"}
-            ),
+            "runtime_sha256": canonical_sha256({"seed": seed, "kind": "runtime"}),
             "requested_device": "cpu",
             "effective_device": "cpu",
         }
@@ -131,14 +129,10 @@ def _run_identity(
             else coordinate_schema_version
         ),
         "coordinate_convention": (
-            output_contract.COORDINATE_CONVENTION
-            if coordinate_convention is None
-            else coordinate_convention
+            output_contract.COORDINATE_CONVENTION if coordinate_convention is None else coordinate_convention
         ),
         "output_schema_version": (
-            output_contract.OUTPUT_SCHEMA_VERSION
-            if output_schema_version is None
-            else output_schema_version
+            output_contract.OUTPUT_SCHEMA_VERSION if output_schema_version is None else output_schema_version
         ),
         "summary_schema_version": summary_schema_version,
         "requested_masking": _masking_request_identity(MaskingConfig()),
@@ -154,6 +148,7 @@ def _publish_schema3_success(output_dir: Path, *, seed: str = "demo") -> str:
 
 
 # --- A1: missing fingerprint => stale unless legacy opt-in --------------------
+
 
 def test_resume_missing_fingerprint_is_stale_under_expected(tmp_path: Path) -> None:
     _seed_outputs(tmp_path)
@@ -228,6 +223,7 @@ def test_schema2_without_expected_fingerprint_is_default_stale(tmp_path: Path) -
 
 # --- A2: every completion path writes the fingerprint ------------------------
 
+
 def test_write_empty_run_log_records_fingerprint(tmp_path: Path) -> None:
     (tmp_path / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
     _seed_masking_status(tmp_path)
@@ -288,9 +284,7 @@ def test_output_contract_identity_changes_fingerprint(
     changed_identity = dict(baseline_identity)
     changed_identity[field] = new_value
 
-    assert compute_run_fingerprint(changed_identity) != compute_run_fingerprint(
-        baseline_identity
-    )
+    assert compute_run_fingerprint(changed_identity) != compute_run_fingerprint(baseline_identity)
 
 
 def test_noncanonical_coordinate_convention_is_rejected() -> None:
@@ -326,9 +320,7 @@ def test_ablation_id_changes_config_and_full_run_fingerprints() -> None:
     ablated_identity["config"]["ablation_id"] = "A6"
 
     assert baseline_config != ablated_config
-    assert compute_run_fingerprint(baseline_identity) != compute_run_fingerprint(
-        ablated_identity
-    )
+    assert compute_run_fingerprint(baseline_identity) != compute_run_fingerprint(ablated_identity)
 
 
 @pytest.mark.parametrize(
@@ -392,9 +384,9 @@ def test_environment_device_change_changes_full_run_fingerprint(tmp_path: Path) 
         )
     )
 
-    assert compute_run_fingerprint(
-        _run_identity(environment=cpu)
-    ) != compute_run_fingerprint(_run_identity(environment=cuda))
+    assert compute_run_fingerprint(_run_identity(environment=cpu)) != compute_run_fingerprint(
+        _run_identity(environment=cuda)
+    )
 
 
 def test_same_path_same_size_input_mutation_changes_full_run_fingerprint(
@@ -410,9 +402,7 @@ def test_same_path_same_size_input_mutation_changes_full_run_fingerprint(
     before_identity["input"] = before
     after_identity = _run_identity()
     after_identity["input"] = after
-    assert compute_run_fingerprint(before_identity) != compute_run_fingerprint(
-        after_identity
-    )
+    assert compute_run_fingerprint(before_identity) != compute_run_fingerprint(after_identity)
 
 
 def test_same_size_installed_source_mutation_changes_full_run_fingerprint(
@@ -430,9 +420,7 @@ def test_same_size_installed_source_mutation_changes_full_run_fingerprint(
     before_identity["code"] = before
     after_identity = _run_identity()
     after_identity["code"] = after
-    assert compute_run_fingerprint(before_identity) != compute_run_fingerprint(
-        after_identity
-    )
+    assert compute_run_fingerprint(before_identity) != compute_run_fingerprint(after_identity)
 
 
 def test_code_identity_reads_source_on_each_call(
@@ -574,9 +562,7 @@ def test_phylo_db_identity_gated_on_enable_phylogenetic(tmp_path: Path) -> None:
         {"gvclass_db": None, "enable_phylogenetic": False, "run_gvclass": False}
     )
     assert off_with_db == off_no_db  # path ignored while phylo is off
-    on_with_db = _run_fingerprint_with_resources(
-        {"gvclass_db": db, "enable_phylogenetic": True, "run_gvclass": False}
-    )
+    on_with_db = _run_fingerprint_with_resources({"gvclass_db": db, "enable_phylogenetic": True, "run_gvclass": False})
     assert on_with_db != off_with_db
 
 
@@ -585,19 +571,11 @@ def test_tmvec_database_dir_gated_on_use_tmvec_database(tmp_path: Path) -> None:
     dbdir.mkdir()
     (dbdir / "tmvec.dmnd").write_bytes(b"tmvec")
     # off: tmvec dir change is invisible
-    off_a = _run_fingerprint_with_resources(
-        {"tmvec_database_dir": dbdir, "use_tmvec_database": False}
-    )
-    off_b = _run_fingerprint_with_resources(
-        {"tmvec_database_dir": None, "use_tmvec_database": False}
-    )
+    off_a = _run_fingerprint_with_resources({"tmvec_database_dir": dbdir, "use_tmvec_database": False})
+    off_b = _run_fingerprint_with_resources({"tmvec_database_dir": None, "use_tmvec_database": False})
     assert off_a == off_b
-    on_db = _run_fingerprint_with_resources(
-        {"tmvec_database_dir": dbdir, "use_tmvec_database": True}
-    )
-    on_none = _run_fingerprint_with_resources(
-        {"tmvec_database_dir": None, "use_tmvec_database": True}
-    )
+    on_db = _run_fingerprint_with_resources({"tmvec_database_dir": dbdir, "use_tmvec_database": True})
+    on_none = _run_fingerprint_with_resources({"tmvec_database_dir": None, "use_tmvec_database": True})
     assert on_db != on_none
 
 
@@ -615,16 +593,12 @@ def test_viral_structure_db_gated_by_use_boltz(tmp_path: Path) -> None:
     db.write_bytes(b"s" * 30)
     base = {"use_boltz": True}
     with_db = _run_fingerprint_with_resources({**base, "viral_structure_db": db})
-    without_db = _run_fingerprint_with_resources(
-        {**base, "viral_structure_db": None}
-    )
+    without_db = _run_fingerprint_with_resources({**base, "viral_structure_db": None})
     assert with_db != without_db
 
 
 def _run_fingerprint_for_identity_items(items) -> str:
-    return compute_run_fingerprint(
-        _run_identity(resources=[asdict(item) for item in items])
-    )
+    return compute_run_fingerprint(_run_identity(resources=[asdict(item) for item in items]))
 
 
 def _identity_digest(items, name: str) -> str | None:
@@ -666,12 +640,8 @@ def test_gvclass_path_executable_is_feature_gated_and_content_bound(
     )
 
     assert _identity_digest(off_before, "executable:gvclass") is None
-    assert _run_fingerprint_for_identity_items(off_before) == (
-        _run_fingerprint_for_identity_items(off_after)
-    )
-    assert _identity_digest(on_before, "executable:gvclass") != (
-        _identity_digest(on_after, "executable:gvclass")
-    )
+    assert _run_fingerprint_for_identity_items(off_before) == (_run_fingerprint_for_identity_items(off_after))
+    assert _identity_digest(on_before, "executable:gvclass") != (_identity_digest(on_after, "executable:gvclass"))
 
 
 def test_gvclass_batch_executable_is_run_gvclass_gated(
@@ -752,12 +722,8 @@ def test_boltz_executable_is_feature_gated_and_content_bound(
     )
 
     assert _identity_digest(off_before, "executable:boltz") is None
-    assert _run_fingerprint_for_identity_items(off_before) == (
-        _run_fingerprint_for_identity_items(off_after)
-    )
-    assert _identity_digest(on_before, "executable:boltz") != (
-        _identity_digest(on_after, "executable:boltz")
-    )
+    assert _run_fingerprint_for_identity_items(off_before) == (_run_fingerprint_for_identity_items(off_after))
+    assert _identity_digest(on_before, "executable:boltz") != (_identity_digest(on_after, "executable:boltz"))
 
 
 def test_skani_executable_is_always_content_bound(
@@ -781,12 +747,8 @@ def test_skani_executable_is_always_content_bound(
         MaskingConfig(),
     )
 
-    assert _identity_digest(before, "executable:skani") != (
-        _identity_digest(after, "executable:skani")
-    )
-    assert _run_fingerprint_for_identity_items(before) != (
-        _run_fingerprint_for_identity_items(after)
-    )
+    assert _identity_digest(before, "executable:skani") != (_identity_digest(after, "executable:skani"))
+    assert _run_fingerprint_for_identity_items(before) != (_run_fingerprint_for_identity_items(after))
 
 
 def test_tmvec_model_revisions_are_feature_gated_and_fingerprinted(
@@ -810,9 +772,7 @@ def test_tmvec_model_revisions_are_feature_gated_and_fingerprinted(
         after,
         f"model:{tmvec_predictor.LOBSTER_MODEL_ID}",
     )
-    assert _run_fingerprint_for_identity_items(before) != (
-        _run_fingerprint_for_identity_items(after)
-    )
+    assert _run_fingerprint_for_identity_items(before) != (_run_fingerprint_for_identity_items(after))
 
 
 @pytest.mark.parametrize(
@@ -849,27 +809,17 @@ def test_closed_run_identity_invalidates_each_output_surface(
     else:
         changed["requested_masking"]["backend"] = "trf"
 
-    assert compute_run_fingerprint(baseline) != compute_run_fingerprint(
-        changed
-    )
+    assert compute_run_fingerprint(baseline) != compute_run_fingerprint(changed)
 
 
-def test_fingerprint_inputs_are_real_impl_parameters() -> None:
-    """Every fingerprinted flat field must be an actual _single_genome_flow_impl param,
-    else locals() filtering yields None and the field is silently dropped from the hash.
-    """
-    import inspect
-
-    from virosync.orchestration._flows.single_genome.orchestrator import (
-        _single_genome_flow_impl,
-    )
-
-    params = set(inspect.signature(_single_genome_flow_impl).parameters)
-    missing = _FINGERPRINT_INPUT_FIELDS - params
-    assert not missing, f"fingerprint reads non-impl params (silently None): {sorted(missing)}"
+def test_fingerprint_inputs_are_emitted_by_resolved_config() -> None:
+    emitted = set(PipelineConfig().to_flow_kwargs())
+    missing = _FINGERPRINT_INPUT_FIELDS - emitted
+    assert not missing, f"fingerprint reads config fields that are never emitted: {sorted(missing)}"
 
 
 # --- A3 drift guard: every FIELD_SPEC is classified --------------------------
+
 
 def test_fingerprint_allowlist_covers_all_field_specs() -> None:
     all_flats = {spec.flat for spec in FIELD_SPECS}
@@ -887,20 +837,16 @@ def test_fingerprint_allowlist_covers_all_field_specs() -> None:
     }
     assert not overlaps, f"fields belong to multiple identity categories: {overlaps}"
     assert _FINGERPRINT_INPUT_FIELDS == (
-        _FINGERPRINT_CONFIG_FIELDS
-        | _FINGERPRINT_RESOURCE_FIELDS
-        | _FINGERPRINT_ENVIRONMENT_FIELDS
+        _FINGERPRINT_CONFIG_FIELDS | _FINGERPRINT_RESOURCE_FIELDS | _FINGERPRINT_ENVIRONMENT_FIELDS
     )
     unclassified = all_flats - classified
-    assert not unclassified, (
-        "unclassified config knobs (triage in manifest.py): "
-        f"{sorted(unclassified)}"
-    )
+    assert not unclassified, f"unclassified config knobs (triage in manifest.py): {sorted(unclassified)}"
     stale = classified - all_flats
     assert not stale, f"classified fields no longer in FIELD_SPECS: {sorted(stale)}"
 
 
 # --- A4: schema-version backward read + legacy manifests ---------------------
+
 
 def test_v1_manifest_without_fingerprint_honours_legacy_optin(tmp_path: Path) -> None:
     _seed_outputs(tmp_path)
@@ -929,24 +875,26 @@ def test_v1_manifest_without_fingerprint_honours_legacy_optin(tmp_path: Path) ->
 
 def test_unknown_schema_version_rejected(tmp_path: Path) -> None:
     manifest = tmp_path / "virosync_run_complete.json"
-    manifest.write_text(
-        json.dumps({"schema_version": 99, "genome_id": "demo", "status": "success"})
-    )
+    manifest.write_text(json.dumps({"schema_version": 99, "genome_id": "demo", "status": "success"}))
     assert not _valid_completion_manifest(manifest, expected_fingerprint=None)
 
 
 # --- CRITICAL: stale COMPLETED run must wipe phase-level caches, not just the -----
 # --- top-level short-circuit. _manifest_is_stale drives the genome-dir discard. ----
 
+
 def test_manifest_is_stale_detects_completed_run_with_differing_fingerprint(
     tmp_path: Path,
 ) -> None:
     run_fingerprint = _publish_schema3_success(tmp_path)
 
-    assert _manifest_is_stale(
-        tmp_path,
-        expected_fingerprint=canonical_sha256({"different": run_fingerprint}),
-    ) is True
+    assert (
+        _manifest_is_stale(
+            tmp_path,
+            expected_fingerprint=canonical_sha256({"different": run_fingerprint}),
+        )
+        is True
+    )
 
 
 def test_manifest_is_stale_false_for_matching_fingerprint(tmp_path: Path) -> None:
@@ -972,10 +920,13 @@ def test_schema2_manifest_is_default_stale_even_when_fingerprint_matches(
         fingerprint="legacy-fingerprint",
     )
 
-    assert _manifest_is_stale(
-        tmp_path,
-        expected_fingerprint="legacy-fingerprint",
-    ) is True
+    assert (
+        _manifest_is_stale(
+            tmp_path,
+            expected_fingerprint="legacy-fingerprint",
+        )
+        is True
+    )
 
 
 def test_manifest_is_stale_false_for_interrupted_run_without_manifest(tmp_path: Path) -> None:

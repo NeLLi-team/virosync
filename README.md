@@ -1,6 +1,6 @@
 # ViroSync
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
@@ -61,6 +61,6 @@ genome. Each genome directory contains:
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-Current `main` reports software version 1.0.0 and uses resource bundle v1.0.7.
+ViroSync 1.0.1 uses resource bundle v1.0.7.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

@@ -1,23 +1,21 @@
-"""
-Database management utilities for ViroSync.
+"""Database management utilities for ViroSync.
 Handles downloading and validating the reference database bundle.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import math
 import os
-import csv
 import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -51,14 +49,10 @@ TMVEC_EMBEDDING_WIDTH = 512
 TMVEC_MANIFEST_NAME = "TMVEC_MANIFEST.json"
 TMVEC2_BASE_MODEL_ID = "asalam91/lobster_24M"
 TMVEC2_BASE_MODEL_REVISION = "9c36ae05d277e312ac319cbc41b5759472f5bd90"
-TMVEC2_BASE_WEIGHT_SHA256 = (
-    "d80ed1022349db63a51a3ee2ea0ea5f71aa78e36f4a5dd4977ae3da49e6b9aa6"
-)
+TMVEC2_BASE_WEIGHT_SHA256 = "d80ed1022349db63a51a3ee2ea0ea5f71aa78e36f4a5dd4977ae3da49e6b9aa6"
 TMVEC2_HEAD_MODEL_ID = "scikit-bio/TMVec-2"
 TMVEC2_HEAD_MODEL_REVISION = "91fbaaefbacd72ff6bc2f2126e8a0c165b2a9d92"
-TMVEC2_HEAD_WEIGHT_SHA256 = (
-    "7739dc359b62712061ad79f01269b37d96eae0a9e4c810c4d5fbef58eab85302"
-)
+TMVEC2_HEAD_WEIGHT_SHA256 = "7739dc359b62712061ad79f01269b37d96eae0a9e4c810c4d5fbef58eab85302"
 TMVEC2_ARCHITECTURE = {
     "base_embedding_dim": 408,
     "output_dim": TMVEC_EMBEDDING_WIDTH,
@@ -102,12 +96,8 @@ class ViroSyncDatabaseManager:
             "filename": "resources_v1_0_7_runtime.tar.gz",
             "archive_size_bytes": 5_877_324_818,
             "payload_size_bytes": 13_137_477_318,
-            "archive_sha256": (
-                "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
-            ),
-            "manifest_sha256": (
-                "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
-            ),
+            "archive_sha256": ("57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"),
+            "manifest_sha256": ("f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"),
         },
     ]
     DATABASE_VERSION = DATABASE_SOURCES[0]["version"]
@@ -129,7 +119,7 @@ class ViroSyncDatabaseManager:
         return cls._project_root() / "resources" / "virosync"
 
     @classmethod
-    def default_tmvec_path(cls, database_path: Optional[Path] = None) -> Path:
+    def default_tmvec_path(cls, database_path: Path | None = None) -> Path:
         if database_path:
             core_path = Path(database_path)
         else:
@@ -137,7 +127,7 @@ class ViroSyncDatabaseManager:
         return core_path.parent / f"{core_path.name}-optional" / "tmvec"
 
     @classmethod
-    def default_interproscan_path(cls, database_path: Optional[Path] = None) -> Path:
+    def default_interproscan_path(cls, database_path: Path | None = None) -> Path:
         if database_path:
             core_path = Path(database_path)
         else:
@@ -161,12 +151,12 @@ class ViroSyncDatabaseManager:
         component: str,
         version: str,
         source: str,
-        extra: Optional[dict] = None,
+        extra: dict | None = None,
     ) -> None:
         payload = {
             "component": component,
             "version": version,
-            "installed_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "installed_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
             "source": source,
         }
         if extra:
@@ -175,7 +165,7 @@ class ViroSyncDatabaseManager:
             json.dump(payload, handle, indent=2)
 
     @staticmethod
-    def _certifi_ca_bundle() -> Optional[str]:
+    def _certifi_ca_bundle() -> str | None:
         try:
             import certifi
         except ImportError:
@@ -186,7 +176,7 @@ class ViroSyncDatabaseManager:
         return None
 
     @classmethod
-    def _record_for_source(cls, source: str) -> Optional[dict]:
+    def _record_for_source(cls, source: str) -> dict | None:
         normalized = source.replace("file://", "", 1) if source.startswith("file://") else source
         for candidate in cls.DATABASE_SOURCES:
             candidate_source = str(candidate["source"])
@@ -202,10 +192,10 @@ class ViroSyncDatabaseManager:
     @classmethod
     def _resolve_core_source(
         cls,
-        source: Optional[str],
-        version: Optional[str],
-        archive_sha256: Optional[str],
-        manifest_sha256: Optional[str],
+        source: str | None,
+        version: str | None,
+        archive_sha256: str | None,
+        manifest_sha256: str | None,
     ) -> ResourceSource:
         if source is None:
             if not cls.DATABASE_SOURCES:
@@ -217,15 +207,9 @@ class ViroSyncDatabaseManager:
             record = cls._record_for_source(source)
 
         record_version = str(record["version"]) if record is not None else None
-        record_archive_sha = (
-            record.get("archive_sha256") or record.get("sha256")
-            if record is not None
-            else None
-        )
+        record_archive_sha = record.get("archive_sha256") or record.get("sha256") if record is not None else None
         record_manifest_sha = (
-            record.get("manifest_sha256") or record.get("resource_manifest_sha256")
-            if record is not None
-            else None
+            record.get("manifest_sha256") or record.get("resource_manifest_sha256") if record is not None else None
         )
         selected_version = version or record_version
         selected_archive_sha = archive_sha256 or record_archive_sha
@@ -241,8 +225,7 @@ class ViroSyncDatabaseManager:
                 mismatches.append("manifest SHA-256 differs from the pinned source record")
             if mismatches:
                 raise ResourceInstallError(
-                    "Configured core-resource identity conflicts with its source record: "
-                    + "; ".join(mismatches)
+                    "Configured core-resource identity conflicts with its source record: " + "; ".join(mismatches)
                 )
 
         if not selected_version or not selected_archive_sha or not selected_manifest_sha:
@@ -293,8 +276,8 @@ class ViroSyncDatabaseManager:
         cls,
         target_dir: Path,
         source: str,
-        filename: Optional[str] = None,
-        archive_sha256: Optional[str] = None,
+        filename: str | None = None,
+        archive_sha256: str | None = None,
         force: bool = False,
         progress_callback=None,
         payload_preparer=None,
@@ -302,9 +285,7 @@ class ViroSyncDatabaseManager:
     ) -> None:
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         if archive_sha256 is not None and _SHA256_RE.fullmatch(archive_sha256) is None:
-            raise ResourceInstallError(
-                "optional resource archive SHA-256 must be a lowercase 64-character digest"
-            )
+            raise ResourceInstallError("optional resource archive SHA-256 must be a lowercase 64-character digest")
         archive_name = filename or Path(source).name or "resources.tar.gz"
         with tempfile.TemporaryDirectory(
             prefix=f".{target_dir.name}.optional-stage-",
@@ -331,8 +312,7 @@ class ViroSyncDatabaseManager:
                 actual_sha256 = sha256_file(archive_path)
                 if actual_sha256 != archive_sha256:
                     raise ResourceInstallError(
-                        "optional resource archive checksum mismatch: "
-                        f"expected {archive_sha256}, found {actual_sha256}"
+                        f"optional resource archive checksum mismatch: expected {archive_sha256}, found {actual_sha256}"
                     )
             if progress_callback is not None:
                 progress_callback(70, "extracting")
@@ -345,20 +325,14 @@ class ViroSyncDatabaseManager:
             if progress_callback is not None:
                 progress_callback(90, "activating")
             if force:
-                if target_dir.is_symlink() or (
-                    target_dir.exists() and not target_dir.is_dir()
-                ):
+                if target_dir.is_symlink() or (target_dir.exists() and not target_dir.is_dir()):
                     target_dir.unlink()
                 elif target_dir.exists():
                     shutil.rmtree(target_dir)
                 os.rename(payload_path, target_dir)
             else:
-                if target_dir.is_symlink() or (
-                    target_dir.exists() and not target_dir.is_dir()
-                ):
-                    raise ResourceInstallError(
-                        f"Optional resource target is not a directory: {target_dir}"
-                    )
+                if target_dir.is_symlink() or (target_dir.exists() and not target_dir.is_dir()):
+                    raise ResourceInstallError(f"Optional resource target is not a directory: {target_dir}")
                 shutil.copytree(payload_path, target_dir, dirs_exist_ok=True)
             if progress_callback is not None:
                 progress_callback(100, "ready")
@@ -368,8 +342,8 @@ class ViroSyncDatabaseManager:
         cls,
         database_path: Path,
         *,
-        expected_version: Optional[str],
-        expected_manifest_sha256: Optional[str],
+        expected_version: str | None,
+        expected_manifest_sha256: str | None,
         verify_hashes: bool,
         full: bool,
         semantic_runner=None,
@@ -399,18 +373,14 @@ class ViroSyncDatabaseManager:
         if not isinstance(actual_counts, dict):
             actual_counts = dict(actual_counts)
         unavailable_runtime_counts = (
-            {"hmm_index_files", "marker_proteins"}
-            if manifest.bundle_kind == "runtime"
-            else set()
+            {"hmm_index_files", "marker_proteins"} if manifest.bundle_kind == "runtime" else set()
         )
         for key, expected in manifest.semantic_counts.items():
             if key in unavailable_runtime_counts:
                 continue
             actual = actual_counts.get(key)
             if actual != expected:
-                raise ResourceManifestError(
-                    f"semantic count mismatch for {key}: {actual!r} != {expected}"
-                )
+                raise ResourceManifestError(f"semantic count mismatch for {key}: {actual!r} != {expected}")
         return replace(result, full=True)
 
     @classmethod
@@ -418,8 +388,8 @@ class ViroSyncDatabaseManager:
         cls,
         database_path: str | Path,
         *,
-        expected_version: Optional[str] = None,
-        manifest_sha256: Optional[str] = None,
+        expected_version: str | None = None,
+        manifest_sha256: str | None = None,
         full: bool = False,
         semantic_runner=None,
     ) -> ResourceValidationResult:
@@ -436,11 +406,11 @@ class ViroSyncDatabaseManager:
     @classmethod
     def setup_database(
         cls,
-        database_path: Optional[str] = None,
-        source: Optional[str] = None,
-        version: Optional[str] = None,
-        archive_sha256: Optional[str] = None,
-        manifest_sha256: Optional[str] = None,
+        database_path: str | None = None,
+        source: str | None = None,
+        version: str | None = None,
+        archive_sha256: str | None = None,
+        manifest_sha256: str | None = None,
         force: bool = False,
         full: bool = True,
         semantic_runner=None,
@@ -530,10 +500,10 @@ class ViroSyncDatabaseManager:
         cls,
         name: str,
         target_path: Path,
-        source: Optional[str],
+        source: str | None,
         required_files: list[str],
         version: str = "unknown",
-        archive_sha256: Optional[str] = None,
+        archive_sha256: str | None = None,
         force: bool = False,
         progress_callback=None,
     ) -> bool:
@@ -543,22 +513,11 @@ class ViroSyncDatabaseManager:
                 return
             missing = [rel for rel in required_files if not (path / rel).is_file()]
             if missing:
-                raise ResourceInstallError(
-                    f"{name} installation incomplete; missing files: {missing}"
-                )
-            if name == "interproscan" and not os.access(
-                path / "interproscan.sh", os.X_OK
-            ):
-                raise ResourceInstallError(
-                    "InterProScan installation incomplete; interproscan.sh "
-                    "is not executable"
-                )
+                raise ResourceInstallError(f"{name} installation incomplete; missing files: {missing}")
+            if name == "interproscan" and not os.access(path / "interproscan.sh", os.X_OK):
+                raise ResourceInstallError("InterProScan installation incomplete; interproscan.sh is not executable")
 
-        if (
-            name in {"tmvec", "interproscan"}
-            and source is not None
-            and archive_sha256 is None
-        ):
+        if name in {"tmvec", "interproscan"} and source is not None and archive_sha256 is None:
             logger.error("%s archive source requires archive_sha256", name)
             return False
 
@@ -574,11 +533,7 @@ class ViroSyncDatabaseManager:
                     exc,
                 )
                 return False
-            installed_version = (
-                cls.load_tmvec_manifest(target_path)["bundle_version"]
-                if name == "tmvec"
-                else version
-            )
+            installed_version = cls.load_tmvec_manifest(target_path)["bundle_version"] if name == "tmvec" else version
             metadata_path = target_path / "DB_METADATA.json"
             if not metadata_path.exists():
                 cls._write_database_metadata(
@@ -600,20 +555,14 @@ class ViroSyncDatabaseManager:
                 archive_sha256=archive_sha256,
                 force=force,
                 progress_callback=progress_callback,
-                payload_preparer=(
-                    cls._download_tmvec_models if name == "tmvec" else None
-                ),
+                payload_preparer=(cls._download_tmvec_models if name == "tmvec" else None),
                 payload_validator=_validate_payload,
             )
         except Exception as exc:
             logger.error("%s installation failed: %s", name, exc)
             return False
 
-        installed_version = (
-            cls.load_tmvec_manifest(target_path)["bundle_version"]
-            if name == "tmvec"
-            else version
-        )
+        installed_version = cls.load_tmvec_manifest(target_path)["bundle_version"] if name == "tmvec" else version
         cls._write_database_metadata(
             target_path=target_path,
             component=name,
@@ -641,8 +590,7 @@ class ViroSyncDatabaseManager:
         payload_bytes = path.stat().st_size - payload_offset
         if payload_bytes != expected_bytes:
             raise ResourceInstallError(
-                f"TMVec NPY payload size mismatch for {path}: "
-                f"expected {expected_bytes}, found {max(0, payload_bytes)}"
+                f"TMVec NPY payload size mismatch for {path}: expected {expected_bytes}, found {max(0, payload_bytes)}"
             )
         return tuple(shape), dtype
 
@@ -668,9 +616,7 @@ class ViroSyncDatabaseManager:
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ResourceInstallError(
-                f"cannot read {manifest_path} before model download: {exc}"
-            ) from exc
+            raise ResourceInstallError(f"cannot read {manifest_path} before model download: {exc}") from exc
         model = payload.get("model") if isinstance(payload, dict) else None
         if not isinstance(model, dict) or model.get("family") != "tmvec2":
             raise ResourceInstallError("TMVec bundle does not declare model.family=tmvec2")
@@ -696,14 +642,8 @@ class ViroSyncDatabaseManager:
         resolved_root = root.resolve()
         for label, (model_id, revision, required_names) in contracts.items():
             section = model.get(label)
-            if (
-                not isinstance(section, dict)
-                or section.get("id") != model_id
-                or section.get("revision") != revision
-            ):
-                raise ResourceInstallError(
-                    f"TMVec bundle must pin {model_id}@{revision} before model download"
-                )
+            if not isinstance(section, dict) or section.get("id") != model_id or section.get("revision") != revision:
+                raise ResourceInstallError(f"TMVec bundle must pin {model_id}@{revision} before model download")
             files = section.get("files")
             if not isinstance(files, list) or not files:
                 raise ResourceInstallError(f"model.{label}.files must be a non-empty list")
@@ -712,55 +652,33 @@ class ViroSyncDatabaseManager:
                 for item in files
                 if isinstance(item, dict) and isinstance(item.get("path"), str)
             ]
-            if len(declared_names) != len(required_names) or set(
-                declared_names
-            ) != required_names:
+            if len(declared_names) != len(required_names) or set(declared_names) != required_names:
                 raise ResourceInstallError(
-                    f"model.{label}.files must contain exactly: "
-                    + ", ".join(sorted(required_names))
+                    f"model.{label}.files must contain exactly: " + ", ".join(sorted(required_names))
                 )
             for index, item in enumerate(files):
                 if not isinstance(item, dict):
-                    raise ResourceInstallError(
-                        f"model.{label}.files[{index}] must be a mapping"
-                    )
+                    raise ResourceInstallError(f"model.{label}.files[{index}] must be a mapping")
                 relative_text = item.get("path")
                 sha256 = item.get("sha256")
                 if not isinstance(relative_text, str) or not relative_text:
-                    raise ResourceInstallError(
-                        f"model.{label}.files[{index}].path must be a relative path"
-                    )
+                    raise ResourceInstallError(f"model.{label}.files[{index}].path must be a relative path")
                 relative = Path(relative_text)
                 expected_dir = "lobster_24M" if label == "base" else "tmvec-2"
-                if (
-                    relative.is_absolute()
-                    or ".." in relative.parts
-                    or relative.parent != Path("models") / expected_dir
-                ):
-                    raise ResourceInstallError(
-                        f"model.{label} file has an invalid bundle path: {relative_text}"
-                    )
+                if relative.is_absolute() or ".." in relative.parts or relative.parent != Path("models") / expected_dir:
+                    raise ResourceInstallError(f"model.{label} file has an invalid bundle path: {relative_text}")
                 target = (root / relative).resolve()
                 if not target.is_relative_to(resolved_root):
-                    raise ResourceInstallError(
-                        f"model.{label} file resolves outside the bundle: {relative_text}"
-                    )
+                    raise ResourceInstallError(f"model.{label} file resolves outside the bundle: {relative_text}")
                 if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
-                    raise ResourceInstallError(
-                        f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256"
-                    )
+                    raise ResourceInstallError(f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256")
                 if target.is_file() and sha256_file(target) == sha256:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                source = (
-                    f"https://huggingface.co/{model_id}/resolve/{revision}/"
-                    f"{relative.name}?download=true"
-                )
+                source = f"https://huggingface.co/{model_id}/resolve/{revision}/{relative.name}?download=true"
                 cls._copy_or_download_archive(source, target)
                 if sha256_file(target) != sha256:
-                    raise ResourceInstallError(
-                        f"downloaded TMVec model checksum mismatch: {target}"
-                    )
+                    raise ResourceInstallError(f"downloaded TMVec model checksum mismatch: {target}")
 
     @classmethod
     def load_tmvec_manifest(
@@ -768,7 +686,7 @@ class ViroSyncDatabaseManager:
         tmvec_root: str | Path,
         *,
         verify_hashes: bool = False,
-        databases: Optional[list[str]] = None,
+        databases: list[str] | None = None,
     ) -> dict:
         """Load and validate one model-bound TMVec2 resource manifest."""
         root = Path(tmvec_root).expanduser()
@@ -782,21 +700,21 @@ class ViroSyncDatabaseManager:
         except ResourceInstallError:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ResourceInstallError(
-                f"cannot read {manifest_path}: {exc}"
-            ) from exc
+            raise ResourceInstallError(f"cannot read {manifest_path}: {exc}") from exc
         if not isinstance(payload, dict):
             raise ResourceInstallError(f"{manifest_path} must contain a JSON object")
         if payload.get("schema_version") != 1:
             raise ResourceInstallError("TMVec manifest schema_version must be 1")
         bundle_version = payload.get("bundle_version")
-        if not isinstance(bundle_version, str) or re.fullmatch(
-            r"v[0-9]+\.[0-9]+\.[0-9]+",
-            bundle_version,
-        ) is None:
-            raise ResourceInstallError(
-                "TMVec manifest bundle_version must have the form vMAJOR.MINOR.PATCH"
+        if (
+            not isinstance(bundle_version, str)
+            or re.fullmatch(
+                r"v[0-9]+\.[0-9]+\.[0-9]+",
+                bundle_version,
             )
+            is None
+        ):
+            raise ResourceInstallError("TMVec manifest bundle_version must have the form vMAJOR.MINOR.PATCH")
 
         model = payload.get("model")
         if not isinstance(model, dict) or model.get("family") != "tmvec2":
@@ -808,15 +726,13 @@ class ViroSyncDatabaseManager:
             actual = architecture.get(name)
             if type(actual) is not type(expected) or actual != expected:
                 raise ResourceInstallError(
-                    f"TMVec2 architecture mismatch for {name}: "
-                    f"expected {expected!r}, found {actual!r}"
+                    f"TMVec2 architecture mismatch for {name}: expected {expected!r}, found {actual!r}"
                 )
         if set(architecture) != set(TMVEC2_ARCHITECTURE):
             unexpected = sorted(set(architecture) - set(TMVEC2_ARCHITECTURE))
             missing = sorted(set(TMVEC2_ARCHITECTURE) - set(architecture))
             raise ResourceInstallError(
-                "TMVec2 architecture keys differ from the release contract: "
-                f"missing={missing}, unexpected={unexpected}"
+                f"TMVec2 architecture keys differ from the release contract: missing={missing}, unexpected={unexpected}"
             )
 
         model_contracts = {
@@ -842,28 +758,20 @@ class ViroSyncDatabaseManager:
             ),
         }
         manifest_members: set[str] = set()
-        for label, (model_id, revision, weight_path, weight_sha, required_names) in (
-            model_contracts.items()
-        ):
+        for label, (model_id, revision, weight_path, weight_sha, required_names) in model_contracts.items():
             section = model.get(label)
             if not isinstance(section, dict):
                 raise ResourceInstallError(f"TMVec manifest model.{label} must be a mapping")
             if section.get("id") != model_id or section.get("revision") != revision:
-                raise ResourceInstallError(
-                    f"TMVec manifest model.{label} must pin {model_id}@{revision}"
-                )
+                raise ResourceInstallError(f"TMVec manifest model.{label} must pin {model_id}@{revision}")
             files = section.get("files")
             if not isinstance(files, list) or not files:
-                raise ResourceInstallError(
-                    f"TMVec manifest model.{label}.files must be a non-empty list"
-                )
+                raise ResourceInstallError(f"TMVec manifest model.{label}.files must be a non-empty list")
             names: set[str] = set()
             weight_verified = False
             for index, item in enumerate(files):
                 if not isinstance(item, dict):
-                    raise ResourceInstallError(
-                        f"TMVec manifest model.{label}.files[{index}] must be a mapping"
-                    )
+                    raise ResourceInstallError(f"TMVec manifest model.{label}.files[{index}] must be a mapping")
                 relative = item.get("path")
                 sha256 = item.get("sha256")
                 member = cls._tmvec_member(
@@ -874,36 +782,25 @@ class ViroSyncDatabaseManager:
                 relative_text = str(relative)
                 prefix = f"models/{'lobster_24M' if label == 'base' else 'tmvec-2'}/"
                 if not relative_text.startswith(prefix):
-                    raise ResourceInstallError(
-                        f"model.{label} file must be under {prefix}: {relative_text}"
-                    )
+                    raise ResourceInstallError(f"model.{label} file must be under {prefix}: {relative_text}")
                 if relative_text in manifest_members:
-                    raise ResourceInstallError(
-                        f"TMVec manifest lists a file more than once: {relative_text}"
-                    )
+                    raise ResourceInstallError(f"TMVec manifest lists a file more than once: {relative_text}")
                 manifest_members.add(relative_text)
                 names.add(Path(relative_text).name)
                 if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
-                    raise ResourceInstallError(
-                        f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256"
-                    )
+                    raise ResourceInstallError(f"model.{label}.files[{index}].sha256 must be a lowercase SHA-256")
                 if relative_text == weight_path:
                     if sha256 != weight_sha:
-                        raise ResourceInstallError(
-                            f"{weight_path} does not match the pinned upstream SHA-256"
-                        )
+                        raise ResourceInstallError(f"{weight_path} does not match the pinned upstream SHA-256")
                     weight_verified = True
                 if verify_hashes and sha256_file(member) != sha256:
                     raise ResourceInstallError(f"TMVec file checksum mismatch: {member}")
             if names != required_names:
                 raise ResourceInstallError(
-                    f"model.{label}.files must contain exactly: "
-                    + ", ".join(sorted(required_names))
+                    f"model.{label}.files must contain exactly: " + ", ".join(sorted(required_names))
                 )
             if not weight_verified:
-                raise ResourceInstallError(
-                    f"model.{label}.files must include {weight_path}"
-                )
+                raise ResourceInstallError(f"model.{label}.files must include {weight_path}")
 
         smoke = payload.get("smoke_query")
         if not isinstance(smoke, dict):
@@ -919,15 +816,11 @@ class ViroSyncDatabaseManager:
             or len(sequence) > TMVEC2_ARCHITECTURE["max_sequence_length"]
             or re.fullmatch(r"[A-Z]+", sequence) is None
         ):
-            raise ResourceInstallError(
-                "smoke_query.sequence must contain 1-512 uppercase amino-acid letters"
-            )
+            raise ResourceInstallError("smoke_query.sequence must contain 1-512 uppercase amino-acid letters")
         if smoke.get("database") != "bfvd":
             raise ResourceInstallError("smoke_query.database must be 'bfvd'")
         if not isinstance(expected_target_id, str) or not expected_target_id:
-            raise ResourceInstallError(
-                "smoke_query.expected_target_id must be a non-empty string"
-            )
+            raise ResourceInstallError("smoke_query.expected_target_id must be a non-empty string")
         expected_score = smoke.get("expected_score")
         score_tolerance = smoke.get("score_tolerance")
         if (
@@ -945,9 +838,7 @@ class ViroSyncDatabaseManager:
 
         references = smoke.get("reference_embeddings")
         if not isinstance(references, dict) or set(references) != {"cpu", "cuda"}:
-            raise ResourceInstallError(
-                "smoke_query.reference_embeddings must contain cpu and cuda mappings"
-            )
+            raise ResourceInstallError("smoke_query.reference_embeddings must contain cpu and cuda mappings")
         reference_paths: set[str] = set()
         for device_name in ("cpu", "cuda"):
             reference = references[device_name]
@@ -955,9 +846,7 @@ class ViroSyncDatabaseManager:
             if not isinstance(reference, dict):
                 raise ResourceInstallError(f"{label} must be a mapping")
             if reference.get("dimensions") != TMVEC_EMBEDDING_WIDTH:
-                raise ResourceInstallError(
-                    f"{label}.dimensions must be {TMVEC_EMBEDDING_WIDTH}"
-                )
+                raise ResourceInstallError(f"{label}.dimensions must be {TMVEC_EMBEDDING_WIDTH}")
             for tolerance_name in ("atol", "rtol"):
                 tolerance = reference.get(tolerance_name)
                 if (
@@ -965,9 +854,7 @@ class ViroSyncDatabaseManager:
                     or not isinstance(tolerance, (int, float))
                     or not 0.0 <= float(tolerance) <= 1.0
                 ):
-                    raise ResourceInstallError(
-                        f"{label}.{tolerance_name} must be in [0, 1]"
-                    )
+                    raise ResourceInstallError(f"{label}.{tolerance_name} must be in [0, 1]")
             reference_value = reference.get("path")
             reference_path = cls._tmvec_member(
                 root,
@@ -975,48 +862,34 @@ class ViroSyncDatabaseManager:
                 f"{label}.path",
             )
             if reference_value in reference_paths:
-                raise ResourceInstallError(
-                    "CPU and CUDA upstream references must use separate files"
-                )
+                raise ResourceInstallError("CPU and CUDA upstream references must use separate files")
             reference_paths.add(reference_value)
             reference_sha = reference.get("sha256")
-            if (
-                not isinstance(reference_sha, str)
-                or _SHA256_RE.fullmatch(reference_sha) is None
-            ):
-                raise ResourceInstallError(
-                    f"{label}.sha256 must be a lowercase SHA-256"
-                )
+            if not isinstance(reference_sha, str) or _SHA256_RE.fullmatch(reference_sha) is None:
+                raise ResourceInstallError(f"{label}.sha256 must be a lowercase SHA-256")
             reference_shape, reference_dtype = cls._tmvec_npy_header(reference_path)
-            if reference_shape not in {
-                (TMVEC_EMBEDDING_WIDTH,),
-                (1, TMVEC_EMBEDDING_WIDTH),
-            } or reference_dtype.kind not in "f":
-                raise ResourceInstallError(
-                    f"{label} must be a 512-value floating NPY array"
-                )
+            if (
+                reference_shape
+                not in {
+                    (TMVEC_EMBEDDING_WIDTH,),
+                    (1, TMVEC_EMBEDDING_WIDTH),
+                }
+                or reference_dtype.kind not in "f"
+            ):
+                raise ResourceInstallError(f"{label} must be a 512-value floating NPY array")
             if verify_hashes and sha256_file(reference_path) != reference_sha:
-                raise ResourceInstallError(
-                    f"TMVec file checksum mismatch: {reference_path}"
-                )
+                raise ResourceInstallError(f"TMVec file checksum mismatch: {reference_path}")
 
         database_payload = payload.get("databases")
         if not isinstance(database_payload, dict) or "bfvd" not in database_payload:
             raise ResourceInstallError("TMVec manifest databases must include bfvd")
-        requested_databases = (
-            list(database_payload) if databases is None else databases
-        )
+        requested_databases = list(database_payload) if databases is None else databases
         unsupported = sorted(set(requested_databases) - set(cls.TMVEC_REQUIRED_FILES))
         if unsupported:
-            raise ResourceInstallError(
-                "unsupported TMVec database key(s): " + ", ".join(unsupported)
-            )
+            raise ResourceInstallError("unsupported TMVec database key(s): " + ", ".join(unsupported))
         absent = sorted(set(requested_databases) - set(database_payload))
         if absent:
-            raise ResourceInstallError(
-                "TMVec manifest does not contain requested database(s): "
-                + ", ".join(absent)
-            )
+            raise ResourceInstallError("TMVec manifest does not contain requested database(s): " + ", ".join(absent))
 
         for name, database in database_payload.items():
             if name not in cls.TMVEC_REQUIRED_FILES or not isinstance(database, dict):
@@ -1030,26 +903,17 @@ class ViroSyncDatabaseManager:
                     "doi": "10.5281/zenodo.13993145",
                     "license": "CC BY 4.0",
                     "license_url": "https://creativecommons.org/licenses/by/4.0/",
-                    "changes": (
-                        "Converted BFVD protein sequences to "
-                        "Lobster-24M/TMVec2 embeddings."
-                    ),
+                    "changes": ("Converted BFVD protein sequences to Lobster-24M/TMVec2 embeddings."),
                 }:
-                    raise ResourceInstallError(
-                        "BFVD attribution must name the official source and CC BY 4.0 license"
-                    )
+                    raise ResourceInstallError("BFVD attribution must name the official source and CC BY 4.0 license")
             resolved_files: dict[str, tuple[Path, dict]] = {}
             for file_kind in ("embeddings", "metadata"):
                 file_info = database.get(file_kind)
                 if not isinstance(file_info, dict):
-                    raise ResourceInstallError(
-                        f"databases.{name}.{file_kind} must be a mapping"
-                    )
+                    raise ResourceInstallError(f"databases.{name}.{file_kind} must be a mapping")
                 rows = file_info.get("rows")
                 if isinstance(rows, bool) or not isinstance(rows, int) or rows < 1:
-                    raise ResourceInstallError(
-                        f"databases.{name}.{file_kind}.rows must be a positive integer"
-                    )
+                    raise ResourceInstallError(f"databases.{name}.{file_kind}.rows must be a positive integer")
                 member = cls._tmvec_member(
                     root,
                     file_info.get("path"),
@@ -1057,9 +921,7 @@ class ViroSyncDatabaseManager:
                 )
                 sha256 = file_info.get("sha256")
                 if not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None:
-                    raise ResourceInstallError(
-                        f"databases.{name}.{file_kind}.sha256 must be a lowercase SHA-256"
-                    )
+                    raise ResourceInstallError(f"databases.{name}.{file_kind}.sha256 must be a lowercase SHA-256")
                 if verify_hashes and sha256_file(member) != sha256:
                     raise ResourceInstallError(f"TMVec file checksum mismatch: {member}")
                 resolved_files[file_kind] = (member, file_info)
@@ -1067,10 +929,7 @@ class ViroSyncDatabaseManager:
             embedding_path, embedding_info = resolved_files["embeddings"]
             embedding_shape, embedding_dtype = cls._tmvec_npy_header(embedding_path)
             expected_rows = embedding_info["rows"]
-            if (
-                embedding_shape != (expected_rows, TMVEC_EMBEDDING_WIDTH)
-                or embedding_dtype.kind not in "iuf"
-            ):
+            if embedding_shape != (expected_rows, TMVEC_EMBEDDING_WIDTH) or embedding_dtype.kind not in "iuf":
                 raise ResourceInstallError(
                     f"databases.{name}.embeddings must have shape "
                     f"({expected_rows}, {TMVEC_EMBEDDING_WIDTH}) with a real numeric dtype"
@@ -1078,9 +937,7 @@ class ViroSyncDatabaseManager:
 
             metadata_path, metadata_info = resolved_files["metadata"]
             if metadata_path.suffix not in {".tsv", ".jsonl"}:
-                raise ResourceInstallError(
-                    f"databases.{name}.metadata must use TSV or JSONL, not pickle"
-                )
+                raise ResourceInstallError(f"databases.{name}.metadata must use TSV or JSONL, not pickle")
             metadata_rows = 0
             found_expected_target = False
             seen_target_ids: set[str] = set()
@@ -1089,11 +946,10 @@ class ViroSyncDatabaseManager:
                     if metadata_path.suffix == ".tsv":
                         records = csv.DictReader(handle, delimiter="\t")
                         if records.fieldnames is None or "id" not in records.fieldnames:
-                            raise ResourceInstallError(
-                                f"databases.{name}.metadata TSV must have an id column"
-                            )
+                            raise ResourceInstallError(f"databases.{name}.metadata TSV must have an id column")
                         record_iter = records
                     else:
+
                         def _jsonl_records():
                             for line_number, line in enumerate(handle, start=1):
                                 if not line.strip():
@@ -1109,49 +965,37 @@ class ViroSyncDatabaseManager:
                                         f"{metadata_path} line {line_number} must be a JSON object"
                                     )
                                 yield item
+
                         record_iter = _jsonl_records()
                     for item in record_iter:
                         target_id = item.get("id")
                         if not isinstance(target_id, str) or not target_id:
-                            raise ResourceInstallError(
-                                f"databases.{name}.metadata contains an empty id"
-                            )
+                            raise ResourceInstallError(f"databases.{name}.metadata contains an empty id")
                         if target_id in seen_target_ids:
-                            raise ResourceInstallError(
-                                f"databases.{name}.metadata contains duplicate id "
-                                f"{target_id!r}"
-                            )
+                            raise ResourceInstallError(f"databases.{name}.metadata contains duplicate id {target_id!r}")
                         seen_target_ids.add(target_id)
                         metadata_rows += 1
                         if name == "bfvd" and target_id == expected_target_id:
                             found_expected_target = True
             except (OSError, UnicodeError) as exc:
-                raise ResourceInstallError(
-                    f"cannot read TMVec metadata {metadata_path}: {exc}"
-                ) from exc
+                raise ResourceInstallError(f"cannot read TMVec metadata {metadata_path}: {exc}") from exc
             if metadata_rows != metadata_info["rows"] or metadata_rows != expected_rows:
                 raise ResourceInstallError(
                     f"databases.{name} row count mismatch: embeddings={expected_rows}, "
                     f"metadata manifest={metadata_info['rows']}, metadata file={metadata_rows}"
                 )
             if name == "bfvd" and not found_expected_target:
-                raise ResourceInstallError(
-                    "smoke_query.expected_target_id is absent from BFVD metadata"
-                )
+                raise ResourceInstallError("smoke_query.expected_target_id is absent from BFVD metadata")
 
         return payload
 
     @classmethod
     def missing_tmvec_files(
         cls,
-        tmvec_root: Optional[str | Path],
-        databases: Optional[list[str]] = None,
+        tmvec_root: str | Path | None,
+        databases: list[str] | None = None,
     ) -> list[str]:
-        root = (
-            Path(tmvec_root).expanduser()
-            if tmvec_root is not None
-            else cls.default_tmvec_path()
-        )
+        root = Path(tmvec_root).expanduser() if tmvec_root is not None else cls.default_tmvec_path()
         try:
             cls.load_tmvec_manifest(
                 root,
@@ -1163,17 +1007,14 @@ class ViroSyncDatabaseManager:
         return []
 
     @classmethod
-    def interproscan_available(cls, interproscan_dir: Optional[str | Path]) -> bool:
+    def interproscan_available(cls, interproscan_dir: str | Path | None) -> bool:
         if interproscan_dir is None:
             return False
         path = Path(interproscan_dir).expanduser()
-        return all(
-            (path / rel).is_file() and os.access(path / rel, os.X_OK)
-            for rel in cls.INTERPROSCAN_REQUIRED_FILES
-        )
+        return all((path / rel).is_file() and os.access(path / rel, os.X_OK) for rel in cls.INTERPROSCAN_REQUIRED_FILES)
 
     @classmethod
-    def default_paths(cls, db_path: Path) -> dict[str, Optional[Path]]:
+    def default_paths(cls, db_path: Path) -> dict[str, Path | None]:
         marker_faa = db_path / "marker" / "marker.faa"
         return {
             "hmm_db": cls.hmm_db_path(db_path),
@@ -1220,7 +1061,7 @@ class ViroSyncDatabaseManager:
     def resolve_config_paths(
         cls,
         config: dict,
-        config_path: Optional[Path] = None,
+        config_path: Path | None = None,
     ) -> dict:
         """Resolve relative paths and auto-fill missing database entries."""
         resolved = dict(config)
@@ -1229,7 +1070,7 @@ class ViroSyncDatabaseManager:
         if env_database_root and not resolved.get("database_root"):
             resolved["database_root"] = env_database_root
 
-        def _abs_path(value: Optional[str | Path]) -> Optional[str]:
+        def _abs_path(value: str | Path | None) -> str | None:
             if value is None:
                 return None
             value_path = Path(value)
@@ -1272,11 +1113,7 @@ class ViroSyncDatabaseManager:
             ("marker_db", resolved.get("marker_db")),
             ("gene_taxonomy_faa_db", resolved.get("gene_taxonomy_faa_db")),
         ]
-        missing = [
-            key
-            for key, value in required_checks
-            if not value or not Path(str(value)).exists()
-        ]
+        missing = [key for key, value in required_checks if not value or not Path(str(value)).exists()]
 
         if missing:
             db_root = resolved.get("database_root")

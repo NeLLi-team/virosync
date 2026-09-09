@@ -59,15 +59,19 @@ def test_validate_hmm_hits_does_not_nameerror_on_happy_path(tmp_path: Path) -> N
         )
     ]
 
-    with patch(
-        "virosync.pipeline.phase1.hhg_seeding.extract_hmm_hit_sequences",
-        side_effect=_fake_extract,
-    ), patch(
-        "virosync.pipeline.phase1.hhg_seeding.run_diamond_on_hmm_hits",
-        side_effect=_fake_run_diamond,
-    ), patch(
-        "virosync.pipeline.phase1.hhg_seeding.filter_validated_markers",
-        return_value=[],
+    with (
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.extract_hmm_hit_sequences",
+            side_effect=_fake_extract,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.run_diamond_on_hmm_hits",
+            side_effect=_fake_run_diamond,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.filter_validated_markers",
+            return_value=[],
+        ),
     ):
         validated_hits, validated_markers = validate_hmm_hits_with_combined_db(
             hits=hits,
@@ -113,15 +117,19 @@ def test_validate_hmm_hits_forwards_optional_genome_fasta(tmp_path: Path) -> Non
         seen_kwargs.update(kwargs)
         return []
 
-    with patch(
-        "virosync.pipeline.phase1.hhg_seeding.extract_hmm_hit_sequences",
-        side_effect=_fake_extract,
-    ), patch(
-        "virosync.pipeline.phase1.hhg_seeding.run_diamond_on_hmm_hits",
-        side_effect=_fake_run_diamond,
-    ), patch(
-        "virosync.pipeline.phase1.hhg_seeding.filter_validated_markers",
-        side_effect=_capture_filter,
+    with (
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.extract_hmm_hit_sequences",
+            side_effect=_fake_extract,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.run_diamond_on_hmm_hits",
+            side_effect=_fake_run_diamond,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.filter_validated_markers",
+            side_effect=_capture_filter,
+        ),
     ):
         validate_hmm_hits_with_combined_db(
             hits=hits,
@@ -149,10 +157,7 @@ def test_filter_uses_prodigal_coordinates_without_reading_genome(tmp_path: Path)
     diamond = tmp_path / "diamond.tsv"
     diamond.write_text("")
     missing_genome = tmp_path / "not-read.fna"
-    hits = [
-        HMMHit(query, "mcp", 120.0, 1e-40, 120.0, 1, 100)
-        for query in ("contig_1_1", "contig_1_2", "contig_2_1")
-    ]
+    hits = [HMMHit(query, "mcp", 120.0, 1e-40, 120.0, 1, 100) for query in ("contig_1_1", "contig_1_2", "contig_2_1")]
 
     markers = filter_validated_markers(
         hits,
@@ -240,21 +245,14 @@ def test_nearby_diamond_validated_protein_supports_novel_marker_in_any_order(
     )
     diamond = tmp_path / "diamond.tsv"
     diamond.write_text(
-        "".join(
-            f"contig_1_2\tEUK__host_{index}\t1e-40\t{300 - index}\t80\t100\n"
-            for index in range(10)
-        )
+        "".join(f"contig_1_2\tEUK__host_{index}\t1e-40\t{300 - index}\t80\t100\n" for index in range(10))
         + "contig_1_2\tNCLDV__reference\t1e-40\t200\t35\t100\n"
     )
     novel = HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 100)
     validated = HMMHit("contig_1_2", "polb", 80.0, 1e-20, 80.0, 1, 100)
 
-    forward = filter_validated_markers(
-        [novel, validated], diamond, proteome, max_seqs=11
-    )
-    reverse = filter_validated_markers(
-        [validated, novel], diamond, proteome, max_seqs=11
-    )
+    forward = filter_validated_markers([novel, validated], diamond, proteome, max_seqs=11)
+    reverse = filter_validated_markers([validated, novel], diamond, proteome, max_seqs=11)
 
     expected = {
         "contig_1_1|aa1-100": "validated_novel",
@@ -289,9 +287,7 @@ def test_invalid_cluster_support_does_not_validate_novel_marker(
         f"{'M' * 100}\n"
     )
     diamond = tmp_path / "diamond.tsv"
-    diamond.write_text(
-        f"{support_query}\tNCLDV__reference\t1e-40\t200\t{support_pident}\t100\n"
-    )
+    diamond.write_text(f"{support_query}\tNCLDV__reference\t1e-40\t200\t{support_pident}\t100\n")
     hits = [
         HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 100),
         HMMHit(support_query, "polb", 80.0, 1e-20, 80.0, 1, 100),
@@ -312,10 +308,7 @@ def test_nearby_hmm_only_hits_do_not_support_each_other(tmp_path: Path) -> None:
     )
     diamond = tmp_path / "diamond.tsv"
     diamond.write_text("")
-    hits = [
-        HMMHit(query, "mcp", 80.0, 1e-20, 80.0, 1, 100)
-        for query in ("contig_1_1", "contig_1_2")
-    ]
+    hits = [HMMHit(query, "mcp", 80.0, 1e-20, 80.0, 1, 100) for query in ("contig_1_1", "contig_1_2")]
 
     markers = filter_validated_markers(hits, diamond, proteome)
 
@@ -329,14 +322,9 @@ def test_second_hmm_segment_on_same_protein_cannot_support_novel_segment(
     tmp_path: Path,
 ) -> None:
     proteome = tmp_path / "proteome.faa"
-    proteome.write_text(
-        ">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n"
-        f"{'M' * 100}\n"
-    )
+    proteome.write_text(f">contig_1_1 # 1 # 300 # + # ID=1_1;partial=00\n{'M' * 100}\n")
     diamond = tmp_path / "diamond.tsv"
-    diamond.write_text(
-        "contig_1_1|aa61-100\tNCLDV__reference\t1e-40\t200\t35\t100\n"
-    )
+    diamond.write_text("contig_1_1|aa61-100\tNCLDV__reference\t1e-40\t200\t35\t100\n")
     hits = [
         HMMHit("contig_1_1", "mcp", 80.0, 1e-20, 80.0, 1, 60),
         HMMHit("contig_1_1", "polb", 80.0, 1e-20, 80.0, 61, 100),

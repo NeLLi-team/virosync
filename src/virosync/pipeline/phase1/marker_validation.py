@@ -1,5 +1,4 @@
-"""
-HMM-Gated Diamond Marker Validation.
+"""HMM-Gated Diamond Marker Validation.
 
 This module implements the key optimization from PIPELINE_HMM_GATED_PLAN.md:
 Only run Diamond on HMM-hit pORFs (not all pORFs), validating viral markers
@@ -54,13 +53,12 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
-from pyhmmer.easel import SequenceFile
 from Bio import SeqIO
+from pyhmmer.easel import SequenceFile
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
-from virosync.pipeline.phase1.coordinates import parse_frame_id, aa_to_nt_coords
+from virosync.pipeline.phase1.coordinates import aa_to_nt_coords, parse_frame_id
 from virosync.pipeline.taxonomy_utils import aggregate_taxonomy_substrings, resolve_org_id
 
 logger = logging.getLogger(__name__)
@@ -111,12 +109,9 @@ class NovelMarkerCriteria:
     initial_window_bp: int = 10000
 
 
-
-
 @dataclass
 class ValidatedMarkerHit:
-    """
-    Represents a validated HMM marker hit with Diamond taxonomy support.
+    """Represents a validated HMM marker hit with Diamond taxonomy support.
 
     Attributes:
         query_porf: pORF ID
@@ -142,6 +137,7 @@ class ValidatedMarkerHit:
         taxonomy_substring_counts: Weighted taxonomy counts (e.g., "Tubulinea:7.2,Amoebozoa:6.8")
         taxonomy_raw_counts: Raw (unweighted) occurrence counts (e.g., "Tubulinea:8,Amoebozoa:7")
     """
+
     query_porf: str
     scaffold: str
     start: int
@@ -175,8 +171,7 @@ def validate_hmm_hit(
     novel_criteria: NovelMarkerCriteria,
     has_nearby_markers: bool = False,
 ) -> ValidationStatus:
-    """
-    Validate an HMM hit using Diamond taxonomy and gating criteria.
+    """Validate an HMM hit using Diamond taxonomy and gating criteria.
 
     If Diamond hits exist, validation is based on taxonomy prefixes.
     If no Diamond hits exist, applies gating criteria to determine
@@ -226,8 +221,7 @@ def extract_hmm_hit_sequences(
     proteome_fasta: Path,
     output_fasta: Path,
 ) -> int:
-    """
-    Extract full protein sequences for HMM-hit pORFs to a FASTA file.
+    """Extract full protein sequences for HMM-hit pORFs to a FASTA file.
 
     Each unique protein is written once (deduplicated by base pORF name).
     Diamond searches the full protein rather than just the HMM-aligned
@@ -296,8 +290,7 @@ def run_diamond_on_hmm_hits(
     search_backend: str = "diamond",
     sensitive: bool = False,
 ) -> Path:
-    """
-    Run sequence search on HMM-hit pORFs only (NOT all pORFs).
+    """Run sequence search on HMM-hit pORFs only (NOT all pORFs).
 
     This is the core optimization: instead of searching millions of pORFs,
     we only search the ~1-10% that have HMM hits.
@@ -321,7 +314,9 @@ def run_diamond_on_hmm_hits(
     mode_str = " (sensitive)" if sensitive else ""
     logger.info(
         "Running %s%s on HMM-hit pORFs (max %d hits per query)",
-        search_backend, mode_str, max_seqs,
+        search_backend,
+        mode_str,
+        max_seqs,
     )
     logger.info("  Query: %s", hmm_hit_fasta.name)
     logger.info("  Database: %s", diamond_db.name)
@@ -344,11 +339,9 @@ def run_diamond_on_hmm_hits(
 
 def collect_host_signatures(
     marker_hits: list,
-    host_prefixes: Optional[set[str]] = None,
+    host_prefixes: set[str] | None = None,
 ) -> set[str]:
-    """
-    Collect host-signature tokens from unvalidated marker hits.
-    """
+    """Collect host-signature tokens from unvalidated marker hits."""
     prefixes = host_prefixes or {"EUK__"}
     signatures: set[str] = set()
     for hit in marker_hits:
@@ -368,17 +361,13 @@ def write_extended_taxonomy(
     output_dir: Path,
     tax_lookup: dict,
 ) -> Path:
-    """
-    Write diamond_top10_taxonomy.tsv with full lineage labels appended.
-    """
+    """Write diamond_top10_taxonomy.tsv with full lineage labels appended."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "diamond_top10_taxonomy.tsv"
 
     with diamond_top10_tsv.open() as inp, output_path.open("w") as out:
-        out.write(
-            "query\ttarget\tevalue\tbitscore\tpident\tqcov\ttaxonomy_label\n"
-        )
+        out.write("query\ttarget\tevalue\tbitscore\tpident\tqcov\ttaxonomy_label\n")
         for line in inp:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 2:
@@ -393,8 +382,7 @@ def write_extended_taxonomy(
 
 
 def parse_taxonomy_prefix(target_id: str) -> str:
-    """
-    Extract taxonomy prefix from target sequence ID.
+    """Extract taxonomy prefix from target sequence ID.
 
     Args:
         target_id: Target sequence ID (e.g., "NCLDV__GVOGm0003_protein123")
@@ -408,21 +396,18 @@ def parse_taxonomy_prefix(target_id: str) -> str:
     return "UNKNOWN__"
 
 
-
-
 def filter_validated_markers(
     hmm_hits: list,
     diamond_output_tsv: Path,
     proteome_fasta: Path,
-    genome_fasta: Optional[Path] = None,
-    output_dir: Optional[Path] = None,
-    novel_criteria: Optional[NovelMarkerCriteria] = None,
-    taxonomy_lookup: Optional[dict] = None,
+    genome_fasta: Path | None = None,
+    output_dir: Path | None = None,
+    novel_criteria: NovelMarkerCriteria | None = None,
+    taxonomy_lookup: dict | None = None,
     taxonomy_weight_mode: str = "rank",
     max_seqs: int = 10,
 ) -> list[ValidatedMarkerHit]:
-    """
-    Filter HMM hits to validated markers based on Diamond top-10 taxonomy.
+    """Filter HMM hits to validated markers based on Diamond top-10 taxonomy.
 
     Validation rules:
     1. "validated": at least one top-10 hit from a validated viral prefix
@@ -443,6 +428,7 @@ def filter_validated_markers(
     Returns:
         List of ValidatedMarkerHit objects (includes all hits with metadata)
     """
+
     def _marker_group(name: str) -> str:
         lower = name.lower()
         if lower.startswith("gvogm"):
@@ -462,7 +448,7 @@ def filter_validated_markers(
             scaffold, start, end, strand = prodigal_parsed
             porf_coords[name] = (scaffold, start, end, strand)
 
-    contig_lengths: Optional[dict[str, int]] = None
+    contig_lengths: dict[str, int] | None = None
 
     # Parse Diamond results
     diamond_hits = {}  # query -> list of (rank, target, bits, pident, evalue)
@@ -560,38 +546,36 @@ def filter_validated_markers(
 
         # Diamond queries use base protein name (full-protein search). Fall
         # back to full query_porf for old result files.
-        top10_hits = list(
-            diamond_hits.get(base_query, []) or diamond_hits.get(query_porf, [])
-        )
+        top10_hits = list(diamond_hits.get(base_query, []) or diamond_hits.get(query_porf, []))
         if not top10_hits:
             stats["no_diamond_hits"] += 1
             protein_length = protein_lengths.get(base_query)
             hmm_coverage = None
             if protein_length:
                 hmm_coverage = min(1.0, (qend - qstart + 1) / protein_length)
-            validated_markers.append(ValidatedMarkerHit(
-                query_porf=query_porf,
-                scaffold=scaffold,
-                start=start,
-                end=end,
-                strand=strand,
-                hmm_target=hmm_target,
-                hmm_score=hmm_score,
-                hmm_evalue=hmm_evalue,
-                validation_status="unvalidated",
-                top10_prefixes="",
-                best_hit_target="",
-                best_hit_pident=0.0,
-                best_hit_bits=0.0,
-                has_ncldv=0,
-                has_mirus=0,
-                has_plv=0,
-                has_vp=0,
-                has_viral=0,
-            ))
-            novel_candidates.append(
-                (len(validated_markers) - 1, base_query, hmm_coverage)
+            validated_markers.append(
+                ValidatedMarkerHit(
+                    query_porf=query_porf,
+                    scaffold=scaffold,
+                    start=start,
+                    end=end,
+                    strand=strand,
+                    hmm_target=hmm_target,
+                    hmm_score=hmm_score,
+                    hmm_evalue=hmm_evalue,
+                    validation_status="unvalidated",
+                    top10_prefixes="",
+                    best_hit_target="",
+                    best_hit_pident=0.0,
+                    best_hit_bits=0.0,
+                    has_ncldv=0,
+                    has_mirus=0,
+                    has_plv=0,
+                    has_vp=0,
+                    has_viral=0,
+                )
             )
+            novel_candidates.append((len(validated_markers) - 1, base_query, hmm_coverage))
             continue
 
         # Sort by bit score (descending) and take the configured top K.
@@ -663,45 +647,42 @@ def filter_validated_markers(
                 )
                 taxonomy_substring_counts, taxonomy_raw_counts = fingerprint.to_string()
 
-        validated_markers.append(ValidatedMarkerHit(
-            query_porf=query_porf,
-            scaffold=scaffold,
-            start=start,
-            end=end,
-            strand=strand,
-            hmm_target=hmm_target,
-            hmm_score=hmm_score,
-            hmm_evalue=hmm_evalue,
-            validation_status=validation_status,
-            top10_prefixes=top10_prefixes_str,
-            best_hit_target=best_target,
-            best_hit_pident=best_pident,
-            best_hit_bits=best_bits,
-            has_ncldv=has_ncldv,
-            has_mirus=has_mirus,
-            has_plv=has_plv,
-            has_vp=has_vp,
-            has_viral=has_viral,
-            top10_targets=top10_targets,
-            top10_pidents=top10_pidents,
-            top10_bitscores=top10_bitscores,
-            top10_evalues=top10_evalues,
-            taxonomy_substring_counts=taxonomy_substring_counts,
-            taxonomy_raw_counts=taxonomy_raw_counts,
-        ))
+        validated_markers.append(
+            ValidatedMarkerHit(
+                query_porf=query_porf,
+                scaffold=scaffold,
+                start=start,
+                end=end,
+                strand=strand,
+                hmm_target=hmm_target,
+                hmm_score=hmm_score,
+                hmm_evalue=hmm_evalue,
+                validation_status=validation_status,
+                top10_prefixes=top10_prefixes_str,
+                best_hit_target=best_target,
+                best_hit_pident=best_pident,
+                best_hit_bits=best_bits,
+                has_ncldv=has_ncldv,
+                has_mirus=has_mirus,
+                has_plv=has_plv,
+                has_vp=has_vp,
+                has_viral=has_viral,
+                top10_targets=top10_targets,
+                top10_pidents=top10_pidents,
+                top10_bitscores=top10_bitscores,
+                top10_evalues=top10_evalues,
+                taxonomy_substring_counts=taxonomy_substring_counts,
+                taxonomy_raw_counts=taxonomy_raw_counts,
+            )
+        )
 
-    validated_support = [
-        marker
-        for marker in validated_markers
-        if marker.validation_status == "validated"
-    ]
+    validated_support = [marker for marker in validated_markers if marker.validation_status == "validated"]
     for marker_index, base_query, hmm_coverage in novel_candidates:
         marker = validated_markers[marker_index]
         has_nearby_markers = any(
             support.query_porf.split("|aa", 1)[0] != base_query
             and support.scaffold == marker.scaffold
-            and max(0, marker.start - support.end, support.start - marker.end)
-            <= novel_criteria.initial_window_bp
+            and max(0, marker.start - support.end, support.start - marker.end) <= novel_criteria.initial_window_bp
             for support in validated_support
         )
         validation_result = ValidationStatus.UNVALIDATED
@@ -798,7 +779,21 @@ def filter_validated_markers(
         len(validated_markers),
     )
     logger.info("  Taxonomy breakdown (top1 overridden by NCLDV/MIRUS in top-10):")
-    for prefix in ("NCLDV__", "MIRUS__", "PPV__", "PLV__", "VP__", "CRESS__", "GVMAG__", "PHAGE__", "EUK__", "BAC__", "ARC__", "OTHER", "NO_HITS"):
+    for prefix in (
+        "NCLDV__",
+        "MIRUS__",
+        "PPV__",
+        "PLV__",
+        "VP__",
+        "CRESS__",
+        "GVMAG__",
+        "PHAGE__",
+        "EUK__",
+        "BAC__",
+        "ARC__",
+        "OTHER",
+        "NO_HITS",
+    ):
         logger.info("    %s: %s", prefix, taxonomy_counts[prefix])
 
     # Write output files
@@ -808,38 +803,41 @@ def filter_validated_markers(
         # Write validated_marker_hits.tsv
         validated_path = output_dir / "validated_marker_hits.tsv"
         with validated_path.open("w") as f:
-            f.write("query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
-                   "validation_status\ttop10_prefixes\tbest_hit_pident\tbest_hit_target\t"
-                   "best_hit_bits\thas_ncldv\thas_mirus\thas_viral\t"
-                   "top10_targets\ttop10_pidents\ttop10_bitscores\ttop10_evalues\t"
-                   "taxonomy_substring_counts\ttaxonomy_raw_counts\n")
+            f.write(
+                "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
+                "validation_status\ttop10_prefixes\tbest_hit_pident\tbest_hit_target\t"
+                "best_hit_bits\thas_ncldv\thas_mirus\thas_viral\t"
+                "top10_targets\ttop10_pidents\ttop10_bitscores\ttop10_evalues\t"
+                "taxonomy_substring_counts\ttaxonomy_raw_counts\n"
+            )
             for vm in validated_markers:
-                f.write(f"{vm.query_porf}\t{vm.scaffold}\t{vm.start}\t{vm.end}\t{vm.strand}\t"
-                       f"{vm.hmm_target}\t{vm.hmm_score:.3f}\t{vm.validation_status}\t"
-                       f"{vm.top10_prefixes}\t{vm.best_hit_pident:.1f}\t{vm.best_hit_target}\t"
-                       f"{vm.best_hit_bits:.1f}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\t"
-                       f"{vm.top10_targets}\t{vm.top10_pidents}\t{vm.top10_bitscores}\t"
-                       f"{vm.top10_evalues}\t{vm.taxonomy_substring_counts}\t{vm.taxonomy_raw_counts}\n")
+                f.write(
+                    f"{vm.query_porf}\t{vm.scaffold}\t{vm.start}\t{vm.end}\t{vm.strand}\t"
+                    f"{vm.hmm_target}\t{vm.hmm_score:.3f}\t{vm.validation_status}\t"
+                    f"{vm.top10_prefixes}\t{vm.best_hit_pident:.1f}\t{vm.best_hit_target}\t"
+                    f"{vm.best_hit_bits:.1f}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\t"
+                    f"{vm.top10_targets}\t{vm.top10_pidents}\t{vm.top10_bitscores}\t"
+                    f"{vm.top10_evalues}\t{vm.taxonomy_substring_counts}\t{vm.taxonomy_raw_counts}\n"
+                )
         logger.info(f"Wrote validated marker hits: {validated_path}")
 
         # Write diamond_top10_taxonomy.tsv
         taxonomy_path = output_dir / "diamond_top10_taxonomy.tsv"
         with taxonomy_path.open("w") as f:
-            f.write("query_porf\thmm_target\ttop1_prefix\ttop10_prefixes\t"
-                   "has_ncldv\thas_mirus\thas_viral\n")
+            f.write("query_porf\thmm_target\ttop1_prefix\ttop10_prefixes\thas_ncldv\thas_mirus\thas_viral\n")
             for vm in validated_markers:
                 top1_prefix = vm.top10_prefixes.split(",")[0] if vm.top10_prefixes else ""
-                f.write(f"{vm.query_porf}\t{vm.hmm_target}\t{top1_prefix}\t"
-                       f"{vm.top10_prefixes}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\n")
+                f.write(
+                    f"{vm.query_porf}\t{vm.hmm_target}\t{top1_prefix}\t"
+                    f"{vm.top10_prefixes}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\n"
+                )
         logger.info(f"Wrote top-10 taxonomy summary: {taxonomy_path}")
 
     return validated_markers
 
 
 def load_validated_marker_hits(tsv_path: Path) -> list[ValidatedMarkerHit]:
-    """
-    Load validated marker hits from a TSV produced by filter_validated_markers.
-    """
+    """Load validated marker hits from a TSV produced by filter_validated_markers."""
     hits: list[ValidatedMarkerHit] = []
     if not tsv_path.exists():
         return hits
@@ -875,7 +873,9 @@ def load_validated_marker_hits(tsv_path: Path) -> list[ValidatedMarkerHit]:
                     top10_pidents=parts[idx["top10_pidents"]] if "top10_pidents" in idx else "",
                     top10_bitscores=parts[idx["top10_bitscores"]] if "top10_bitscores" in idx else "",
                     top10_evalues=parts[idx["top10_evalues"]] if "top10_evalues" in idx else "",
-                    taxonomy_substring_counts=parts[idx["taxonomy_substring_counts"]] if "taxonomy_substring_counts" in idx else "",
+                    taxonomy_substring_counts=parts[idx["taxonomy_substring_counts"]]
+                    if "taxonomy_substring_counts" in idx
+                    else "",
                     taxonomy_raw_counts=parts[idx["taxonomy_raw_counts"]] if "taxonomy_raw_counts" in idx else "",
                 )
             )

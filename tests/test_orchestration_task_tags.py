@@ -1,9 +1,9 @@
 from virosync.orchestration._flows.single_genome import run_single_genome_task
 from virosync.orchestration.tasks import (
     classify_jelly_roll_task,
+    gene_taxonomy_batch_task,
     generate_outputs_task,
     generate_proteome_task,
-    gene_taxonomy_batch_task,
     hhg_seeding_task,
     interproscan_batch_task,
     marker_validation_task,

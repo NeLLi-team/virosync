@@ -54,10 +54,7 @@ def test_filter_vs_profiles_keeps_only_complete_exact_vs_records(tmp_path: Path)
     source = tmp_path / "combined.hmm"
     output = tmp_path / "filtered.hmm"
     source.write_text(
-        _hmm_record("VS000001")
-        + _hmm_record("NCLDV_MCP")
-        + _hmm_record("VS123456")
-        + _hmm_record("VS123456_extra")
+        _hmm_record("VS000001") + _hmm_record("NCLDV_MCP") + _hmm_record("VS123456") + _hmm_record("VS123456_extra")
     )
 
     count = frameshift_screening.filter_vs_profiles(source, output)
@@ -119,9 +116,7 @@ def test_parser_normalizes_coordinates_strand_and_filters_event_free_rows(
     assert (hits[1].ali_start, hits[1].ali_end, hits[1].strand) == (49, 90, "-")
     assert hits[1].description == "-"
     assert hits[2].description == ""
-    assert {hit.annotation_class for hit in hits} == {
-        frameshift_screening.ANNOTATION_CLASS
-    }
+    assert {hit.annotation_class for hit in hits} == {frameshift_screening.ANNOTATION_CLASS}
     lines = normalized.read_text().splitlines()
     assert lines[0].split("\t") == [
         "annotation_class",
@@ -239,9 +234,7 @@ def test_translation_parser_and_candidate_faa_preserve_coordinates_and_provenanc
     assert frameshift_screening.is_rescued_protein_id(record.id)
     assert frameshift_screening.is_rescued_protein_id(f"{record.id}|aa1-4")
     assert not frameshift_screening.is_rescued_protein_id("contig_1_VSRnot-generated")
-    assert not frameshift_screening.is_rescued_protein_id(
-        "contig_1_VSR0123456789ABCDEF"
-    )
+    assert not frameshift_screening.is_rescued_protein_id("contig_1_VSR0123456789ABCDEF")
 
 
 def _write_text(path: Path, text: str) -> Path:
@@ -377,16 +370,11 @@ def test_runner_uses_frameshift_and_threshold_options_and_keeps_raw_outputs(
         commands.append((args, kwargs))
         if Path(args[0]).name == "bathconvert":
             assert Path(args[2]) != hmm_database
-            assert not any(
-                Path(f"{args[2]}.{suffix}").exists()
-                for suffix in ("h3f", "h3i", "h3m", "h3p")
-            )
+            assert not any(Path(f"{args[2]}.{suffix}").exists() for suffix in ("h3f", "h3i", "h3m", "h3p"))
             converted_input = Path(args[2]).read_text()
             Path(args[1]).write_text("converted models\n")
         else:
-            Path(args[args.index("--tblout") + 1]).write_text(
-                _event_row("1", 10, 40, shifts=1, stops=0)
-            )
+            Path(args[args.index("--tblout") + 1]).write_text(_event_row("1", 10, 40, shifts=1, stops=0))
             Path(args[args.index("--fstblout") + 1]).write_text("raw fs output\n")
             Path(args[args.index("-o") + 1]).write_text(_bath_alignment_report())
         return subprocess.CompletedProcess(args, 0, stdout="captured", stderr="")
@@ -512,8 +500,7 @@ def test_frameshift_optional_runtime_identities_and_phase_artifact(
         "ID=0_VSR0123456789abcdef;annotation=frameshift_rescued_domain\nMPEPTIDE\n"
     )
     confirmed.with_name("confirmed_frameshift_markers.tsv").write_text(
-        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\t"
-        "validation_status\n"
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\tvalidation_status\n"
     )
     identities = orchestrator._phase_artifacts(tmp_path, 1)
     assert {identity.relative_path for identity in identities} == {

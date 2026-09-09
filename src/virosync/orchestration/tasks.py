@@ -1,5 +1,4 @@
-"""
-ViroSync orchestration task functions.
+"""ViroSync orchestration task functions.
 
 Each pipeline phase is decomposed into granular Python functions for reuse by
 the single-genome orchestrator.
@@ -7,17 +6,18 @@ the single-genome orchestrator.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 # Import pipeline functions for testing/mocking
 from virosync.ablation import AblationID
 from virosync.config import MaskingBackend, MaskingConfig
+from virosync.orchestration.runtime import get_orchestration_logger
 from virosync.pipeline.phase0.masking import (
     MaskingResult,
     mask_genome_pipeline,
+)
+from virosync.pipeline.phase0.masking import (
     quick_mask as _quick_mask,
 )
-from virosync.orchestration.runtime import get_orchestration_logger
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 # Public module attribute for callers and tests. It is not an automatic
@@ -59,11 +59,10 @@ def mask_genome_task(
     genome_path: Path,
     output_dir: Path,
     threads: int = 8,
-    masking: Optional[MaskingConfig] = None,
-    skip_masking: Optional[bool] = None,
+    masking: MaskingConfig | None = None,
+    skip_masking: bool | None = None,
 ) -> MaskingResult:
-    """
-    Identify repeats and optionally mask the genome.
+    """Identify repeats and optionally mask the genome.
 
     Args:
         genome_path: Path to input genome FASTA
@@ -116,8 +115,7 @@ def mask_genome_task(
             config=masking,
         )
         logger.info(
-            "mask_genome: status=%s effective_backend=%s masked_bases=%d "
-            "repeat_regions=%d output=%s",
+            "mask_genome: status=%s effective_backend=%s masked_bases=%d repeat_regions=%d output=%s",
             result.status,
             result.effective_backend.value,
             result.masked_bases,
@@ -132,8 +130,7 @@ def generate_proteome_task(
     output_dir: Path,
     threads: int = 1,
 ) -> tuple[Path, int]:
-    """
-    Generate genome-wide gene predictions via prodigal-gv.
+    """Generate genome-wide gene predictions via prodigal-gv.
 
     Args:
         genome_path: Path to (masked) genome FASTA
@@ -141,8 +138,8 @@ def generate_proteome_task(
     Returns:
         Tuple of (proteome_path, n_genes)
     """
-    from virosync.pipeline.phase0 import run_prodigal_genome
     from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.pipeline.phase0 import run_prodigal_genome
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir)
@@ -183,7 +180,6 @@ def frameshift_screening_task(
     threads: int = 8,
 ) -> list:
     """Run the optional BATH rescue screen against the masked assembly."""
-
     from virosync.pipeline.phase1.frameshift_screening import (
         run_frameshift_screening,
     )
@@ -199,20 +195,19 @@ def frameshift_screening_task(
 def hhg_seeding_task(
     proteome_path: Path,
     hmm_database: Path,
-    hmm_query_fasta: Optional[Path] = None,
-    genome_fasta: Optional[Path] = None,
-    hmm_allowlist: Optional[Path] = None,
-    marker_faa_dir: Optional[Path] = None,
-    marker_db: Optional[Path] = None,
+    hmm_query_fasta: Path | None = None,
+    genome_fasta: Path | None = None,
+    hmm_allowlist: Path | None = None,
+    marker_faa_dir: Path | None = None,
+    marker_db: Path | None = None,
     marker_top_k: int = 10,
     window_size: int = 20000,
     threads: int = 8,
-    assembly_mode: Optional[str] = None,
-    hmm_chunk_size: Optional[int] = None,
-    output_dir: Optional[Path] = None,
+    assembly_mode: str | None = None,
+    hmm_chunk_size: int | None = None,
+    output_dir: Path | None = None,
 ) -> tuple[list, list]:
-    """
-    Run HHG seeding strategy.
+    """Run HHG seeding strategy.
 
     Searches proteome against HMM database to find hallmark genes,
     then creates seed windows around anchors.
@@ -231,8 +226,8 @@ def hhg_seeding_task(
     Returns:
         Tuple of (hhg_seeds, hhg_hits)
     """
-    from virosync.pipeline.phase1 import hhg_seeding_pipeline
     from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.pipeline.phase1 import hhg_seeding_pipeline
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir) if output_dir else Path(proteome_path).parent.parent
@@ -288,7 +283,6 @@ def pfam_arbitration_task(
     threads: int = 8,
 ) -> list:
     """Resolve multi-model HMM hits with the bundled Pfam screening library."""
-
     from virosync.orchestration.resource_monitor import ResourceMonitor
     from virosync.pipeline.phase1.pfam_arbitration import run_pfam_arbitration
 
@@ -327,17 +321,16 @@ def marker_validation_task(
     proteome_path: Path,
     marker_db: Path,
     output_dir: Path,
-    genome_path: Optional[Path] = None,
+    genome_path: Path | None = None,
     threads: int = 8,
     evalue: float = 1e-5,
     max_seqs: int = 10,
     novel_criteria=None,
-    taxonomy_labels_file: Optional[Path] = None,
+    taxonomy_labels_file: Path | None = None,
     taxonomy_weight_mode: str = "rank",
     search_backend: str = "diamond",
 ) -> list:
-    """
-    Run HMM-gated Diamond validation workflow (Steps 2-3).
+    """Run HMM-gated Diamond validation workflow (Steps 2-3).
 
     This is the key optimization: only run Diamond on HMM-hit sequences,
     not all genes. Validates markers based on top-10 taxonomy (NCLDV/MIRUS in top-10).
@@ -357,13 +350,13 @@ def marker_validation_task(
     Returns:
         List of ValidatedMarkerHit objects
     """
+    from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.pipeline.host_signatures import TaxonomyLabelLookup
     from virosync.pipeline.phase1 import (
         extract_hmm_hit_sequences,
-        run_diamond_on_hmm_hits,
         filter_validated_markers,
+        run_diamond_on_hmm_hits,
     )
-    from virosync.pipeline.host_signatures import TaxonomyLabelLookup
-    from virosync.orchestration.resource_monitor import ResourceMonitor
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir)
@@ -453,8 +446,7 @@ def region_assembly_task(
     ablation_id: AblationID = AblationID.A0,
     single_marker_min_score: float = 50.0,
 ) -> list:
-    """
-    Assemble candidate regions from validated markers (Step 4).
+    """Assemble candidate regions from validated markers (Step 4).
 
     Uses iterative extension to capture adjacent markers until no more can be found.
 
@@ -472,8 +464,8 @@ def region_assembly_task(
     Returns:
         List of CandidateRegion objects
     """
-    from virosync.pipeline.phase1 import assemble_candidate_regions
     from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.pipeline.phase1 import assemble_candidate_regions
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir)
@@ -522,18 +514,17 @@ def gene_taxonomy_batch_task(
     output_dir: Path,
     threads: int = 4,
     high_pident_host_threshold: float = 70.0,
-    host_label: Optional[str] = None,
-    marker_validation_dir: Optional[Path] = None,
-    hmm_hits_file: Optional[Path] = None,
+    host_label: str | None = None,
+    marker_validation_dir: Path | None = None,
+    hmm_hits_file: Path | None = None,
     search_backend: str = "diamond",
 ) -> dict[str, tuple[list, dict]]:
-    """
-    Run Diamond gene taxonomy for all candidates in one batch using genome-wide prodigal genes.
+    """Run Diamond gene taxonomy for all candidates in one batch using genome-wide prodigal genes.
 
     Uses the Tier 2 database (combined_proteome.dmnd) for all-gene taxonomy.
     """
-    from virosync.pipeline.phase3.gene_taxonomy import run_gene_taxonomy_diamond_batch
     from virosync.orchestration.utils import run_with_monitor
+    from virosync.pipeline.phase3.gene_taxonomy import run_gene_taxonomy_diamond_batch
 
     return run_with_monitor(
         task_name="gene_taxonomy_batch",
@@ -555,14 +546,12 @@ def interproscan_batch_task(
     interproscan_dir: Path,
     output_dir: Path,
     threads: int = 4,
-    keywords: Optional[list[str]] = None,
-    applications: Optional[list[str]] = None,
+    keywords: list[str] | None = None,
+    applications: list[str] | None = None,
 ) -> dict[str, dict]:
-    """
-    Run InterProScan for all candidates in one batch using genome-wide prodigal genes.
-    """
-    from virosync.pipeline.phase3.interproscan import run_interproscan_batch
+    """Run InterProScan for all candidates in one batch using genome-wide prodigal genes."""
     from virosync.orchestration.utils import run_with_monitor
+    from virosync.pipeline.phase3.interproscan import run_interproscan_batch
 
     return run_with_monitor(
         task_name="interproscan_batch",
@@ -586,19 +575,19 @@ def verify_eve_task(
     genome_path: Path,
     work_dir: Path,
     proteome_path: Path,
-    hallmark_hits: Optional[list] = None,
-    novelty_scores: Optional[dict] = None,
-    gene_taxonomy_result: Optional[tuple[list, dict]] = None,
-    interproscan_result: Optional[dict] = None,
-    euk_host_signatures: Optional[set[str]] = None,
-    host_signature_model: Optional[dict] = None,
+    hallmark_hits: list | None = None,
+    novelty_scores: dict | None = None,
+    gene_taxonomy_result: tuple[list, dict] | None = None,
+    interproscan_result: dict | None = None,
+    euk_host_signatures: set[str] | None = None,
+    host_signature_model: dict | None = None,
     host_signature_score_threshold: float = 0.3,
-    host_prefixes: Optional[list[str]] = None,
+    host_prefixes: list[str] | None = None,
     host_label: str = "EUK",
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
     use_crf_in_final_score: bool = False,
-    priority_marker_list: Optional[list[str]] = None,
+    priority_marker_list: list[str] | None = None,
     marker_floor_priority_only: float = 0.55,
     marker_floor_priority_plus_family: float = 0.70,
     marker_floor_priority_multi_family: float = 0.80,
@@ -612,23 +601,22 @@ def verify_eve_task(
     boltz_max_seq_len: int = 1000,
     boltz_no_kernels: bool = True,
     use_tmvec_database: bool = False,
-    tmvec_databases: Optional[list[str]] = None,
-    tmvec_database_dir: Optional[Path] = None,
+    tmvec_databases: list[str] | None = None,
+    tmvec_database_dir: Path | None = None,
     tmvec_min_score: float = 0.5,
     tmvec_require_gpu: bool = False,
     device: str = "cuda",
-    viral_structure_db: Optional[Path] = None,
-    gvclass_db: Optional[Path] = None,
-    diamond_db: Optional[Path] = None,
+    viral_structure_db: Path | None = None,
+    gvclass_db: Path | None = None,
+    diamond_db: Path | None = None,
     enable_phylogenetic: bool = False,
     max_porfs: int = 10000,
-    hmm_database: Optional[Path] = None,
-    precomputed_tmvec: Optional[dict] = None,
-    taxonomy_labels_file: Optional[Path] = None,
+    hmm_database: Path | None = None,
+    precomputed_tmvec: dict | None = None,
+    taxonomy_labels_file: Path | None = None,
     ablation_id: AblationID = AblationID.A0,
 ):
-    """
-    Verify a single EVE candidate using evidence synthesis.
+    """Verify a single EVE candidate using evidence synthesis.
 
     Assigns confidence tiers (HIGH/MEDIUM/LOW) from marker, taxonomy,
     composition, optional structural/domain, and phylogenetic evidence.
@@ -664,12 +652,12 @@ def verify_eve_task(
     Returns:
         VerificationResult with final status
     """
+    from virosync.orchestration.resource_monitor import ResourceMonitor
+    from virosync.orchestration.utils import get_genes_for_boundary
     from virosync.pipeline.phase3 import (
         EvidenceSynthesizer,
         EvidenceSynthesizerConfig,
     )
-    from virosync.orchestration.resource_monitor import ResourceMonitor
-    from virosync.orchestration.utils import get_genes_for_boundary
 
     logger = get_orchestration_logger(__name__)
     work_dir = Path(work_dir)
@@ -677,6 +665,7 @@ def verify_eve_task(
 
     if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
         from virosync.pipeline.host_signatures import TaxonomyLabelLookup, set_taxonomy_lookup
+
         lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
         set_taxonomy_lookup(lookup)
         logger.info("Loaded taxonomy labels for host signature (%d entries)", len(lookup))
@@ -797,12 +786,10 @@ def verify_eve_task(
             "  → %s (confidence=%.3f, status=%s)",
             status_str,
             result.final_confidence,
-            result.status.name if hasattr(result.status, 'name') else result.status,
+            result.status.name if hasattr(result.status, "name") else result.status,
         )
 
-        result.gene_taxonomy_records = [
-            getattr(r, "__dict__", r) for r in gene_taxonomy_records
-        ]
+        result.gene_taxonomy_records = [getattr(r, "__dict__", r) for r in gene_taxonomy_records]
         if gene_taxonomy_summary:
             result.gene_taxonomy_total = gene_taxonomy_summary.get("total", 0)
             result.gene_taxonomy_ncldv_top10 = gene_taxonomy_summary.get("ncldv_mirus", 0)
@@ -814,12 +801,8 @@ def verify_eve_task(
             result.gene_taxonomy_unknown = 0
             result.gene_taxonomy_has_ncldv_mirus = gene_taxonomy_summary.get("has_ncldv_mirus", False)
             result.gene_taxonomy_has_vp_plv = gene_taxonomy_summary.get("has_vp_plv", False)
-            result.gene_taxonomy_dominant_family = gene_taxonomy_summary.get(
-                "dominant_family", "UNKNOWN"
-            )
-            result.gene_taxonomy_dominant_fraction = gene_taxonomy_summary.get(
-                "dominant_fraction", 0.0
-            )
+            result.gene_taxonomy_dominant_family = gene_taxonomy_summary.get("dominant_family", "UNKNOWN")
+            result.gene_taxonomy_dominant_fraction = gene_taxonomy_summary.get("dominant_fraction", 0.0)
             result.gene_count = gene_taxonomy_summary.get("total", 0)
             result.genes_with_ncldv_mirus_top10 = gene_taxonomy_summary.get("ncldv_mirus", 0)
             result.genes_with_vp_plv_top10 = gene_taxonomy_summary.get("vp_plv", 0)
@@ -834,8 +817,8 @@ def _base_porf_id(porf_id: str) -> str:
 
 def _build_jelly_roll_summary_for_boundary(
     porf_sequences: list[tuple[str, str]],
-    jelly_roll_map: Optional[dict[str, list[dict]]],
-) -> Optional[dict]:
+    jelly_roll_map: dict[str, list[dict]] | None,
+) -> dict | None:
     """Aggregate capsid-fold and MCP-support records for one boundary."""
     if not porf_sequences or not jelly_roll_map:
         return None
@@ -873,14 +856,8 @@ def _build_jelly_roll_summary_for_boundary(
 
     records = sorted(best_records.values(), key=lambda rec: rec["porf_id"])
     total_mcp = len(records)
-    supported_records = [
-        r
-        for r in records
-        if r["mcp_support"] in {"sequence_supported", "structure_supported"}
-    ]
-    supported_djr_confidences = [
-        r["confidence"] for r in supported_records if r["classification"] == "DJR"
-    ]
+    supported_records = [r for r in records if r["mcp_support"] in {"sequence_supported", "structure_supported"}]
+    supported_djr_confidences = [r["confidence"] for r in supported_records if r["classification"] == "DJR"]
     sjr_count = sum(1 for r in records if r["classification"] == "SJR")
     djr_count = sum(1 for r in records if r["classification"] == "DJR")
     hk97_count = sum(1 for r in records if r["classification"] == "HK97")
@@ -915,19 +892,19 @@ def verify_eve_candidates_batched_task(
     work_dir: Path,
     proteome_path: Path,
     hallmark_hits_map: dict,
-    novelty_scores: Optional[dict] = None,
-    gene_taxonomy_map: Optional[dict] = None,
-    interproscan_map: Optional[dict] = None,
-    jelly_roll_map: Optional[dict[str, list[dict]]] = None,
-    euk_host_signatures: Optional[set[str]] = None,
-    host_signature_model: Optional[dict] = None,
+    novelty_scores: dict | None = None,
+    gene_taxonomy_map: dict | None = None,
+    interproscan_map: dict | None = None,
+    jelly_roll_map: dict[str, list[dict]] | None = None,
+    euk_host_signatures: set[str] | None = None,
+    host_signature_model: dict | None = None,
     host_signature_score_threshold: float = 0.3,
-    host_prefixes: Optional[list[str]] = None,
+    host_prefixes: list[str] | None = None,
     host_label: str = "EUK",
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
     use_crf_in_final_score: bool = False,
-    priority_marker_list: Optional[list[str]] = None,
+    priority_marker_list: list[str] | None = None,
     marker_floor_priority_only: float = 0.55,
     marker_floor_priority_plus_family: float = 0.70,
     marker_floor_priority_multi_family: float = 0.80,
@@ -941,24 +918,23 @@ def verify_eve_candidates_batched_task(
     boltz_max_seq_len: int = 1000,
     boltz_no_kernels: bool = True,
     use_tmvec_database: bool = False,
-    tmvec_databases: Optional[list[str]] = None,
-    tmvec_database_dir: Optional[Path] = None,
+    tmvec_databases: list[str] | None = None,
+    tmvec_database_dir: Path | None = None,
     tmvec_min_score: float = 0.5,
     tmvec_require_gpu: bool = False,
     device: str = "cuda",
-    viral_structure_db: Optional[Path] = None,
-    gvclass_db: Optional[Path] = None,
-    diamond_db: Optional[Path] = None,
+    viral_structure_db: Path | None = None,
+    gvclass_db: Path | None = None,
+    diamond_db: Path | None = None,
     enable_phylogenetic: bool = False,
     max_porfs: int = 10000,
-    hmm_database: Optional[Path] = None,
-    precomputed_tmvec: Optional[dict] = None,
-    taxonomy_labels_file: Optional[Path] = None,
+    hmm_database: Path | None = None,
+    precomputed_tmvec: dict | None = None,
+    taxonomy_labels_file: Path | None = None,
     max_workers: int = 32,
     ablation_id: AblationID = AblationID.A0,
 ):
-    """
-    Verify ALL EVE candidates in parallel using ThreadPoolExecutor.
+    """Verify ALL EVE candidates in parallel using ThreadPoolExecutor.
 
     This keeps candidate verification within one Python task function
     that internally parallelizes with Python threads. I/O-bound operations
@@ -980,13 +956,14 @@ def verify_eve_candidates_batched_task(
     Returns:
         List of VerificationResult objects
     """
+    import logging
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from virosync.orchestration.utils import get_genes_for_boundary
     from virosync.pipeline.phase3 import (
         EvidenceSynthesizer,
         EvidenceSynthesizerConfig,
     )
-    from virosync.orchestration.utils import get_genes_for_boundary
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import logging
 
     logger = get_orchestration_logger(__name__)
     work_dir = Path(work_dir)
@@ -1056,6 +1033,7 @@ def verify_eve_candidates_batched_task(
     # Ensure taxonomy lookup is set for host signature fallback scoring
     if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
         from virosync.pipeline.host_signatures import TaxonomyLabelLookup, set_taxonomy_lookup
+
         lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
         set_taxonomy_lookup(lookup)
         logger.info("Batched: loaded taxonomy labels for host signature (%d entries)", len(lookup))
@@ -1117,9 +1095,7 @@ def verify_eve_candidates_batched_task(
             )
 
             # Populate gene taxonomy fields
-            result.gene_taxonomy_records = [
-                getattr(r, "__dict__", r) for r in gene_taxonomy_records
-            ]
+            result.gene_taxonomy_records = [getattr(r, "__dict__", r) for r in gene_taxonomy_records]
             if gene_taxonomy_summary:
                 result.gene_taxonomy_total = gene_taxonomy_summary.get("total", 0)
                 result.gene_taxonomy_ncldv_top10 = gene_taxonomy_summary.get("ncldv_mirus", 0)
@@ -1165,10 +1141,7 @@ def verify_eve_candidates_batched_task(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all boundaries
-        future_to_boundary = {
-            executor.submit(verify_single_boundary, boundary): boundary
-            for boundary in boundaries
-        }
+        future_to_boundary = {executor.submit(verify_single_boundary, boundary): boundary for boundary in boundaries}
 
         # Collect results as they complete
         for future in as_completed(future_to_boundary):
@@ -1205,12 +1178,11 @@ def classify_jelly_roll_task(
     marker_hits_path: Path,
     sequences_path: Path,
     output_path: Path,
-    interproscan_path: Optional[Path] = None,
-    tmvec_results_path: Optional[Path] = None,
-    foldseek_results_path: Optional[Path] = None,
+    interproscan_path: Path | None = None,
+    tmvec_results_path: Path | None = None,
+    foldseek_results_path: Path | None = None,
 ) -> Path:
-    """
-    Classify MCP candidates by capsid fold and support.
+    """Classify MCP candidates by capsid fold and support.
 
     InterProScan domain counts take priority, then quality-gated HK97
     Foldseek hits. Other fold signals precede HK97 marker-family inference.
@@ -1232,18 +1204,20 @@ def classify_jelly_roll_task(
     """
     import sys
     from pathlib import Path as PathLib
+
     sys.path.insert(0, str(PathLib(__file__).parent.parent.parent.parent / "scripts"))
 
     from classify_jelly_roll import (
+        classify_proteins,
+        count_hmm_domains_per_protein,
+        load_foldseek_results,
+        load_interproscan_domains,
         load_marker_hits,
         load_sequences,
-        load_interproscan_domains,
         load_tmvec_results,
-        load_foldseek_results,
-        count_hmm_domains_per_protein,
-        classify_proteins,
         write_results,
     )
+
     from virosync.orchestration.resource_monitor import ResourceMonitor
 
     logger = get_orchestration_logger(__name__)
@@ -1329,17 +1303,16 @@ def classify_jelly_roll_task(
 def generate_outputs_task(
     verification_results: list,
     output_dir: Path,
-    genome_path: Optional[Path] = None,
-    proteome_path: Optional[Path] = None,
+    genome_path: Path | None = None,
+    proteome_path: Path | None = None,
     accepted_only: bool = False,
     extended_output: bool = True,
-    seed_marker_allowlist: Optional[list[str]] = None,
+    seed_marker_allowlist: list[str] | None = None,
     export_all_eve_sequences: bool = False,
-    canonical_results: Optional[list] = None,
-    promoted_low_results: Optional[list] = None,
+    canonical_results: list | None = None,
+    promoted_low_results: list | None = None,
 ) -> dict:
-    """
-    Generate output files from verification results.
+    """Generate output files from verification results.
 
     Produces BED, GFF3, TSV, and optionally FASTA files.
 
@@ -1398,8 +1371,7 @@ def create_summary_artifact_task(
     tier_counts: dict[str, int],
     output_files: dict,
 ) -> str:
-    """
-    Create a markdown summary artifact placeholder.
+    """Create a markdown summary artifact placeholder.
 
     Args:
         genome_id: Genome identifier

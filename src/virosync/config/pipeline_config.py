@@ -1,16 +1,11 @@
-"""
-ViroSync Pipeline Configuration Dataclasses.
-
-Provides a unified configuration system for the ViroSync orchestration pipeline.
-Consolidates 50+ parameters into nested dataclasses with validation.
-"""
+"""Define validated pipeline configuration sections and flat option mappings."""
 
 import types
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Union, get_args, get_origin, get_type_hints
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from virosync.ablation import ABLATION_CONTRACT_SHA256, AblationID
 
@@ -22,13 +17,11 @@ class ConfigError(ValueError):
 def _unknown_key(path: str, key: str, allowed: set[str]) -> ConfigError:
     dotted = f"{path}.{key}" if path else key
     matches = get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
-    hint = (
-        f" Did you mean '{path + '.' if path else ''}{matches[0]}'?" if matches else ""
-    )
+    hint = f" Did you mean '{path + '.' if path else ''}{matches[0]}'?" if matches else ""
     return ConfigError(f"Unknown configuration key '{dotted}'.{hint}")
 
 
-def _decode_value(annotation, value, path: str, base_dir: Optional[Path]):
+def _decode_value(annotation, value, path: str, base_dir: Path | None):
     origin = get_origin(annotation)
     args = get_args(annotation)
 
@@ -42,9 +35,7 @@ def _decode_value(annotation, value, path: str, base_dir: Optional[Path]):
                 return _decode_value(candidate, value, path, base_dir)
             except ConfigError as exc:
                 failures.append(str(exc))
-        raise ConfigError(
-            f"Invalid value for '{path}': {value!r}. {'; '.join(failures)}"
-        )
+        raise ConfigError(f"Invalid value for '{path}': {value!r}. {'; '.join(failures)}")
 
     if value is None:
         raise ConfigError(f"Configuration key '{path}' may not be null")
@@ -53,19 +44,13 @@ def _decode_value(annotation, value, path: str, base_dir: Optional[Path]):
         if not isinstance(value, list):
             raise ConfigError(f"Configuration key '{path}' must be a list")
         item_type = args[0] if args else Any
-        return [
-            _decode_value(item_type, item, f"{path}[{index}]", base_dir)
-            for index, item in enumerate(value)
-        ]
+        return [_decode_value(item_type, item, f"{path}[{index}]", base_dir) for index, item in enumerate(value)]
 
     if origin is tuple:
         if not isinstance(value, (list, tuple)):
             raise ConfigError(f"Configuration key '{path}' must be a list")
         item_type = args[0] if args else Any
-        return tuple(
-            _decode_value(item_type, item, f"{path}[{index}]", base_dir)
-            for index, item in enumerate(value)
-        )
+        return tuple(_decode_value(item_type, item, f"{path}[{index}]", base_dir) for index, item in enumerate(value))
 
     if annotation is Any:
         return value
@@ -99,9 +84,7 @@ def _decode_value(annotation, value, path: str, base_dir: Optional[Path]):
             return annotation(value)
         except ValueError as exc:
             choices = ", ".join(repr(member.value) for member in annotation)
-            raise ConfigError(
-                f"Configuration key '{path}' must be one of: {choices}"
-            ) from exc
+            raise ConfigError(f"Configuration key '{path}' must be one of: {choices}") from exc
     if isinstance(annotation, type) and is_dataclass(annotation):
         return _decode_dataclass(annotation, value, path, base_dir)
     if isinstance(annotation, type) and isinstance(value, annotation):
@@ -109,7 +92,7 @@ def _decode_value(annotation, value, path: str, base_dir: Optional[Path]):
     raise ConfigError(f"Unsupported schema type for '{path}': {annotation!r}")
 
 
-def _decode_dataclass(cls, data, path: str, base_dir: Optional[Path] = None):
+def _decode_dataclass(cls, data, path: str, base_dir: Path | None = None):
     if not isinstance(data, dict):
         label = path or cls.__name__
         raise ConfigError(f"Configuration section '{label}' must be a mapping")
@@ -177,29 +160,29 @@ class DatabasePaths:
     """Database and reference file paths for pipeline execution."""
 
     # HMM Detection
-    hmm_database: Optional[Path] = None
-    hmm_allowlist: Optional[Path] = None
+    hmm_database: Path | None = None
+    hmm_allowlist: Path | None = None
 
     # Marker Validation
-    marker_faa_dir: Optional[Path] = None
-    marker_faa_db: Optional[Path] = None
-    marker_db: Optional[Path] = None
-    seed_marker_allowlist: Optional[list[str]] = None
+    marker_faa_dir: Path | None = None
+    marker_faa_db: Path | None = None
+    marker_db: Path | None = None
+    seed_marker_allowlist: list[str] | None = None
 
     # Gene Taxonomy (Phase 3)
-    gene_taxonomy_faa_db: Optional[Path] = None
+    gene_taxonomy_faa_db: Path | None = None
 
     # Novelty/Taxonomy
-    faa_dir: Optional[Path] = None
+    faa_dir: Path | None = None
 
     # Phylogenetic Validation
-    gvclass_db: Optional[Path] = None
-    diamond_db: Optional[Path] = None
+    gvclass_db: Path | None = None
+    diamond_db: Path | None = None
 
     # Taxonomy Labels (for host signature comparison)
-    taxonomy_labels_file: Optional[Path] = None
+    taxonomy_labels_file: Path | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert string paths to Path objects."""
         for attr in [
             "hmm_database",
@@ -223,13 +206,13 @@ class ComputeConfig:
     """Compute resource settings."""
 
     threads: int = 8
-    max_threads: Optional[int] = None
+    max_threads: int | None = None
     device: Device = Device.CPU
     search_backend: SearchBackend = SearchBackend.DIAMOND
-    gene_taxonomy_threads: Optional[int] = None
-    interproscan_threads: Optional[int] = None
+    gene_taxonomy_threads: int | None = None
+    interproscan_threads: int | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert device/search_backend strings to enum if needed."""
         if isinstance(self.device, str):
             self.device = Device(self.device)
@@ -265,9 +248,7 @@ class AblationConfig:
         if not isinstance(self.id, AblationID):
             raise ValueError("ablation.id must be one of A0-A6")
         if self.contract_sha256 != ABLATION_CONTRACT_SHA256:
-            raise ValueError(
-                "ablation.contract_sha256 does not match this ViroSync build"
-            )
+            raise ValueError("ablation.contract_sha256 does not match this ViroSync build")
 
 
 @dataclass
@@ -278,7 +259,7 @@ class Phase1Config:
 
     # HMM settings
     assembly_mode: AssemblyMode = AssemblyMode.DEFAULT
-    hmm_chunk_size: Optional[int] = None
+    hmm_chunk_size: int | None = None
     frameshift_screening_enabled: bool = False
 
     # Region assembly
@@ -309,7 +290,7 @@ class Phase1Config:
     novel_marker_min_coverage: float = 0.5
     novel_marker_require_cluster: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert assembly_mode string to enum if needed."""
         if isinstance(self.assembly_mode, str):
             self.assembly_mode = AssemblyMode(self.assembly_mode)
@@ -344,6 +325,7 @@ class Phase2Config:
     diamond_random_seed: int = 42
     diamond_superset_prototype_enabled: bool = False
 
+
 @dataclass
 class Phase3Config:
     """Phase 3: Evidence synthesis parameters."""
@@ -373,40 +355,32 @@ class Phase3Config:
     boltz_no_kernels: bool = True  # Use --no_kernels flag for safer Boltz execution
     use_tmvec_database: bool = False
     tmvec_require_gpu: bool = False
-    tmvec_databases: Optional[list[str]] = None
-    tmvec_database_dir: Optional[Path] = None
+    tmvec_databases: list[str] | None = None
+    tmvec_database_dir: Path | None = None
     tmvec_min_score: float = 0.5
-    viral_structure_db: Optional[Path] = None
+    viral_structure_db: Path | None = None
     extended_output: bool = True
     export_all_eve_sequences: bool = True
 
     # InterProScan
     interproscan_enabled: bool = False
-    interproscan_dir: Optional[Path] = None
-    interproscan_keywords: Optional[list[str]] = None
-    interproscan_applications: Optional[list[str]] = None
+    interproscan_dir: Path | None = None
+    interproscan_keywords: list[str] | None = None
+    interproscan_applications: list[str] | None = None
 
     # GVClass batch classification
     run_gvclass: bool = False
-    gvclass_path: Optional[Path] = None
+    gvclass_path: Path | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert path fields to Path if needed."""
-        if self.interproscan_dir is not None and not isinstance(
-            self.interproscan_dir, Path
-        ):
+        if self.interproscan_dir is not None and not isinstance(self.interproscan_dir, Path):
             self.interproscan_dir = Path(self.interproscan_dir)
-        if self.viral_structure_db is not None and not isinstance(
-            self.viral_structure_db, Path
-        ):
+        if self.viral_structure_db is not None and not isinstance(self.viral_structure_db, Path):
             self.viral_structure_db = Path(self.viral_structure_db)
-        if self.tmvec_database_dir is not None and not isinstance(
-            self.tmvec_database_dir, Path
-        ):
+        if self.tmvec_database_dir is not None and not isinstance(self.tmvec_database_dir, Path):
             self.tmvec_database_dir = Path(self.tmvec_database_dir)
-        if self.gvclass_path is not None and not isinstance(
-            self.gvclass_path, Path
-        ):
+        if self.gvclass_path is not None and not isinstance(self.gvclass_path, Path):
             self.gvclass_path = Path(self.gvclass_path)
 
 
@@ -416,9 +390,9 @@ class MaskingConfig:
 
     backend: MaskingBackend = MaskingBackend.OFF
     failure_policy: MaskingFailurePolicy = MaskingFailurePolicy.STRICT
-    fallback_backend: Optional[MaskingBackend] = None
-    repeatmasker_species: Optional[str] = None
-    repeatmasker_library: Optional[Path] = None
+    fallback_backend: MaskingBackend | None = None
+    repeatmasker_species: str | None = None
+    repeatmasker_library: Path | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.backend, str):
@@ -474,36 +448,25 @@ class MaskingConfig:
         has_library = self.repeatmasker_library is not None
         if has_species and has_library:
             errors.append(
-                "execution.masking must set exactly one of repeatmasker_species "
-                "or repeatmasker_library, not both"
+                "execution.masking must set exactly one of repeatmasker_species or repeatmasker_library, not both"
             )
         if self.uses_repeatmasker and not (has_species or has_library):
             errors.append(
-                "execution.masking backend requires exactly one of "
-                "repeatmasker_species or repeatmasker_library"
+                "execution.masking backend requires exactly one of repeatmasker_species or repeatmasker_library"
             )
         if self.failure_policy is MaskingFailurePolicy.STRICT:
             if self.fallback_backend is not None:
-                errors.append(
-                    "execution.masking.fallback_backend must be null under strict policy"
-                )
+                errors.append("execution.masking.fallback_backend must be null under strict policy")
         else:
             if self.fallback_backend not in {
                 MaskingBackend.OFF,
                 MaskingBackend.TRF,
             }:
-                errors.append(
-                    "execution.masking fallback policy requires fallback_backend "
-                    "to be 'off' or 'trf'"
-                )
+                errors.append("execution.masking fallback policy requires fallback_backend to be 'off' or 'trf'")
             elif self.fallback_backend is self.backend:
-                errors.append(
-                    "execution.masking.fallback_backend must differ from backend"
-                )
+                errors.append("execution.masking.fallback_backend must differ from backend")
             if self.backend is MaskingBackend.OFF:
-                errors.append(
-                    "execution.masking fallback policy is invalid when backend is 'off'"
-                )
+                errors.append("execution.masking fallback policy is invalid when backend is 'off'")
         return errors
 
 
@@ -529,18 +492,18 @@ class FieldSpec:
     - ``to_flow_kwargs`` (nested field -> flat kwarg), incl. enum ``.value`` emission
     """
 
-    flat: str                       # canonical flat name (with_overrides key + to_flow_kwargs output key)
-    section: str                    # nested config attribute on PipelineConfig
-    field: str                      # dataclass field name on the section
-    enum: Optional[type] = None     # enum class: with_overrides coerces str; to_flow_kwargs emits .value
-    path: bool = False              # with_overrides coerces str -> Path
-    overridable: bool = True        # appears in with_overrides
-    emit: bool = True               # appears in to_flow_kwargs
-    wo_aliases: tuple = ()          # extra override-only flat names accepted by with_overrides
+    flat: str  # canonical flat name (with_overrides key + to_flow_kwargs output key)
+    section: str  # nested config attribute on PipelineConfig
+    field: str  # dataclass field name on the section
+    enum: type | None = None  # enum class: with_overrides coerces str; to_flow_kwargs emits .value
+    path: bool = False  # with_overrides coerces str -> Path
+    overridable: bool = True  # appears in with_overrides
+    emit: bool = True  # appears in to_flow_kwargs
+    wo_aliases: tuple[str, ...] = ()  # extra override-only flat names accepted by with_overrides
 
 
-def _spec(flat, section, field, **kw):
-    return FieldSpec(flat=flat, section=section, field=field, **kw)
+def _spec(flat: str, section: str, field: str, **kwargs: Any) -> FieldSpec:
+    return FieldSpec(flat=flat, section=section, field=field, **kwargs)
 
 
 _HTD = "host_taxonomy_deviation_"
@@ -719,8 +682,7 @@ def _reject_retired_pipeline_keys(data: dict) -> None:
 
 @dataclass
 class PipelineConfig:
-    """
-    Complete ViroSync pipeline configuration.
+    """Complete ViroSync pipeline configuration.
 
     Usage:
         # From YAML file
@@ -752,8 +714,7 @@ class PipelineConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
 
     def validate_database_paths(self, check_files: bool = True) -> list[str]:
-        """
-        Validate that required database files exist on disk.
+        """Validate that required database files exist on disk.
 
         Args:
             check_files: If True, verify files exist on disk. Set to False for tests.
@@ -768,7 +729,7 @@ class PipelineConfig:
 
         selected_paths: list[tuple[str, Path, str]] = []
 
-        def selected(label: str, path: Optional[Path], kind: str = "path") -> None:
+        def selected(label: str, path: Path | None, kind: str = "path") -> None:
             if path is not None:
                 selected_paths.append((label, Path(path), kind))
 
@@ -806,10 +767,7 @@ class PipelineConfig:
         masking_library = self.execution.masking.repeatmasker_library
         if self.execution.masking.uses_repeatmasker and masking_library is not None:
             if not masking_library.is_file():
-                errors.append(
-                    "RepeatMasker library is not a regular file: "
-                    f"{masking_library}"
-                )
+                errors.append(f"RepeatMasker library is not a regular file: {masking_library}")
             elif masking_library.stat().st_size == 0:
                 errors.append(f"RepeatMasker library is empty: {masking_library}")
 
@@ -837,17 +795,12 @@ class PipelineConfig:
         # HMM-gated workflow requires HMM database (only path supported)
         if not self.databases.hmm_database:
             errors.append("HMM-gated workflow requires databases.hmm_database")
-        missing_marker_build_inputs = (
-            self.databases.faa_dir is None
-            or (
-                self.databases.marker_faa_dir is None
-                and self.databases.marker_faa_db is None
-            )
+        missing_marker_build_inputs = self.databases.faa_dir is None or (
+            self.databases.marker_faa_dir is None and self.databases.marker_faa_db is None
         )
         if self.phase1.rebuild_db and missing_marker_build_inputs:
             errors.append(
-                "phase1.rebuild_db requires databases.faa_dir plus "
-                "databases.marker_faa_db or databases.marker_faa_dir"
+                "phase1.rebuild_db requires databases.faa_dir plus databases.marker_faa_db or databases.marker_faa_dir"
             )
         elif self.databases.marker_db is None and missing_marker_build_inputs:
             errors.append(
@@ -856,9 +809,7 @@ class PipelineConfig:
             )
         if self.phase3.enable_phylogenetic:
             if not self.databases.gvclass_db and not self.databases.diamond_db:
-                errors.append(
-                    "Phylogenetic validation requires gvclass_db or diamond_db"
-                )
+                errors.append("Phylogenetic validation requires gvclass_db or diamond_db")
         if self.phase3.interproscan_enabled and not self.phase3.interproscan_dir:
             errors.append("InterProScan enabled but interproscan_dir not set")
         return errors
@@ -869,18 +820,12 @@ class PipelineConfig:
         if not isinstance(self.ablation.id, AblationID):
             errors.append("ablation.id must be one of A0-A6")
         if self.ablation.contract_sha256 != ABLATION_CONTRACT_SHA256:
-            errors.append(
-                "ablation.contract_sha256 does not match this ViroSync build"
-            )
+            errors.append("ablation.contract_sha256 does not match this ViroSync build")
         if self.ablation.id is AblationID.A4 and self.phase2.taxonomy_ml_enabled:
             errors.append(
-                "ablation A4 cannot use phase2.taxonomy_ml_enabled because its "
-                "model contains host-derived features"
+                "ablation A4 cannot use phase2.taxonomy_ml_enabled because its model contains host-derived features"
             )
-        if (
-            self.phase2.diamond_superset_prototype_enabled
-            and self.phase2.diamond_top_k != 10
-        ):
+        if self.phase2.diamond_superset_prototype_enabled and self.phase2.diamond_top_k != 10:
             errors.append(
                 "phase2.diamond_superset_prototype_enabled requires "
                 "phase2.diamond_top_k=10 so both cached consumers use the same "
@@ -991,17 +936,13 @@ class PipelineConfig:
             errors.append("phase3.priority_marker_list must include at least one marker token")
 
         if self.phase2.taxonomy_ml_model not in {"logreg", "gbdt", "xgboost"}:
-            errors.append(
-                "phase2.taxonomy_ml_model must be one of: logreg, gbdt, xgboost"
-            )
+            errors.append("phase2.taxonomy_ml_model must be one of: logreg, gbdt, xgboost")
         if self.phase2.taxonomy_weight_mode not in {"rank", "bitscore"}:
             errors.append("phase2.taxonomy_weight_mode must be one of: rank, bitscore")
         if self.phase3.boltz_min_seq_len > self.phase3.boltz_max_seq_len:
             errors.append("phase3.boltz_min_seq_len must be <= boltz_max_seq_len")
         if self.phase3.tmvec_require_gpu and not self.phase3.use_tmvec_database:
-            errors.append(
-                "phase3.tmvec_require_gpu requires phase3.use_tmvec_database=true"
-            )
+            errors.append("phase3.tmvec_require_gpu requires phase3.use_tmvec_database=true")
         if self.phase3.tmvec_databases is not None:
             if self.phase3.tmvec_databases != ["bfvd"]:
                 errors.append("phase3.tmvec_databases must be ['bfvd']")
@@ -1015,15 +956,12 @@ class PipelineConfig:
         if not self.host.label.strip():
             errors.append("host.label must not be empty")
         elif f"{self.host.label}__" not in self.host.prefixes:
-            errors.append(
-                f"host.prefixes must contain the primary prefix '{self.host.label}__'"
-            )
+            errors.append(f"host.prefixes must contain the primary prefix '{self.host.label}__'")
 
         return errors
 
-    def with_overrides(self, **kwargs) -> "PipelineConfig":
-        """
-        Return a new config with specified overrides applied.
+    def with_overrides(self, **kwargs: Any) -> "PipelineConfig":
+        """Return a new config with specified overrides applied.
 
         Maps flat kwargs (from flow function signatures) to nested config
         structure via FIELD_SPECS. Only non-None values are applied.
@@ -1042,9 +980,7 @@ class PipelineConfig:
                 continue
             if key == "skip_masking":
                 if type(value) is not bool:
-                    raise ConfigError(
-                        "Pipeline override 'skip_masking' must be a boolean"
-                    )
+                    raise ConfigError("Pipeline override 'skip_masking' must be a boolean")
                 current = new_config.execution.masking
                 new_config.execution.masking = (
                     current.with_backend(MaskingBackend.OFF)
@@ -1068,9 +1004,7 @@ class PipelineConfig:
                     value = spec.enum(value)
                 except ValueError as exc:
                     choices = ", ".join(repr(item.value) for item in spec.enum)
-                    raise ConfigError(
-                        f"Pipeline override '{key}' must be one of: {choices}"
-                    ) from exc
+                    raise ConfigError(f"Pipeline override '{key}' must be one of: {choices}") from exc
             elif spec.path and isinstance(value, str):
                 value = Path(value)
             setattr(getattr(new_config, spec.section), spec.field, value)
@@ -1101,7 +1035,7 @@ class PipelineConfig:
         cls,
         data: dict,
         *,
-        base_dir: Optional[Path] = None,
+        base_dir: Path | None = None,
     ) -> "PipelineConfig":
         """Decode canonical nested pipeline configuration without side effects."""
         if not isinstance(data, dict):

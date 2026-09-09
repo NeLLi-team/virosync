@@ -88,9 +88,7 @@ def test_phylo_validation_does_not_clobber_true_has_mcp(tmp_path: Path) -> None:
     result = _verification_result(has_mcp=True)
     synth._run_phylogenetic_validation(result, _boundary())
 
-    assert result.has_mcp is True, (
-        "has_mcp set upstream by HMM/Diamond must not be demoted by GVClass"
-    )
+    assert result.has_mcp is True, "has_mcp set upstream by HMM/Diamond must not be demoted by GVClass"
 
 
 def test_phylo_validation_promotes_false_has_mcp(tmp_path: Path) -> None:
@@ -100,9 +98,7 @@ def test_phylo_validation_promotes_false_has_mcp(tmp_path: Path) -> None:
     result = _verification_result(has_mcp=False)
     synth._run_phylogenetic_validation(result, _boundary())
 
-    assert result.has_mcp is True, (
-        "GVClass-detected MCP must promote an upstream-False has_mcp to True"
-    )
+    assert result.has_mcp is True, "GVClass-detected MCP must promote an upstream-False has_mcp to True"
 
 
 def test_phylo_validation_keeps_false_when_both_false(tmp_path: Path) -> None:

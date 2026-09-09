@@ -8,7 +8,6 @@ import csv
 import hashlib
 import json
 from pathlib import Path
-from typing import Optional
 
 from .run_state import (
     RUN_STATE_FILENAME,
@@ -46,10 +45,7 @@ def _completed_run_artifacts(
         if not plan.completed or state.status != "success":
             return None
 
-        paths = {
-            artifact.relative_path: output_dir / artifact.relative_path
-            for artifact in state.artifacts
-        }
+        paths = {artifact.relative_path: output_dir / artifact.relative_path for artifact in state.artifacts}
 
         def _select(*relative_paths: str) -> Path | None:
             for relative in relative_paths:
@@ -125,9 +121,7 @@ def _completed_run_artifacts(
     }
     payload = _load_completion_payload(manifest) or {}
     if payload.get("masking_status"):
-        artifacts["masking_status"] = (
-            output_dir / "phase0" / "masking" / "masking_status.json"
-        )
+        artifacts["masking_status"] = output_dir / "phase0" / "masking" / "masking_status.json"
     return artifacts
 
 
@@ -245,9 +239,7 @@ def _masking_identity_ok(
     requested_fingerprint = payload.get("config_fingerprint")
     effective_fingerprint = payload.get("effective_masking_fingerprint")
     if requested_fingerprint is not None:
-        expected_effective = hashlib.sha256(
-            f"{requested_fingerprint}|{result.status_sha256}".encode()
-        ).hexdigest()
+        expected_effective = hashlib.sha256(f"{requested_fingerprint}|{result.status_sha256}".encode()).hexdigest()
         if effective_fingerprint != expected_effective:
             return False
     return True
@@ -321,10 +313,10 @@ def _manifest_is_stale(
 
 
 def _require_phase2b_gene_taxonomy_db(
-    gene_taxonomy_faa_db: Optional[Path],
+    gene_taxonomy_faa_db: Path | None,
     *,
     has_seeds: bool,
-) -> Optional[Path]:
+) -> Path | None:
     """Return the required Phase 2b taxonomy DB, or fail before boundary work."""
     if not has_seeds:
         return None
@@ -336,7 +328,5 @@ def _require_phase2b_gene_taxonomy_db(
         )
     phase2b_db = Path(gene_taxonomy_faa_db)
     if not phase2b_db.exists():
-        raise FileNotFoundError(
-            f"Phase 2b gene taxonomy database not found: {phase2b_db}"
-        )
+        raise FileNotFoundError(f"Phase 2b gene taxonomy database not found: {phase2b_db}")
     return phase2b_db

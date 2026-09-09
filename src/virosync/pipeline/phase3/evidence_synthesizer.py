@@ -1,5 +1,4 @@
-"""
-Evidence Synthesizer for EVE Verification.
+"""Evidence Synthesizer for EVE Verification.
 
 Combines all enabled evidence for each candidate, then assigns one of the
 default confidence tiers:
@@ -22,23 +21,23 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family
 from virosync.ablation import AblationID
 from virosync.config import get_config
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family
+from virosync.pipeline.host_signatures import (
+    HostSignatureModel,
+    get_taxonomy_lookup,
+    host_signature_density_evalue_weighted,
+)
 from virosync.pipeline.phase1.viral_markers import (
     CRESS_MARKER_MODELS,
     base_marker_gene_id,
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
 )
-from virosync.pipeline.host_signatures import (
-    HostSignatureModel,
-    get_taxonomy_lookup,
-    host_signature_density_evalue_weighted,
-)
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase3.gene_taxonomy import viral_hit_categories
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
@@ -47,11 +46,13 @@ from .evidence_graph import (
     analyze_eve_coherence,
 )
 from .phylogenetic_validation import (
-    PhylogeneticValidator,
     PhylogeneticValidationResult,
+    PhylogeneticValidator,
 )
 
 if TYPE_CHECKING:
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomyRecord
+
     from .structural_homology import BoltzFoldSeekAnalyzer, StructuralHomologyResult
     from .tmvec_database import TMVecDatabaseSearch
 
@@ -95,9 +96,9 @@ PLV_CORE_MARKER_PREFIXES = {
     "pc": ("plv_pc",),
 }
 
+
 def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
     """Return identity-qualified and CRESS-specific-top-hit gene IDs."""
-
     qualified: set[str] = set()
     specific_top1: set[str] = set()
     for hit in hallmark_hits:
@@ -106,11 +107,7 @@ def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
         if isinstance(hit, dict):
             porf_id = str(hit.get("porf_id") or hit.get("query_name") or "")
         else:
-            porf_id = str(
-                getattr(hit, "porf_id", None)
-                or getattr(hit, "query_porf", "")
-                or ""
-            )
+            porf_id = str(getattr(hit, "porf_id", None) or getattr(hit, "query_porf", "") or "")
         if porf_id:
             gene_id = base_marker_gene_id(porf_id)
             qualified.add(gene_id)
@@ -120,8 +117,7 @@ def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
 
 
 def _marker_totals_from_annotation(annotation_index: dict[str, dict]) -> dict[str, int]:
-    """
-    Count total unique marker categories for completeness calculation.
+    """Count total unique marker categories for completeness calculation.
 
     Groups similar HMM variants (e.g., PLV_MCP_1-10 count as one "mcp" category)
     to match the per-protein deduplication logic in compute_marker_completeness.
@@ -190,7 +186,7 @@ def _infer_family_from_model(model_name: str, source: str, description: str) -> 
     return "UNKNOWN"
 
 
-def load_marker_annotation_index(annotation_path: Optional[Path]) -> dict[str, dict]:
+def load_marker_annotation_index(annotation_path: Path | None) -> dict[str, dict]:
     if not annotation_path or not Path(annotation_path).exists():
         return {}
     index: dict[str, dict] = {}
@@ -210,7 +206,7 @@ def load_marker_annotation_index(annotation_path: Optional[Path]) -> dict[str, d
             # ("capscan <group> Major Capsid Protein"); surface it for likely_group.
             capscan_group = ""
             if "_caps_" in model_name.lower() and description.startswith("capscan "):
-                capscan_group = description[len("capscan "):].split(" Major Capsid Protein")[0].strip()
+                capscan_group = description[len("capscan ") :].split(" Major Capsid Protein")[0].strip()
             index[model_name.lower()] = {
                 "categories": categories,
                 "family": family,
@@ -223,7 +219,7 @@ def load_marker_annotation_index(annotation_path: Optional[Path]) -> dict[str, d
 
 def summarize_marker_hits(
     hallmark_genes: list[str],
-    annotation_index: Optional[dict[str, dict]] = None,
+    annotation_index: dict[str, dict] | None = None,
 ) -> dict:
     annotation_index = annotation_index or {}
     categories: set[str] = set()
@@ -238,10 +234,7 @@ def summarize_marker_hits(
             family = annotation.get("family", "UNKNOWN")
             if family != "UNKNOWN":
                 families[family] += 1
-            if (
-                "capsid" in annotation.get("categories", set())
-                and gene.upper() not in CRESS_MARKER_MODELS
-            ):
+            if "capsid" in annotation.get("categories", set()) and gene.upper() not in CRESS_MARKER_MODELS:
                 has_mcp = True
             continue
 
@@ -283,11 +276,10 @@ def summarize_marker_hits(
 
 def compute_marker_completeness(
     hallmark_genes: list[str],
-    annotation_index: Optional[dict[str, dict]] = None,
-    hallmark_hits: Optional[list[dict]] = None,
+    annotation_index: dict[str, dict] | None = None,
+    hallmark_hits: list[dict] | None = None,
 ) -> dict[str, object]:
-    """
-    Compute marker completeness with per-protein deduplication.
+    """Compute marker completeness with per-protein deduplication.
 
     When a single protein hits multiple similar HMM models (e.g., PLV_MCP_1,
     PLV_MCP_2, PLV_MCP_9), only count the highest-scoring hit to avoid
@@ -381,7 +373,9 @@ def compute_marker_completeness(
                 ncldv_hits.add(key)
             if key.startswith("mirus_"):
                 mirus_hits.add(key)
-            if key.startswith("plv_") and not any(key.startswith(p) for label, prefixes in PLV_CORE_MARKER_PREFIXES.items() for p in prefixes):
+            if key.startswith("plv_") and not any(
+                key.startswith(p) for label, prefixes in PLV_CORE_MARKER_PREFIXES.items() for p in prefixes
+            ):
                 plv_hits.add(key)
     else:
         # Count unique categories from deduplicated hits
@@ -482,7 +476,7 @@ def _hit_field(hit: object, name: str) -> object:
 
 def marker_taxonomy_category(
     hit: object,
-    taxonomy_lookup: Optional[dict] = None,
+    taxonomy_lookup: dict | None = None,
 ) -> str:
     """Return one marker's taxonomy vote, or ``""`` when it has no vote.
 
@@ -527,16 +521,12 @@ def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
         gene_name = str(_hit_field(hit, "hallmark_gene") or "")
         if not gene_name:
             continue
-        porf_id = str(
-            _hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""
-        )
+        porf_id = str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
         # Without a protein ID there is no evidence two hits share a protein, so
         # they must not be collapsed. Key them apart instead of on profile name.
         base_gene = base_marker_gene_id(porf_id) if porf_id else f"\0hit{index}"
         try:
-            score = float(
-                _hit_field(hit, "hmm_score") or _hit_field(hit, "score") or 0.0
-            )
+            score = float(_hit_field(hit, "hmm_score") or _hit_field(hit, "score") or 0.0)
         except (TypeError, ValueError):
             score = 0.0
         # An MCP outranks any score; among equals, the higher score wins.
@@ -548,8 +538,8 @@ def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
 
 
 def mcp_vote_classes(
-    hallmark_hits: Optional[list],
-    taxonomy_lookup: Optional[dict] = None,
+    hallmark_hits: list | None,
+    taxonomy_lookup: dict | None = None,
 ) -> set[str]:
     """Return the distinct classes this EVE's MCP markers vote for."""
     return {
@@ -561,10 +551,10 @@ def mcp_vote_classes(
 
 
 def taxonomy_class_votes(
-    hallmark_hits: Optional[list],
+    hallmark_hits: list | None,
     *,
-    gene_taxonomy_records: Optional[list] = None,
-    taxonomy_lookup: Optional[dict] = None,
+    gene_taxonomy_records: list | None = None,
+    taxonomy_lookup: dict | None = None,
 ) -> Counter:
     """Return the weighted lineage votes for one EVE.
 
@@ -587,14 +577,10 @@ def taxonomy_class_votes(
             continue
         gene_id = base_marker_gene_id(str(_hit_field(record, "porf_id") or ""))
         if gene_id:
-            gene_category_by_id[gene_id] = marker_taxonomy_category(
-                record, taxonomy_lookup
-            )
+            gene_category_by_id[gene_id] = marker_taxonomy_category(record, taxonomy_lookup)
 
     for hit in hallmark_hits or []:
-        gene_id = base_marker_gene_id(
-            str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
-        )
+        gene_id = base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""))
         if gene_id:
             marker_gene_ids.add(gene_id)
         marker_category = marker_taxonomy_category(hit, taxonomy_lookup)
@@ -627,10 +613,10 @@ def taxonomy_class_votes(
 
 
 def consensus_taxonomy_class(
-    hallmark_hits: Optional[list],
+    hallmark_hits: list | None,
     *,
-    gene_taxonomy_records: Optional[list] = None,
-    taxonomy_lookup: Optional[dict] = None,
+    gene_taxonomy_records: list | None = None,
+    taxonomy_lookup: dict | None = None,
 ) -> str:
     """Return the published taxonomy class for one EVE.
 
@@ -659,11 +645,7 @@ def consensus_taxonomy_class(
     )
     total = sum(weights.values())
     if not total:
-        return (
-            "VIRAL_UNKNOWN"
-            if _has_validated_marker(list(hallmark_hits or []))
-            else "UNKNOWN"
-        )
+        return "VIRAL_UNKNOWN" if _has_validated_marker(list(hallmark_hits or [])) else "UNKNOWN"
     category, weight = weights.most_common(1)[0]
     if category in LINEAGE_EVE_CLASSES and weight * 2 > total:
         return category
@@ -672,13 +654,11 @@ def consensus_taxonomy_class(
 
 def _has_validated_marker(hits: list) -> bool:
     return any(
-        str(_hit_field(hit, "validation_status") or "").strip().lower()
-        in _VALIDATED_MARKER_STATUSES
-        for hit in hits
+        str(_hit_field(hit, "validation_status") or "").strip().lower() in _VALIDATED_MARKER_STATUSES for hit in hits
     )
 
 
-def infer_likely_family(result: "VerificationResult") -> str:
+def infer_likely_family(result: VerificationResult) -> str:
     classification = result.region_classification or ""
     if canonical_family(classification) in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
         return canonical_family(classification)
@@ -705,7 +685,7 @@ def infer_likely_family(result: "VerificationResult") -> str:
 
 def infer_likely_group(
     scored_hallmarks: list[tuple[str, float]],
-    annotation_index: Optional[dict[str, dict]] = None,
+    annotation_index: dict[str, dict] | None = None,
 ) -> str:
     """Best-hit capscan group (Trimcap/PgVV/Alpenseevirus/...) for an EVE's hallmark
     MCP markers. Returns the Bellas&Sommaruga 2026 group of the highest-scoring hallmark
@@ -739,7 +719,7 @@ def _confidence_tier_for_score(score: float, *, high: float, low: float) -> str:
     return "LOW"
 
 
-def assign_confidence_tier(result: "VerificationResult", high: float = 0.7, low: float = 0.2) -> str:
+def assign_confidence_tier(result: VerificationResult, high: float = 0.7, low: float = 0.2) -> str:
     """Assign a tier from the final rule-based score, not a probability.
 
     Tiers:
@@ -758,7 +738,7 @@ def assign_confidence_tier(result: "VerificationResult", high: float = 0.7, low:
     return _confidence_tier_for_score(result.final_confidence, high=high, low=low)
 
 
-def compute_marker_score(result: "VerificationResult") -> float:
+def compute_marker_score(result: VerificationResult) -> float:
     """Compute marker score from hallmark evidence."""
     # seed_sources records provenance, not marker identity. The authoritative
     # has_mcp flag is populated in _process_hallmark_hits via is_mcp_gene.
@@ -767,19 +747,11 @@ def compute_marker_score(result: "VerificationResult") -> float:
     diversity_score = min(result.hallmark_diversity / 5.0, 1.0) if total_markers > 0 else 0.0
 
     if result.marker_category_hits:
-        return (
-            0.45 * (1.0 if has_mcp else 0.0) +
-            0.35 * result.marker_complement_score +
-            0.20 * diversity_score
-        )
-    return (
-        0.50 * (1.0 if has_mcp else 0.0) +
-        0.30 * diversity_score +
-        0.20 * min(total_markers / 8.0, 1.0)
-    )
+        return 0.45 * (1.0 if has_mcp else 0.0) + 0.35 * result.marker_complement_score + 0.20 * diversity_score
+    return 0.50 * (1.0 if has_mcp else 0.0) + 0.30 * diversity_score + 0.20 * min(total_markers / 8.0, 1.0)
 
 
-def compute_family_consistency_score(result: "VerificationResult") -> float:
+def compute_family_consistency_score(result: VerificationResult) -> float:
     """Small bonus when marker, taxonomy, and interproscan evidence agree on family."""
     votes: Counter[str] = Counter()
     # Canonicalise before voting: a region labelled PPV and a marker family
@@ -815,7 +787,7 @@ def compute_family_consistency_score(result: "VerificationResult") -> float:
     return 0.0
 
 
-def should_accept_mcp_override(result: "VerificationResult") -> bool:
+def should_accept_mcp_override(result: VerificationResult) -> bool:
     """Return True when MCP evidence is present for override acceptance."""
     if result.has_mcp and result.hallmark_count >= 1:
         return True
@@ -845,8 +817,8 @@ class CompositionAblationEffect:
     interventions: int = 0
     changed: int = 0
     composition_score: float = 0.0
-    reference_confidence: Optional[float] = None
-    selected_confidence: Optional[float] = None
+    reference_confidence: float | None = None
+    selected_confidence: float | None = None
     reference_tier: str = ""
     selected_tier: str = ""
 
@@ -872,8 +844,8 @@ def evaluate_composition_ablation_effect(
     selected_confidence: float,
     high_threshold: float,
     low_threshold: float,
-    reference_tier: Optional[str] = None,
-    selected_tier: Optional[str] = None,
+    reference_tier: str | None = None,
+    selected_tier: str | None = None,
 ) -> CompositionAblationEffect:
     """Compare A5 with A0 without changing a ``VerificationResult``.
 
@@ -900,10 +872,7 @@ def evaluate_composition_ablation_effect(
     opportunity = int(composition_score > 0.0)
     changed = int(
         opportunity > 0
-        and (
-            reference_confidence != selected_confidence
-            or resolved_reference_tier != resolved_selected_tier
-        )
+        and (reference_confidence != selected_confidence or resolved_reference_tier != resolved_selected_tier)
     )
     return CompositionAblationEffect(
         opportunities=opportunity,
@@ -919,8 +888,7 @@ def evaluate_composition_ablation_effect(
 
 @dataclass
 class VerificationResult:
-    """
-    Complete verification result for an EVE candidate.
+    """Complete verification result for an EVE candidate.
 
     Contains the verification status, all evidence, and final scores.
     """
@@ -935,18 +903,16 @@ class VerificationResult:
     status: VerificationStatus = VerificationStatus.AMBIGUOUS
     final_confidence: float = 0.0
     ablation_id: AblationID = AblationID.A0
-    composition_ablation_effect: CompositionAblationEffect = field(
-        default_factory=CompositionAblationEffect
-    )
+    composition_ablation_effect: CompositionAblationEffect = field(default_factory=CompositionAblationEffect)
 
     # Input evidence
     crf_confidence: float = 0.0
     crf_posterior: float = 0.0
 
     # Tie-breaker results
-    coherence_analysis: Optional[CoherenceAnalysis] = None
+    coherence_analysis: CoherenceAnalysis | None = None
     structural_results: list[StructuralHomologyResult] = field(default_factory=list)
-    phylogenetic_result: Optional[PhylogeneticValidationResult] = None
+    phylogenetic_result: PhylogeneticValidationResult | None = None
     tmvec_all_proteins: list[dict] = field(default_factory=list)
 
     # Aggregated scores
@@ -1016,8 +982,8 @@ class VerificationResult:
     taxonomy_class_from_mcp: bool = False
     likely_group: str = ""  # capscan Bellas2026 group (Trimcap/PgVV/...) below the class
     confidence_tier: str = "LOW"  # HIGH, MEDIUM, or LOW
-    candidate_start: Optional[int] = None
-    candidate_end: Optional[int] = None
+    candidate_start: int | None = None
+    candidate_end: int | None = None
 
     # Contig-edge detection (partial EVE flag - no penalty, just informational)
     partial_eve: bool = False  # True if EVE is at contig boundary
@@ -1055,7 +1021,7 @@ class VerificationResult:
     gene_taxonomy_has_vp_plv: bool = False
     gene_taxonomy_dominant_family: str = "UNKNOWN"
     gene_taxonomy_dominant_fraction: float = 0.0
-    gene_taxonomy_records: list[dict] = field(default_factory=list)
+    gene_taxonomy_records: list[GeneTaxonomyRecord] = field(default_factory=list)
 
     # NEW: Flanking gene tracking (for taxonomy expansion fix)
     gene_taxonomy_total_with_flanking: int = 0  # Interior + flanking
@@ -1293,12 +1259,8 @@ class EvidenceSynthesizerConfig:
     # HIGH: confidence >= high_tier_threshold
     # MEDIUM: low_tier_threshold <= confidence < high_tier_threshold
     # LOW: confidence < low_tier_threshold
-    high_tier_threshold: float = field(
-        default_factory=lambda: get_config().evidence.high_tier_threshold
-    )
-    low_tier_threshold: float = field(
-        default_factory=lambda: get_config().evidence.low_tier_threshold
-    )
+    high_tier_threshold: float = field(default_factory=lambda: get_config().evidence.high_tier_threshold)
+    low_tier_threshold: float = field(default_factory=lambda: get_config().evidence.low_tier_threshold)
     use_crf_in_final_score: bool = False
     priority_marker_list: list[str] = field(default_factory=lambda: ["mcp"])
     marker_floor_priority_only: float = 0.55
@@ -1308,11 +1270,11 @@ class EvidenceSynthesizerConfig:
     marker_multi_family_bonus: float = 0.08
 
     # Optional host signature strings for host-like penalty
-    euk_host_signatures: Optional[set[str]] = None
+    euk_host_signatures: set[str] | None = None
     # Weighted host signature model
-    host_signature_model: Optional[dict] = None
+    host_signature_model: dict | None = None
     host_signature_score_threshold: float = 0.3
-    host_prefixes: Optional[list[str]] = None
+    host_prefixes: list[str] | None = None
     host_label: str = "EUK"
 
     # Structural analysis settings (Boltz + FoldSeek)
@@ -1326,23 +1288,23 @@ class EvidenceSynthesizerConfig:
 
     # TMVec database search (fast structural evidence)
     use_tmvec_database: bool = False
-    tmvec_databases: Optional[list[str]] = None  # BFVD only
-    tmvec_database_dir: Optional[Path] = None
+    tmvec_databases: list[str] | None = None  # BFVD only
+    tmvec_database_dir: Path | None = None
     tmvec_min_score: float = 0.5
     tmvec_require_gpu: bool = False
 
     # Phylogenetic validation settings
     use_phylogenetic_validation: bool = False
-    gvclass_db: Optional[Path] = None
-    diamond_db: Optional[Path] = None
+    gvclass_db: Path | None = None
+    diamond_db: Path | None = None
 
     # InterProScan settings
     use_interproscan: bool = False
-    interproscan_dir: Optional[Path] = None
-    interproscan_keywords: Optional[list[str]] = None
+    interproscan_dir: Path | None = None
+    interproscan_keywords: list[str] | None = None
 
     # Marker annotation index (for category scoring)
-    marker_annotations_path: Optional[Path] = None
+    marker_annotations_path: Path | None = None
 
     # Phylogenetic rejection override
     # If phylogenetic validation strongly rejects viral, override boundary support.
@@ -1361,8 +1323,7 @@ class EvidenceSynthesizerConfig:
 
 
 def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
-    """
-    Load capsid-fold and MCP-support data from a TSV file.
+    """Load capsid-fold and MCP-support data from a TSV file.
 
     Returns a dict mapping pORF base IDs (without domain suffixes) to classification records.
 
@@ -1432,9 +1393,7 @@ def _has_priority_marker(result: VerificationResult, priority_markers: list[str]
     # {"hhg","novelty","compositional"} source tags, never priority-marker
     # tokens like "mcp"/"polb". See note above compute_marker_score.
     marker_tokens = (
-        list(result.hallmark_genes)
-        + list(result.interproscan_keyword_hits)
-        + list(result.interproscan_category_hits)
+        list(result.hallmark_genes) + list(result.interproscan_keyword_hits) + list(result.interproscan_category_hits)
     )
     # "mcp" goes through the canonical detector: a substring match promoted any
     # name merely containing the trigram ("ncmcp_pseudoprotein", "Baculovirus
@@ -1455,9 +1414,9 @@ def _has_priority_marker(result: VerificationResult, priority_markers: list[str]
 def calculate_eve_confidence(
     result: VerificationResult,
     crf_confidence: float,
-    tmvec_score: Optional[float] = None,
+    tmvec_score: float | None = None,
     use_crf_score: bool = False,
-    priority_markers: Optional[list[str]] = None,
+    priority_markers: list[str] | None = None,
     marker_floor_priority_only: float = 0.55,
     marker_floor_priority_plus_family: float = 0.70,
     marker_floor_priority_multi_family: float = 0.80,
@@ -1468,8 +1427,7 @@ def calculate_eve_confidence(
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
 ) -> float:
-    """
-    Calculate final EVE confidence score integrating all evidence types.
+    """Calculate final EVE confidence score integrating all evidence types.
 
     Implements Step 10 confidence formula from PIPELINE_HMM_GATED_PLAN.md:
 
@@ -1484,6 +1442,11 @@ def calculate_eve_confidence(
     Active base weights are normalized. Structural evidence contributes a
     separate additive term of at most 0.15 before penalties, bonuses, caps,
     and configured priority-marker floors are applied.
+
+    After both reference and selected scores succeed, this function updates
+    ``result.ablation_id``, ``result.high_confidence_euk_genes``,
+    ``result.family_consistency_score``, ``result.score_components``, and
+    ``result.composition_ablation_effect``.
 
     Penalties:
     - High-identity EUK (max -0.12): Fraction of genes with >=70% EUK identity
@@ -1501,171 +1464,260 @@ def calculate_eve_confidence(
     """
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
+    evidence = _collect_confidence_evidence(
+        result,
+        crf_confidence=crf_confidence,
+        tmvec_score=tmvec_score,
+        use_crf_score=use_crf_score,
+        host_signature_score_threshold=host_signature_score_threshold,
+    )
+    bonuses = _calculate_confidence_bonuses(
+        result,
+        evidence,
+        priority_markers=[marker.lower() for marker in (priority_markers or ["mcp"])],
+        marker_floor_priority_only=marker_floor_priority_only,
+        marker_floor_priority_plus_family=marker_floor_priority_plus_family,
+        marker_floor_priority_multi_family=marker_floor_priority_multi_family,
+        marker_family_bonus_per_family=marker_family_bonus_per_family,
+        marker_multi_family_bonus=marker_multi_family_bonus,
+    )
+    _log_confidence_bonuses(result, evidence, bonuses)
 
-    def _seed_cluster_score(res: VerificationResult) -> float:
-        ncldv = res.region_classification_ncldv_markers
-        vp_plv = res.region_classification_vp_plv_markers
-        mirus = res.region_classification_mirus_markers
-        if vp_plv >= 4 or ncldv >= 3 or mirus >= 3:
-            return 1.0
-        if max(ncldv, vp_plv, mirus) >= 2:
-            return 0.5
-        return 0.0
-    # ─────────────────────────────────────────────────────────────
-    # 1. Marker Score (0-1)
-    # ─────────────────────────────────────────────────────────────
+    reference = _assemble_confidence(result, evidence, bonuses, include_composition=True)
+    selected = (
+        _assemble_confidence(result, evidence, bonuses, include_composition=False)
+        if ablation_id is AblationID.A5
+        else reference
+    )
+    composition_ablation_effect = evaluate_composition_ablation_effect(
+        ablation_id=ablation_id,
+        composition_score=evidence.component_scores["composition"],
+        reference_confidence=reference.confidence,
+        selected_confidence=selected.confidence,
+        high_threshold=high_tier_threshold,
+        low_threshold=low_tier_threshold,
+    )
+    _apply_confidence_result(
+        result,
+        ablation_id=ablation_id,
+        selected=selected,
+        high_confidence_euk_genes=evidence.high_confidence_euk_genes,
+        family_consistency_score=evidence.family_consistency_score,
+        composition_ablation_effect=composition_ablation_effect,
+    )
+    return selected.confidence
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfidenceEvidence:
+    """Normalized evidence needed to assemble reference and selected scores."""
+
+    component_scores: dict[str, float]
+    component_weights: dict[str, float]
+    structural_score: float
+    gene_count: int
+    viral_fraction: float
+    viral_evidence: int
+    family_consistency_score: float
+    high_confidence_euk_genes: int
+    euk_penalty: float
+    host_signature_penalty: float
+    size_penalty: float
+    use_crf_score: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfidenceBonuses:
+    """Ordered additive terms and marker-floor policy for one candidate."""
+
+    common: float
+    reference: float
+    composition: float
+    priority_floor: float
+    has_priority_marker: bool
+    taxonomy_distribution: float
+    host_divergence: float
+    viral_enrichment: float
+
+
+@dataclass(frozen=True, slots=True)
+class _CalculatedConfidence:
+    """One assembled confidence score and its inspectable component record."""
+
+    confidence: float
+    components: dict[str, object]
+
+
+def _collect_confidence_evidence(
+    result: VerificationResult,
+    *,
+    crf_confidence: float,
+    tmvec_score: float | None,
+    use_crf_score: bool,
+    host_signature_score_threshold: float,
+) -> _ConfidenceEvidence:
+    """Normalize all score components and penalties without mutating the result."""
     marker_score = compute_marker_score(result)
+    composition_score = _composition_score(result)
+    viral_fraction = _viral_gene_fraction(result)
+    gene_taxonomy_score = _gene_taxonomy_score(result, viral_fraction)
+    structural_score = _structural_score(result, tmvec_score)
+    high_confidence_euk_genes = _high_confidence_euk_gene_count(result.gene_taxonomy_records)
+    euk_penalty = _euk_penalty(result, high_confidence_euk_genes, viral_fraction)
+    host_signature_penalty = _host_signature_penalty(result, host_signature_score_threshold)
+    if result.taxonomy_distribution_viral_score >= 0.4:
+        reduction_factor = min(result.taxonomy_distribution_viral_score, 0.8)
+        euk_penalty *= 1.0 - reduction_factor
+        host_signature_penalty *= 1.0 - reduction_factor * 0.5
+    interproscan_score = result.interproscan_score or 0.0
+    seed_cluster_score = _seed_cluster_score(result)
+    family_consistency_score = compute_family_consistency_score(result)
+    return _ConfidenceEvidence(
+        component_scores={
+            "crf": crf_confidence,
+            "composition": composition_score,
+            "marker": marker_score,
+            "gene_taxonomy": gene_taxonomy_score,
+            "interpro": interproscan_score,
+            "seed_cluster": seed_cluster_score,
+        },
+        component_weights=_component_weights(result.gene_count or 0, use_crf_score),
+        structural_score=structural_score,
+        gene_count=result.gene_count,
+        viral_fraction=viral_fraction,
+        viral_evidence=result.gene_taxonomy_viral_interior or result.gene_taxonomy_viral_top10,
+        family_consistency_score=family_consistency_score,
+        high_confidence_euk_genes=high_confidence_euk_genes,
+        euk_penalty=euk_penalty,
+        host_signature_penalty=host_signature_penalty,
+        size_penalty=_size_penalty(result),
+        use_crf_score=use_crf_score,
+    )
 
-    # ─────────────────────────────────────────────────────────────
-    # 2. Composition Score (0-1)
-    # ─────────────────────────────────────────────────────────────
-    # Higher score = more distinct from host
+
+def _composition_score(result: VerificationResult) -> float:
+    """Return composition deviation normalized to the confidence scale."""
     kfd_norm = min(result.kfd / 0.3, 1.0)
-    gc_dev_norm = min(result.gc_deviation / 0.15, 1.0)
-    cub_norm = min(result.cub_deviation / 0.5, 1.0)
+    gc_deviation_norm = min(result.gc_deviation / 0.15, 1.0)
+    cub_deviation_norm = min(result.cub_deviation / 0.5, 1.0)
+    return 0.4 * kfd_norm + 0.3 * gc_deviation_norm + 0.3 * cub_deviation_norm
 
-    composition_score = 0.4 * kfd_norm + 0.3 * gc_dev_norm + 0.3 * cub_norm
 
-    # ─────────────────────────────────────────────────────────────
-    # 3. Gene Taxonomy Bonus (0-1)
-    # ─────────────────────────────────────────────────────────────
-    # Use interior genes only for viral_fraction: both numerator
-    # (gene_taxonomy_viral_top10) and denominator (gene_count) are
-    # interior-only counts.  Flanking genes are host context and
-    # would unfairly dilute the viral fraction.
-    total_genes_interior = result.gene_count  # Interior only
+def _viral_gene_fraction(result: VerificationResult) -> float:
+    """Return identity-qualified viral support among interior genes."""
+    if result.gene_count <= 0:
+        return 0.0
 
-    if total_genes_interior > 0:
-        viral_genes = result.gene_taxonomy_viral_top10 or result.genes_with_ncldv_mirus_top10
+    viral_genes = result.gene_taxonomy_viral_top10 or result.genes_with_ncldv_mirus_top10
+    return min(viral_genes / result.gene_count, 1.0)
 
-        viral_fraction = min(viral_genes / total_genes_interior, 1.0)
 
-        dominant_fraction = result.gene_taxonomy_dominant_fraction or 0.0
-        gene_bonus = min(1.0, 0.7 * viral_fraction + 0.3 * dominant_fraction)
-    else:
-        gene_bonus = 0.0
+def _gene_taxonomy_score(result: VerificationResult, viral_fraction: float) -> float:
+    """Combine viral-gene and dominant-family support for an interior region."""
+    if result.gene_count <= 0:
+        return 0.0
+    dominant_fraction = result.gene_taxonomy_dominant_fraction or 0.0
+    return min(1.0, 0.7 * viral_fraction + 0.3 * dominant_fraction)
 
-    # ─────────────────────────────────────────────────────────────
-    # 4. Structural Score (0-1) - TMVec
-    # ─────────────────────────────────────────────────────────────
+
+def _structural_score(result: VerificationResult, tmvec_score: float | None) -> float:
+    """Return the normalized TMVec score or the existing structural score."""
     if tmvec_score is not None and tmvec_score > 0:
-        # Normalize TM-score (0.5+ is significant)
-        structural_score = min((tmvec_score - 0.3) / 0.4, 1.0)
-        structural_score = max(0.0, structural_score)
-    else:
-        # Use existing structural score from result
-        structural_score = result.structural_score
+        normalized_score = min((tmvec_score - 0.3) / 0.4, 1.0)
+        return max(0.0, normalized_score)
+    return result.structural_score
 
-    # ─────────────────────────────────────────────────────────────
-    # 5. Boundary Confidence (0-1; legacy field name)
-    # ─────────────────────────────────────────────────────────────
-    crf_score = crf_confidence
 
-    # ─────────────────────────────────────────────────────────────
-    # 6. High-Confidence EUK Penalty
-    # ─────────────────────────────────────────────────────────────
-    # A gene is "high-confidence EUK" when its top 3 Diamond hits are
-    # ALL eukaryotic with >=70% sequence identity AND it has zero viral
-    # hits in the entire top 10.  This catches clear host genes without
-    # relying on the host signature model (which can be too strict).
-    # Divergent EUK genes (common in EVEs) typically have <70% identity
-    # or mixed viral/EUK top-10 hits, so they are NOT penalized.
-    high_conf_euk = 0
-    for rec in result.gene_taxonomy_records:
-        is_flanking = rec.get("is_flanking", False) if isinstance(rec, dict) else getattr(rec, "is_flanking", False)
-        has_hit = rec.get("has_hit", False) if isinstance(rec, dict) else getattr(rec, "has_hit", False)
-        has_viral = rec.get("has_viral", False) if isinstance(rec, dict) else getattr(rec, "has_viral", False)
-        if is_flanking or not has_hit or has_viral:
-            continue
-        prefixes = rec.get("top10_prefixes", []) if isinstance(rec, dict) else getattr(rec, "top10_prefixes", [])
-        pidents = rec.get("top10_pidents", []) if isinstance(rec, dict) else getattr(rec, "top10_pidents", [])
-        if not isinstance(prefixes, list) or not isinstance(pidents, list):
-            continue
-        top3_p = prefixes[:3]
-        top3_id = pidents[:3]
-        if len(top3_p) < 3 or len(top3_id) < 3:
-            continue
-        try:
-            all_euk = all(str(p).upper().startswith("EUK") for p in top3_p)
-            all_high_id = all(float(pid) >= 70.0 for pid in top3_id)
-        except (TypeError, ValueError):
-            continue
-        if all_euk and all_high_id:
-            high_conf_euk += 1
-    if total_genes_interior > 0 and high_conf_euk > 0:
-        euk_fraction = high_conf_euk / total_genes_interior
+def _euk_penalty(
+    result: VerificationResult,
+    high_confidence_euk_genes: int,
+    viral_fraction: float,
+) -> float:
+    """Return the stronger of strict and broad EUK penalties."""
+    if result.gene_count > 0 and high_confidence_euk_genes > 0:
+        euk_fraction = high_confidence_euk_genes / result.gene_count
         euk_penalty = min(euk_fraction * 0.20, 0.12)
     else:
         euk_penalty = 0.0
 
-    # Broad EUK penalty — secondary signal for overwhelmingly eukaryotic
-    # regions with negligible viral evidence.  Fires when >=80% of interior
-    # genes have high-identity eukaryotic top hits AND <10% have viral hits.
-    # This catches FP regions where the strict high-confidence EUK penalty
-    # (top-3 all-EUK >=70%, no viral in top-10) is too conservative.
-    if total_genes_interior > 0:
-        broad_euk_frac = result.genes_with_high_pident_euk / total_genes_interior
-        if broad_euk_frac > 0.80 and viral_fraction < 0.10:
-            broad_euk_penalty = min(broad_euk_frac * 0.12, 0.12)
+    if result.gene_count > 0:
+        broad_euk_fraction = result.genes_with_high_pident_euk / result.gene_count
+        if broad_euk_fraction > 0.80 and viral_fraction < 0.10:
+            broad_euk_penalty = min(broad_euk_fraction * 0.12, 0.12)
             euk_penalty = max(euk_penalty, broad_euk_penalty)
+    return euk_penalty
 
-    # Host signature penalty — fires when a significant fraction of
-    # interior genes match the host taxonomy model (fraction >= threshold).
-    # Real EVEs carry some host-like flanking genes, but their viral
-    # core keeps the fraction low.  FP regions that are purely host
-    # sequence have fraction well above the threshold.
-    host_frac_threshold = host_signature_score_threshold
-    if result.host_signature_gene_count > 0 and result.host_signature_fraction >= host_frac_threshold:
-        host_excess = result.host_signature_fraction - host_frac_threshold
-        host_signature_penalty = min(host_excess * 0.60, 0.18)
-    else:
-        host_signature_penalty = 0.0
 
-    # ─────────────────────────────────────────────────────────────
-    # 7. Taxonomy Distribution Modulation
-    # ─────────────────────────────────────────────────────────────
-    # High taxonomy distribution viral score indicates EVE despite EUK hits
-    # Reduces EUK penalty when genes show divergent taxonomy (viral pattern)
-    tax_dist_viral_score = result.taxonomy_distribution_viral_score
-    if tax_dist_viral_score >= 0.4:
-        # Reduce EUK penalty proportionally to viral score
-        reduction_factor = min(tax_dist_viral_score, 0.8)  # Max 80% reduction
-        euk_penalty *= (1.0 - reduction_factor)
-        host_signature_penalty *= (1.0 - reduction_factor * 0.5)
+def _host_signature_penalty(result: VerificationResult, score_threshold: float) -> float:
+    """Return the excess host-signature penalty above its score threshold."""
+    if result.host_signature_gene_count > 0 and result.host_signature_fraction >= score_threshold:
+        host_excess = result.host_signature_fraction - score_threshold
+        return min(host_excess * 0.60, 0.18)
+    return 0.0
 
-    # ─────────────────────────────────────────────────────────────
-    # InterProScan Bonus (0-1)
-    # ─────────────────────────────────────────────────────────────
-    interproscan_score = result.interproscan_score or 0.0
-    seed_cluster_score = _seed_cluster_score(result)
 
-    # Family consistency bonus (small additive)
-    family_consistency_bonus = compute_family_consistency_score(result)
+def _high_confidence_euk_gene_count(records: list[GeneTaxonomyRecord]) -> int:
+    """Count interior genes with three high-identity EUK hits and no viral hit."""
+    count = 0
+    for record in records:
+        if isinstance(record, dict):
+            is_flanking = record.get("is_flanking", False)
+            has_hit = record.get("has_hit", False)
+            has_viral = record.get("has_viral", False)
+            prefixes = record.get("top10_prefixes", [])
+            identities = record.get("top10_pidents", [])
+        else:
+            is_flanking = getattr(record, "is_flanking", False)
+            has_hit = getattr(record, "has_hit", False)
+            has_viral = getattr(record, "has_viral", False)
+            prefixes = getattr(record, "top10_prefixes", [])
+            identities = getattr(record, "top10_pidents", [])
+        if is_flanking or not has_hit or has_viral:
+            continue
+        if not isinstance(prefixes, list) or not isinstance(identities, list):
+            continue
+        top_prefixes = prefixes[:3]
+        top_identities = identities[:3]
+        if len(top_prefixes) < 3 or len(top_identities) < 3:
+            continue
+        try:
+            all_euk = all(str(prefix).upper().startswith("EUK") for prefix in top_prefixes)
+            all_high_identity = all(float(identity) >= 70.0 for identity in top_identities)
+        except (TypeError, ValueError):
+            continue
+        if all_euk and all_high_identity:
+            count += 1
+    return count
 
-    # ─────────────────────────────────────────────────────────────
-    # Size penalty: small regions without MCP are less reliable.
-    # Boundary/composition evidence can inflate confidence for 1-2 gene fragments
-    # because those signals are not strong region-level support by themselves.
-    # ─────────────────────────────────────────────────────────────
-    region_genes = result.gene_count or 0
-    size_penalty = 0.0
-    if not result.has_mcp:
-        if region_genes <= 1:
-            size_penalty = 0.15
-        elif region_genes <= 2:
-            size_penalty = 0.08
-        elif region_genes <= 3:
-            size_penalty = 0.04
 
-    component_scores = {
-        "crf": crf_score,
-        "composition": composition_score,
-        "marker": marker_score,
-        "gene_taxonomy": gene_bonus,
-        "interpro": interproscan_score,
-        "seed_cluster": seed_cluster_score,
-    }
-    base_component_weights = {
+def _seed_cluster_score(result: VerificationResult) -> float:
+    """Return support from multiple seed markers of the same viral family."""
+    ncldv = result.region_classification_ncldv_markers
+    vp_plv = result.region_classification_vp_plv_markers
+    mirus = result.region_classification_mirus_markers
+    if vp_plv >= 4 or ncldv >= 3 or mirus >= 3:
+        return 1.0
+    if max(ncldv, vp_plv, mirus) >= 2:
+        return 0.5
+    return 0.0
+
+
+def _size_penalty(result: VerificationResult) -> float:
+    """Penalize one-to-three-gene candidates without MCP support."""
+    if result.has_mcp:
+        return 0.0
+    if result.gene_count <= 1:
+        return 0.15
+    if result.gene_count <= 2:
+        return 0.08
+    if result.gene_count <= 3:
+        return 0.04
+    return 0.0
+
+
+def _component_weights(gene_count: int, use_crf_score: bool) -> dict[str, float]:
+    """Return active component weights, including small-region CRF reduction."""
+    weights = {
         "crf": 0.18,
         "composition": 0.18,
         "marker": 0.24,
@@ -1673,44 +1725,53 @@ def calculate_eve_confidence(
         "interpro": 0.08,
         "seed_cluster": 0.08,
     }
-
-    # Boundary-confidence weight reduction for small regions.
-    if region_genes <= 2 and use_crf_score:
-        base_component_weights["crf"] = 0.06  # 1/3 of normal weight
-    elif region_genes <= 4 and use_crf_score:
-        base_component_weights["crf"] = 0.12  # 2/3 of normal weight
-
-    # NOTE: Genome-wide composition baseline was evaluated but disabled.
-    # When every candidate shares similar composition (e.g., Aurantiochytrium
-    # median ~0.71), any across-the-board reduction also eliminates true EVEs
-    # that sit close to the MEDIUM threshold.  Future improvement: couple
-    # composition normalization with stronger non-composition evidence to
-    # provide margin before deflating.
+    if gene_count <= 2 and use_crf_score:
+        weights["crf"] = 0.06
+    elif gene_count <= 4 and use_crf_score:
+        weights["crf"] = 0.12
     if not use_crf_score:
-        base_component_weights["crf"] = 0.0
+        weights["crf"] = 0.0
+    return weights
 
+
+def _calculate_confidence_bonuses(
+    result: VerificationResult,
+    evidence: _ConfidenceEvidence,
+    *,
+    priority_markers: list[str],
+    marker_floor_priority_only: float,
+    marker_floor_priority_plus_family: float,
+    marker_floor_priority_multi_family: float,
+    marker_family_bonus_per_family: float,
+    marker_multi_family_bonus: float,
+) -> _ConfidenceBonuses:
+    """Accumulate score bonuses in their established floating-point order."""
+    marker_score = evidence.component_scores["marker"]
+    composition_score = evidence.component_scores["composition"]
+    gene_taxonomy_score = evidence.component_scores["gene_taxonomy"]
+    interproscan_score = evidence.component_scores["interpro"]
+    seed_cluster_score = evidence.component_scores["seed_cluster"]
     common_bonus = 0.0
     reference_bonus = 0.0
 
-    def _add_common_bonus(value: float) -> None:
-        """Add a non-composition term in the same order to both score paths."""
-
+    def add_common_bonus(value: float) -> None:
         nonlocal common_bonus, reference_bonus
         common_bonus += value
         reference_bonus += value
 
-    if marker_score >= 0.6 and gene_bonus >= 0.6:
-        _add_common_bonus(0.04)
+    if marker_score >= 0.6 and gene_taxonomy_score >= 0.6:
+        add_common_bonus(0.04)
     if seed_cluster_score >= 1.0 and interproscan_score >= 0.5:
-        _add_common_bonus(0.03)
+        add_common_bonus(0.03)
     composition_bonus = 0.0
-    if crf_score >= 0.9 and composition_score >= 0.6:
+    if evidence.component_scores["crf"] >= 0.9 and composition_score >= 0.6:
         composition_bonus = 0.03
         reference_bonus += composition_bonus
-    if family_consistency_bonus > 0:
-        _add_common_bonus(min(family_consistency_bonus, 0.05))
+    if evidence.family_consistency_score > 0:
+        add_common_bonus(min(evidence.family_consistency_score, 0.05))
     if result.has_mcp:
-        _add_common_bonus(0.05)
+        add_common_bonus(0.05)
+
     completeness_ratio = max(
         result.vp_completeness_ratio,
         result.ppv_completeness_ratio,
@@ -1718,74 +1779,79 @@ def calculate_eve_confidence(
         result.mirus_completeness_ratio,
     )
     if completeness_ratio >= 0.9:
-        _add_common_bonus(0.60)
+        add_common_bonus(0.60)
     elif completeness_ratio >= 0.7:
-        _add_common_bonus(0.40)
+        add_common_bonus(0.40)
     elif completeness_ratio >= 0.5:
-        _add_common_bonus(0.20)
-    ncldv_core_hits = len({g.lower() for g in result.hallmark_genes if g.lower().startswith("gvogm")})
+        add_common_bonus(0.20)
+
+    ncldv_core_hits = len({gene.lower() for gene in result.hallmark_genes if gene.lower().startswith("gvogm")})
     if ncldv_core_hits >= 4:
-        _add_common_bonus(0.20)
+        add_common_bonus(0.20)
     elif ncldv_core_hits >= 3:
-        _add_common_bonus(0.10)
+        add_common_bonus(0.10)
 
-    # Within-genome clustering bonus (similar EVEs provide additional evidence)
     if result.clustering_bonus > 0:
-        _add_common_bonus(result.clustering_bonus)
-        logger.debug(
-            f"Clustering bonus for {result.eve_id}: +{result.clustering_bonus:.2f} "
-            f"(cluster_size={result.cluster_size}, max_ani={result.max_cluster_ani:.1f}%)"
-        )
+        add_common_bonus(result.clustering_bonus)
 
-    # Taxonomy distribution bonus (divergent taxonomy suggests viral origin)
-    if tax_dist_viral_score >= 0.6:
-        # High viral score = strong evidence of viral origin
-        tax_bonus = min(0.15, (tax_dist_viral_score - 0.4) * 0.5)
-        _add_common_bonus(tax_bonus)
-        logger.debug(
-            f"Taxonomy distribution bonus for {result.eve_id}: +{tax_bonus:.2f} "
-            f"(viral_score={tax_dist_viral_score:.2f})"
-        )
+    taxonomy_distribution_bonus = 0.0
+    if result.taxonomy_distribution_viral_score >= 0.6:
+        taxonomy_distribution_bonus = min(0.15, (result.taxonomy_distribution_viral_score - 0.4) * 0.5)
+        add_common_bonus(taxonomy_distribution_bonus)
 
-    # Strong bonus when the region diverges from sampled host-control taxonomy fingerprint.
-    # Only apply when the baseline and per-gene distribution are actually available.
-    if (
-        result.taxonomy_distribution_genes_analyzed > 0
-        and result.taxonomy_distribution_baseline_markers > 0
-    ):
+    host_divergence_bonus = 0.0
+    if result.taxonomy_distribution_genes_analyzed > 0 and result.taxonomy_distribution_baseline_markers > 0:
         host_overlap = max(0.0, min(1.0, result.taxonomy_distribution_host_overlap))
         host_divergence = 1.0 - host_overlap
         if host_divergence >= 0.5:
             host_divergence_bonus = min(0.20, 0.05 + (host_divergence - 0.5) * 0.30)
-            _add_common_bonus(host_divergence_bonus)
-            logger.debug(
-                f"Host-divergence bonus for {result.eve_id}: +{host_divergence_bonus:.2f} "
-                f"(host_overlap={host_overlap:.2f}, divergence={host_divergence:.2f})"
-            )
+            add_common_bonus(host_divergence_bonus)
 
-    # Viral gene enrichment + low host signal bonus
-    # Rewards regions where viral genes dominate and host contamination is minimal
-    if total_genes_interior > 0:
-        viral_fraction_for_bonus = (result.gene_taxonomy_viral_top10 or 0) / total_genes_interior
+    viral_enrichment_bonus = 0.0
+    if evidence.gene_count > 0:
+        viral_fraction_for_bonus = (result.gene_taxonomy_viral_top10 or 0) / evidence.gene_count
         if viral_fraction_for_bonus >= 0.15 and result.host_signature_fraction < 0.10:
-            viral_host_bonus = min(0.12, viral_fraction_for_bonus * 0.4)
-            _add_common_bonus(viral_host_bonus)
-            logger.debug(
-                f"Viral-enrichment bonus for {result.eve_id}: +{viral_host_bonus:.2f} "
-                f"(viral_frac={viral_fraction_for_bonus:.2f}, host_sig_frac={result.host_signature_fraction:.2f})"
-            )
+            viral_enrichment_bonus = min(0.12, viral_fraction_for_bonus * 0.4)
+            add_common_bonus(viral_enrichment_bonus)
 
-    configured_priority_markers = [m.lower() for m in (priority_markers or ["mcp"])]
-    has_priority = _has_priority_marker(result, configured_priority_markers)
+    has_priority_marker = _has_priority_marker(result, priority_markers)
+    priority_floor = 0.0
+    if has_priority_marker:
+        family_support_count = _family_support_count(result)
+        if family_support_count >= 2:
+            add_common_bonus(marker_multi_family_bonus)
+            priority_floor = marker_floor_priority_multi_family
+        elif family_support_count >= 1:
+            add_common_bonus(marker_family_bonus_per_family)
+            priority_floor = marker_floor_priority_plus_family
+        else:
+            priority_floor = marker_floor_priority_only
 
-    families = set()
+    if result.jelly_roll_confidence_bonus > 0:
+        add_common_bonus(result.jelly_roll_confidence_bonus)
+
+    return _ConfidenceBonuses(
+        common=common_bonus,
+        reference=reference_bonus,
+        composition=composition_bonus,
+        priority_floor=priority_floor,
+        has_priority_marker=has_priority_marker,
+        taxonomy_distribution=taxonomy_distribution_bonus,
+        host_divergence=host_divergence_bonus,
+        viral_enrichment=viral_enrichment_bonus,
+    )
+
+
+def _family_support_count(result: VerificationResult) -> int:
+    """Count viral families supported by marker and taxonomy evidence."""
+    families: set[str] = set()
     if result.region_classification_ncldv_markers > 0:
         families.add("NCLDV")
     if result.region_classification_mirus_markers > 0:
         families.add("MIRUS")
     if result.region_classification_vp_plv_markers > 0:
-        # Preplasmiviricota is one family however the vp_/plv_ markers split.
         families.add("PPV")
+
     family_tokens = (
         list(result.hallmark_genes)
         + list(result.marker_family_hits)
@@ -1802,119 +1868,146 @@ def calculate_eve_confidence(
             families.add("PPV")
         elif upper in {"VP", "VIROPHAGE"} or "VP_" in upper or "_VP" in upper:
             families.add("PPV")
-    family_support_count = len(families)
-    priority_floor = 0.0
-    if has_priority:
-        if family_support_count >= 2:
-            _add_common_bonus(marker_multi_family_bonus)
-            priority_floor = marker_floor_priority_multi_family
-        elif family_support_count >= 1:
-            _add_common_bonus(marker_family_bonus_per_family)
-            priority_floor = marker_floor_priority_plus_family
-        else:
-            priority_floor = marker_floor_priority_only
+    return len(families)
 
-    # Jelly roll bonus (validated DJR MCP provides structural evidence)
-    if result.jelly_roll_confidence_bonus > 0:
-        _add_common_bonus(result.jelly_roll_confidence_bonus)
+
+def _log_confidence_bonuses(
+    result: VerificationResult,
+    evidence: _ConfidenceEvidence,
+    bonuses: _ConfidenceBonuses,
+) -> None:
+    """Log the optional evidence bonuses without changing score calculation."""
+    if result.clustering_bonus > 0:
         logger.debug(
-            f"Jelly roll bonus for {result.eve_id}: +{result.jelly_roll_confidence_bonus:.2f} "
-            f"(DJR={result.jelly_roll_djr_count}, avg_conf={result.jelly_roll_avg_confidence:.2f})"
+            "Clustering bonus for %s: +%.2f (cluster_size=%s, max_ani=%.1f%%)",
+            result.eve_id,
+            result.clustering_bonus,
+            result.cluster_size,
+            result.max_cluster_ani,
+        )
+    if bonuses.taxonomy_distribution > 0:
+        logger.debug(
+            "Taxonomy distribution bonus for %s: +%.2f (viral_score=%.2f)",
+            result.eve_id,
+            bonuses.taxonomy_distribution,
+            result.taxonomy_distribution_viral_score,
+        )
+    if bonuses.host_divergence > 0:
+        host_overlap = max(0.0, min(1.0, result.taxonomy_distribution_host_overlap))
+        logger.debug(
+            "Host-divergence bonus for %s: +%.2f (host_overlap=%.2f, divergence=%.2f)",
+            result.eve_id,
+            bonuses.host_divergence,
+            host_overlap,
+            1.0 - host_overlap,
+        )
+    if bonuses.viral_enrichment > 0:
+        viral_fraction = (result.gene_taxonomy_viral_top10 or 0) / evidence.gene_count
+        logger.debug(
+            "Viral-enrichment bonus for %s: +%.2f (viral_frac=%.2f, host_sig_frac=%.2f)",
+            result.eve_id,
+            bonuses.viral_enrichment,
+            viral_fraction,
+            result.host_signature_fraction,
+        )
+    if result.jelly_roll_confidence_bonus > 0:
+        logger.debug(
+            "Jelly roll bonus for %s: +%.2f (DJR=%s, avg_conf=%.2f)",
+            result.eve_id,
+            result.jelly_roll_confidence_bonus,
+            result.jelly_roll_djr_count,
+            result.jelly_roll_avg_confidence,
         )
 
-    viral_evidence = result.gene_taxonomy_viral_interior or result.gene_taxonomy_viral_top10
 
-    def _assemble_confidence(*, include_composition: bool) -> tuple[float, dict[str, object]]:
-        """Assemble one score from immutable local evidence."""
-        component_weights = dict(base_component_weights)
-        if not include_composition or composition_score <= 0.0:
-            component_weights["composition"] = 0.0
-        weight_total = sum(component_weights.values()) or 1.0
-        base = sum(
-            (component_weights[name] / weight_total) * component_scores[name]
-            for name in component_scores
-        )
+def _assemble_confidence(
+    result: VerificationResult,
+    evidence: _ConfidenceEvidence,
+    bonuses: _ConfidenceBonuses,
+    *,
+    include_composition: bool,
+) -> _CalculatedConfidence:
+    """Assemble one score from normalized evidence without mutating the result."""
+    component_weights = dict(evidence.component_weights)
+    composition_score = evidence.component_scores["composition"]
+    if not include_composition or composition_score <= 0.0:
+        component_weights["composition"] = 0.0
+    weight_total = sum(component_weights.values()) or 1.0
+    weighted_base = sum(
+        (component_weights[name] / weight_total) * evidence.component_scores[name] for name in evidence.component_scores
+    )
 
-        selected_composition_bonus = composition_bonus if include_composition else 0.0
-        bonus = reference_bonus if include_composition else common_bonus
+    selected_composition_bonus = bonuses.composition if include_composition else 0.0
+    bonus_total = bonuses.reference if include_composition else bonuses.common
+    marker_score = evidence.component_scores["marker"]
+    gene_taxonomy_score = evidence.component_scores["gene_taxonomy"]
+    seed_cluster_score = evidence.component_scores["seed_cluster"]
 
-        cap = 0.95
-        if seed_cluster_score >= 1.0 and gene_bonus >= 0.6 and marker_score >= 0.6:
-            cap = 0.99
-        composition_cap_active = (
-            include_composition
-            and composition_score >= 0.6
-            and seed_cluster_score >= 1.0
-            and gene_bonus >= 0.7
-            and marker_score >= 0.7
-            and (crf_score >= 0.9 or not use_crf_score)
-        )
-        if composition_cap_active:
-            cap = 1.0
+    cap = 0.95
+    if seed_cluster_score >= 1.0 and gene_taxonomy_score >= 0.6 and marker_score >= 0.6:
+        cap = 0.99
+    composition_cap_active = (
+        include_composition
+        and composition_score >= 0.6
+        and seed_cluster_score >= 1.0
+        and gene_taxonomy_score >= 0.7
+        and marker_score >= 0.7
+        and (evidence.component_scores["crf"] >= 0.9 or not evidence.use_crf_score)
+    )
+    if composition_cap_active:
+        cap = 1.0
 
-        confidence = (
-            base
-            + bonus
-            + (0.15 * structural_score)
-            - euk_penalty
-            - host_signature_penalty
-            - size_penalty
-        )
-        confidence = min(confidence, cap)
-        if priority_floor > 0.0:
-            confidence = max(confidence, priority_floor)
+    confidence = (
+        weighted_base
+        + bonus_total
+        + (0.15 * evidence.structural_score)
+        - evidence.euk_penalty
+        - evidence.host_signature_penalty
+        - evidence.size_penalty
+    )
+    confidence = min(confidence, cap)
+    if bonuses.priority_floor > 0.0:
+        confidence = max(confidence, bonuses.priority_floor)
+    if evidence.viral_evidence == 0 and not result.has_mcp:
+        confidence = min(confidence, 0.05)
+    if evidence.gene_count > 0 and not result.has_mcp and evidence.viral_fraction < 0.05:
+        confidence = min(confidence, 0.19)
 
-        # Regions with zero viral taxonomy hits and no MCP cannot be EVEs.
-        if viral_evidence == 0 and not result.has_mcp:
-            confidence = min(confidence, 0.05)
-
-        # Regions below 5% viral genes and without MCP stay below MEDIUM.
-        if total_genes_interior > 0 and not result.has_mcp and viral_fraction < 0.05:
-            confidence = min(confidence, 0.19)
-
-        score_components: dict[str, object] = {
-            "scores": dict(component_scores),
+    return _CalculatedConfidence(
+        confidence=max(0.0, min(1.0, confidence)),
+        components={
+            "scores": dict(evidence.component_scores),
             "weights": component_weights,
-            "weighted_base": float(base),
-            "bonus_total": float(bonus),
+            "weighted_base": float(weighted_base),
+            "bonus_total": float(bonus_total),
             "composition_bonus": float(selected_composition_bonus),
             "composition_cap_active": composition_cap_active,
             "composition_evidence_active": include_composition,
-            "priority_floor": float(priority_floor),
+            "priority_floor": float(bonuses.priority_floor),
             "cap": float(cap),
-            "family_consistency_bonus": float(family_consistency_bonus),
+            "family_consistency_bonus": float(evidence.family_consistency_score),
             "has_mcp": bool(result.has_mcp),
-            "priority_marker_active": bool(has_priority),
+            "priority_marker_active": bool(bonuses.has_priority_marker),
             "final_confidence_pre_clamp": float(confidence),
-        }
-        return max(0.0, min(1.0, confidence)), score_components
-
-    reference_confidence, reference_components = _assemble_confidence(
-        include_composition=True
+        },
     )
-    if ablation_id is AblationID.A5:
-        selected_confidence, selected_components = _assemble_confidence(
-            include_composition=False
-        )
-    else:
-        selected_confidence = reference_confidence
-        selected_components = reference_components
 
-    # Apply the selected score metadata once. The A0 counterfactual above is
-    # pure and never overwrites the candidate while A5 is being evaluated.
+
+def _apply_confidence_result(
+    result: VerificationResult,
+    *,
+    ablation_id: AblationID,
+    selected: _CalculatedConfidence,
+    high_confidence_euk_genes: int,
+    family_consistency_score: float,
+    composition_ablation_effect: CompositionAblationEffect,
+) -> None:
+    """Apply the five score metadata fields after all calculations succeed."""
     result.ablation_id = ablation_id
-    result.high_confidence_euk_genes = high_conf_euk
-    result.family_consistency_score = family_consistency_bonus
-    result.score_components = selected_components
-    result.composition_ablation_effect = evaluate_composition_ablation_effect(
-        ablation_id=ablation_id,
-        composition_score=composition_score,
-        reference_confidence=reference_confidence,
-        selected_confidence=selected_confidence,
-        high_threshold=high_tier_threshold,
-        low_threshold=low_tier_threshold,
-    )
-    return selected_confidence
+    result.high_confidence_euk_genes = high_confidence_euk_genes
+    result.family_consistency_score = family_consistency_score
+    result.score_components = selected.components
+    result.composition_ablation_effect = composition_ablation_effect
 
 
 @dataclass(frozen=True, slots=True)
@@ -1949,9 +2042,7 @@ def _evaluate_post_score_policy(
     non_hhg_demoted = False
     if tier in {"HIGH", "MEDIUM"} and result.seed_sources and "hhg" not in result.seed_sources:
         non_hhg_quality_pass = (
-            result.hallmark_count >= 3
-            or (result.hallmark_count >= 1 and result.has_mcp)
-            or non_host_genes >= 5
+            result.hallmark_count >= 3 or (result.hallmark_count >= 1 and result.has_mcp) or non_host_genes >= 5
         )
         if not non_hhg_quality_pass:
             non_hhg_demoted = True
@@ -1968,8 +2059,7 @@ def _evaluate_post_score_policy(
 
 
 class EvidenceSynthesizer:
-    """
-    Main evidence synthesis engine with gated escalation.
+    """Main evidence synthesis engine with gated escalation.
 
     Implements the verification pipeline that combines marker, taxonomy,
     compositional, structural/domain, and phylogenetic evidence.
@@ -1982,13 +2072,12 @@ class EvidenceSynthesizer:
 
     def __init__(
         self,
-        config: Optional[EvidenceSynthesizerConfig] = None,
-        viral_structure_db: Optional[Path] = None,
-        genome_path: Optional[Path] = None,
-        work_dir: Optional[Path] = None,
+        config: EvidenceSynthesizerConfig | None = None,
+        viral_structure_db: Path | None = None,
+        genome_path: Path | None = None,
+        work_dir: Path | None = None,
     ):
-        """
-        Initialize evidence synthesizer.
+        """Initialize evidence synthesizer.
 
         Args:
             config: Configuration settings
@@ -2029,12 +2118,10 @@ class EvidenceSynthesizer:
             token_weights.items(),
             key=lambda item: (-float(item[1]), str(item[0])),
         )[:10]
-        self._phase1_host_signature_top_tokens = "|".join(
-            f"{token}:{float(weight):.2f}" for token, weight in top_items
-        )
+        self._phase1_host_signature_top_tokens = "|".join(f"{token}:{float(weight):.2f}" for token, weight in top_items)
 
     @property
-    def boltz_analyzer(self) -> Optional[BoltzFoldSeekAnalyzer]:
+    def boltz_analyzer(self) -> BoltzFoldSeekAnalyzer | None:
         """Lazy load Boltz + FoldSeek analyzer (optional)."""
         if not self.config.use_boltz:
             return None
@@ -2055,7 +2142,7 @@ class EvidenceSynthesizer:
         return self._boltz_analyzer
 
     @property
-    def phylogenetic_validator(self) -> Optional[PhylogeneticValidator]:
+    def phylogenetic_validator(self) -> PhylogeneticValidator | None:
         """Lazy load phylogenetic validator."""
         if not self.config.use_phylogenetic_validation:
             return None
@@ -2080,7 +2167,7 @@ class EvidenceSynthesizer:
         return self._phylogenetic_validator
 
     @property
-    def tmvec_searcher(self) -> Optional[TMVecDatabaseSearch]:
+    def tmvec_searcher(self) -> TMVecDatabaseSearch | None:
         """Lazy load TMVec database searcher."""
         if not self.config.use_tmvec_database:
             return None
@@ -2100,9 +2187,7 @@ class EvidenceSynthesizer:
     def marker_annotation_index(self) -> dict[str, dict]:
         """Lazy load marker annotation index for category scoring."""
         if self._marker_annotation_index is None:
-            self._marker_annotation_index = load_marker_annotation_index(
-                self.config.marker_annotations_path
-            )
+            self._marker_annotation_index = load_marker_annotation_index(self.config.marker_annotations_path)
         return self._marker_annotation_index or {}
 
     def _initialize_result(
@@ -2138,9 +2223,7 @@ class EvidenceSynthesizer:
             result.candidate_start = candidate_start
             result.candidate_end = candidate_end
             result.candidate_length = max(0, candidate_end - candidate_start)
-            result.candidate_reduction_bp = max(
-                0, result.candidate_length - (result.end - result.start)
-            )
+            result.candidate_reduction_bp = max(0, result.candidate_length - (result.end - result.start))
             result.candidate_reduction_reason = getattr(refined_boundary, "host_trim_reason", "")
         result.phase1_host_signature_host_prefixes = self._phase1_host_signature_host_prefixes
         result.phase1_host_signature_top_tokens = self._phase1_host_signature_top_tokens
@@ -2151,7 +2234,7 @@ class EvidenceSynthesizer:
         self,
         result: VerificationResult,
         refined_boundary: RefinedBoundary,
-        scaffold_lengths: Optional[dict[str, int]],
+        scaffold_lengths: dict[str, int] | None,
     ) -> None:
         """Detect if EVE is at contig boundary (partial EVE)."""
         EDGE_BUFFER_BP = 5000
@@ -2212,7 +2295,7 @@ class EvidenceSynthesizer:
     def _process_hallmark_hits(
         self,
         result: VerificationResult,
-        hallmark_hits: Optional[list],
+        hallmark_hits: list | None,
     ) -> None:
         """Process hallmark hits and update result with marker evidence.
 
@@ -2232,35 +2315,20 @@ class EvidenceSynthesizer:
         result.hallmark_diversity = len(set(hallmark_genes))
         result.has_virus_specific_marker = True
         result.has_mcp = any(is_mcp_gene(g) for g in hallmark_genes)
-        result.mcp_gene_ids = [
-            info["base_gene"]
-            for info in by_gene.values()
-            if is_mcp_gene(info["hallmark_gene"])
-        ]
+        result.mcp_gene_ids = [info["base_gene"] for info in by_gene.values() if is_mcp_gene(info["hallmark_gene"])]
         bypassed = [
             info
             for info in by_gene.values()
-            if isinstance(info["hit"], dict)
-            and bool(info["hit"].get("tier1_bypassed", False))
+            if isinstance(info["hit"], dict) and bool(info["hit"].get("tier1_bypassed", False))
         ]
-        result.tier1_bypassed_marker_ids = [
-            info["base_gene"] for info in bypassed
-        ]
-        result.tier1_bypassed_marker_models = [
-            info["hallmark_gene"] for info in bypassed
-        ]
+        result.tier1_bypassed_marker_ids = [info["base_gene"] for info in bypassed]
+        result.tier1_bypassed_marker_models = [info["hallmark_gene"] for info in bypassed]
         from virosync.pipeline.phase1.frameshift_screening import (
             is_rescued_protein_id,
         )
 
-        rescued = [
-            info
-            for info in by_gene.values()
-            if is_rescued_protein_id(info["base_gene"])
-        ]
-        result.frameshift_rescue_marker_ids = [
-            info["base_gene"] for info in rescued
-        ]
+        rescued = [info for info in by_gene.values() if is_rescued_protein_id(info["base_gene"])]
+        result.frameshift_rescue_marker_ids = [info["base_gene"] for info in rescued]
         marker_summary = summarize_marker_hits(
             hallmark_genes,
             annotation_index=self.marker_annotation_index,
@@ -2269,17 +2337,10 @@ class EvidenceSynthesizer:
             identity_qualified_cress_genes,
             specific_top1_cress_genes,
         ) = _cress_gene_support(hallmark_hits)
-        canonical_cress_marker_support = (
-            len(identity_qualified_cress_genes) >= 2
-            or bool(specific_top1_cress_genes)
-        )
-        compact_cress_boundary = (
-            canonical_family(result.region_classification) == "CRESS"
-        )
+        canonical_cress_marker_support = len(identity_qualified_cress_genes) >= 2 or bool(specific_top1_cress_genes)
+        compact_cress_boundary = canonical_family(result.region_classification) == "CRESS"
         if compact_cress_boundary and canonical_cress_marker_support:
-            marker_summary["families"] = sorted(
-                {*marker_summary["families"], "CRESS"}
-            )
+            marker_summary["families"] = sorted({*marker_summary["families"], "CRESS"})
             if marker_summary["dominant_family"] == "UNKNOWN":
                 marker_summary["dominant_family"] = "CRESS"
                 marker_summary["dominant_fraction"] = 1.0
@@ -2316,8 +2377,8 @@ class EvidenceSynthesizer:
     def _assign_taxonomy_class(
         self,
         result: VerificationResult,
-        hallmark_hits: Optional[list],
-        gene_taxonomy_records: Optional[list],
+        hallmark_hits: list | None,
+        gene_taxonomy_records: list | None,
     ) -> None:
         """Assign the published class from the weighted marker-and-gene vote.
 
@@ -2337,15 +2398,13 @@ class EvidenceSynthesizer:
         # vote decided it, which is the single-MCP-class override path. When
         # MCP markers disagree the weighted vote settles it, and a class the
         # weights chose is not one a capsid decided.
-        result.taxonomy_class_from_mcp = (
-            len(mcp_vote_classes(hallmark_hits, taxonomy_lookup)) == 1
-        )
+        result.taxonomy_class_from_mcp = len(mcp_vote_classes(hallmark_hits, taxonomy_lookup)) == 1
 
     def _process_gene_taxonomy(
         self,
         result: VerificationResult,
-        gene_taxonomy_records: Optional[list],
-        gene_taxonomy_summary: Optional[dict],
+        gene_taxonomy_records: list | None,
+        gene_taxonomy_summary: dict | None,
     ) -> None:
         """Process gene taxonomy and host signature evidence."""
         if gene_taxonomy_summary:
@@ -2359,12 +2418,8 @@ class EvidenceSynthesizer:
             result.gene_taxonomy_has_ncldv_mirus = gene_taxonomy_summary.get("has_ncldv_mirus", False)
             result.gene_taxonomy_has_vp_plv = gene_taxonomy_summary.get("has_vp_plv", False)
             result.gene_taxonomy_viral_top10 = gene_taxonomy_summary.get("viral_top10", 0)
-            result.gene_taxonomy_dominant_family = gene_taxonomy_summary.get(
-                "dominant_family", "UNKNOWN"
-            )
-            result.gene_taxonomy_dominant_fraction = gene_taxonomy_summary.get(
-                "dominant_fraction", 0.0
-            )
+            result.gene_taxonomy_dominant_family = gene_taxonomy_summary.get("dominant_family", "UNKNOWN")
+            result.gene_taxonomy_dominant_fraction = gene_taxonomy_summary.get("dominant_fraction", 0.0)
 
             # NEW: Flanking gene tracking (taxonomy expansion fix)
             result.gene_taxonomy_total_with_flanking = gene_taxonomy_summary.get(
@@ -2378,9 +2433,7 @@ class EvidenceSynthesizer:
             result.taxonomy_distribution_viral_score = gene_taxonomy_summary.get(
                 "taxonomy_distribution_viral_score", 0.0
             )
-            result.taxonomy_distribution_diversity = gene_taxonomy_summary.get(
-                "taxonomy_distribution_diversity", 0.0
-            )
+            result.taxonomy_distribution_diversity = gene_taxonomy_summary.get("taxonomy_distribution_diversity", 0.0)
             result.taxonomy_distribution_host_overlap = gene_taxonomy_summary.get(
                 "taxonomy_distribution_host_overlap", 0.0
             )
@@ -2409,14 +2462,13 @@ class EvidenceSynthesizer:
                 "taxonomy_distribution_baseline_diversity", 0.0
             )
         if gene_taxonomy_records:
-            result.gene_taxonomy_records = [
-                getattr(r, "__dict__", r) for r in gene_taxonomy_records
-            ]
+            result.gene_taxonomy_records = [getattr(r, "__dict__", r) for r in gene_taxonomy_records]
             # Filter out flanking genes for host signature calculation
             # Flanking genes should not affect the host signature penalty since
             # they are outside the EVE boundary and gene_count only counts interior genes
             interior_records = [
-                r for r in gene_taxonomy_records
+                r
+                for r in gene_taxonomy_records
                 if not (r.get("is_flanking") if isinstance(r, dict) else getattr(r, "is_flanking", False))
             ]
             if self.config.host_signature_model:
@@ -2436,8 +2488,10 @@ class EvidenceSynthesizer:
                     logger.debug(
                         "%s: host_signature_gene_count=0 despite %d high-pident EUK genes "
                         "(mean_score=%.4f, threshold=%.2f) — EUK/host penalties disabled",
-                        result.eve_id, result.genes_with_high_pident_euk,
-                        mean_score, self.config.host_signature_score_threshold,
+                        result.eve_id,
+                        result.genes_with_high_pident_euk,
+                        mean_score,
+                        self.config.host_signature_score_threshold,
                     )
             elif self.config.euk_host_signatures:
                 host_like = 0
@@ -2456,7 +2510,7 @@ class EvidenceSynthesizer:
     def _process_interproscan(
         self,
         result: VerificationResult,
-        interproscan_summary: Optional[dict],
+        interproscan_summary: dict | None,
     ) -> None:
         """Process InterProScan annotation results."""
         if not interproscan_summary:
@@ -2485,7 +2539,7 @@ class EvidenceSynthesizer:
     def _apply_jelly_roll_summary(
         self,
         result: VerificationResult,
-        jelly_roll_summary: Optional[dict],
+        jelly_roll_summary: dict | None,
     ) -> None:
         """Apply capsid-fold and MCP-support data before confidence scoring."""
         if not jelly_roll_summary:
@@ -2493,14 +2547,10 @@ class EvidenceSynthesizer:
         result.jelly_roll_djr_count = int(jelly_roll_summary.get("djr_count", 0) or 0)
         result.jelly_roll_sjr_count = int(jelly_roll_summary.get("sjr_count", 0) or 0)
         result.jelly_roll_hk97_count = int(jelly_roll_summary.get("hk97_count", 0) or 0)
-        result.jelly_roll_supported_mcp_count = int(
-            jelly_roll_summary.get("supported_mcp_count", 0) or 0
-        )
+        result.jelly_roll_supported_mcp_count = int(jelly_roll_summary.get("supported_mcp_count", 0) or 0)
         result.jelly_roll_total_mcp = int(jelly_roll_summary.get("total_mcp", 0) or 0)
         result.jelly_roll_avg_confidence = float(jelly_roll_summary.get("avg_confidence", 0.0) or 0.0)
-        result.jelly_roll_confidence_bonus = float(
-            jelly_roll_summary.get("confidence_bonus", 0.0) or 0.0
-        )
+        result.jelly_roll_confidence_bonus = float(jelly_roll_summary.get("confidence_bonus", 0.0) or 0.0)
         proteins = jelly_roll_summary.get("mcp_proteins", [])
         result.jelly_roll_mcp_proteins = proteins if isinstance(proteins, list) else []
         if result.jelly_roll_supported_mcp_count > 0:
@@ -2510,10 +2560,9 @@ class EvidenceSynthesizer:
         self,
         result: VerificationResult,
         porf_sequences: list[tuple[str, str]],
-        precomputed_tmvec: Optional[dict[str, dict]] = None,
+        precomputed_tmvec: dict[str, dict] | None = None,
     ) -> None:
-        """
-        Run TMVec database scan for proteins in an EVE.
+        """Run TMVec database scan for proteins in an EVE.
 
         Args:
             result: VerificationResult to update
@@ -2578,7 +2627,7 @@ class EvidenceSynthesizer:
 
     def _filter_boltz_mcp_sequences(
         self,
-        hallmark_hits: Optional[list],
+        hallmark_hits: list | None,
         porf_sequences: list[tuple[str, str]],
     ) -> list[tuple[str, str]]:
         if not hallmark_hits:
@@ -2607,10 +2656,10 @@ class EvidenceSynthesizer:
         result: VerificationResult,
         refined_boundary: RefinedBoundary,
         window_features: list,
-        hallmark_hits: Optional[list],
-        novelty_scores: Optional[dict],
-        porf_sequences: Optional[list[tuple[str, str]]],
-        precomputed_tmvec: Optional[dict[str, dict]] = None,
+        hallmark_hits: list | None,
+        novelty_scores: dict | None,
+        porf_sequences: list[tuple[str, str]] | None,
+        precomputed_tmvec: dict[str, dict] | None = None,
     ) -> None:
         """Run tie-breaker modules: coherence, structural, phylogenetic.
 
@@ -2642,10 +2691,7 @@ class EvidenceSynthesizer:
             result.has_virus_specific_marker = (
                 result.has_virus_specific_marker or coherence.profile.has_virus_specific_marker
             )
-            hallmark_count = sum(
-                1 for k in coherence.profile.evidence_counts.keys()
-                if k.value.startswith("hallmark_")
-            )
+            hallmark_count = sum(1 for k in coherence.profile.evidence_counts.keys() if k.value.startswith("hallmark_"))
             result.hallmark_count = max(result.hallmark_count, hallmark_count)
 
         # Tie-breaker 2: TMVec database scan across all EVE proteins
@@ -2755,37 +2801,30 @@ class EvidenceSynthesizer:
 
         # Set status for backward compatibility with existing code
         if result.confidence_tier == "HIGH":
-            logger.info(
-                f"{result.eve_id}: HIGH confidence (score: {result.final_confidence:.3f})"
-            )
+            logger.info(f"{result.eve_id}: HIGH confidence (score: {result.final_confidence:.3f})")
             result.status = VerificationStatus.HIGH_CONFIDENCE
         elif result.confidence_tier == "MEDIUM":
-            logger.info(
-                f"{result.eve_id}: MEDIUM confidence (score: {result.final_confidence:.3f})"
-            )
+            logger.info(f"{result.eve_id}: MEDIUM confidence (score: {result.final_confidence:.3f})")
             result.status = VerificationStatus.MEDIUM_CONFIDENCE
         else:
-            logger.info(
-                f"{result.eve_id}: LOW confidence (score: {result.final_confidence:.3f})"
-            )
+            logger.info(f"{result.eve_id}: LOW confidence (score: {result.final_confidence:.3f})")
             result.status = VerificationStatus.LOW_CONFIDENCE_TIEBREAKER
 
     def verify_eve(
         self,
         refined_boundary: RefinedBoundary,
         window_features: list,
-        hallmark_hits: Optional[list] = None,
-        novelty_scores: Optional[dict] = None,
-        porf_sequences: Optional[list[tuple[str, str]]] = None,
-        gene_taxonomy_records: Optional[list] = None,
-        gene_taxonomy_summary: Optional[dict] = None,
-        interproscan_summary: Optional[dict] = None,
-        jelly_roll_summary: Optional[dict] = None,
-        scaffold_lengths: Optional[dict[str, int]] = None,
-        precomputed_tmvec: Optional[dict[str, dict]] = None,
+        hallmark_hits: list | None = None,
+        novelty_scores: dict | None = None,
+        porf_sequences: list[tuple[str, str]] | None = None,
+        gene_taxonomy_records: list | None = None,
+        gene_taxonomy_summary: dict | None = None,
+        interproscan_summary: dict | None = None,
+        jelly_roll_summary: dict | None = None,
+        scaffold_lengths: dict[str, int] | None = None,
+        precomputed_tmvec: dict[str, dict] | None = None,
     ) -> VerificationResult:
-        """
-        Verify a single EVE candidate through gated escalation.
+        """Verify a single EVE candidate through gated escalation.
 
         Args:
             refined_boundary: RefinedBoundary from Phase 2
@@ -2821,13 +2860,11 @@ class EvidenceSynthesizer:
         # Run Full Analysis (no gates - all EVEs get full evaluation)
         # ==================================================
         logger.info(
-            f"{result.eve_id}: Running full evidence analysis "
-            f"(boundary_confidence={refined_boundary.confidence:.3f})"
+            f"{result.eve_id}: Running full evidence analysis (boundary_confidence={refined_boundary.confidence:.3f})"
         )
 
         self._run_tiebreakers(
-            result, refined_boundary, window_features,
-            hallmark_hits, novelty_scores, porf_sequences, precomputed_tmvec
+            result, refined_boundary, window_features, hallmark_hits, novelty_scores, porf_sequences, precomputed_tmvec
         )
 
         # Phylogenetic rejection override
@@ -2897,8 +2934,7 @@ class EvidenceSynthesizer:
         result: VerificationResult,
         refined_boundary: RefinedBoundary,
     ) -> None:
-        """
-        Run phylogenetic validation (GVClass + Diamond) on a region.
+        """Run phylogenetic validation (GVClass + Diamond) on a region.
 
         Updates the result object in place with phylogenetic scores.
 

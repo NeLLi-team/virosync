@@ -6,21 +6,21 @@ state, but it does not import the single-genome orchestrator or any phase code.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
 import csv
-from dataclasses import dataclass, fields, is_dataclass
 import fcntl
-from functools import wraps
 import hashlib
 import io
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
 import stat
 import tempfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, fields, is_dataclass
+from functools import wraps
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
 
@@ -33,28 +33,23 @@ from virosync.ablation import (
     validate_ablation_events_bytes,
 )
 
-
 RUN_STATE_SCHEMA_VERSION = 3
 RUN_STATE_FILENAME = "virosync_run_state.json"
-PHASE_MARKER_FILENAMES = tuple(
-    f"phase{phase}.complete.json" for phase in range(4)
-)
+PHASE_MARKER_FILENAMES = tuple(f"phase{phase}.complete.json" for phase in range(4))
 RUN_STATUSES = frozenset({"running", "failed", "success"})
-PHASE_OUTCOMES = frozenset(
-    {"complete", "passthrough", "terminal_zero", "terminal_ablation"}
-)
+PHASE_OUTCOMES = frozenset({"complete", "passthrough", "terminal_zero", "terminal_ablation"})
 _TERMINAL_PHASE_OUTCOMES = frozenset({"terminal_zero", "terminal_ablation"})
 
 _SHA256_LENGTH = 64
 _MAX_STATE_BYTES = 16 * 1024 * 1024
 # The largest measured Phase-1 state is 597,742,200 bytes; 1 GiB gives 1.80x room.
 _MAX_CHECKPOINT_BYTES = 1024 * 1024 * 1024
-_ARTIFACT_OBSERVATION_CACHE: ContextVar[
-    dict[tuple[str, str, str], tuple[int, str, int | None]] | None
-] = ContextVar("artifact_observation_cache", default=None)
-_INPUT_SCAFFOLD_CACHE: ContextVar[
-    dict[tuple[str, int, str], dict[str, int]] | None
-] = ContextVar("input_scaffold_cache", default=None)
+_ARTIFACT_OBSERVATION_CACHE: ContextVar[dict[tuple[str, str, str], tuple[int, str, int | None]] | None] = ContextVar(
+    "artifact_observation_cache", default=None
+)
+_INPUT_SCAFFOLD_CACHE: ContextVar[dict[tuple[str, int, str], dict[str, int]] | None] = ContextVar(
+    "input_scaffold_cache", default=None
+)
 _RUNTIME_ENVIRONMENT_SHA256: str | None = None
 _PHASE_DIRECTORIES = {
     0: ("phase0",),
@@ -83,7 +78,6 @@ def _validation_cache_scope() -> Iterator[None]:
 
     A cache hit is the decision's existing snapshot and does not re-stat the path.
     """
-
     artifact_token = _ARTIFACT_OBSERVATION_CACHE.set({})
     scaffold_token = _INPUT_SCAFFOLD_CACHE.set({})
     try:
@@ -100,6 +94,7 @@ def _scoped_validation_cache(function: Any) -> Any:
             return function(*args, **kwargs)
 
     return wrapper
+
 
 # These are the minimum reloadable artifacts for a non-terminal phase.  A phase
 # marker may record additional diagnostics, but it cannot make an empty or
@@ -167,29 +162,19 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase0/masking/masking_status.json": "masking-status-v1",
     "phase1/resume_state.json": "virosync.phase1.resume_state/v1",
     "phase1/frameshift_screening/frameshift_hits.tsv": "frameshift-hits-v1",
-    "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": (
-        "frameshift-rescued-proteins-v1"
-    ),
-    "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": (
-        "frameshift-rescued-markers-v1"
-    ),
+    "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": ("frameshift-rescued-proteins-v1"),
+    "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": ("frameshift-rescued-markers-v1"),
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v2",
     "phase2/resume_state.json": "virosync.phase2.resume_state/v1",
     "virosync_predictions.tsv": "canonical-predictions-v6",
     "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v6",
     "virosync_predictions_detailed.tsv": "detailed-predictions-v6",
-    "phase3_synthesis/virosync_predictions_detailed.tsv": (
-        "detailed-predictions-v6"
-    ),
+    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v6"),
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
-    "phase3_synthesis/virosync_predictions.bed": (
-        "canonical-predictions-bed-v1"
-    ),
+    "phase3_synthesis/virosync_predictions.bed": ("canonical-predictions-bed-v1"),
     "virosync_predictions.gff3": "canonical-predictions-gff3-v1",
-    "phase3_synthesis/virosync_predictions.gff3": (
-        "canonical-predictions-gff3-v1"
-    ),
+    "phase3_synthesis/virosync_predictions.gff3": ("canonical-predictions-gff3-v1"),
     "virosync_summary.json": "virosync-summary-v3",
     "phase3_synthesis/virosync_summary.json": "virosync-summary-v3",
     # Pinned but not required: a genome with fewer than two accepted EVEs, or one
@@ -301,10 +286,7 @@ class RunState:
 
 def _jsonable(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: _jsonable(getattr(value, field.name))
-            for field in fields(value)
-        }
+        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
         result: dict[str, object] = {}
         for key, item in value.items():
@@ -327,7 +309,6 @@ def _jsonable(value: object) -> object:
 
 def canonical_json_bytes(value: object) -> bytes:
     """Encode *value* as deterministic UTF-8 JSON without insignificant bytes."""
-
     return json.dumps(
         _jsonable(value),
         ensure_ascii=False,
@@ -339,7 +320,6 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def canonical_sha256(value: object) -> str:
     """Return the SHA-256 of :func:`canonical_json_bytes`."""
-
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
@@ -374,11 +354,7 @@ def _normalized_relative_path(value: object, label: str = "relative path") -> st
     if not isinstance(value, str) or not value or "\\" in value:
         raise ValueError(f"{label} must be a normalized POSIX relative path")
     relative = PurePosixPath(value)
-    if (
-        relative.is_absolute()
-        or str(relative) != value
-        or any(part in {"", ".", ".."} for part in relative.parts)
-    ):
+    if relative.is_absolute() or str(relative) != value or any(part in {"", ".", ".."} for part in relative.parts):
         raise ValueError(f"{label} must be a normalized POSIX relative path")
     return value
 
@@ -409,10 +385,7 @@ def _open_regular_no_follow(path: Path) -> tuple[int, os.stat_result]:
 
 
 _DIRECTORY_OPEN_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_CLOEXEC", 0)
-    | getattr(os, "O_DIRECTORY", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
+    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 )
 
 
@@ -449,8 +422,6 @@ def _open_artifact_no_follow(
             os.close(directory_fd)
 
 
-
-
 def _sha256_regular_file(path: Path) -> tuple[int, str]:
     descriptor, metadata = _open_regular_no_follow(path)
     digest = hashlib.sha256()
@@ -465,9 +436,11 @@ def _sha256_regular_file(path: Path) -> tuple[int, str]:
         except OSError:
             pass
         raise
-    if (
-        (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        != (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
     ):
         raise ValueError(f"file changed while hashing: {path}")
     return metadata.st_size, digest.hexdigest()
@@ -499,9 +472,7 @@ def _observe_artifact(
         row_mode = "table"
     elif suffix in {".faa", ".fna", ".fa", ".fasta"} or "fasta" in lowered:
         row_mode = "fasta"
-    elif suffix in {".bed", ".gff", ".gff3"} or any(
-        token in lowered for token in ("bed", "gff")
-    ):
+    elif suffix in {".bed", ".gff", ".gff3"} or any(token in lowered for token in ("bed", "gff")):
         row_mode = "records"
     else:
         row_mode = None
@@ -530,10 +501,7 @@ def _observe_artifact(
                             "canonical-predictions-v6",
                             "detailed-predictions-v6",
                         }:
-                            raise ValueError(
-                                "final prediction table has no header: "
-                                f"{relative_path}"
-                            )
+                            raise ValueError(f"final prediction table has no header: {relative_path}")
                         row_count = 0
                     else:
                         row_count = nonempty_rows - 1
@@ -608,7 +576,6 @@ def build_artifact_identity(
     row_count: int | None = None,
 ) -> ArtifactIdentity:
     """Hash one normalized, regular, non-symlink artifact below *root*."""
-
     if not isinstance(schema, str) or not schema.strip():
         raise ValueError("artifact schema must be a non-empty string")
     root_path = _require_directory_no_follow(Path(root), "artifact root")
@@ -631,14 +598,9 @@ def build_artifact_identity(
     if row_count is not None:
         expected_rows = _require_nonnegative_int(row_count, "artifact row_count")
         if observed_rows is None:
-            raise ValueError(
-                f"artifact row_count is not defined for schema {schema!r}"
-            )
+            raise ValueError(f"artifact row_count is not defined for schema {schema!r}")
         if observed_rows != expected_rows:
-            raise ValueError(
-                f"artifact row_count mismatch for {relative_path}: "
-                f"{observed_rows} != {expected_rows}"
-            )
+            raise ValueError(f"artifact row_count mismatch for {relative_path}: {observed_rows} != {expected_rows}")
     return ArtifactIdentity(
         relative_path=relative_path,
         size=size,
@@ -690,9 +652,7 @@ def _require_known_artifact_schemas(
     for relative_path, expected_schema in _KNOWN_ARTIFACT_SCHEMAS.items():
         artifact = artifacts.get(relative_path)
         if artifact is not None and artifact.schema != expected_schema:
-            raise ValueError(
-                f"artifact {relative_path} must use schema {expected_schema!r}"
-            )
+            raise ValueError(f"artifact {relative_path} must use schema {expected_schema!r}")
 
 
 def _require_final_artifact_set(
@@ -700,11 +660,7 @@ def _require_final_artifact_set(
 ) -> dict[str, ArtifactIdentity]:
     by_path = _artifacts_by_path(artifacts)
     _require_known_artifact_schemas(by_path)
-    missing = [
-        choices
-        for choices in _FINAL_REQUIRED_PATH_GROUPS
-        if not any(path in by_path for path in choices)
-    ]
+    missing = [choices for choices in _FINAL_REQUIRED_PATH_GROUPS if not any(path in by_path for path in choices)]
     if missing:
         rendered = [" or ".join(group) for group in missing]
         raise ValueError(f"final artifact set is incomplete: {rendered!r}")
@@ -729,9 +685,7 @@ def _require_phase_artifact_set(record: PhaseRecord) -> None:
         required.clear()
     missing = sorted(required - set(by_path))
     if missing:
-        raise ValueError(
-            f"Phase {record.phase} artifact set is incomplete: {missing!r}"
-        )
+        raise ValueError(f"Phase {record.phase} artifact set is incomplete: {missing!r}")
 
 
 def _validate_phase0_binding(
@@ -743,9 +697,7 @@ def _validate_phase0_binding(
         return
     if record.requested_masking != identities.get("requested_masking"):
         raise ValueError("Phase 0 requested masking differs from the run identity")
-    status_artifact = _artifacts_by_path(record.artifacts)[
-        "phase0/masking/masking_status.json"
-    ]
+    status_artifact = _artifacts_by_path(record.artifacts)["phase0/masking/masking_status.json"]
     status_payload = _read_artifact_json(root, status_artifact.relative_path)
     required_status_fields = {
         "schema_version",
@@ -785,12 +737,9 @@ def _validate_phase0_binding(
         status_path=root / status_artifact.relative_path,
         status_sha256=status_artifact.sha256,
     )
-    if (
-        status_payload.get("requested_backend")
-        != record.requested_masking.get("backend")
-        or status_payload.get("failure_policy")
-        != record.requested_masking.get("failure_policy")
-    ):
+    if status_payload.get("requested_backend") != record.requested_masking.get("backend") or status_payload.get(
+        "failure_policy"
+    ) != record.requested_masking.get("failure_policy"):
         raise ValueError("masking status differs from the requested masking identity")
     expected_actual = {**status_payload, "status_sha256": status_artifact.sha256}
     if record.actual_masking != expected_actual:
@@ -812,16 +761,11 @@ def _validate_phase0_binding(
         if output_sha256 != input_identity.get("sha256"):
             raise ValueError("unmasked Phase 0 output differs from the input identity")
         size, observed_sha256 = _sha256_regular_file(output_path)
-        if (
-            size != input_identity.get("size")
-            or observed_sha256 != output_sha256
-        ):
+        if size != input_identity.get("size") or observed_sha256 != output_sha256:
             raise ValueError("unmasked Phase 0 output is missing or stale")
         return
     try:
-        relative_output = output_path.resolve(strict=True).relative_to(
-            root.resolve(strict=True)
-        ).as_posix()
+        relative_output = output_path.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix()
     except (OSError, ValueError) as exc:
         raise ValueError("masked Phase 0 output is outside the run directory") from exc
     output_artifact = _artifacts_by_path(record.artifacts).get(relative_output)
@@ -842,11 +786,7 @@ def _validate_phase_checkpoint(
         identities,
     )
     owner_phase = ablation_policy(phase_events.ablation_id).intervention_phase
-    if (
-        owner_phase is not None
-        and record.phase < owner_phase
-        and phase_events.counters.total_opportunities != 0
-    ):
+    if owner_phase is not None and record.phase < owner_phase and phase_events.counters.total_opportunities != 0:
         raise ValueError("ablation counters are nonzero before their owner phase")
     if record.phase > 0:
         previous_events = _validate_ablation_event_binding(
@@ -857,18 +797,9 @@ def _validate_phase_checkpoint(
         previous_counts = previous_events.counters.to_document()
         current_counts = phase_events.counters.to_document()
         for key, fields in previous_counts.items():
-            if any(
-                current_counts[key][field] < value
-                for field, value in fields.items()
-            ):
-                raise ValueError(
-                    "ablation counters decreased across phase fragments"
-                )
-        if (
-            owner_phase is not None
-            and record.phase > owner_phase
-            and phase_events.counters != previous_events.counters
-        ):
+            if any(current_counts[key][field] < value for field, value in fields.items()):
+                raise ValueError("ablation counters decreased across phase fragments")
+        if owner_phase is not None and record.phase > owner_phase and phase_events.counters != previous_events.counters:
             raise ValueError("ablation counters changed after their owner phase")
     if record.phase == 3 or record.outcome in _TERMINAL_PHASE_OUTCOMES:
         root_events = _validate_ablation_event_binding(
@@ -877,33 +808,23 @@ def _validate_phase_checkpoint(
             identities,
         )
         if root_events != phase_events:
-            raise ValueError(
-                "final ablation events differ from the terminal phase fragment"
-            )
+            raise ValueError("final ablation events differ from the terminal phase fragment")
     if record.outcome not in {"complete", "passthrough", "terminal_ablation"}:
         return
     artifacts = _artifacts_by_path(record.artifacts)
     if record.phase == 1:
         from .phase1_state import phase1_state_from_document
 
-        phase1_state_from_document(
-            _read_artifact_json(root, "phase1/resume_state.json")
-        )
+        phase1_state_from_document(_read_artifact_json(root, "phase1/resume_state.json"))
     elif record.phase == 2:
         from .phase2_resume_state import phase2_resume_state_from_document
         from .phase_state import phase2_state_from_document, phase2_state_to_document
 
-        boundaries = phase2_state_from_document(
-            _read_artifact_json(root, "phase2/refined_state.json")
-        )
-        resume_state = phase2_resume_state_from_document(
-            _read_artifact_json(root, "phase2/resume_state.json")
-        )
+        boundaries = phase2_state_from_document(_read_artifact_json(root, "phase2/refined_state.json"))
+        resume_state = phase2_resume_state_from_document(_read_artifact_json(root, "phase2/resume_state.json"))
         if not boundaries:
             raise ValueError("completed Phase 2 checkpoint contains no boundaries")
-        if phase2_state_to_document(boundaries) != phase2_state_to_document(
-            resume_state.refined_boundaries
-        ):
+        if phase2_state_to_document(boundaries) != phase2_state_to_document(resume_state.refined_boundaries):
             raise ValueError("Phase 2 boundary checkpoints disagree")
         if identities is None:
             raise ValueError("Phase 2 validation requires the run identity")
@@ -911,9 +832,7 @@ def _validate_phase_checkpoint(
         for boundary in boundaries:
             scaffold_length = scaffold_lengths.get(boundary.scaffold)
             if scaffold_length is None or boundary.end > scaffold_length:
-                raise ValueError(
-                    "Phase 2 boundary lies outside the authenticated input FASTA"
-                )
+                raise ValueError("Phase 2 boundary lies outside the authenticated input FASTA")
         bed = artifacts["phase2/refined_boundaries.bed"]
         if bed.row_count != len(boundaries):
             raise ValueError("Phase 2 BED row count differs from its checkpoint")
@@ -933,24 +852,16 @@ def _validate_phase_checkpoint(
                     continue
                 fields = line.rstrip("\n").split("\t")
                 if len(fields) != 6:
-                    raise ValueError(
-                        f"Phase 2 BED row {row_number} does not contain six fields"
-                    )
+                    raise ValueError(f"Phase 2 BED row {row_number} does not contain six fields")
                 try:
                     start = int(fields[1])
                     end = int(fields[2])
                     score = int(fields[4])
                 except ValueError as exc:
-                    raise ValueError(
-                        f"Phase 2 BED row {row_number} has invalid numerics"
-                    ) from exc
+                    raise ValueError(f"Phase 2 BED row {row_number} has invalid numerics") from exc
                 if start < 0 or end <= start or not 0 <= score <= 1000:
-                    raise ValueError(
-                        f"Phase 2 BED row {row_number} violates BED6 semantics"
-                    )
-                observed_boundaries.append(
-                    (fields[0], start, end, fields[3], score, fields[5])
-                )
+                    raise ValueError(f"Phase 2 BED row {row_number} violates BED6 semantics")
+                observed_boundaries.append((fields[0], start, end, fields[3], score, fields[5]))
             after = os.fstat(handle.fileno())
         if (
             metadata.st_dev,
@@ -987,7 +898,6 @@ def validate_artifact_identity(
     root: str | Path,
 ) -> bool:
     """Return whether an artifact still has its recorded identity and row count."""
-
     try:
         expected = _coerce_artifact(artifact)
         size, digest, observed_rows = _observe_artifact(
@@ -1006,7 +916,6 @@ def validate_artifact_identity(
 
 def build_input_identity(path: str | Path) -> InputIdentity:
     """Build the whole-file input identity used by the run fingerprint."""
-
     candidate = Path(path)
     try:
         metadata = candidate.lstat()
@@ -1022,7 +931,6 @@ def _authenticated_scaffold_lengths(
     identities: Mapping[str, object],
 ) -> dict[str, int]:
     """Read the fingerprinted FASTA once and return its sequence lengths."""
-
     input_path = identities.get("input_path")
     input_identity = identities.get("input")
     if not isinstance(input_path, str) or not isinstance(input_identity, Mapping):
@@ -1061,9 +969,7 @@ def _authenticated_scaffold_lengths(
                         raise ValueError("input FASTA header is not UTF-8") from exc
                     current = header.split(maxsplit=1)[0] if header else ""
                     if not current or current in lengths:
-                        raise ValueError(
-                            "input FASTA contains an empty or duplicate scaffold ID"
-                        )
+                        raise ValueError("input FASTA contains an empty or duplicate scaffold ID")
                     lengths[current] = 0
                     continue
                 sequence = b"".join(raw_line.split())
@@ -1105,7 +1011,6 @@ def _scan_regular_tree(
     python_only: bool = False,
 ) -> tuple[tuple[str, ...], tuple[object, ...]]:
     """Return stable regular-file paths plus a metadata mutation signature."""
-
     root = _require_directory_no_follow(root, label)
     files: list[str] = []
     signature: list[object] = []
@@ -1222,7 +1127,6 @@ def build_resource_identity(
     already the authenticated bundle identity.  Optional resources without that
     contract receive a deterministic content manifest over every regular file.
     """
-
     if not isinstance(name, str) or not name.strip():
         raise ValueError("resource name must be a non-empty string")
     if not isinstance(version, str) or not version.strip():
@@ -1262,9 +1166,7 @@ def build_resource_identity(
             except OSError as exc:
                 raise ValueError(f"resource file is not accessible: {candidate}") from exc
             if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                raise ValueError(
-                    f"resource file must be regular and non-symlink: {candidate}"
-                )
+                raise ValueError(f"resource file must be regular and non-symlink: {candidate}")
             size, file_digest = _sha256_regular_file(candidate)
             inventory = [
                 {
@@ -1303,7 +1205,6 @@ def build_resource_set_identity(
     kind: str = "optional",
 ) -> ResourceIdentity:
     """Hash a declared set of regular resource files as one synthetic manifest."""
-
     if not isinstance(name, str) or not name.strip():
         raise ValueError("resource name must be a non-empty string")
     if not isinstance(version, str) or not version.strip():
@@ -1321,9 +1222,7 @@ def build_resource_set_identity(
         except OSError as exc:
             raise ValueError(f"resource member is not accessible: {candidate}") from exc
         if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-            raise ValueError(
-                f"resource member must be regular and non-symlink: {candidate}"
-            )
+            raise ValueError(f"resource member must be regular and non-symlink: {candidate}")
         size, digest = _sha256_regular_file(candidate)
         inventory.append(
             {
@@ -1353,7 +1252,6 @@ def build_code_identity(
     version: str,
 ) -> CodeIdentity:
     """Hash the installed Python source inventory without following symlinks."""
-
     if not isinstance(version, str) or not version:
         raise ValueError("code version must be a non-empty string")
     root = _require_directory_no_follow(Path(source_root), "source root")
@@ -1378,9 +1276,7 @@ def build_code_identity(
         raise ValueError("source tree changed while hashing")
     return CodeIdentity(
         version=version,
-        source_sha256=canonical_sha256(
-            {"schema_version": 1, "files": inventory}
-        ),
+        source_sha256=canonical_sha256({"schema_version": 1, "files": inventory}),
     )
 
 
@@ -1391,7 +1287,6 @@ def build_environment_identity(
     effective_device: str,
 ) -> EnvironmentIdentity:
     """Bind the lockfile plus requested and effective accelerator choices."""
-
     if not isinstance(requested_device, str) or not requested_device:
         raise ValueError("requested_device must be a non-empty string")
     if not isinstance(effective_device, str) or not effective_device:
@@ -1408,7 +1303,6 @@ def build_environment_identity(
 
 def runtime_environment_sha256() -> str:
     """Hash the effective interpreter and installed distribution inventory."""
-
     global _RUNTIME_ENVIRONMENT_SHA256
     if _RUNTIME_ENVIRONMENT_SHA256 is not None:
         return _RUNTIME_ENVIRONMENT_SHA256
@@ -1525,9 +1419,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
     )
     if config_identity["ablation_contract_sha256"] != ABLATION_CONTRACT_SHA256:
         raise ValueError("config ablation contract does not match this ViroSync build")
-    if not isinstance(code_identity.get("version"), str) or not code_identity.get(
-        "version"
-    ):
+    if not isinstance(code_identity.get("version"), str) or not code_identity.get("version"):
         raise ValueError("code version must be a non-empty string")
     _require_sha256(code_identity.get("source_sha256"), "code source_sha256")
     _require_sha256(environment_identity.get("lock_sha256"), "environment lock_sha256")
@@ -1536,9 +1428,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
         "environment runtime_sha256",
     )
     for field in ("requested_device", "effective_device"):
-        if not isinstance(environment_identity.get(field), str) or not environment_identity[
-            field
-        ]:
+        if not isinstance(environment_identity.get(field), str) or not environment_identity[field]:
             raise ValueError(f"environment {field} must be a non-empty string")
     _require_sha256(environment_identity.get("sha256"), "environment sha256")
     environment_payload = {
@@ -1601,7 +1491,6 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
 
 def compute_run_fingerprint(payload: Mapping[str, object]) -> str:
     """Hash the complete canonical run identity as lowercase SHA-256."""
-
     return canonical_sha256(_validate_run_identity(payload))
 
 
@@ -1616,7 +1505,6 @@ def build_phase_record(
     actual_masking: Mapping[str, object] | None = None,
 ) -> PhaseRecord:
     """Build a deterministic phase completion record."""
-
     if phase not in range(len(PHASE_MARKER_FILENAMES)):
         raise ValueError("phase must be in the range 0..3")
     _require_sha256(run_fingerprint, "run_fingerprint")
@@ -1658,11 +1546,8 @@ def build_phase_record(
     )
 
 
-
-
 def marker_sha256(path: str | Path, phase: int | None = None) -> str:
     """Hash the exact published marker bytes used by the next phase."""
-
     candidate = Path(path)
     if phase is not None:
         if phase not in range(len(PHASE_MARKER_FILENAMES)):
@@ -1676,7 +1561,6 @@ def marker_sha256(path: str | Path, phase: int | None = None) -> str:
 
 def atomic_write_json(path: str | Path, payload: object) -> Path:
     """Durably publish complete JSON with replace and file/directory fsync."""
-
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     parent = _require_directory_no_follow(destination.parent, "JSON parent")
@@ -1684,9 +1568,7 @@ def atomic_write_json(path: str | Path, payload: object) -> Path:
         existing = destination.lstat()
     except FileNotFoundError:
         existing = None
-    if existing is not None and (
-        not stat.S_ISREG(existing.st_mode) or stat.S_ISLNK(existing.st_mode)
-    ):
+    if existing is not None and (not stat.S_ISREG(existing.st_mode) or stat.S_ISLNK(existing.st_mode)):
         raise ValueError(f"JSON destination must be a regular file: {destination}")
     content = (
         json.dumps(
@@ -1699,9 +1581,7 @@ def atomic_write_json(path: str | Path, payload: object) -> Path:
         + "\n"
     ).encode("utf-8")
     if len(content) > _MAX_STATE_BYTES:
-        raise ValueError(
-            f"JSON state exceeds the {_MAX_STATE_BYTES}-byte reader limit"
-        )
+        raise ValueError(f"JSON state exceeds the {_MAX_STATE_BYTES}-byte reader limit")
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
@@ -1732,7 +1612,6 @@ def atomic_write_json(path: str | Path, payload: object) -> Path:
 @contextmanager
 def sibling_run_lock(output_dir: str | Path) -> Iterator[Path]:
     """Serialize attempts with a non-symlink lock beside the output directory."""
-
     output = Path(output_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     parent = _require_directory_no_follow(output.parent, "run-lock parent")
@@ -1749,8 +1628,7 @@ def sibling_run_lock(output_dir: str | Path) -> Iterator[Path]:
         if (
             not stat.S_ISREG(current.st_mode)
             or current.st_nlink != 1
-            or (current.st_dev, current.st_ino)
-            != (metadata.st_dev, metadata.st_ino)
+            or (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino)
         ):
             raise ValueError(f"run lock changed while acquiring it: {lock_path}")
         yield lock_path
@@ -1823,8 +1701,6 @@ def _load_phase_record(path: Path) -> PhaseRecord:
     return _phase_record_from_payload(_read_json(path))
 
 
-
-
 def _validated_phase_prefix(
     output_dir: Path,
     expected_run_fingerprint: str,
@@ -1859,18 +1735,12 @@ def _validated_phase_prefix(
             _validate_phase_checkpoint(output_dir, record, state.identities)
         except (OSError, TypeError, ValueError) as exc:
             return tuple(records), f"{filename} has an incomplete artifact set: {exc}"
-        if any(
-            not validate_artifact_identity(artifact, root=output_dir)
-            for artifact in record.artifacts
-        ):
+        if any(not validate_artifact_identity(artifact, root=output_dir) for artifact in record.artifacts):
             return tuple(records), f"{filename} has a stale artifact"
         records.append(record)
         dependency = marker_sha256(marker)
         if record.outcome in _TERMINAL_PHASE_OUTCOMES:
-            if any(
-                _entry_exists(output_dir / later)
-                for later in PHASE_MARKER_FILENAMES[phase + 1:]
-            ):
+            if any(_entry_exists(output_dir / later) for later in PHASE_MARKER_FILENAMES[phase + 1 :]):
                 return tuple(records[:-1]), f"{filename} precedes a downstream marker"
             return tuple(records), None
     return tuple(records), None
@@ -1915,7 +1785,6 @@ def publish_phase_completion(
     **record_fields: Any,
 ) -> Path:
     """Validate, fsync, and atomically publish one chained phase marker."""
-
     root = _require_directory_no_follow(Path(output_dir), "output directory")
     if record is None:
         record = build_phase_record(**record_fields)
@@ -1931,32 +1800,20 @@ def publish_phase_completion(
         raise ValueError("phase markers can only be published for a running attempt")
     _validate_phase0_binding(root, record, current_state.identities)
     _validate_phase_checkpoint(root, record, current_state.identities)
-    if any(
-        not validate_artifact_identity(artifact, root=root)
-        for artifact in record.artifacts
-    ):
+    if any(not validate_artifact_identity(artifact, root=root) for artifact in record.artifacts):
         raise ValueError(f"Phase {record.phase} artifacts failed identity validation")
     prefix, reason = _validated_phase_prefix(root, record.run_fingerprint)
     if len(prefix) < record.phase:
         raise ValueError(reason or "prior phase marker is invalid")
-    if (
-        prefix
-        and prefix[-1].outcome in _TERMINAL_PHASE_OUTCOMES
-        and record.phase > prefix[-1].phase
-    ):
+    if prefix and prefix[-1].outcome in _TERMINAL_PHASE_OUTCOMES and record.phase > prefix[-1].phase:
         raise ValueError("no phase may be published after a terminal completion")
     if record.phase == 0:
         expected_dependency = record.run_fingerprint
     else:
-        expected_dependency = marker_sha256(
-            root / PHASE_MARKER_FILENAMES[record.phase - 1]
-        )
+        expected_dependency = marker_sha256(root / PHASE_MARKER_FILENAMES[record.phase - 1])
     if record.dependency_sha256 != expected_dependency:
         raise ValueError("phase dependency does not match the authenticated prefix")
-    if any(
-        _entry_exists(root / filename)
-        for filename in PHASE_MARKER_FILENAMES[record.phase + 1:]
-    ):
+    if any(_entry_exists(root / filename) for filename in PHASE_MARKER_FILENAMES[record.phase + 1 :]):
         raise ValueError("downstream phase markers must be invalidated before publish")
     for artifact in record.artifacts:
         _fsync_artifact(root, artifact)
@@ -2035,7 +1892,6 @@ def _load_run_state(output_dir: Path) -> RunState:
 
 def load_run_state(output_dir: str | Path) -> RunState:
     """Load a structurally valid schema-v3 run state."""
-
     root = _require_directory_no_follow(Path(output_dir), "output directory")
     return _load_run_state(root)
 
@@ -2052,7 +1908,6 @@ def _unlink_no_follow(path: Path) -> None:
 
 def _entry_exists(path: Path) -> bool:
     """Return true for any directory entry, including dangling symlinks."""
-
     try:
         path.lstat()
     except FileNotFoundError:
@@ -2069,7 +1924,6 @@ def publish_run_started(
     preserve_success_artifacts: bool = False,
 ) -> RunState:
     """Publish ``running`` before Phase 0 and advance the attempt counter."""
-
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     root = _require_directory_no_follow(root, "output directory")
@@ -2089,9 +1943,7 @@ def publish_run_started(
         if run_fingerprint is None:
             run_fingerprint = identity_fingerprint
         elif run_fingerprint != identity_fingerprint:
-            raise ValueError(
-                "run fingerprint does not match the canonical run identity"
-            )
+            raise ValueError("run fingerprint does not match the canonical run identity")
     if run_fingerprint is None:
         raise ValueError("run_fingerprint or identity is required")
     _require_sha256(run_fingerprint, "run_fingerprint")
@@ -2099,9 +1951,7 @@ def publish_run_started(
     if previous is not None and previous.run_fingerprint == run_fingerprint:
         if normalized_identities is None:
             normalized_identities = previous.identities
-        elif canonical_json_bytes(normalized_identities) != canonical_json_bytes(
-            previous.identities
-        ):
+        elif canonical_json_bytes(normalized_identities) != canonical_json_bytes(previous.identities):
             raise ValueError("same fingerprint has a different run identity")
         attempt = previous.attempt + 1
         if previous.status == "success":
@@ -2111,17 +1961,12 @@ def publish_run_started(
                     records[-1].phase != len(PHASE_MARKER_FILENAMES) - 1
                     and records[-1].outcome not in _TERMINAL_PHASE_OUTCOMES
                 ):
-                    raise ValueError(
-                        reason
-                        or "cannot preserve success artifacts without a final marker"
-                    )
+                    raise ValueError(reason or "cannot preserve success artifacts without a final marker")
             else:
                 invalidate_from_phase(root, from_phase=0)
     else:
         if preserve_success_artifacts:
-            raise ValueError(
-                "success artifacts can only be preserved for the same fingerprint"
-            )
+            raise ValueError("success artifacts can only be preserved for the same fingerprint")
         if normalized_identities is None:
             raise ValueError("a new run fingerprint requires the complete identity")
         attempt = 1
@@ -2149,7 +1994,6 @@ def publish_run_failed(
     message: str,
 ) -> RunState:
     """Atomically replace the current running state with ``failed``."""
-
     root = _require_directory_no_follow(Path(output_dir), "output directory")
     current = _load_run_state(root)
     if current.status != "running":
@@ -2188,12 +2032,8 @@ def _validated_result(result: Mapping[str, object]) -> dict[str, object]:
     missing = required - set(normalized)
     if missing:
         raise ValueError(f"success result is missing fields: {sorted(missing)!r}")
-    canonical_rows = _require_nonnegative_int(
-        normalized["canonical_rows"], "canonical_rows"
-    )
-    detailed_rows = _require_nonnegative_int(
-        normalized["detailed_rows"], "detailed_rows"
-    )
+    canonical_rows = _require_nonnegative_int(normalized["canonical_rows"], "canonical_rows")
+    detailed_rows = _require_nonnegative_int(normalized["detailed_rows"], "detailed_rows")
     _require_nonnegative_int(normalized["accepted_bp"], "accepted_bp")
     if detailed_rows < canonical_rows:
         raise ValueError("detailed_rows cannot be smaller than canonical_rows")
@@ -2209,9 +2049,7 @@ def _validated_result(result: Mapping[str, object]) -> dict[str, object]:
             raise ValueError(f"{field} must sum to canonical_rows")
     from virosync.output_contract import normalize_effective_eve_class_counts
 
-    normalized["class_counts"] = normalize_effective_eve_class_counts(
-        normalized["class_counts"]
-    )
+    normalized["class_counts"] = normalize_effective_eve_class_counts(normalized["class_counts"])
     if set(normalized["tier_counts"]) != {"HIGH", "MEDIUM", "LOW"}:
         raise ValueError("tier_counts must contain HIGH, MEDIUM, and LOW")
     promoted_low_rows = normalized.get(
@@ -2226,9 +2064,7 @@ def _validated_result(result: Mapping[str, object]) -> dict[str, object]:
         raise ValueError("promoted_low_rows cannot exceed canonical LOW rows")
     normalized["promoted_low_rows"] = promoted_low_rows
     terminal_phase = normalized["terminal_phase"]
-    if terminal_phase is not None and terminal_phase not in range(
-        len(PHASE_MARKER_FILENAMES)
-    ):
+    if terminal_phase is not None and terminal_phase not in range(len(PHASE_MARKER_FILENAMES)):
         raise ValueError("terminal_phase must be null or an integer in the range 0..3")
     if isinstance(terminal_phase, bool):
         raise ValueError("terminal_phase must not be boolean")
@@ -2268,12 +2104,7 @@ def _validate_invariant_report(path: Path, *, expected_rows: int) -> None:
         warning_count = int(rows[1][4])
     except ValueError as exc:
         raise ValueError("invariant report counts must be integers") from exc
-    if (
-        rows_checked != expected_rows
-        or issue_count < 0
-        or error_count != 0
-        or warning_count != issue_count
-    ):
+    if rows_checked != expected_rows or issue_count < 0 or error_count != 0 or warning_count != issue_count:
         raise ValueError("invariant report counts disagree with final outputs")
     issue_rows = [row for row in rows[2:] if any(field.strip() for field in row)]
     if issue_rows:
@@ -2309,9 +2140,7 @@ def _validate_completion_manifest(
         "output_schema_version",
     ):
         if payload.get(field) != identities.get(field):
-            raise ValueError(
-                f"completion manifest {field} differs from the run identity"
-            )
+            raise ValueError(f"completion manifest {field} differs from the run identity")
     if not isinstance(payload.get("generated_at"), str) or not isinstance(
         payload.get("reason"),
         str,
@@ -2341,19 +2170,14 @@ def _validate_completion_manifest(
             try:
                 relative = candidate.absolute().relative_to(root).as_posix()
             except ValueError as exc:
-                raise ValueError(
-                    "completion manifest output path escapes the run directory"
-                ) from exc
+                raise ValueError("completion manifest output path escapes the run directory") from exc
         else:
             relative = candidate.as_posix()
         _normalized_relative_path(relative, "completion output path")
 
     validate_output_paths(output_files)
     masking = payload.get("masking_status")
-    if (
-        not isinstance(masking, dict)
-        or masking.get("benchmark_eligible") is not benchmark_eligible
-    ):
+    if not isinstance(masking, dict) or masking.get("benchmark_eligible") is not benchmark_eligible:
         raise ValueError("completion manifest benchmark eligibility is inconsistent")
     status_path = path.parent / "phase0" / "masking" / "masking_status.json"
     from virosync.pipeline.phase0.masking import load_masking_result
@@ -2369,9 +2193,7 @@ def _validate_completion_manifest(
     }
     if masking != expected_masking:
         raise ValueError("completion manifest masking identity is inconsistent")
-    expected_effective = hashlib.sha256(
-        f"{run_fingerprint}|{result.status_sha256}".encode()
-    ).hexdigest()
+    expected_effective = hashlib.sha256(f"{run_fingerprint}|{result.status_sha256}".encode()).hexdigest()
     if payload.get("effective_masking_fingerprint") != expected_effective:
         raise ValueError("completion manifest effective masking identity is stale")
 
@@ -2414,11 +2236,7 @@ def _read_delimited_artifact(
         after.st_mtime_ns,
     ):
         raise ValueError(f"tabular artifact changed while reading: {relative_path}")
-    if (
-        not fields
-        or any(not field.strip() for field in fields)
-        or len(fields) != len(set(fields))
-    ):
+    if not fields or any(not field.strip() for field in fields) or len(fields) != len(set(fields)):
         raise ValueError(f"tabular artifact has an invalid header: {relative_path}")
     if any(None in row for row in rows):
         raise ValueError(f"tabular artifact has an extra-width row: {relative_path}")
@@ -2454,9 +2272,7 @@ def _prediction_coordinates(
         "effective_eve_class",
     }
     if not required.issubset(fields):
-        raise ValueError(
-            f"prediction table {relative_path} lacks required schema columns"
-        )
+        raise ValueError(f"prediction table {relative_path} lacks required schema columns")
     coordinates: dict[
         str,
         tuple[str, int, int, int, str, float, str],
@@ -2468,9 +2284,7 @@ def _prediction_coordinates(
         eve_id = str(row.get("eve_id") or "").strip()
         scaffold = str(row.get("scaffold") or "").strip()
         if not eve_id or not scaffold or eve_id in coordinates:
-            raise ValueError(
-                f"prediction table {relative_path} has an invalid ID at row {row_number}"
-            )
+            raise ValueError(f"prediction table {relative_path} has an invalid ID at row {row_number}")
         try:
             start = int(row["start"])
             end = int(row["end"])
@@ -2478,34 +2292,22 @@ def _prediction_coordinates(
             confidence = float(row["final_confidence"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(
-                f"prediction table {relative_path} has invalid numeric fields "
-                f"at row {row_number}"
+                f"prediction table {relative_path} has invalid numeric fields at row {row_number}"
             ) from exc
         if start < 0 or end <= start or length != end - start:
-            raise ValueError(
-                f"prediction table {relative_path} violates coordinates at "
-                f"row {row_number}"
-            )
+            raise ValueError(f"prediction table {relative_path} violates coordinates at row {row_number}")
         if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
-            raise ValueError(
-                f"prediction table {relative_path} has invalid confidence"
-            )
+            raise ValueError(f"prediction table {relative_path} has invalid confidence")
         persisted_class = str(row["effective_eve_class"]).strip().upper()
-        if persisted_class not in (
-            set(EFFECTIVE_EVE_CLASSES) | set(PPV_LEGACY_ALIASES) | {"MIXED"}
-        ):
-            raise ValueError(
-                f"prediction table {relative_path} has an invalid effective class"
-            )
+        if persisted_class not in (set(EFFECTIVE_EVE_CLASSES) | set(PPV_LEGACY_ALIASES) | {"MIXED"}):
+            raise ValueError(f"prediction table {relative_path} has an invalid effective class")
         # Fold legacy VP/PLV onto PPV and legacy MIXED onto VIRAL_UNKNOWN exactly
         # like the manifest summary does, so a pre-migration result directory
         # still validates instead of forcing a full recompute.
         eve_class = normalize_effective_eve_class(persisted_class)
         tier = str(row["confidence_tier"]).strip().upper()
         if tier not in tier_counts:
-            raise ValueError(
-                f"prediction table {relative_path} has an invalid confidence tier"
-            )
+            raise ValueError(f"prediction table {relative_path} has an invalid confidence tier")
         coordinates[eve_id] = (
             scaffold,
             start,
@@ -2546,12 +2348,7 @@ def _validate_bed_export(
                 start, end, score = int(fields[1]), int(fields[2]), int(fields[4])
             except ValueError as exc:
                 raise ValueError(f"BED row {row_number} has invalid numerics") from exc
-            if (
-                start < 0
-                or end <= start
-                or not 0 <= score <= 1000
-                or fields[5] != "."
-            ):
+            if start < 0 or end <= start or not 0 <= score <= 1000 or fields[5] != ".":
                 raise ValueError(f"BED row {row_number} violates BED6 semantics")
             if fields[3] in observed:
                 raise ValueError(f"BED contains duplicate EVE ID {fields[3]!r}")
@@ -2619,9 +2416,7 @@ def _validate_gff_export(
             try:
                 confidence = float(attributes.get("confidence", ""))
             except ValueError as exc:
-                raise ValueError(
-                    f"GFF3 row {row_number} has invalid confidence"
-                ) from exc
+                raise ValueError(f"GFF3 row {row_number} has invalid confidence") from exc
             if (
                 not eve_id
                 or eve_id in observed
@@ -2732,15 +2527,9 @@ def _validate_success_artifacts(
         "ablation_events.json",
         identities,
     )
-    canonical = [
-        artifact
-        for artifact in normalized
-        if Path(artifact.relative_path).name == "virosync_predictions.tsv"
-    ]
+    canonical = [artifact for artifact in normalized if Path(artifact.relative_path).name == "virosync_predictions.tsv"]
     detailed = [
-        artifact
-        for artifact in normalized
-        if Path(artifact.relative_path).name == "virosync_predictions_detailed.tsv"
+        artifact for artifact in normalized if Path(artifact.relative_path).name == "virosync_predictions_detailed.tsv"
     ]
     if not canonical or not detailed:
         raise ValueError("success state requires canonical and detailed prediction tables")
@@ -2750,14 +2539,10 @@ def _validate_success_artifacts(
         raise ValueError("detailed prediction row count disagrees with summary")
     for suffix in (".bed", ".gff3"):
         exports = [
-            artifact
-            for artifact in normalized
-            if artifact.relative_path.endswith(f"virosync_predictions{suffix}")
+            artifact for artifact in normalized if artifact.relative_path.endswith(f"virosync_predictions{suffix}")
         ]
         if any(artifact.row_count != result["canonical_rows"] for artifact in exports):
-            raise ValueError(
-                f"canonical {suffix} row count disagrees with summary"
-            )
+            raise ValueError(f"canonical {suffix} row count disagrees with summary")
     for relative_path in (
         "run.log",
         "virosync_run_complete.json",
@@ -2780,19 +2565,9 @@ def _validate_success_artifacts(
         )
         for artifact in detailed
     }
-    if len(
-        {
-            (artifact.size, artifact.sha256, artifact.row_count)
-            for artifact in canonical
-        }
-    ) != 1:
+    if len({(artifact.size, artifact.sha256, artifact.row_count) for artifact in canonical}) != 1:
         raise ValueError("duplicate canonical prediction tables disagree")
-    if len(
-        {
-            (artifact.size, artifact.sha256, artifact.row_count)
-            for artifact in detailed
-        }
-    ) != 1:
+    if len({(artifact.size, artifact.sha256, artifact.row_count) for artifact in detailed}) != 1:
         raise ValueError("duplicate detailed prediction tables disagree")
     canonical_path = next(
         path
@@ -2827,16 +2602,9 @@ def _validate_success_artifacts(
         for values in rows.values():
             scaffold_length = scaffold_lengths.get(values[0])
             if scaffold_length is None or values[2] > scaffold_length:
-                raise ValueError(
-                    "prediction lies outside the authenticated input FASTA"
-                )
-    if any(
-        detailed_coordinates.get(eve_id) != coordinates
-        for eve_id, coordinates in canonical_coordinates.items()
-    ):
-        raise ValueError(
-            "canonical prediction coordinates differ from detailed predictions"
-        )
+                raise ValueError("prediction lies outside the authenticated input FASTA")
+    if any(detailed_coordinates.get(eve_id) != coordinates for eve_id, coordinates in canonical_coordinates.items()):
+        raise ValueError("canonical prediction coordinates differ from detailed predictions")
     for bed_path in (
         "virosync_predictions.bed",
         "phase3_synthesis/virosync_predictions.bed",
@@ -2884,17 +2652,13 @@ def _validate_success_artifacts(
             "output_schema_version",
         ):
             if summary.get(field) != identities.get(field):
-                raise ValueError(
-                    f"ViroSync summary {field} differs from the run identity"
-                )
+                raise ValueError(f"ViroSync summary {field} differs from the run identity")
         statistics = summary.get("statistics")
         if not isinstance(statistics, dict):
             raise ValueError("ViroSync summary has no statistics object")
         for field, expected in expected_statistics.items():
             if statistics.get(field) != expected:
-                raise ValueError(
-                    f"ViroSync summary {field} disagrees with run result"
-                )
+                raise ValueError(f"ViroSync summary {field} disagrees with run result")
         if not isinstance(summary.get("virosync_version"), str) or not isinstance(
             summary.get("per_scaffold"),
             dict,
@@ -2941,9 +2705,7 @@ def _success_artifacts_match_terminal_record(
 ) -> bool:
     if not records:
         return False
-    recorded = {
-        artifact.relative_path: artifact for artifact in records[-1].artifacts
-    }
+    recorded = {artifact.relative_path: artifact for artifact in records[-1].artifacts}
     return all(recorded.get(artifact.relative_path) == artifact for artifact in artifacts)
 
 
@@ -2956,7 +2718,6 @@ def publish_run_success(
     run_fingerprint: str,
 ) -> RunState:
     """Validate final outputs and phase chain before publishing ``success``."""
-
     root = _require_directory_no_follow(Path(output_dir), "output directory")
     current = _load_run_state(root)
     if current.status != "running":
@@ -2976,9 +2737,7 @@ def publish_run_success(
         normalized_artifacts,
         phase_records,
     ):
-        raise ValueError(
-            "success artifacts are not authenticated by the final phase marker"
-        )
+        raise ValueError("success artifacts are not authenticated by the final phase marker")
     terminal_phase = normalized_result["terminal_phase"]
     if terminal_phase is not None:
         if (
@@ -2998,9 +2757,7 @@ def publish_run_success(
                     *normalized_result["tier_counts"].values(),
                 )
             ):
-                raise ValueError(
-                    "terminal-zero summaries must contain all-zero result counts"
-                )
+                raise ValueError("terminal-zero summaries must contain all-zero result counts")
         else:
             config_identity = current.identities.get("config")
             if (
@@ -3008,21 +2765,15 @@ def publish_run_success(
                 or not isinstance(config_identity, Mapping)
                 or config_identity.get("ablation_id") != AblationID.A1.value
             ):
-                raise ValueError(
-                    "terminal-ablation success is reserved for the A1 Phase-1 surface"
-                )
+                raise ValueError("terminal-ablation success is reserved for the A1 Phase-1 surface")
             if (
                 normalized_result["canonical_rows"] <= 0
                 or normalized_result["detailed_rows"] <= 0
                 or normalized_result["accepted_bp"] <= 0
             ):
-                raise ValueError(
-                    "terminal-ablation success requires nonzero authenticated output"
-                )
+                raise ValueError("terminal-ablation success requires nonzero authenticated output")
             if normalized_result["promoted_low_rows"] != 0:
-                raise ValueError(
-                    "terminal-ablation LOW rows are unscored, not promoted"
-                )
+                raise ValueError("terminal-ablation LOW rows are unscored, not promoted")
     elif len(phase_records) != len(PHASE_MARKER_FILENAMES):
         raise ValueError(reason or "success requires all four phase markers")
     for artifact in normalized_artifacts:
@@ -3047,7 +2798,6 @@ def plan_resume(
     expected_run_fingerprint: str,
 ) -> ResumePlan:
     """Validate state and return only the reusable sequential phase prefix."""
-
     _require_sha256(expected_run_fingerprint, "expected_run_fingerprint")
     root = Path(output_dir)
     try:
@@ -3059,11 +2809,7 @@ def plan_resume(
         return ResumePlan((), 0, reason="run fingerprint changed")
     records, reason = _validated_phase_prefix(root, expected_run_fingerprint)
     phases = tuple(record.phase for record in records)
-    terminal_phase = (
-        records[-1].phase
-        if records and records[-1].outcome in _TERMINAL_PHASE_OUTCOMES
-        else None
-    )
+    terminal_phase = records[-1].phase if records and records[-1].outcome in _TERMINAL_PHASE_OUTCOMES else None
     if state.status == "success":
         if not _success_state_is_valid(root, state):
             return ResumePlan(
@@ -3132,15 +2878,11 @@ def _remove_entry_at(parent_fd: int, name: str) -> None:
     try:
         directory_fd = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
     except OSError as exc:
-        raise ValueError(
-            f"directory changed during guarded invalidation: {name}"
-        ) from exc
+        raise ValueError(f"directory changed during guarded invalidation: {name}") from exc
     try:
         opened = os.fstat(directory_fd)
         if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
-            raise ValueError(
-                f"directory changed during guarded invalidation: {name}"
-            )
+            raise ValueError(f"directory changed during guarded invalidation: {name}")
         with os.scandir(directory_fd) as entries:
             child_names = [entry.name for entry in entries]
         for child_name in child_names:
@@ -3152,10 +2894,7 @@ def _remove_entry_at(parent_fd: int, name: str) -> None:
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
         return
-    if (
-        not stat.S_ISDIR(current.st_mode)
-        or (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino)
-    ):
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
         raise ValueError(f"directory changed during guarded invalidation: {name}")
     os.rmdir(name, dir_fd=parent_fd)
 
@@ -3194,17 +2933,11 @@ def _remove_relative_no_follow(root: Path, relative_path: str) -> None:
                     dir_fd=current_fd,
                 )
             except OSError as exc:
-                raise ValueError(
-                    "artifact parent changed during guarded invalidation: "
-                    f"{component}"
-                ) from exc
+                raise ValueError(f"artifact parent changed during guarded invalidation: {component}") from exc
             opened = os.fstat(next_fd)
             if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
                 os.close(next_fd)
-                raise ValueError(
-                    "artifact parent changed during guarded invalidation: "
-                    f"{component}"
-                )
+                raise ValueError(f"artifact parent changed during guarded invalidation: {component}")
             opened_fds.append(next_fd)
             current_fd = next_fd
         _remove_entry_at(current_fd, parts[-1])
@@ -3224,7 +2957,6 @@ def _is_owned_final_name(name: str) -> bool:
 
 def invalidate_from_phase(output_dir: str | Path, *, from_phase: int) -> None:
     """Clear success and remove a phase suffix without following symlinks."""
-
     if from_phase not in range(len(PHASE_MARKER_FILENAMES)):
         raise ValueError("from_phase must be in the range 0..3")
     root = _require_directory_no_follow(Path(output_dir), "output directory")
@@ -3239,9 +2971,7 @@ def invalidate_from_phase(output_dir: str | Path, *, from_phase: int) -> None:
         _unlink_no_follow(state_path)
         state = None
     if state is not None and state.status == "success":
-        recorded_artifacts.update(
-            artifact.relative_path for artifact in state.artifacts
-        )
+        recorded_artifacts.update(artifact.relative_path for artifact in state.artifacts)
         cleared = RunState(
             schema_version=RUN_STATE_SCHEMA_VERSION,
             run_fingerprint=state.run_fingerprint,
@@ -3257,9 +2987,7 @@ def invalidate_from_phase(output_dir: str | Path, *, from_phase: int) -> None:
             record = _load_phase_record(marker)
         except (FileNotFoundError, OSError, TypeError, ValueError):
             continue
-        recorded_artifacts.update(
-            artifact.relative_path for artifact in record.artifacts
-        )
+        recorded_artifacts.update(artifact.relative_path for artifact in record.artifacts)
 
     for phase in range(from_phase, len(PHASE_MARKER_FILENAMES)):
         _unlink_no_follow(root / PHASE_MARKER_FILENAMES[phase])
@@ -3269,9 +2997,7 @@ def invalidate_from_phase(output_dir: str | Path, *, from_phase: int) -> None:
     root_fd = _open_directory_fd(root)
     try:
         with os.scandir(root_fd) as entries:
-            owned_names = [
-                entry.name for entry in entries if _is_owned_final_name(entry.name)
-            ]
+            owned_names = [entry.name for entry in entries if _is_owned_final_name(entry.name)]
         for name in owned_names:
             _remove_entry_at(root_fd, name)
     finally:

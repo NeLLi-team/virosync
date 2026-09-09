@@ -1,5 +1,4 @@
-"""
-Taxonomy-Based Expansion for Low-Marker EVE Regions.
+"""Taxonomy-Based Expansion for Low-Marker EVE Regions.
 
 Validates single-marker or low-marker regions by expanding ±N genes
 and checking if flanking genes have viral taxonomy in top-10 Diamond hits.
@@ -83,16 +82,6 @@ class TaxonomyExpansionResult:
 # ============================================================================
 
 
-
-
-
-
-
-
-
-
-
-
 def extract_all_flanking_genes_batched(
     candidate_regions: list,
     gene_data: dict[str, list[GenePrediction]],
@@ -100,8 +89,7 @@ def extract_all_flanking_genes_batched(
     flank_genes: int = 5,
     output_dir: Path = None,
 ) -> tuple[Path, dict[str, list[str]]]:
-    """
-    Extract ALL flanking genes from ALL regions into a SINGLE FASTA.
+    """Extract ALL flanking genes from ALL regions into a SINGLE FASTA.
 
     This is Phase 1 of batch processing: consolidate all genes into one file
     for a single batched Diamond call.
@@ -135,9 +123,7 @@ def extract_all_flanking_genes_batched(
         for record in SeqIO.parse(proteome_path, "fasta"):
             proteome_seqs[record.id] = str(record.seq)
     except Exception as e:
-        raise FileNotFoundError(
-            f"Failed to load proteome {proteome_path}: {e}"
-        ) from e
+        raise FileNotFoundError(f"Failed to load proteome {proteome_path}: {e}") from e
 
     logger.info(f"  Proteome loaded: {len(proteome_seqs)} sequences")
 
@@ -168,14 +154,11 @@ def extract_all_flanking_genes_batched(
 
     if missing_genes and len(missing_genes) == len(all_genes):
         raise ValueError(
-            f"ALL genes missing from proteome! Check proteome/gene prediction mismatch. "
-            f"Missing: {missing_genes[:5]}"
+            f"ALL genes missing from proteome! Check proteome/gene prediction mismatch. Missing: {missing_genes[:5]}"
         )
 
     if missing_genes:
-        logger.warning(
-            f"  {len(missing_genes)}/{len(all_genes)} genes missing from proteome"
-        )
+        logger.warning(f"  {len(missing_genes)}/{len(all_genes)} genes missing from proteome")
 
     # Log stats
     unique_genes = len(all_genes) - len(missing_genes)
@@ -188,7 +171,7 @@ def extract_all_flanking_genes_batched(
 
     # MEDIUM FIX (Codex review): Guard division by zero
     if unique_genes > 0:
-        logger.info(f"  Multi-mapped genes: {multi_mapped} ({multi_mapped*100.0/unique_genes:.1f}%)")
+        logger.info(f"  Multi-mapped genes: {multi_mapped} ({multi_mapped * 100.0 / unique_genes:.1f}%)")
     else:
         logger.info(f"  Multi-mapped genes: {multi_mapped} (N/A - no genes extracted)")
 
@@ -197,11 +180,8 @@ def extract_all_flanking_genes_batched(
     return batch_fasta, dict(gene_to_regions)
 
 
-
-
 def parse_diamond_top10(diamond_tsv: Path) -> dict[str, list[tuple[str, float]]]:
-    """
-    Parse Diamond TSV into gene-level top-10 hits.
+    """Parse Diamond TSV into gene-level top-10 hits.
 
     Args:
         diamond_tsv: Merged Diamond results TSV
@@ -246,8 +226,7 @@ def classify_region_from_gene_hits(
     short_scaffold_min_fraction: float = 0.20,
     flank_genes: int = 5,
 ) -> TaxonomyExpansionResult:
-    """
-    Classify a single region using pre-computed gene-level Diamond hits.
+    """Classify a single region using pre-computed gene-level Diamond hits.
 
     This is Phase 3 of batch processing: classify regions using the merged
     Diamond results from Phase 2.
@@ -295,9 +274,7 @@ def classify_region_from_gene_hits(
     # Counts
     total_genes = len(flanking_genes)
     total_viral = len(viral_positive_genes)
-    non_marker_viral = sum(
-        1 for g in viral_positive_genes if g.gene_id not in marker_gene_ids
-    )
+    non_marker_viral = sum(1 for g in viral_positive_genes if g.gene_id not in marker_gene_ids)
 
     # Check for MCP markers
     has_mcp = any(m.is_mcp for m in region.markers)
@@ -315,10 +292,8 @@ def classify_region_from_gene_hits(
         if total_viral >= min_viral_genes_total and non_marker_viral >= min_viral_genes_non_marker:
             accepted = True
             confidence = "HIGH" if has_mcp else "MEDIUM"
-            acceptance_reason = (
-                f"{total_viral}/{expected_window} genes viral, "
-                f"{non_marker_viral} non-marker"
-                + (", MCP present → HIGH" if has_mcp else " → MEDIUM")
+            acceptance_reason = f"{total_viral}/{expected_window} genes viral, {non_marker_viral} non-marker" + (
+                ", MCP present → HIGH" if has_mcp else " → MEDIUM"
             )
         elif has_mcp and total_viral >= 2 and non_marker_viral >= 1:
             accepted = True
@@ -337,17 +312,12 @@ def classify_region_from_gene_hits(
     elif total_genes >= 2:
         viral_fraction = total_viral / total_genes
 
-        if (
-            viral_fraction >= short_scaffold_min_fraction
-            and total_viral >= 2
-            and non_marker_viral >= 1
-        ):
+        if viral_fraction >= short_scaffold_min_fraction and total_viral >= 2 and non_marker_viral >= 1:
             accepted = True
             confidence = "HIGH" if (has_mcp and total_viral >= 3) else "MEDIUM"
             acceptance_reason = (
                 f"{total_viral}/{total_genes} genes viral ({viral_fraction:.1%}), "
-                f"{non_marker_viral} non-marker"
-                + (" → HIGH" if (has_mcp and total_viral >= 3) else " → MEDIUM")
+                f"{non_marker_viral} non-marker" + (" → HIGH" if (has_mcp and total_viral >= 3) else " → MEDIUM")
             )
         else:
             rejection_reason = (
@@ -377,8 +347,7 @@ def extract_flanking_genes(
     gene_data: dict[str, list[GenePrediction]],
     flank_genes: int = 5,
 ) -> list[GenePrediction]:
-    """
-    Extract ±flank_genes around all markers in a region.
+    """Extract ±flank_genes around all markers in a region.
 
     For each validated marker in the region, extracts N genes upstream
     and N genes downstream. Combines into a single deduplicated list.
@@ -426,8 +395,7 @@ def is_gene_viral_positive(
     validated_prefixes: set[str] = VALIDATED_PREFIXES,
     min_pident: float = MIN_VIRAL_HIT_PIDENT,
 ) -> bool:
-    """
-    Classify gene as viral-positive based on top-10 Diamond hits.
+    """Classify gene as viral-positive based on top-10 Diamond hits.
 
     EVE-specific rule: Gene is viral-positive if any viral prefix appears
     in top-10 with percent identity >= 25.0, regardless of rank or bitscore.

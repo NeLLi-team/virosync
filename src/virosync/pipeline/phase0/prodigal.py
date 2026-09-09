@@ -1,14 +1,9 @@
-"""
-Genome-wide gene calling with Prodigal-GV.
+"""Genome-wide gene calling with Prodigal-GV.
 
 Supports parallel gene calling by splitting scaffolds into chunks
 and running multiple prodigal-gv CLI processes.
 """
 
-from concurrent.futures import ThreadPoolExecutor
-from collections import Counter
-from dataclasses import dataclass
-from pathlib import Path
 import json
 import logging
 import re
@@ -16,7 +11,10 @@ import shutil
 import signal
 import subprocess
 import tempfile
-from typing import Optional
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -31,9 +29,7 @@ _TILE_CORE_BP = 1_000_000
 # without re-running the real long-scaffold regression gate.
 _TILE_OVERLAP_BP = 25_000
 _TILE_ID_PREFIX = "__virosync_tile_"
-_SEQUENCE_DATA_RE = re.compile(
-    r'^# Sequence Data: seqnum=\d+;seqlen=(\d+);seqhdr="(.*)"\s*$'
-)
+_SEQUENCE_DATA_RE = re.compile(r'^# Sequence Data: seqnum=\d+;seqlen=(\d+);seqhdr="(.*)"\s*$')
 _TRANSL_TABLE_RE = re.compile(r"(?:^|;)transl_table=(\d+)(?:;|$)")
 _KNOWN_CLEANUP_ERRORS = (
     "double free or corruption",
@@ -60,7 +56,7 @@ class _ProdigalValidation:
     reconstructed_coordinates: tuple[tuple[str, int, int, str], ...] = ()
 
 
-def parse_prodigal_header(header: str, record_id: str) -> Optional[tuple[str, int, int, str]]:
+def parse_prodigal_header(header: str, record_id: str) -> tuple[str, int, int, str] | None:
     """Parse and normalize coordinates from a Prodigal-GV protein header.
 
     Prodigal header format example:
@@ -75,33 +71,26 @@ def parse_prodigal_header(header: str, record_id: str) -> Optional[tuple[str, in
     if len(parts) == 1:
         return None
     if len(parts) < 4:
-        raise ValueError(
-            f"Malformed Prodigal header for {record_id!r}: expected start, end, and strand"
-        )
+        raise ValueError(f"Malformed Prodigal header for {record_id!r}: expected start, end, and strand")
     try:
         start = int(parts[1])
         end = int(parts[2])
     except ValueError as exc:
         raise ValueError(
-            f"Invalid Prodigal coordinate for {record_id!r}: "
-            f"start={parts[1]!r}, end={parts[2]!r}"
+            f"Invalid Prodigal coordinate for {record_id!r}: start={parts[1]!r}, end={parts[2]!r}"
         ) from exc
 
     if start < 1:
         raise ValueError(f"Invalid Prodigal start for {record_id!r}: {start}; expected >= 1")
     if end < start:
-        raise ValueError(
-            f"Invalid Prodigal end for {record_id!r}: {end}; expected >= start ({start})"
-        )
+        raise ValueError(f"Invalid Prodigal end for {record_id!r}: {end}; expected >= start ({start})")
 
     strand_token = parts[3].strip()
     strand_map = {"1": "+", "+": "+", "-1": "-", "-": "-"}
     try:
         strand = strand_map[strand_token]
     except KeyError as exc:
-        raise ValueError(
-            f"Invalid Prodigal strand for {record_id!r}: {strand_token!r}"
-        ) from exc
+        raise ValueError(f"Invalid Prodigal strand for {record_id!r}: {strand_token!r}") from exc
 
     scaffold_fields = parts[0].split()
     if not scaffold_fields:
@@ -144,10 +133,7 @@ def _format_prodigal_header(
 ) -> str:
     """Serialize a normalized interval using Prodigal's header coordinates."""
     strand_token = "1" if strand == "+" else "-1"
-    return (
-        f">{gene_id} # {start + 1} # {end} # "
-        f"{strand_token} # {';'.join(attributes)}\n"
-    )
+    return f">{gene_id} # {start + 1} # {end} # {strand_token} # {';'.join(attributes)}\n"
 
 
 def _contains_internal_tile(fasta_path: str) -> bool:
@@ -161,7 +147,7 @@ def _validate_tiled_prodigal_output(
     input_fasta: Path,
     proteins_faa: Path,
     genes_gff: Path,
-    tile_cores: Optional[dict[str, tuple[int, int]]] = None,
+    tile_cores: dict[str, tuple[int, int]] | None = None,
     allow_cleanup_recovery: bool = False,
 ) -> _ProdigalValidation:
     """Require complete input metadata and matching FAA/GFF CDS coordinates."""
@@ -198,9 +184,7 @@ def _validate_tiled_prodigal_output(
             if line.startswith("# Sequence Data:"):
                 match = _SEQUENCE_DATA_RE.match(line)
                 if not match:
-                    raise RuntimeError(
-                        f"unparseable Sequence Data at {genes_gff}:{line_number}"
-                    )
+                    raise RuntimeError(f"unparseable Sequence Data at {genes_gff}:{line_number}")
                 length, header = match.groups()
                 record_id = header.split(maxsplit=1)[0]
                 observed_sequences[(record_id, int(length))] += 1
@@ -220,9 +204,7 @@ def _validate_tiled_prodigal_output(
                 gff_coordinates[coordinate] += 1
                 gff_order.append(coordinate)
             except ValueError as exc:
-                raise RuntimeError(
-                    f"invalid CDS coordinates at {genes_gff}:{line_number}"
-                ) from exc
+                raise RuntimeError(f"invalid CDS coordinates at {genes_gff}:{line_number}") from exc
 
     if observed_sequences != expected_sequences:
         raise RuntimeError(
@@ -242,14 +224,8 @@ def _validate_tiled_prodigal_output(
             if allow_cleanup_recovery and index == len(faa_records) - 1:
                 malformed_final_header = True
                 continue
-            raise RuntimeError(
-                f"malformed Prodigal protein header: {record.id}"
-            ) from exc
-        if (
-            parsed is None
-            and allow_cleanup_recovery
-            and index == len(faa_records) - 1
-        ):
+            raise RuntimeError(f"malformed Prodigal protein header: {record.id}") from exc
+        if parsed is None and allow_cleanup_recovery and index == len(faa_records) - 1:
             malformed_final_header = True
             continue
         if parsed is None:
@@ -269,9 +245,7 @@ def _validate_tiled_prodigal_output(
                 )
             )
         if "*" in protein[:-1]:
-            invalid_proteins.append(
-                (coordinate, f"internal stop codon in Prodigal protein: {record.id}")
-            )
+            invalid_proteins.append((coordinate, f"internal stop codon in Prodigal protein: {record.id}"))
 
     if not allow_cleanup_recovery:
         if not has_final_newline:
@@ -295,16 +269,10 @@ def _validate_tiled_prodigal_output(
     record_id = input_ids[0]
     core = tile_cores.get(record_id)
     if core is None:
-        raise RuntimeError(
-            "cleanup-abort output for an untiled record cannot be accepted safely: "
-            f"{record_id}"
-        )
+        raise RuntimeError(f"cleanup-abort output for an untiled record cannot be accepted safely: {record_id}")
     faa_only = faa_coordinates - gff_coordinates
     if faa_only:
-        raise RuntimeError(
-            "protein FASTA contains coordinates absent from the GFF: "
-            f"{list(faa_only)[:3]}"
-        )
+        raise RuntimeError(f"protein FASTA contains coordinates absent from the GFF: {list(faa_only)[:3]}")
 
     affected = set(gff_coordinates - faa_coordinates)
     affected.update(coordinate for coordinate, _ in invalid_proteins)
@@ -313,9 +281,7 @@ def _validate_tiled_prodigal_output(
             raise RuntimeError("nonempty cleanup-abort output contains no proteins")
         affected.add(faa_order[-1])
     if malformed_final_header and not affected:
-        raise RuntimeError(
-            "malformed final protein header has no matching GFF suffix"
-        )
+        raise RuntimeError("malformed final protein header has no matching GFF suffix")
     if not affected:
         return _ProdigalValidation(
             gff_count=sum(gff_coordinates.values()),
@@ -324,9 +290,7 @@ def _validate_tiled_prodigal_output(
 
     if any(count != 1 for count in gff_coordinates.values()):
         raise RuntimeError("cleanup-abort recovery does not allow duplicate GFF coordinates")
-    affected_indices = [
-        index for index, coordinate in enumerate(gff_order) if coordinate in affected
-    ]
+    affected_indices = [index for index, coordinate in enumerate(gff_order) if coordinate in affected]
     if not affected_indices or set(gff_order[affected_indices[0] :]) != affected:
         raise RuntimeError("cleanup-abort output loss is not a contiguous GFF suffix")
 
@@ -335,9 +299,7 @@ def _validate_tiled_prodigal_output(
     discarded = set()
     for scaffold, start, end, strand in affected:
         if scaffold != record_id:
-            raise RuntimeError(
-                f"cleanup-abort coordinate maps to unexpected record: {scaffold}"
-            )
+            raise RuntimeError(f"cleanup-abort coordinate maps to unexpected record: {scaffold}")
         if _owns_midpoint(start, end, core_start, core_end):
             reconstructed.add((scaffold, start, end, strand))
         else:
@@ -348,9 +310,7 @@ def _validate_tiled_prodigal_output(
             raise RuntimeError(f"Prodigal GFF lacks a final newline: {genes_gff}")
         order_keys = [(start, end) for _, start, end, _ in gff_order]
         if any(left >= right for left, right in zip(order_keys, order_keys[1:])):
-            raise RuntimeError(
-                "cleanup-abort GFF is not strictly coordinate ordered"
-            )
+            raise RuntimeError("cleanup-abort GFF is not strictly coordinate ordered")
         if not gff_order or gff_order[-1][1] < core_end:
             raise RuntimeError(
                 "cleanup-abort GFF does not cover the owned core: "
@@ -362,14 +322,10 @@ def _validate_tiled_prodigal_output(
         gff_count=sum(gff_coordinates.values()),
         faa_count=sum(faa_coordinates.values()),
         discarded_coordinates=tuple(
-            coordinate
-            for coordinate in gff_order[affected_indices[0] :]
-            if coordinate in discarded
+            coordinate for coordinate in gff_order[affected_indices[0] :] if coordinate in discarded
         ),
         reconstructed_coordinates=tuple(
-            coordinate
-            for coordinate in gff_order[affected_indices[0] :]
-            if coordinate in reconstructed
+            coordinate for coordinate in gff_order[affected_indices[0] :] if coordinate in reconstructed
         ),
     )
 
@@ -486,52 +442,30 @@ def _translate_gff_feature(
     if strand == "-":
         coding = coding.reverse_complement()
     if len(coding) % 3:
-        raise RuntimeError(
-            "Prodigal GFF CDS span is not divisible by three: "
-            f"{coordinate}"
-        )
-    values = {
-        key: value
-        for item in attributes
-        if "=" in item
-        for key, value in [item.split("=", 1)]
-    }
+        raise RuntimeError(f"Prodigal GFF CDS span is not divisible by three: {coordinate}")
+    values = {key: value for item in attributes if "=" in item for key, value in [item.split("=", 1)]}
     required = {"ID", "partial", "start_type", "genetic_code", "gc_cont"}
     missing = sorted(required - set(values))
     if missing:
-        raise RuntimeError(
-            "Prodigal GFF feature lacks required attributes: "
-            + ", ".join(missing)
-        )
+        raise RuntimeError("Prodigal GFF feature lacks required attributes: " + ", ".join(missing))
     feature_table = int(values["genetic_code"])
     if feature_table != translation_table:
-        raise RuntimeError(
-            "Prodigal GFF feature translation table differs from Model Data"
-        )
+        raise RuntimeError("Prodigal GFF feature translation table differs from Model Data")
     coding_text = str(coding)
     if any(base not in "ACGTacgt" for base in coding_text):
         if reject_ambiguous:
-            raise RuntimeError(
-                f"reconstructed Prodigal CDS contains an ambiguous base: {coordinate}"
-            )
+            raise RuntimeError(f"reconstructed Prodigal CDS contains an ambiguous base: {coordinate}")
         coding = Seq(
             "".join(
-                codon
-                if all(base in "ACGTacgt" for base in codon)
-                else "NNN"
-                for codon in (
-                    coding_text[offset : offset + 3]
-                    for offset in range(0, len(coding_text), 3)
-                )
+                codon if all(base in "ACGTacgt" for base in codon) else "NNN"
+                for codon in (coding_text[offset : offset + 3] for offset in range(0, len(coding_text), 3))
             )
         )
     protein = str(coding.translate(table=translation_table))
     if protein and values["start_type"] != "Edge":
         protein = "M" + protein[1:]
     if "*" in protein[:-1]:
-        raise RuntimeError(
-            f"reconstructed Prodigal protein has an internal stop: {coordinate}"
-        )
+        raise RuntimeError(f"reconstructed Prodigal protein has an internal stop: {coordinate}")
     return protein
 
 
@@ -562,9 +496,7 @@ def _repair_cleanup_abort_proteins(
             if line.startswith("# Model Data:"):
                 match = _TRANSL_TABLE_RE.search(line.strip())
                 if not match:
-                    raise RuntimeError(
-                        f"missing translation table at {genes_gff}:{line_number}"
-                    )
+                    raise RuntimeError(f"missing translation table at {genes_gff}:{line_number}")
                 translation_table = int(match.group(1))
                 continue
             if line.startswith("#") or not line.strip():
@@ -601,9 +533,7 @@ def _repair_cleanup_abort_proteins(
         if parsed not in affected:
             survivor_records[parsed] = record
 
-    expected_survivors = [
-        coordinate for coordinate in gff_order if coordinate not in affected
-    ]
+    expected_survivors = [coordinate for coordinate in gff_order if coordinate not in affected]
     if not expected_survivors:
         raise RuntimeError("cleanup-abort reconstruction has no intact survivors")
     if set(survivor_records) != set(expected_survivors):
@@ -617,10 +547,7 @@ def _repair_cleanup_abort_proteins(
             reject_ambiguous=False,
         )
         if reconstructed != str(survivor_records[coordinate].seq):
-            raise RuntimeError(
-                "cleanup-abort survivor protein does not round-trip from GFF: "
-                f"{coordinate}"
-            )
+            raise RuntimeError(f"cleanup-abort survivor protein does not round-trip from GFF: {coordinate}")
 
     temporary_path = proteins_faa.with_suffix(".repaired.faa")
     reconstructed_set = set(validation.reconstructed_coordinates)
@@ -640,12 +567,7 @@ def _repair_cleanup_abort_proteins(
                     metadata.append(attribute)
                     if attribute.startswith("gc_cont="):
                         break
-                values = {
-                    key: value
-                    for item in metadata
-                    if "=" in item
-                    for key, value in [item.split("=", 1)]
-                }
+                values = {key: value for item in metadata if "=" in item for key, value in [item.split("=", 1)]}
                 try:
                     gene_index = values["ID"].split("_")[-1]
                 except KeyError as exc:
@@ -665,9 +587,7 @@ def _repair_cleanup_abort_proteins(
                     translation_table,
                 )
             else:
-                raise RuntimeError(
-                    f"cleanup-abort repair cannot resolve GFF feature: {coordinate}"
-                )
+                raise RuntimeError(f"cleanup-abort repair cannot resolve GFF feature: {coordinate}")
             handle.write(header)
             for offset in range(0, len(protein), 60):
                 handle.write(protein[offset : offset + 60] + "\n")
@@ -678,8 +598,8 @@ def _repair_cleanup_abort_proteins(
 def _run_prodigal_on_chunk(
     chunk_fasta: str,
     chunk_out: str,
-    has_tiles: Optional[bool] = None,
-    tile_cores: Optional[dict[str, tuple[int, int]]] = None,
+    has_tiles: bool | None = None,
+    tile_cores: dict[str, tuple[int, int]] | None = None,
 ) -> str:
     """Run prodigal-gv CLI on a single chunk FASTA. Returns protein FASTA path."""
     if has_tiles is None:
@@ -687,11 +607,16 @@ def _run_prodigal_on_chunk(
     tile_cores = tile_cores or {}
     cmd = [
         "prodigal-gv",
-        "-i", chunk_fasta,
-        "-a", chunk_out,
-        "-o", str(Path(chunk_out).with_suffix(".gff")) if has_tiles else "/dev/null",
-        "-f", "gff",
-        "-p", "meta",
+        "-i",
+        chunk_fasta,
+        "-a",
+        chunk_out,
+        "-o",
+        str(Path(chunk_out).with_suffix(".gff")) if has_tiles else "/dev/null",
+        "-f",
+        "gff",
+        "-p",
+        "meta",
         "-q",
     ]
     if has_tiles:
@@ -712,9 +637,7 @@ def _run_prodigal_on_chunk(
                 )
             except RuntimeError:
                 failure_dir = _retain_failed_prodigal_attempt(
-                    Path(chunk_out).parent.parent
-                    / "prodigal_failures"
-                    / Path(chunk_out).stem,
+                    Path(chunk_out).parent.parent / "prodigal_failures" / Path(chunk_out).stem,
                     [
                         Path(chunk_fasta),
                         Path(chunk_out),
@@ -727,8 +650,7 @@ def _run_prodigal_on_chunk(
             return chunk_out
 
         logger.warning(
-            "prodigal-gv exited nonzero for tiled worker %s; retrying "
-            "its records separately",
+            "prodigal-gv exited nonzero for tiled worker %s; retrying its records separately",
             chunk_fasta,
         )
         with tempfile.TemporaryDirectory(
@@ -744,11 +666,16 @@ def _run_prodigal_on_chunk(
                 SeqIO.write([record], retry_input, "fasta")
                 retry_cmd = [
                     "prodigal-gv",
-                    "-i", str(retry_input),
-                    "-a", str(retry_output),
-                    "-o", str(retry_gff),
-                    "-f", "gff",
-                    "-p", "meta",
+                    "-i",
+                    str(retry_input),
+                    "-a",
+                    str(retry_output),
+                    "-o",
+                    str(retry_gff),
+                    "-f",
+                    "gff",
+                    "-p",
+                    "meta",
                     "-q",
                 ]
                 with retry_stderr.open("w") as stderr:
@@ -759,18 +686,12 @@ def _run_prodigal_on_chunk(
                         stderr=stderr,
                     )
                 try:
-                    known_cleanup = (
-                        retry_completed.returncode != 0
-                        and _known_cleanup_failure(
-                            retry_completed.returncode,
-                            retry_stderr,
-                        )
+                    known_cleanup = retry_completed.returncode != 0 and _known_cleanup_failure(
+                        retry_completed.returncode,
+                        retry_stderr,
                     )
                     if retry_completed.returncode != 0 and not known_cleanup:
-                        raise RuntimeError(
-                            "unrecognized nonzero Prodigal-GV exit: "
-                            f"{retry_completed.returncode}"
-                        )
+                        raise RuntimeError(f"unrecognized nonzero Prodigal-GV exit: {retry_completed.returncode}")
                     validation = _validate_tiled_prodigal_output(
                         retry_input,
                         retry_output,
@@ -780,9 +701,7 @@ def _run_prodigal_on_chunk(
                     )
                     if known_cleanup:
                         if retry_output.stat().st_size == 0:
-                            raise RuntimeError(
-                                "nonzero Prodigal-GV exit produced no proteins"
-                            )
+                            raise RuntimeError("nonzero Prodigal-GV exit produced no proteins")
                         survivor_check_count = _repair_cleanup_abort_proteins(
                             retry_input,
                             retry_output,
@@ -790,8 +709,7 @@ def _run_prodigal_on_chunk(
                             validation,
                         )
                         audit_path = _write_cleanup_abort_audit(
-                            Path(chunk_out).parent.parent
-                            / "accepted_cleanup_aborts",
+                            Path(chunk_out).parent.parent / "accepted_cleanup_aborts",
                             record.id,
                             retry_completed.returncode,
                             retry_stderr,
@@ -806,10 +724,7 @@ def _run_prodigal_on_chunk(
                         )
                 except (RuntimeError, ValueError):
                     failure_dir = _retain_failed_prodigal_attempt(
-                        Path(chunk_out).parent.parent
-                        / "prodigal_failures"
-                        / Path(chunk_out).stem
-                        / f"record_{index}",
+                        Path(chunk_out).parent.parent / "prodigal_failures" / Path(chunk_out).stem / f"record_{index}",
                         [retry_input, retry_output, retry_gff, retry_stderr],
                     )
                     logger.error("Retained failed Prodigal attempt in %s", failure_dir)
@@ -827,8 +742,7 @@ def _run_prodigal_on_chunk(
     except subprocess.CalledProcessError:
         if Path(chunk_out).exists() and Path(chunk_out).stat().st_size > 0:
             logger.warning(
-                "prodigal-gv exited nonzero after writing %s; accepting the "
-                "existing untiled output for compatibility",
+                "prodigal-gv exited nonzero after writing %s; accepting the existing untiled output for compatibility",
                 chunk_out,
             )
         else:
@@ -842,8 +756,7 @@ def run_prodigal_genome(
     mode: str = "meta",
     threads: int = 1,
 ) -> tuple[Path, list[GenePrediction]]:
-    """
-    Run prodigal-gv on a genome and parse gene predictions.
+    """Run prodigal-gv on a genome and parse gene predictions.
 
     Long scaffolds are tiled even with one requested thread. With multiple
     threads, work records are balanced across parallel prodigal-gv processes.
@@ -861,17 +774,10 @@ def run_prodigal_genome(
     use_parallel = threads > 1
     if not use_parallel:
         with genome_fasta.open() as handle:
-            use_parallel = any(
-                len(record.seq) > _LONG_SCAFFOLD_BP
-                for record in SeqIO.parse(handle, "fasta")
-            )
+            use_parallel = any(len(record.seq) > _LONG_SCAFFOLD_BP for record in SeqIO.parse(handle, "fasta"))
     if use_parallel:
-        return _run_prodigal_parallel(
-            genome_fasta, output_dir, proteins_faa, gff_path, max(1, threads)
-        )
-    return _run_prodigal_single(
-        genome_fasta, output_dir, proteins_faa, gff_path, mode
-    )
+        return _run_prodigal_parallel(genome_fasta, output_dir, proteins_faa, gff_path, max(1, threads))
+    return _run_prodigal_single(genome_fasta, output_dir, proteins_faa, gff_path, mode)
 
 
 def _run_prodigal_parallel(
@@ -885,14 +791,9 @@ def _run_prodigal_parallel(
     # Read all scaffolds and split long records into bounded work units. The
     # merged proteome is restored to genome-global coordinates before Phase 1.
     records = list(SeqIO.parse(genome_fasta, "fasta"))
-    reserved_ids = [
-        record.id for record in records if record.id.startswith(_TILE_ID_PREFIX)
-    ]
+    reserved_ids = [record.id for record in records if record.id.startswith(_TILE_ID_PREFIX)]
     if reserved_ids:
-        raise RuntimeError(
-            "input scaffold ID uses ViroSync's reserved tile prefix: "
-            f"{reserved_ids[0]}"
-        )
+        raise RuntimeError(f"input scaffold ID uses ViroSync's reserved tile prefix: {reserved_ids[0]}")
     scaffold_order = {record.id: index for index, record in enumerate(records)}
     work_records: list[SeqRecord] = []
     tile_sources: dict[str, tuple[str, int, int, int]] = {}
@@ -911,9 +812,7 @@ def _run_prodigal_parallel(
             core_end = len(record.seq) * (tile_index + 1) // tile_count
             tile_start = max(0, core_start - _TILE_OVERLAP_BP)
             tile_end = min(len(record.seq), core_end + _TILE_OVERLAP_BP)
-            tile_id = (
-                f"{_TILE_ID_PREFIX}{record_index:06d}_{tile_index:06d}"
-            )
+            tile_id = f"{_TILE_ID_PREFIX}{record_index:06d}_{tile_index:06d}"
             work_records.append(
                 SeqRecord(
                     record.seq[tile_start:tile_end],
@@ -931,9 +830,12 @@ def _run_prodigal_parallel(
     n_chunks = min(threads, len(work_records))
 
     logger.info(
-        "prodigal-gv parallel: %d scaffolds (%d tiled) split into %d chunks "
-        "(%d work records, %d threads)",
-        len(records), tiled_scaffolds, n_chunks, len(work_records), threads,
+        "prodigal-gv parallel: %d scaffolds (%d tiled) split into %d chunks (%d work records, %d threads)",
+        len(records),
+        tiled_scaffolds,
+        n_chunks,
+        len(work_records),
+        threads,
     )
 
     with tempfile.TemporaryDirectory(dir=output_dir) as tmpdir:
@@ -1012,9 +914,7 @@ def _run_prodigal_parallel(
                     )
                 )
         else:
-            predictions: dict[
-                str, list[tuple[int, int, str, str, str]]
-            ] = {}
+            predictions: dict[str, list[tuple[int, int, str, str, str]]] = {}
             for chunk_out in chunk_outputs:
                 if not Path(chunk_out).exists():
                     continue
@@ -1033,15 +933,12 @@ def _run_prodigal_parallel(
                         if not _owns_midpoint(start, end, core_start, core_end):
                             continue
 
-                    predictions.setdefault(scaffold, []).append(
-                        (start, end, strand, str(record.seq), metadata)
-                    )
+                    predictions.setdefault(scaffold, []).append((start, end, strand, str(record.seq), metadata))
 
             unknown_scaffolds = sorted(set(predictions) - set(scaffold_order))
             if unknown_scaffolds:
                 raise RuntimeError(
-                    "prodigal-gv output could not be mapped to input scaffolds: "
-                    + ", ".join(unknown_scaffolds[:5])
+                    "prodigal-gv output could not be mapped to input scaffolds: " + ", ".join(unknown_scaffolds[:5])
                 )
 
             with open(proteins_faa, "w") as out_f:
@@ -1110,11 +1007,16 @@ def _run_prodigal_single(
     # are normalized to ViroSync's 0-based half-open convention.
     cmd = [
         "prodigal-gv",
-        "-i", str(genome_fasta),
-        "-a", str(proteins_faa),
-        "-o", str(gff_path),
-        "-f", "gff",
-        "-p", mode,
+        "-i",
+        str(genome_fasta),
+        "-a",
+        str(proteins_faa),
+        "-o",
+        str(gff_path),
+        "-f",
+        "gff",
+        "-p",
+        mode,
         "-q",
     ]
     logger.info("Running prodigal-gv: %s", " ".join(cmd))
@@ -1123,8 +1025,8 @@ def _run_prodigal_single(
     except subprocess.CalledProcessError as e:
         if proteins_faa.exists() and proteins_faa.stat().st_size > 0:
             logger.warning(
-                "prodigal-gv exited with error %s, but output files exist. "
-                "Treating as success (known cleanup issue).", e.returncode
+                "prodigal-gv exited with error %s, but output files exist. Treating as success (known cleanup issue).",
+                e.returncode,
             )
         else:
             raise
@@ -1151,9 +1053,7 @@ def _run_prodigal_single(
 
 
 def load_gene_predictions(proteins_faa: Path) -> dict[str, list[GenePrediction]]:
-    """
-    Load gene predictions from a prodigal-gv proteins FASTA.
-    """
+    """Load gene predictions from a prodigal-gv proteins FASTA."""
     by_scaffold: dict[str, list[GenePrediction]] = {}
     for record in SeqIO.parse(proteins_faa, "fasta"):
         parsed = parse_prodigal_header(record.description, record.id)

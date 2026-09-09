@@ -15,7 +15,6 @@ from pathlib import Path
 
 from virosync.utils.atomic_write import atomic_write_context
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -68,43 +67,32 @@ class BathTranslation:
 
 def rescued_protein_id(hit: FrameshiftHit) -> str:
     """Return a stable ID whose Prodigal-style suffix preserves the scaffold."""
-
     token = hashlib.sha256(
-        f"{hit.query_name}\0{hit.target_name}\0{hit.ali_start}\0"
-        f"{hit.ali_end}\0{hit.strand}".encode("utf-8")
+        f"{hit.query_name}\0{hit.target_name}\0{hit.ali_start}\0{hit.ali_end}\0{hit.strand}".encode()
     ).hexdigest()[:16]
     return f"{hit.target_name}_VSR{token}"
 
 
 def is_rescued_protein_id(value: str) -> bool:
     """Return whether a protein ID has ViroSync's generated rescue suffix."""
-
-    return bool(
-        isinstance(value, str)
-        and RESCUED_PROTEIN_ID_PATTERN.search(value.split("|aa", 1)[0])
-    )
+    return bool(isinstance(value, str) and RESCUED_PROTEIN_ID_PATTERN.search(value.split("|aa", 1)[0]))
 
 
 def filter_vs_profiles(hmm_path: Path, output_path: Path) -> int:
     """Stream complete HMMER records and write exact ``VS######`` profiles."""
-
     hmm_path = Path(hmm_path)
     output_path = Path(output_path)
     selected_names: set[str] = set()
     record: list[str] = []
 
-    with hmm_path.open(encoding="utf-8") as source, output_path.open(
-        "x", encoding="utf-8"
-    ) as output:
+    with hmm_path.open(encoding="utf-8") as source, output_path.open("x", encoding="utf-8") as output:
         for line in source:
             record.append(line)
             if line.strip() != "//":
                 continue
 
             names = [
-                parts[1]
-                for record_line in record
-                if len(parts := record_line.split()) >= 2 and parts[0] == "NAME"
+                parts[1] for record_line in record if len(parts := record_line.split()) >= 2 and parts[0] == "NAME"
             ]
             if len(names) == 1 and VS_NAME_PATTERN.fullmatch(names[0]):
                 name = names[0]
@@ -124,7 +112,6 @@ def filter_vs_profiles(hmm_path: Path, output_path: Path) -> int:
 
 def parse_bathsearch_tblout(path: Path) -> list[FrameshiftHit]:
     """Parse event-bearing BATH hits and normalize alignment coordinates."""
-
     hits: list[FrameshiftHit] = []
     with Path(path).open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -135,8 +122,7 @@ def parse_bathsearch_tblout(path: Path) -> list[FrameshiftHit]:
                 columns.append("")
             if len(columns) != 18:
                 raise ValueError(
-                    f"Invalid bathsearch tblout row at {path}:{line_number}: "
-                    f"expected 18 columns, found {len(columns)}"
+                    f"Invalid bathsearch tblout row at {path}:{line_number}: expected 18 columns, found {len(columns)}"
                 )
             (
                 hit_id,
@@ -174,9 +160,7 @@ def parse_bathsearch_tblout(path: Path) -> list[FrameshiftHit]:
                     "pid": float(pid),
                 }
             except ValueError as error:
-                raise ValueError(
-                    f"Invalid numeric value in bathsearch tblout at {path}:{line_number}"
-                ) from error
+                raise ValueError(f"Invalid numeric value in bathsearch tblout at {path}:{line_number}") from error
             if shifts_int <= 0 and stops_int <= 0:
                 continue
             hits.append(
@@ -201,7 +185,6 @@ def parse_bathsearch_tblout(path: Path) -> list[FrameshiftHit]:
 
 def write_frameshift_hits(hits: list[FrameshiftHit], output_path: Path) -> None:
     """Write the stable normalized diagnostic TSV."""
-
     output_path = Path(output_path)
     with atomic_write_context(output_path, "w") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
@@ -218,7 +201,6 @@ def parse_bathsearch_translations(path: Path) -> dict[tuple[str, str], BathTrans
     amino-acid row immediately before each nucleotide target row. Hit IDs are
     ordinals within each query and match ``--tblout`` ordering.
     """
-
     translations: dict[tuple[str, str], BathTranslation] = {}
     query_name = ""
     target_name = ""
@@ -234,19 +216,15 @@ def parse_bathsearch_translations(path: Path) -> dict[tuple[str, str], BathTrans
             return
         if not amino_acids or ali_from is None or ali_to is None:
             raise ValueError(
-                f"Missing translated alignment for {query_name} hit {hit_ordinal} "
-                f"({target_name}) in {path}"
+                f"Missing translated alignment for {query_name} hit {hit_ordinal} ({target_name}) in {path}"
             )
         raw_sequence = "".join(amino_acids).replace("-", "").upper()
         if not raw_sequence:
-            raise ValueError(
-                f"Empty translated alignment for {query_name} hit {hit_ordinal} in {path}"
-            )
+            raise ValueError(f"Empty translated alignment for {query_name} hit {hit_ordinal} in {path}")
         invalid = sorted(set(raw_sequence) - set("ABCDEFGHIJKLMNOPQRSTUVWXYZ*"))
         if invalid:
             raise ValueError(
-                f"Invalid translated residues for {query_name} hit {hit_ordinal} "
-                f"in {path}: {''.join(invalid)}"
+                f"Invalid translated residues for {query_name} hit {hit_ordinal} in {path}: {''.join(invalid)}"
             )
         key = (query_name, str(hit_ordinal))
         if key in translations:
@@ -295,19 +273,12 @@ def parse_bathsearch_translations(path: Path) -> dict[tuple[str, str], BathTrans
                     and tokens[0] == target_name
                     and tokens[1].lstrip("-").isdigit()
                     and tokens[-1].lstrip("-").isdigit()
-                    and all(
-                        re.fullmatch(r"[ACGTUNacgtun-]+", token)
-                        for token in tokens[2:-1]
-                    )
+                    and all(re.fullmatch(r"[ACGTUNacgtun-]+", token) for token in tokens[2:-1])
                 )
                 if is_target_row:
                     aa_tokens = previous_line.split()
-                    if not aa_tokens or not all(
-                        re.fullmatch(r"[A-Za-z*-]", token) for token in aa_tokens
-                    ):
-                        raise ValueError(
-                            f"Invalid BATH amino-acid row before {path}:{line_number}"
-                        )
+                    if not aa_tokens or not all(re.fullmatch(r"[A-Za-z*-]", token) for token in aa_tokens):
+                        raise ValueError(f"Invalid BATH amino-acid row before {path}:{line_number}")
                     amino_acids.extend(aa_tokens)
                     if ali_from is None:
                         ali_from = int(tokens[1])
@@ -325,7 +296,6 @@ def write_frameshift_candidate_faa(
     output_path: Path,
 ) -> dict[str, FrameshiftHit]:
     """Write event-bearing BATH aligned domains as pseudo-protein candidates."""
-
     by_protein_id: dict[str, FrameshiftHit] = {}
     with atomic_write_context(output_path, "w") as handle:
         for hit in hits:
@@ -370,7 +340,6 @@ def diamond_query_coverages(
     validated_prefixes: set[str],
 ) -> dict[str, float]:
     """Return maximum qualifying viral DIAMOND query coverage per query."""
-
     coverages: dict[str, float] = {}
     if not Path(path).is_file():
         return coverages
@@ -385,9 +354,7 @@ def diamond_query_coverages(
                 pident_value = float(pident)
                 qcov_value = float(qcov)
             except ValueError as error:
-                raise ValueError(
-                    f"Invalid DIAMOND numeric value at {path}:{line_number}"
-                ) from error
+                raise ValueError(f"Invalid DIAMOND numeric value at {path}:{line_number}") from error
             if prefix in validated_prefixes and pident_value >= min_pident:
                 coverages[query] = max(coverages.get(query, 0.0), qcov_value)
     return coverages
@@ -404,7 +371,6 @@ def select_confirmed_frameshift_markers(
     min_diamond_query_coverage: float = MIN_DIAMOND_QUERY_COVERAGE,
 ) -> list[object]:
     """Retain DIAMOND-confirmed, sufficiently covered, non-overlapping loci."""
-
     qcov_by_query = diamond_query_coverages(
         diamond_output,
         min_pident=min_pident,
@@ -465,17 +431,10 @@ def write_confirmed_frameshift_faa(
     output_path: Path,
 ) -> int:
     """Write candidate records retained as confirmed rescue seed markers."""
-
     from Bio import SeqIO
 
-    confirmed_ids = {
-        str(marker.query_porf).split("|aa", 1)[0] for marker in confirmed_markers
-    }
-    records = [
-        record
-        for record in SeqIO.parse(candidate_faa, "fasta")
-        if record.id in confirmed_ids
-    ]
+    confirmed_ids = {str(marker.query_porf).split("|aa", 1)[0] for marker in confirmed_markers}
+    records = [record for record in SeqIO.parse(candidate_faa, "fasta") if record.id in confirmed_ids]
     with atomic_write_context(output_path, "w") as handle:
         SeqIO.write(records, handle, "fasta")
     return len(records)
@@ -486,7 +445,6 @@ def write_confirmed_frameshift_markers(
     output_path: Path,
 ) -> None:
     """Write the confirmed rescue markers consumed by EVE reporting."""
-
     columns = (
         "query_porf",
         "scaffold",
@@ -521,9 +479,7 @@ def _run_command(args: list[str], label: str) -> subprocess.CompletedProcess[str
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError(
-            f"{label} timed out after {COMMAND_TIMEOUT_SECONDS} seconds"
-        ) from error
+        raise RuntimeError(f"{label} timed out after {COMMAND_TIMEOUT_SECONDS} seconds") from error
     except OSError as error:
         raise RuntimeError(f"Failed to start {label}: {error}") from error
     if result.returncode != 0:
@@ -540,7 +496,6 @@ def run_frameshift_screening(
     threads: int,
 ) -> list[FrameshiftHit]:
     """Run the VS-profile BATH screen and write event-bearing candidate domains."""
-
     bathconvert = _required_tool("bathconvert")
     bathsearch = _required_tool("bathsearch")
     output_dir = Path(output_dir)

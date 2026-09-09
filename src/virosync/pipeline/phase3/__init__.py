@@ -1,5 +1,4 @@
-"""
-Phase 3: Evidence Synthesis & Verification.
+"""Phase 3: Evidence Synthesis & Verification.
 
 This module implements the verification pipeline that scores EVE candidates
 using marker, taxonomy, composition, optional structural/domain, and optional
@@ -19,7 +18,6 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
 )
-
 from virosync.pipeline.phase3.output_generator import OutputGenerator
 
 __all__ = [

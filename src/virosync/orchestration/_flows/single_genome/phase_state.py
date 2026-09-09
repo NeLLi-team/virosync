@@ -21,13 +21,10 @@ from virosync.features.compositional import WindowFeatures
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.utils.atomic_write import atomic_write
 
-
 PHASE2_STATE_FILENAME = "refined_state.json"
 PHASE2_STATE_SCHEMA_VERSION = 2
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
-PHASE2_STATE_SCHEMA = (
-    f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
-)
+PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 
 _TOP_LEVEL_FIELDS = {"artifact_type", "schema_version", "boundaries"}
 _POSTERIOR_FIELDS = {"dtype", "shape", "data"}
@@ -162,32 +159,22 @@ def _require_boolean(value: object, context: str) -> bool:
 def _require_string_list(value: object, context: str) -> list[str]:
     if not isinstance(value, list):
         raise Phase2StateError(f"{context} must be a list")
-    return [
-        _require_string(item, f"{context}[{index}]")
-        for index, item in enumerate(value)
-    ]
+    return [_require_string(item, f"{context}[{index}]") for index, item in enumerate(value)]
 
 
 def _require_integer_list(value: object, context: str) -> list[int]:
     if not isinstance(value, list):
         raise Phase2StateError(f"{context} must be a list")
-    return [
-        _require_integer(item, f"{context}[{index}]")
-        for index, item in enumerate(value)
-    ]
+    return [_require_integer(item, f"{context}[{index}]") for index, item in enumerate(value)]
 
 
 def _validate_model_fields() -> None:
     boundary_fields = {item.name for item in fields(RefinedBoundary)}
     if boundary_fields != _BOUNDARY_FIELD_SET:
-        raise Phase2StateError(
-            "RefinedBoundary fields changed without a Phase-2 state schema update"
-        )
+        raise Phase2StateError("RefinedBoundary fields changed without a Phase-2 state schema update")
     window_fields = {item.name for item in fields(WindowFeatures)}
     if window_fields != _WINDOW_FIELD_SET:
-        raise Phase2StateError(
-            "WindowFeatures fields changed without a Phase-2 state schema update"
-        )
+        raise Phase2StateError("WindowFeatures fields changed without a Phase-2 state schema update")
 
 
 def _posterior_to_document(value: object, context: str) -> dict[str, object] | None:
@@ -197,9 +184,7 @@ def _posterior_to_document(value: object, context: str) -> dict[str, object] | N
         raise Phase2StateError(f"{context} must be a NumPy array or null")
     dtype_name = value.dtype.name
     if dtype_name not in _POSTERIOR_DTYPES:
-        raise Phase2StateError(
-            f"{context} dtype must be one of {sorted(_POSTERIOR_DTYPES)}"
-        )
+        raise Phase2StateError(f"{context} dtype must be one of {sorted(_POSTERIOR_DTYPES)}")
     if value.ndim != 2:
         raise Phase2StateError(f"{context} must be a two-dimensional array")
     if not np.isfinite(value).all():
@@ -217,16 +202,11 @@ def _posterior_from_document(value: object, context: str) -> np.ndarray | None:
     document = _require_exact_fields(value, _POSTERIOR_FIELDS, context)
     dtype_name = _require_string(document["dtype"], f"{context}.dtype")
     if dtype_name not in _POSTERIOR_DTYPES:
-        raise Phase2StateError(
-            f"{context}.dtype must be one of {sorted(_POSTERIOR_DTYPES)}"
-        )
+        raise Phase2StateError(f"{context}.dtype must be one of {sorted(_POSTERIOR_DTYPES)}")
     raw_shape = document["shape"]
     if not isinstance(raw_shape, list) or len(raw_shape) != 2:
         raise Phase2StateError(f"{context}.shape must contain two dimensions")
-    shape = tuple(
-        _require_integer(dimension, f"{context}.shape[{index}]")
-        for index, dimension in enumerate(raw_shape)
-    )
+    shape = tuple(_require_integer(dimension, f"{context}.shape[{index}]") for index, dimension in enumerate(raw_shape))
     if any(dimension < 0 for dimension in shape):
         raise Phase2StateError(f"{context}.shape dimensions must be non-negative")
 
@@ -235,24 +215,15 @@ def _posterior_from_document(value: object, context: str) -> np.ndarray | None:
         raise Phase2StateError(f"{context}.data must be a flat list")
     expected_size = math.prod(shape)
     if len(raw_data) != expected_size:
-        raise Phase2StateError(
-            f"{context}.data length {len(raw_data)} does not match shape {shape}"
-        )
-    data = [
-        _require_finite_float(item, f"{context}.data[{index}]")
-        for index, item in enumerate(raw_data)
-    ]
+        raise Phase2StateError(f"{context}.data length {len(raw_data)} does not match shape {shape}")
+    data = [_require_finite_float(item, f"{context}.data[{index}]") for index, item in enumerate(raw_data)]
     try:
         with np.errstate(over="ignore", invalid="ignore"):
             result = np.asarray(data, dtype=np.dtype(dtype_name)).reshape(shape)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise Phase2StateError(
-            f"{context}.data cannot be reshaped to {shape}"
-        ) from exc
+        raise Phase2StateError(f"{context}.data cannot be reshaped to {shape}") from exc
     if not np.isfinite(result).all():
-        raise Phase2StateError(
-            f"{context}.data cannot be represented as finite {dtype_name} values"
-        )
+        raise Phase2StateError(f"{context}.data cannot be represented as finite {dtype_name} values")
     return result
 
 
@@ -267,9 +238,7 @@ def _window_to_document(window: object, context: str) -> dict[str, object]:
     for name in _WINDOW_INTEGER_FIELDS:
         document[name] = _require_integer(getattr(window, name), f"{context}.{name}")
     for name in _WINDOW_FLOAT_FIELDS:
-        document[name] = _require_finite_float(
-            getattr(window, name), f"{context}.{name}"
-        )
+        document[name] = _require_finite_float(getattr(window, name), f"{context}.{name}")
     return document
 
 
@@ -294,33 +263,19 @@ def _boundary_to_document(boundary: object, index: int) -> dict[str, object]:
 
     document: dict[str, object] = {}
     for name in _BOUNDARY_STRING_FIELDS:
-        document[name] = _require_string(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_string(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_INTEGER_FIELDS:
-        document[name] = _require_integer(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_integer(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_OPTIONAL_INTEGER_FIELDS:
-        document[name] = _require_optional_integer(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_optional_integer(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_FLOAT_FIELDS:
-        document[name] = _require_finite_float(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_finite_float(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_STRING_LIST_FIELDS:
-        document[name] = _require_string_list(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_string_list(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_INTEGER_LIST_FIELDS:
-        document[name] = _require_integer_list(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_integer_list(getattr(boundary, name), f"{context}.{name}")
     for name in _BOUNDARY_BOOLEAN_FIELDS:
-        document[name] = _require_boolean(
-            getattr(boundary, name), f"{context}.{name}"
-        )
+        document[name] = _require_boolean(getattr(boundary, name), f"{context}.{name}")
     document["state_posteriors"] = _posterior_to_document(
         boundary.state_posteriors,
         f"{context}.state_posteriors",
@@ -343,9 +298,7 @@ def _boundary_from_document(value: object, index: int) -> RefinedBoundary:
     for name in _BOUNDARY_INTEGER_FIELDS:
         kwargs[name] = _require_integer(document[name], f"{context}.{name}")
     for name in _BOUNDARY_OPTIONAL_INTEGER_FIELDS:
-        kwargs[name] = _require_optional_integer(
-            document[name], f"{context}.{name}"
-        )
+        kwargs[name] = _require_optional_integer(document[name], f"{context}.{name}")
     for name in _BOUNDARY_FLOAT_FIELDS:
         kwargs[name] = _require_finite_float(document[name], f"{context}.{name}")
     for name in _BOUNDARY_STRING_LIST_FIELDS:
@@ -372,23 +325,18 @@ def phase2_state_to_document(
     boundaries: Sequence[RefinedBoundary],
 ) -> dict[str, object]:
     """Convert refined boundaries to the closed JSON-compatible schema."""
-
     _validate_model_fields()
     if isinstance(boundaries, (str, bytes)) or not isinstance(boundaries, Sequence):
         raise Phase2StateError("boundaries must be a sequence")
     return {
         "artifact_type": PHASE2_STATE_ARTIFACT_TYPE,
         "schema_version": PHASE2_STATE_SCHEMA_VERSION,
-        "boundaries": [
-            _boundary_to_document(boundary, index)
-            for index, boundary in enumerate(boundaries)
-        ],
+        "boundaries": [_boundary_to_document(boundary, index) for index, boundary in enumerate(boundaries)],
     }
 
 
 def phase2_state_from_document(document: object) -> list[RefinedBoundary]:
     """Validate a decoded JSON document and reconstruct refined boundaries."""
-
     _validate_model_fields()
     payload = _require_exact_fields(document, _TOP_LEVEL_FIELDS, "phase2 state")
     schema_version = payload["schema_version"]
@@ -397,23 +345,14 @@ def phase2_state_from_document(document: object) -> list[RefinedBoundary]:
         or not isinstance(schema_version, int)
         or schema_version != PHASE2_STATE_SCHEMA_VERSION
     ):
-        raise Phase2StateError(
-            f"unsupported Phase-2 state schema_version: {schema_version!r}"
-        )
-    artifact_type = _require_string(
-        payload["artifact_type"], "phase2 state.artifact_type"
-    )
+        raise Phase2StateError(f"unsupported Phase-2 state schema_version: {schema_version!r}")
+    artifact_type = _require_string(payload["artifact_type"], "phase2 state.artifact_type")
     if artifact_type != PHASE2_STATE_ARTIFACT_TYPE:
-        raise Phase2StateError(
-            f"unsupported Phase-2 state artifact_type: {artifact_type!r}"
-        )
+        raise Phase2StateError(f"unsupported Phase-2 state artifact_type: {artifact_type!r}")
     raw_boundaries = payload["boundaries"]
     if not isinstance(raw_boundaries, list):
         raise Phase2StateError("phase2 state.boundaries must be a list")
-    return [
-        _boundary_from_document(boundary, index)
-        for index, boundary in enumerate(raw_boundaries)
-    ]
+    return [_boundary_from_document(boundary, index) for index, boundary in enumerate(raw_boundaries)]
 
 
 def _object_without_duplicate_keys(
@@ -436,7 +375,6 @@ def write_phase2_state(
     boundaries: Sequence[RefinedBoundary],
 ) -> None:
     """Atomically write refined boundaries as canonical schema-v1 JSON."""
-
     document = phase2_state_to_document(boundaries)
     try:
         content = json.dumps(
@@ -453,7 +391,6 @@ def write_phase2_state(
 
 def load_phase2_state(path: str | Path) -> list[RefinedBoundary]:
     """Load and strictly validate a Phase-2 refined-boundary JSON artifact."""
-
     state_path = Path(path)
     try:
         content = state_path.read_text(encoding="utf-8")

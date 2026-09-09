@@ -137,9 +137,7 @@ def test_phase2_state_round_trip_preserves_none_and_empty_posterior_shape() -> N
         state_posteriors=np.empty((0, 6), dtype=np.float64),
     )
 
-    loaded = phase2_state_from_document(
-        phase2_state_to_document([without_posteriors, with_empty_posteriors])
-    )
+    loaded = phase2_state_from_document(phase2_state_to_document([without_posteriors, with_empty_posteriors]))
 
     _assert_boundaries_equal(without_posteriors, loaded[0])
     _assert_boundaries_equal(with_empty_posteriors, loaded[1])
@@ -182,27 +180,19 @@ def test_phase2_state_rejects_unknown_schema_and_field_drift() -> None:
             "seed_sources must be a list",
         ),
         (
-            lambda boundary: boundary["state_posteriors"].__setitem__(
-                "dtype", "object"
-            ),
+            lambda boundary: boundary["state_posteriors"].__setitem__("dtype", "object"),
             "dtype must be one of",
         ),
         (
-            lambda boundary: boundary["state_posteriors"].__setitem__(
-                "shape", [3, 6]
-            ),
+            lambda boundary: boundary["state_posteriors"].__setitem__("shape", [3, 6]),
             "data length.*does not match shape",
         ),
         (
-            lambda boundary: boundary["state_posteriors"].update(
-                {"shape": [10**100, 0], "data": []}
-            ),
+            lambda boundary: boundary["state_posteriors"].update({"shape": [10**100, 0], "data": []}),
             "cannot be reshaped",
         ),
         (
-            lambda boundary: boundary["window_features"][0].__setitem__(
-                "gc_content", float("inf")
-            ),
+            lambda boundary: boundary["window_features"][0].__setitem__("gc_content", float("inf")),
             "gc_content must be finite",
         ),
     ],
@@ -223,16 +213,14 @@ def test_phase2_state_file_rejects_duplicate_keys_and_nonstandard_numbers(
 ) -> None:
     duplicate_path = tmp_path / "duplicate.json"
     duplicate_path.write_text(
-        '{"artifact_type":"virosync.phase2.refined_boundaries",'
-        '"schema_version":1,"schema_version":1,"boundaries":[]}'
+        '{"artifact_type":"virosync.phase2.refined_boundaries","schema_version":1,"schema_version":1,"boundaries":[]}'
     )
     with pytest.raises(Phase2StateError, match="duplicate JSON key"):
         load_phase2_state(duplicate_path)
 
     nonfinite_path = tmp_path / "nonfinite.json"
     nonfinite_path.write_text(
-        '{"artifact_type":"virosync.phase2.refined_boundaries",'
-        '"schema_version":1,"boundaries":NaN}'
+        '{"artifact_type":"virosync.phase2.refined_boundaries","schema_version":1,"boundaries":NaN}'
     )
     with pytest.raises(Phase2StateError, match="non-finite JSON number"):
         load_phase2_state(nonfinite_path)

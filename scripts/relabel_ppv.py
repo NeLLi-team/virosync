@@ -40,6 +40,7 @@ Usage:
     python scripts/relabel_ppv.py --apply                  # relabel labels.tsv (backed up)
     python scripts/relabel_ppv.py --proteome IN.faa --proteome-out OUT.faa --apply
 """
+
 from __future__ import annotations
 
 import argparse

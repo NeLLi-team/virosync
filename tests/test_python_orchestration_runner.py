@@ -94,13 +94,9 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
 
     assert [result["genome_id"] for result in results] == ["b", "a"]
     summary = (tmp_path / "out" / "batch_summary.tsv").read_text().splitlines()
-    assert summary[0].startswith(
-        "genome_id\tstatus\tbenchmark_eligible\tlegacy_resume\t"
-        "predictions\taccepted"
-    )
+    assert summary[0].startswith("genome_id\tstatus\tbenchmark_eligible\tlegacy_resume\tpredictions\taccepted")
     assert summary[0].endswith(
-        "\tncldv\tmirus\tppv\tcress\tphage\tviral_unknown\tunknown\t"
-        "total_bp\tgenes\thallmarks\telapsed_sec\terror"
+        "\tncldv\tmirus\tppv\tcress\tphage\tviral_unknown\tunknown\ttotal_bp\tgenes\thallmarks\telapsed_sec\terror"
     )
     assert summary[1].startswith("b\tsuccess\ttrue\tfalse\t2\t1\t1")
     assert summary[2].startswith("a\tsuccess\ttrue\tfalse\t2\t1\t1")
@@ -355,7 +351,7 @@ def test_non_mapping_worker_result_still_writes_one_failed_row(
     monkeypatch.setattr(
         python_runner,
         "_single_genome_callable",
-        lambda: (lambda **kwargs: None),
+        lambda: lambda **kwargs: None,
     )
 
     results = python_runner.run_batch_python(
@@ -446,10 +442,7 @@ def test_batch_outputs_fold_legacy_subtypes_and_include_cress(tmp_path: Path) ->
     assert "| PLV |" not in report
     assert "| MIXED |" not in report
     assert "| **Total** | **8** |" in report
-    assert (
-        "| synthetic | success | yes | no | 8 | 0 | 0 | 1 | 1 | 3 | 1 | 0 | 1 | 1 |"
-        in report
-    )
+    assert "| synthetic | success | yes | no | 8 | 0 | 0 | 1 | 1 | 3 | 1 | 0 | 1 | 1 |" in report
 
 
 def test_batch_progress_is_monotonic_and_finishes_failed_queries() -> None:
@@ -506,11 +499,7 @@ def test_batch_progress_tty_line_never_exceeds_terminal_width(
         )
     progress.finish(True)
 
-    rendered = [
-        segment.replace("\x1b[K", "")
-        for segment in stream.getvalue().split("\r")
-        if segment.strip()
-    ]
+    rendered = [segment.replace("\x1b[K", "") for segment in stream.getvalue().split("\r") if segment.strip()]
     assert rendered, "expected at least one rendered bar"
     assert max(len(segment.rstrip("\n")) for segment in rendered) <= columns - 1
     assert rendered[-1].startswith("Progress: [")
@@ -548,9 +537,7 @@ def test_batch_outputs_fail_offsetting_per_genome_class_mismatches(
     report_path = python_runner._write_batch_report(tmp_path, results)
 
     with summary_path.open(newline="") as handle:
-        rows = {
-            row["genome_id"]: row for row in csv.DictReader(handle, delimiter="\t")
-        }
+        rows = {row["genome_id"]: row for row in csv.DictReader(handle, delimiter="\t")}
     assert set(rows) == {"over", "under", "clean"}
     for genome_id in ("over", "under"):
         assert rows[genome_id]["status"] == "failed"

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +10,8 @@ import virosync.utils.resource_manifest as resource_manifest
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
     LEGACY_SEMANTIC_COUNT_KEYS,
-    RUNTIME_RESOURCE_FILES,
     RESOURCE_MANIFEST_NAME,
+    RUNTIME_RESOURCE_FILES,
     SEMANTIC_COUNT_KEYS,
     SOURCE_RESOURCE_FILES,
     ResourceManifestError,
@@ -31,18 +31,12 @@ def _payloads(version: str = "v1.0.6") -> dict[str, bytes]:
         "models/combined.hmm.h3i": b"h3i\n",
         "models/combined.hmm.h3m": b"h3m\n",
         "models/combined.hmm.h3p": b"h3p\n",
-        "models/model_annotations_with_interpro.tsv": (
-            b"model\tannotation\nVS000001\tone\nVS000002\ttwo\n"
-        ),
-        "models/og_marker_name_map.tsv": (
-            b"model\tmarker\nVS000001\tOG1\nVS000002\tOG2\n"
-        ),
+        "models/model_annotations_with_interpro.tsv": (b"model\tannotation\nVS000001\tone\nVS000002\ttwo\n"),
+        "models/og_marker_name_map.tsv": (b"model\tmarker\nVS000001\tOG1\nVS000002\tOG2\n"),
         "marker/marker.faa": b">one\nMPEP\n>two\nMPEP\n>three\nMPEP\n",
         "marker/marker.dmnd": b"synthetic marker diamond\n",
         "genomes/combined_proteome.dmnd": b"synthetic proteome diamond\n",
-        "taxonomy/labels.tsv": (
-            b"genome\tlineage\ngenome-one\tNCLDV\ngenome-two\tPLV\n"
-        ),
+        "taxonomy/labels.tsv": (b"genome\tlineage\ngenome-one\tNCLDV\ngenome-two\tPLV\n"),
     }
 
 
@@ -74,10 +68,7 @@ def test_manifest_schema_and_fast_validation_use_no_child_process(
     tmp_path: Path,
 ) -> None:
     root, manifest_sha256 = _write_tree(tmp_path / "virosync")
-    assert (
-        manifest_sha256
-        == "3c3976abfea9dc7e75bc8491a7c125a6519f79856de923cacc06da4262c47c2b"
-    )
+    assert manifest_sha256 == "3c3976abfea9dc7e75bc8491a7c125a6519f79856de923cacc06da4262c47c2b"
 
     def reject_runner(*_args, **_kwargs):
         raise AssertionError("fast validation must not invoke a child process")
@@ -156,11 +147,7 @@ def test_hmm_and_annotation_identifiers_must_match(tmp_path: Path) -> None:
     annotation_path.write_text(replacement)
     manifest_path = root / RESOURCE_MANIFEST_NAME
     document = json.loads(manifest_path.read_text())
-    entry = next(
-        item
-        for item in document["files"]
-        if item["path"] == "models/model_annotations_with_interpro.tsv"
-    )
+    entry = next(item for item in document["files"] if item["path"] == "models/model_annotations_with_interpro.tsv")
     entry["sha256"] = resource_manifest.sha256_file(annotation_path)
     manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
@@ -227,9 +214,7 @@ def test_text_semantic_count_mismatch_is_rejected(tmp_path: Path) -> None:
     document["semantic_counts"]["hmm_models"] = 99
     manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
-    with pytest.raises(
-        ResourceManifestError, match="semantic count mismatch for hmm_models"
-    ):
+    with pytest.raises(ResourceManifestError, match="semantic count mismatch for hmm_models"):
         validate_resource_tree(root)
 
 
@@ -302,9 +287,7 @@ def test_legacy_six_count_manifest_is_accepted_but_new_counts_are_not(
 
     for key in ("pfam_models", "unknown_count"):
         document["semantic_counts"][key] = 1
-        manifest_path.write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n"
-        )
+        manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         with pytest.raises(ResourceManifestError, match=f"unexpected=.*{key}"):
             load_resource_manifest(root)
         document["semantic_counts"].pop(key)
@@ -386,9 +369,7 @@ def test_schema_v2_manifests_are_strict_bound_views_of_union(
         (extracted / RESOURCE_MANIFEST_NAME).write_bytes(manifest_bytes)
         result = validate_resource_tree(
             extracted,
-            expected_runtime_manifest_sha256=(
-                runtime.manifest_sha256 if kind == "source" else None
-            ),
+            expected_runtime_manifest_sha256=(runtime.manifest_sha256 if kind == "source" else None),
         )
         assert result.files_verified == len(payload_files)
 

@@ -38,12 +38,7 @@ def v1_legacy_substring(name: str) -> bool:
     if not name:
         return False
     lower = name.lower()
-    return (
-        "mcp" in lower
-        or lower == "gvogm0003"
-        or lower == "og1352"
-        or lower == "og484"
-    )
+    return "mcp" in lower or lower == "gvogm0003" or lower == "og1352" or lower == "og484"
 
 
 # Canonical corpus drawn from real marker definitions in
@@ -87,18 +82,36 @@ CANONICAL_CORPUS: list[str] = [
     "atpase",
     "int_tyr",
     # VP/PLV MCP prefixes (positives under both)
-    "vp_mcp_1", "vp_mcp_2", "vp_mcp_3", "vp_mcp_4",
-    "vp_mcp_5", "vp_mcp_6", "vp_mcp_7",
+    "vp_mcp_1",
+    "vp_mcp_2",
+    "vp_mcp_3",
+    "vp_mcp_4",
+    "vp_mcp_5",
+    "vp_mcp_6",
+    "vp_mcp_7",
     "plv_mcp",
     # VP/PLV non-MCP (negatives under both)
-    "vp_atpase_1", "vp_atpase_2", "vp_atpase_3", "vp_atpase_4",
-    "vp_penton_1", "vp_penton_2", "vp_penton_3", "vp_penton_4",
-    "vp_penton_5", "vp_penton_6", "vp_penton_7",
-    "vp_pro_1", "vp_pro_2",
+    "vp_atpase_1",
+    "vp_atpase_2",
+    "vp_atpase_3",
+    "vp_atpase_4",
+    "vp_penton_1",
+    "vp_penton_2",
+    "vp_penton_3",
+    "vp_penton_4",
+    "vp_penton_5",
+    "vp_penton_6",
+    "vp_penton_7",
+    "vp_pro_1",
+    "vp_pro_2",
     "plv_pc_054",
     # Additional NCLDV OG/GVOGm IDs seen in real outputs (negatives)
-    "OG1590", "OG2068", "OG516",
-    "GVOGm0023", "GVOGm0054", "GVOGm0461",
+    "OG1590",
+    "OG2068",
+    "OG516",
+    "GVOGm0023",
+    "GVOGm0054",
+    "GVOGm0461",
     "Mirus_Terminase_merged",
     "Mirus_Portal",
     "Mirus_Triplex2",
@@ -129,11 +142,7 @@ EXPECTED_FLIPS_V1_TO_V2 = {
 
 
 def test_v1_to_v2_drops_match_expected() -> None:
-    drops = {
-        name
-        for name in CANONICAL_CORPUS
-        if name and v1_legacy_substring(name) and not is_mcp_gene(name)
-    }
+    drops = {name for name in CANONICAL_CORPUS if name and v1_legacy_substring(name) and not is_mcp_gene(name)}
     assert drops == EXPECTED_FLIPS_V1_TO_V2, (
         "Stage 1B drop set diverged from expectation.\n"
         f"Expected: {sorted(EXPECTED_FLIPS_V1_TO_V2)}\n"
@@ -144,36 +153,37 @@ def test_v1_to_v2_drops_match_expected() -> None:
 def test_v1_to_v2_does_not_grow_positive_set_on_canonical_inputs() -> None:
     """The new helper must not introduce NEW positives on the canonical
     corpus. (Adversarial negatives like "dmcp" are handled above.)"""
-    promotions = {
-        name
-        for name in CANONICAL_CORPUS
-        if name and not v1_legacy_substring(name) and is_mcp_gene(name)
-    }
+    promotions = {name for name in CANONICAL_CORPUS if name and not v1_legacy_substring(name) and is_mcp_gene(name)}
     # v2 may match some names (e.g. "mcp_mirus") that v1's weaker form
     # also matched (it contains "mcp"), so this set should be empty on
     # this corpus. If a future canonical marker is added that v1 missed
     # but v2 should catch, that name must be listed here.
-    assert promotions == set(), (
-        f"Unexpected new positives under is_mcp_gene: {sorted(promotions)}"
-    )
+    assert promotions == set(), f"Unexpected new positives under is_mcp_gene: {sorted(promotions)}"
 
 
 def test_v2_rejects_every_adversarial_name() -> None:
     adversarial = EXPECTED_FLIPS_V1_TO_V2
     for name in adversarial:
-        assert is_mcp_gene(name) is False, (
-            f"Adversarial name {name!r} must be rejected by is_mcp_gene"
-        )
+        assert is_mcp_gene(name) is False, f"Adversarial name {name!r} must be rejected by is_mcp_gene"
 
 
 def test_v2_accepts_every_canonical_mcp_name() -> None:
     canonical_mcp = {
-        "og1352", "og484", "gamadvirusmcp", "gvogm0003", "mcp",
-        "mcp_mirus", "mcp_poli", "plv_mcp",
-        "vp_mcp_1", "vp_mcp_2", "vp_mcp_3", "vp_mcp_4",
-        "vp_mcp_5", "vp_mcp_6", "vp_mcp_7",
+        "og1352",
+        "og484",
+        "gamadvirusmcp",
+        "gvogm0003",
+        "mcp",
+        "mcp_mirus",
+        "mcp_poli",
+        "plv_mcp",
+        "vp_mcp_1",
+        "vp_mcp_2",
+        "vp_mcp_3",
+        "vp_mcp_4",
+        "vp_mcp_5",
+        "vp_mcp_6",
+        "vp_mcp_7",
     }
     for name in canonical_mcp:
-        assert is_mcp_gene(name) is True, (
-            f"Canonical MCP name {name!r} must be accepted by is_mcp_gene"
-        )
+        assert is_mcp_gene(name) is True, f"Canonical MCP name {name!r} must be accepted by is_mcp_gene"

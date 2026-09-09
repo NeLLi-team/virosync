@@ -1,15 +1,11 @@
-"""
-Coordinate helpers for 6-frame translated queries.
+"""Coordinate helpers for 6-frame translated queries.
 
 Shared between HHG seeding, marker validation, and legacy feature mapping.
 """
 
-from typing import Optional
 
-
-def parse_frame_id(seq_id: str) -> tuple[str, Optional[int], int]:
-    """
-    Parse a seqkit 6-frame translated header into (contig, frame, offset).
+def parse_frame_id(seq_id: str) -> tuple[str, int | None, int]:
+    """Parse a seqkit 6-frame translated header into (contig, frame, offset).
 
     Supports headers with `_frame=` or `_frame_` and optional `_offset=`.
     Returns (contig, frame, offset) where frame is 1..6 or negative for reverse.
@@ -44,9 +40,7 @@ def aa_to_nt_coords(
     frame: int,
     offset: int = 0,
 ) -> tuple[int, int, str]:
-    """
-    Convert amino-acid coordinates to nucleotide coordinates for 6-frame translations.
-    """
+    """Convert amino-acid coordinates to nucleotide coordinates for 6-frame translations."""
     if frame == 0:
         raise ValueError("Frame cannot be 0")
     aa_start = aa_start + offset

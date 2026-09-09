@@ -16,7 +16,6 @@ import threading
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -48,7 +47,7 @@ class TMvecConfig:
     projection_hidden_dim: int = 1024
 
     @classmethod
-    def from_json(cls, path: Path) -> "TMvecConfig":
+    def from_json(cls, path: Path) -> TMvecConfig:
         """Read the architecture fields from the installed TMVec2 parameters."""
         with path.open(encoding="utf-8") as handle:
             data = json.load(handle)
@@ -57,9 +56,7 @@ class TMvecConfig:
         fields = set(cls.__dataclass_fields__)
         missing = sorted(fields - set(data))
         if missing:
-            raise RuntimeError(
-                "Installed TMVec2 parameters are missing: " + ", ".join(missing)
-            )
+            raise RuntimeError("Installed TMVec2 parameters are missing: " + ", ".join(missing))
         return cls(**{key: data[key] for key in fields})
 
 
@@ -112,7 +109,7 @@ class TMvecPredictor:
     def __init__(
         self,
         device: str = "cuda",
-        model_root: Optional[Path] = None,
+        model_root: Path | None = None,
         require_gpu: bool = False,
         fail_on_unavailable: bool = False,
     ) -> None:
@@ -122,9 +119,7 @@ class TMvecPredictor:
             raise ValueError(f"Unsupported TMVec device: {device}")
         if device == "cuda" and not torch.cuda.is_available():
             if self._must_fail:
-                raise RuntimeError(
-                    "TMvecPredictor requested CUDA but no CUDA device is available."
-                )
+                raise RuntimeError("TMvecPredictor requested CUDA but no CUDA device is available.")
             logger.warning("CUDA is not available. TMVec2 will use the CPU.")
             device = "cpu"
 
@@ -133,9 +128,9 @@ class TMvecPredictor:
         self._lobster_model = None
         self._tokenizer = None
         self._tmvec_model = None
-        self._config: Optional[TMvecConfig] = None
+        self._config: TMvecConfig | None = None
         self._initialized = False
-        self._available: Optional[bool] = None
+        self._available: bool | None = None
         self._batch_oom_fallbacks = 0
         self._per_seq_fallback_failures = 0
 
@@ -144,11 +139,11 @@ class TMvecPredictor:
         return self.require_gpu or self.fail_on_unavailable
 
     @property
-    def _lobster_path(self) -> Optional[Path]:
+    def _lobster_path(self) -> Path | None:
         return self.model_root / "lobster_24M" if self.model_root else None
 
     @property
-    def _tmvec_path(self) -> Optional[Path]:
+    def _tmvec_path(self) -> Path | None:
         return self.model_root / "tmvec-2" if self.model_root else None
 
     @property
@@ -160,22 +155,14 @@ class TMvecPredictor:
 
                 required = (
                     self._lobster_path / "config.json" if self._lobster_path else None,
-                    self._lobster_path / "pytorch_model.bin"
-                    if self._lobster_path
-                    else None,
+                    self._lobster_path / "pytorch_model.bin" if self._lobster_path else None,
                     self._lobster_path / "vocab.txt" if self._lobster_path else None,
-                    self._lobster_path / "tokenizer_config.json"
-                    if self._lobster_path
-                    else None,
-                    self._lobster_path / "special_tokens_map.json"
-                    if self._lobster_path
-                    else None,
+                    self._lobster_path / "tokenizer_config.json" if self._lobster_path else None,
+                    self._lobster_path / "special_tokens_map.json" if self._lobster_path else None,
                     self._tmvec_path / "params.json" if self._tmvec_path else None,
                     self._tmvec_path / "tmvec-2.ckpt" if self._tmvec_path else None,
                 )
-                self._available = all(
-                    path is not None and path.is_file() for path in required
-                )
+                self._available = all(path is not None and path.is_file() for path in required)
             except ImportError as exc:
                 logger.warning("TMVec2 dependency is not available: %s", exc)
                 self._available = False
@@ -203,9 +190,7 @@ class TMvecPredictor:
         config = TMvecConfig.from_json(self._tmvec_path / "params.json")
         expected = TMvecConfig()
         if config != expected:
-            raise RuntimeError(
-                "Installed TMVec2 parameters do not match the supported architecture"
-            )
+            raise RuntimeError("Installed TMVec2 parameters do not match the supported architecture")
 
         model = TMvecModel(config)
         checkpoint = torch.load(
@@ -225,9 +210,7 @@ class TMvecPredictor:
 
         model = LobsterPMLM(str(self._lobster_path))
         if int(model.model.config.hidden_size) != TMvecConfig().d_model:
-            raise RuntimeError(
-                "Installed Lobster model does not produce 408-value residue features"
-            )
+            raise RuntimeError("Installed Lobster model does not produce 408-value residue features")
         self._tokenizer = model.tokenizer
         self._lobster_model = model.to(self.device).eval()
 
@@ -259,8 +242,7 @@ class TMvecPredictor:
             residue_features = outputs.hidden_states[-1]
             if residue_features.shape[-1] != TMvecConfig().d_model:
                 raise RuntimeError(
-                    "Lobster returned residue features with an invalid width: "
-                    f"{residue_features.shape[-1]}"
+                    f"Lobster returned residue features with an invalid width: {residue_features.shape[-1]}"
                 )
             embeddings = self._tmvec_model(
                 residue_features,
@@ -314,10 +296,7 @@ class TMvecPredictor:
         residue_count = 0
         for item in prepared:
             item_length = max(1, min(len(item[1]), _MAX_TOKEN_LENGTH))
-            if current and (
-                residue_count + item_length > max_residues
-                or len(current) >= max_batch
-            ):
+            if current and (residue_count + item_length > max_residues or len(current) >= max_batch):
                 batches.append(current)
                 current = []
                 residue_count = 0
@@ -367,16 +346,11 @@ class TMvecPredictor:
         """Return database IDs with the highest cosine similarity."""
         query = self.embed(query_sequence)
         if database_embeddings.ndim != 2 or database_embeddings.shape[1] != query.shape[0]:
-            raise ValueError(
-                "TMVec2 database embeddings must be a 2-D array with width "
-                f"{query.shape[0]}"
-            )
+            raise ValueError(f"TMVec2 database embeddings must be a 2-D array with width {query.shape[0]}")
         if len(database_ids) != database_embeddings.shape[0]:
             raise ValueError("TMVec2 database ID and embedding row counts differ")
         query_normalized = query / np.linalg.norm(query)
-        database_normalized = database_embeddings / (
-            np.linalg.norm(database_embeddings, axis=1, keepdims=True) + 1e-8
-        )
+        database_normalized = database_embeddings / (np.linalg.norm(database_embeddings, axis=1, keepdims=True) + 1e-8)
         similarities = database_normalized @ query_normalized
         hits: list[tuple[str, float]] = []
         for index in np.argsort(similarities)[::-1]:
@@ -392,7 +366,7 @@ _live_predictors: weakref.WeakSet = weakref.WeakSet()
 
 def get_tmvec_predictor(
     device: str = "cuda",
-    model_root: Optional[Path] = None,
+    model_root: Path | None = None,
     require_gpu: bool = False,
     fail_on_unavailable: bool = False,
 ) -> TMvecPredictor:

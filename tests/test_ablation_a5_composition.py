@@ -333,17 +333,13 @@ def test_configured_scoring_reaches_all_three_routes(
     expected_tier = "HIGH" if path == "marker_taxonomy" else "MEDIUM"
     assert observed.confidence_tier == expected_tier
     expected_status = (
-        VerificationStatus.HIGH_CONFIDENCE
-        if path == "marker_taxonomy"
-        else VerificationStatus.MEDIUM_CONFIDENCE
+        VerificationStatus.HIGH_CONFIDENCE if path == "marker_taxonomy" else VerificationStatus.MEDIUM_CONFIDENCE
     )
     assert observed.status is expected_status
     assert observed.likely_family == ("UNKNOWN" if path == "final" else "NCLDV")
     assert observed.composition_ablation_effect.interventions == 1
     assert observed.composition_ablation_effect.reference_confidence is not None
-    assert observed.composition_ablation_effect.selected_confidence == pytest.approx(
-        expected_confidence
-    )
+    assert observed.composition_ablation_effect.selected_confidence == pytest.approx(expected_confidence)
 
 
 def test_config_requires_the_single_ablation_enum() -> None:

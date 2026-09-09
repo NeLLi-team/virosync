@@ -1,5 +1,4 @@
-"""
-Genome masking with TRF and RepeatMasker.
+"""Genome masking with TRF and RepeatMasker.
 
 Masks low-complexity regions and host-specific repeats to reduce false positives
 in downstream homology searches and statistical analyses.
@@ -20,7 +19,6 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -76,16 +74,16 @@ class MaskingResult:
     legacy_adapter: bool
     backend_versions: tuple[tuple[str, str], ...]
     masked_bases: int
-    repeatmasker_species: Optional[str]
-    repeatmasker_library: Optional[Path]
-    repeatmasker_library_sha256: Optional[str]
-    configured_fallback_backend: Optional[MaskingBackend]
-    fallback_backend: Optional[MaskingBackend]
-    fallback_reason: Optional[str]
+    repeatmasker_species: str | None
+    repeatmasker_library: Path | None
+    repeatmasker_library_sha256: str | None
+    configured_fallback_backend: MaskingBackend | None
+    fallback_backend: MaskingBackend | None
+    fallback_reason: str | None
     input_sha256: str
     output_sha256: str
-    status_path: Optional[Path] = None
-    status_sha256: Optional[str] = None
+    status_path: Path | None = None
+    status_sha256: str | None = None
 
     @property
     def benchmark_eligible(self) -> bool:
@@ -94,26 +92,18 @@ class MaskingResult:
             return False
         if self.status == "off":
             return True
-        if (
-            self.status != "success"
-            or self.legacy_adapter
-            or self.failure_policy is not MaskingFailurePolicy.STRICT
-        ):
+        if self.status != "success" or self.legacy_adapter or self.failure_policy is not MaskingFailurePolicy.STRICT:
             return False
         versions = dict(self.backend_versions)
-        expected = {
-            backend.value for backend in _requested_tools(self.effective_backend)
-        }
+        expected = {backend.value for backend in _requested_tools(self.effective_backend)}
         return bool(expected) and all(
-            versions.get(backend)
-            and versions[backend] not in {"failed", _LEGACY_VERSION}
-            for backend in expected
+            versions.get(backend) and versions[backend] not in {"failed", _LEGACY_VERSION} for backend in expected
         )
 
     def to_status_payload(
         self,
         *,
-        repeat_region_count: Optional[int] = None,
+        repeat_region_count: int | None = None,
     ) -> dict:
         """Return the canonical JSON-safe status payload."""
         if repeat_region_count is None:
@@ -130,21 +120,13 @@ class MaskingResult:
             "repeat_region_count": repeat_region_count,
             "repeatmasker_species": self.repeatmasker_species,
             "repeatmasker_library": (
-                str(self.repeatmasker_library.resolve())
-                if self.repeatmasker_library is not None
-                else None
+                str(self.repeatmasker_library.resolve()) if self.repeatmasker_library is not None else None
             ),
             "repeatmasker_library_sha256": self.repeatmasker_library_sha256,
             "configured_fallback_backend": (
-                self.configured_fallback_backend.value
-                if self.configured_fallback_backend is not None
-                else None
+                self.configured_fallback_backend.value if self.configured_fallback_backend is not None else None
             ),
-            "fallback_backend": (
-                self.fallback_backend.value
-                if self.fallback_backend is not None
-                else None
-            ),
+            "fallback_backend": (self.fallback_backend.value if self.fallback_backend is not None else None),
             "fallback_reason": self.fallback_reason,
             "input_sha256": self.input_sha256,
             "output_path": str(self.output_path.resolve()),
@@ -187,33 +169,25 @@ def _validate_input_fasta(path: Path) -> None:
         raise ValueError(f"invalid input FASTA {path}: duplicate record IDs {joined}")
 
 
-def _library_sha256(config: MaskingConfig) -> Optional[str]:
+def _library_sha256(config: MaskingConfig) -> str | None:
     if config.repeatmasker_library is None:
         return None
     library = Path(config.repeatmasker_library)
     if not library.is_file():
-        raise ConfigError(
-            f"execution.masking.repeatmasker_library is not a file: {library}"
-        )
+        raise ConfigError(f"execution.masking.repeatmasker_library is not a file: {library}")
     if library.stat().st_size == 0:
-        raise ConfigError(
-            f"execution.masking.repeatmasker_library is empty: {library}"
-        )
+        raise ConfigError(f"execution.masking.repeatmasker_library is empty: {library}")
     return _file_sha256(library)
 
 
 def _is_verified_version(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value.strip())
-        and value not in {"failed", _LEGACY_VERSION}
-    )
+    return isinstance(value, str) and bool(value.strip()) and value not in {"failed", _LEGACY_VERSION}
 
 
 def _masking_state_errors(
     result: MaskingResult,
     *,
-    repeat_region_count: Optional[int] = None,
+    repeat_region_count: int | None = None,
 ) -> list[str]:
     """Return violations of the persisted masking state machine."""
     errors: list[str] = []
@@ -223,9 +197,7 @@ def _masking_state_errors(
         errors.append("legacy_adapter must be a boolean")
     if type(result.masked_bases) is not int or result.masked_bases < 0:
         errors.append("masked_bases must be a non-negative integer")
-    if repeat_region_count is not None and (
-        type(repeat_region_count) is not int or repeat_region_count < 0
-    ):
+    if repeat_region_count is not None and (type(repeat_region_count) is not int or repeat_region_count < 0):
         errors.append("repeat_region_count must be a non-negative integer")
     for label, digest in (
         ("input_sha256", result.input_sha256),
@@ -278,9 +250,7 @@ def _masking_state_errors(
     elif result.repeatmasker_library_sha256 is not None:
         errors.append("RepeatMasker library SHA256 has no library path")
 
-    required_tools = {
-        backend.value for backend in _requested_tools(result.requested_backend)
-    }
+    required_tools = {backend.value for backend in _requested_tools(result.requested_backend)}
     if result.status == "off":
         if result.requested_backend is not MaskingBackend.OFF:
             errors.append("off status requires requested backend off")
@@ -359,7 +329,7 @@ def _masking_state_errors(
 def _validate_masking_state(
     result: MaskingResult,
     *,
-    repeat_region_count: Optional[int] = None,
+    repeat_region_count: int | None = None,
 ) -> None:
     errors = _masking_state_errors(
         result,
@@ -404,7 +374,7 @@ def _write_failed_masking_status(
     config: MaskingConfig,
     error: MaskingBackendError,
     backend_versions: dict[str, str],
-    selected_fallback_backend: Optional[MaskingBackend] = None,
+    selected_fallback_backend: MaskingBackend | None = None,
 ) -> Path:
     """Atomically persist a typed backend failure without claiming output success."""
     library_sha256 = _library_sha256(config)
@@ -420,21 +390,11 @@ def _write_failed_masking_status(
         "repeat_region_count": 0,
         "repeatmasker_species": config.repeatmasker_species,
         "repeatmasker_library": (
-            str(config.repeatmasker_library.resolve())
-            if config.repeatmasker_library is not None
-            else None
+            str(config.repeatmasker_library.resolve()) if config.repeatmasker_library is not None else None
         ),
         "repeatmasker_library_sha256": library_sha256,
-        "configured_fallback_backend": (
-            config.fallback_backend.value
-            if config.fallback_backend is not None
-            else None
-        ),
-        "fallback_backend": (
-            selected_fallback_backend.value
-            if selected_fallback_backend is not None
-            else None
-        ),
+        "configured_fallback_backend": (config.fallback_backend.value if config.fallback_backend is not None else None),
+        "fallback_backend": (selected_fallback_backend.value if selected_fallback_backend is not None else None),
         "fallback_reason": str(error),
         "input_sha256": _file_sha256(input_fasta),
         "output_path": None,
@@ -467,16 +427,11 @@ def _load_status_payload(status_path: Path) -> dict:
     if not isinstance(payload, dict):
         raise ValueError(f"invalid masking status {status_path}: root must be an object")
     if payload.get("schema_version") != MASKING_STATUS_SCHEMA_VERSION:
-        raise ValueError(
-            f"invalid masking status schema in {status_path}: "
-            f"{payload.get('schema_version')!r}"
-        )
+        raise ValueError(f"invalid masking status schema in {status_path}: {payload.get('schema_version')!r}")
     fingerprint = payload.get("result_fingerprint")
     semantic = dict(payload)
     semantic.pop("result_fingerprint", None)
-    expected = hashlib.sha256(
-        json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    expected = hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if fingerprint != expected:
         raise ValueError(f"masking status semantic fingerprint mismatch: {status_path}")
     return payload
@@ -487,14 +442,11 @@ def masking_result_from_status_payload(
     *,
     status_path: Path,
     status_sha256: str,
-    repeat_regions: Optional[tuple[MaskedRegion, ...]] = None,
+    repeat_regions: tuple[MaskedRegion, ...] | None = None,
 ) -> MaskingResult:
     """Reconstruct and semantically validate a decoded masking-status payload."""
-
     if payload.get("status") not in {"off", "success", "fallback"}:
-        raise ValueError(
-            f"masking status is not reusable: {payload.get('status')!r}"
-        )
+        raise ValueError(f"masking status is not reusable: {payload.get('status')!r}")
     if payload.get("legacy_adapter") is True:
         raise ValueError("legacy adapter masking status is not reusable")
     output_path_raw = payload.get("output_path")
@@ -508,27 +460,17 @@ def masking_result_from_status_payload(
         failure_policy=MaskingFailurePolicy(payload["failure_policy"]),
         status=str(payload["status"]),
         legacy_adapter=payload.get("legacy_adapter", False),
-        backend_versions=tuple(
-            sorted((str(key), str(value)) for key, value in payload["backend_versions"].items())
-        ),
+        backend_versions=tuple(sorted((str(key), str(value)) for key, value in payload["backend_versions"].items())),
         masked_bases=int(payload["masked_bases"]),
         repeatmasker_species=payload.get("repeatmasker_species"),
-        repeatmasker_library=(
-            Path(payload["repeatmasker_library"])
-            if payload.get("repeatmasker_library")
-            else None
-        ),
+        repeatmasker_library=(Path(payload["repeatmasker_library"]) if payload.get("repeatmasker_library") else None),
         repeatmasker_library_sha256=payload.get("repeatmasker_library_sha256"),
         configured_fallback_backend=(
             MaskingBackend(payload["configured_fallback_backend"])
             if payload.get("configured_fallback_backend")
             else None
         ),
-        fallback_backend=(
-            MaskingBackend(payload["fallback_backend"])
-            if payload.get("fallback_backend")
-            else None
-        ),
+        fallback_backend=(MaskingBackend(payload["fallback_backend"]) if payload.get("fallback_backend") else None),
         fallback_reason=payload.get("fallback_reason"),
         input_sha256=str(payload["input_sha256"]),
         output_sha256=str(payload["output_sha256"]),
@@ -538,35 +480,25 @@ def masking_result_from_status_payload(
     persisted_region_count = payload.get("repeat_region_count")
     _validate_masking_state(
         result,
-        repeat_region_count=(
-            len(result.repeat_regions)
-            if repeat_regions is not None
-            else persisted_region_count
-        ),
+        repeat_region_count=(len(result.repeat_regions) if repeat_regions is not None else persisted_region_count),
     )
     expected_payload = result.to_status_payload(
-        repeat_region_count=(
-            None if repeat_regions is not None else persisted_region_count
-        )
+        repeat_region_count=(None if repeat_regions is not None else persisted_region_count)
     )
     mismatched = sorted(
-        key
-        for key in set(payload) | set(expected_payload)
-        if payload.get(key) != expected_payload.get(key)
+        key for key in set(payload) | set(expected_payload) if payload.get(key) != expected_payload.get(key)
     )
     if mismatched:
-        raise ValueError(
-            "masking status result mismatch: " + ", ".join(mismatched)
-        )
+        raise ValueError("masking status result mismatch: " + ", ".join(mismatched))
     return result
 
 
 def load_masking_result(
     status_path: Path,
     *,
-    repeat_regions: Optional[tuple[MaskedRegion, ...]] = None,
-    expected_config: Optional[MaskingConfig] = None,
-    expected_input: Optional[Path] = None,
+    repeat_regions: tuple[MaskedRegion, ...] | None = None,
+    expected_config: MaskingConfig | None = None,
+    expected_input: Path | None = None,
 ) -> MaskingResult:
     """Reconstruct and validate a successful/off/fallback result from status."""
     payload = _load_status_payload(status_path)
@@ -590,9 +522,7 @@ def load_masking_result(
         if result.repeatmasker_species != expected_config.repeatmasker_species:
             mismatches.append("RepeatMasker species")
         observed_library = (
-            str(result.repeatmasker_library.resolve())
-            if result.repeatmasker_library is not None
-            else None
+            str(result.repeatmasker_library.resolve()) if result.repeatmasker_library is not None else None
         )
         if observed_library != expected_library:
             mismatches.append("RepeatMasker library")
@@ -601,9 +531,7 @@ def load_masking_result(
         if result.configured_fallback_backend is not expected_config.fallback_backend:
             mismatches.append("configured fallback backend")
         if mismatches:
-            raise ValueError(
-                "masking status request mismatch: " + ", ".join(mismatches)
-            )
+            raise ValueError("masking status request mismatch: " + ", ".join(mismatches))
     validate_masking_result(
         result,
         expected_input=expected_input,
@@ -615,7 +543,7 @@ def load_masking_result(
 def validate_masking_result(
     result: MaskingResult,
     *,
-    expected_input: Optional[Path] = None,
+    expected_input: Path | None = None,
     verify_repeat_region_count: bool = True,
 ) -> None:
     """Verify status and output identities before passing output downstream."""
@@ -628,26 +556,16 @@ def validate_masking_result(
     persisted_region_count = payload.get("repeat_region_count")
     _validate_masking_state(
         result,
-        repeat_region_count=(
-            len(result.repeat_regions)
-            if verify_repeat_region_count
-            else persisted_region_count
-        ),
+        repeat_region_count=(len(result.repeat_regions) if verify_repeat_region_count else persisted_region_count),
     )
     expected_payload = result.to_status_payload(
-        repeat_region_count=(
-            None if verify_repeat_region_count else persisted_region_count
-        )
+        repeat_region_count=(None if verify_repeat_region_count else persisted_region_count)
     )
     mismatched = sorted(
-        key
-        for key in set(payload) | set(expected_payload)
-        if payload.get(key) != expected_payload.get(key)
+        key for key in set(payload) | set(expected_payload) if payload.get(key) != expected_payload.get(key)
     )
     if mismatched:
-        raise ValueError(
-            "masking status result mismatch: " + ", ".join(mismatched)
-        )
+        raise ValueError("masking status result mismatch: " + ", ".join(mismatched))
     if result.effective_backend is MaskingBackend.OFF:
         if not result.output_path.is_file():
             raise ValueError(f"masking output is not a file: {result.output_path}")
@@ -676,8 +594,7 @@ def run_trf(
     minscore: int = 50,
     maxperiod: int = 500,
 ) -> Path:
-    """
-    Run Tandem Repeats Finder on input FASTA.
+    """Run Tandem Repeats Finder on input FASTA.
 
     Args:
         input_fasta: Input genome FASTA file
@@ -717,7 +634,7 @@ def run_trf(
     except FileNotFoundError as exc:
         raise MaskingBackendError(MaskingBackend.TRF, "trf executable not found") from exc
     except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or b"")
+        stderr = exc.stderr or b""
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
         reason = stderr.strip() or f"trf exited with status {exc.returncode}"
@@ -751,8 +668,7 @@ def run_trf(
 
 
 def parse_trf_output(trf_dat: Path) -> list[MaskedRegion]:
-    """
-    Parse TRF .dat output file to extract masked regions.
+    """Parse TRF .dat output file to extract masked regions.
 
     TRF .dat format:
     - Lines starting with "Sequence:" indicate new sequence
@@ -802,9 +718,7 @@ def parse_trf_output(trf_dat: Path) -> list[MaskedRegion]:
                             )
                         )
                     except ValueError as exc:
-                        raise ValueError(
-                            f"malformed TRF coordinates: {line!r}"
-                        ) from exc
+                        raise ValueError(f"malformed TRF coordinates: {line!r}") from exc
 
     logger.info(f"Parsed {len(regions)} tandem repeat regions from TRF output")
     return regions
@@ -813,13 +727,12 @@ def parse_trf_output(trf_dat: Path) -> list[MaskedRegion]:
 def run_repeatmasker(
     input_fasta: Path,
     output_dir: Path,
-    species: Optional[str] = None,
-    library: Optional[Path] = None,
+    species: str | None = None,
+    library: Path | None = None,
     threads: int = 4,
     engine: str = "rmblast",
 ) -> Path:
-    """
-    Run RepeatMasker on input FASTA.
+    """Run RepeatMasker on input FASTA.
 
     Args:
         input_fasta: Input genome FASTA file
@@ -838,9 +751,7 @@ def run_repeatmasker(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if bool(species) == bool(library):
-        raise ConfigError(
-            "RepeatMasker requires exactly one of species or library"
-        )
+        raise ConfigError("RepeatMasker requires exactly one of species or library")
 
     cmd = [
         "RepeatMasker",
@@ -862,9 +773,7 @@ def run_repeatmasker(
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        reason = (e.stderr or "").strip() or (
-            f"RepeatMasker exited with status {e.returncode}"
-        )
+        reason = (e.stderr or "").strip() or (f"RepeatMasker exited with status {e.returncode}")
         raise MaskingBackendError(MaskingBackend.REPEATMASKER, reason) from e
     except FileNotFoundError as exc:
         raise MaskingBackendError(
@@ -916,10 +825,9 @@ def run_repeatmasker(
 
 def parse_repeatmasker_output(
     rm_fasta: Path,
-    input_fasta: Optional[Path] = None,
+    input_fasta: Path | None = None,
 ) -> list[MaskedRegion]:
-    """
-    Parse RepeatMasker soft-masked FASTA to extract masked regions.
+    """Parse RepeatMasker soft-masked FASTA to extract masked regions.
 
     Soft-masked regions are in lowercase. We identify runs of lowercase
     characters as masked regions.
@@ -932,12 +840,7 @@ def parse_repeatmasker_output(
     """
     regions = []
     input_sequences = (
-        {
-            record.id: str(record.seq)
-            for record in SeqIO.parse(input_fasta, "fasta")
-        }
-        if input_fasta is not None
-        else {}
+        {record.id: str(record.seq) for record in SeqIO.parse(input_fasta, "fasta")} if input_fasta is not None else {}
     )
 
     for record in SeqIO.parse(rm_fasta, "fasta"):
@@ -947,9 +850,7 @@ def parse_repeatmasker_output(
         mask_start = 0
 
         for i, char in enumerate(seq):
-            newly_lowercase = char.islower() and (
-                original is None or original[i].isupper()
-            )
+            newly_lowercase = char.islower() and (original is None or original[i].isupper())
             if newly_lowercase and not in_masked:
                 # Start of masked region
                 in_masked = True
@@ -982,8 +883,7 @@ def parse_repeatmasker_output(
 
 
 def merge_overlapping_regions(regions: list[MaskedRegion]) -> list[MaskedRegion]:
-    """
-    Merge overlapping or adjacent masked regions.
+    """Merge overlapping or adjacent masked regions.
 
     Args:
         regions: List of MaskedRegion objects
@@ -1031,8 +931,7 @@ def apply_mask(
     regions: list[MaskedRegion],
     mask_char: str = "N",
 ) -> int:
-    """
-    Apply masking to a genome FASTA file.
+    """Apply masking to a genome FASTA file.
 
     Converts specified regions to the mask character (default 'N').
 
@@ -1092,13 +991,12 @@ def apply_mask(
 def identify_repeats(
     input_fasta: Path,
     output_dir: Path,
-    species: Optional[str] = None,
-    library: Optional[Path] = None,
+    species: str | None = None,
+    library: Path | None = None,
     threads: int = 4,
     skip_repeatmasker: bool = True,
 ) -> list[MaskedRegion]:
-    """
-    Identify repeat regions (TRF + RepeatMasker) without masking.
+    """Identify repeat regions (TRF + RepeatMasker) without masking.
 
     Returns a list of MaskedRegion objects (unmerged) for downstream features.
     """
@@ -1185,11 +1083,7 @@ def _validate_fasta_shape(
 def _validate_repeatmasker_output(input_fasta: Path, output_fasta: Path) -> None:
     """Require RepeatMasker to preserve every base except letter case."""
     input_records = list(SeqIO.parse(input_fasta, "fasta"))
-    output_records = (
-        list(SeqIO.parse(output_fasta, "fasta"))
-        if Path(output_fasta).is_file()
-        else []
-    )
+    output_records = list(SeqIO.parse(output_fasta, "fasta")) if Path(output_fasta).is_file() else []
     expected_shape = [(record.id, len(record.seq)) for record in input_records]
     observed_shape = [(record.id, len(record.seq)) for record in output_records]
     if not expected_shape or observed_shape != expected_shape:
@@ -1219,9 +1113,7 @@ def _validate_trf_output(input_fasta: Path, trf_dat: Path) -> None:
                     continue
                 header = line.split(maxsplit=1)
                 if len(header) != 2 or not header[1].strip():
-                    raise ValueError(
-                        f"malformed TRF sequence header: {line!r}"
-                    )
+                    raise ValueError(f"malformed TRF sequence header: {line!r}")
                 observed_ids.append(header[1].split()[0])
     except (OSError, UnicodeError, ValueError) as exc:
         raise MaskingBackendError(
@@ -1256,8 +1148,7 @@ def _validate_regions(
         if region.start < 0 or region.end <= region.start or region.end > length:
             raise MaskingBackendError(
                 backend,
-                f"invalid repeat interval {region.seq_id}:{region.start}-{region.end} "
-                f"for sequence length {length}",
+                f"invalid repeat interval {region.seq_id}:{region.start}-{region.end} for sequence length {length}",
             )
 
 
@@ -1331,12 +1222,12 @@ def _requested_tools(backend: MaskingBackend) -> tuple[MaskingBackend, ...]:
 def mask_genome_pipeline(
     input_fasta: Path,
     output_dir: Path,
-    species: Optional[str] = None,
-    library: Optional[Path] = None,
+    species: str | None = None,
+    library: Path | None = None,
     threads: int = 4,
     skip_repeatmasker: bool = True,
     write_mask: bool = True,
-    config: Optional[MaskingConfig] = None,
+    config: MaskingConfig | None = None,
     **legacy_kwargs,
 ) -> MaskingResult:
     """Execute one explicit masking request and atomically record its outcome."""
@@ -1399,7 +1290,7 @@ def mask_genome_pipeline(
 
     all_regions: list[MaskedRegion] = []
     backend_versions: dict[str, str] = {}
-    failed: Optional[MaskingBackendError] = None
+    failed: MaskingBackendError | None = None
     if legacy_mode:
         all_regions = identify_repeats(
             input_fasta=input_fasta,
@@ -1430,8 +1321,8 @@ def mask_genome_pipeline(
 
     effective_backend = config.backend
     status = "success"
-    fallback_backend: Optional[MaskingBackend] = None
-    fallback_reason: Optional[str] = None
+    fallback_backend: MaskingBackend | None = None
+    fallback_reason: str | None = None
     if failed is not None:
         if config.failure_policy is MaskingFailurePolicy.STRICT:
             _write_failed_masking_status(
@@ -1512,8 +1403,7 @@ def mask_genome_pipeline(
 
 
 def quick_mask(input_fasta: Path, output_fasta: Path, threads: int = 4) -> Path:
-    """
-    Quick masking using only TRF (faster than full pipeline).
+    """Quick masking using only TRF (faster than full pipeline).
 
     Useful for initial testing or when RepeatMasker libraries are unavailable.
 

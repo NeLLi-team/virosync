@@ -1,5 +1,4 @@
-"""
-Batched Diamond BLAST for boundary refinement with host control sampling.
+"""Batched Diamond BLAST for boundary refinement with host control sampling.
 
 Runs gene taxonomy Diamond ONCE per genome on:
 1. All pORFs within ALL candidate EVE regions
@@ -32,20 +31,21 @@ import logging
 import random
 import subprocess
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import TypedDict
 
 from Bio import SeqIO
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
-from virosync.utils.atomic_write import atomic_write_context
 from virosync.pipeline.taxonomy_utils import (
     TaxonomyFingerprint,
     aggregate_taxonomy_substrings,
     compute_hit_weight,
     resolve_org_id,
 )
+from virosync.utils.atomic_write import atomic_write_context
 
 logger = logging.getLogger(__name__)
 
@@ -222,11 +222,47 @@ class GeneTaxonomy:
     top10_bits: list[float] = field(default_factory=list)
     top10_pidents: list[float] = field(default_factory=list)
     top10_evalues: list[float] = field(default_factory=list)
-    taxonomy_fingerprint: Optional[TaxonomyFingerprint] = None
+    taxonomy_fingerprint: TaxonomyFingerprint | None = None
     has_ncldv_mirus: bool = False
     has_vp_plv: bool = False
     has_viral: bool = False
     has_hit: bool = False
+
+
+class TaxonomyFingerprintRecord(TypedDict):
+    """Serialized taxonomy token counts used by host-signature scoring."""
+
+    weighted_tokens: dict[str, float]
+    raw_tokens: dict[str, int]
+
+
+class GeneTaxonomyRecord(TypedDict):
+    """Serialized Phase 2 gene taxonomy passed to evidence synthesis.
+
+    ``start`` and ``end`` are zero-based, half-open nucleotide coordinates.
+    Empty hit lists and the default hit values preserve the no-hit state.
+    """
+
+    porf_id: str
+    scaffold: str
+    start: int
+    end: int
+    top1_target: str
+    top1_prefix: str
+    top1_pident: float
+    top1_evalue: float
+    top10_prefixes: list[str]
+    top10_targets: list[str]
+    top10_bitscores: list[float]
+    top10_pidents: list[float]
+    top10_evalues: list[float]
+    taxonomy_fingerprint: TaxonomyFingerprintRecord | None
+    has_ncldv_mirus: bool
+    has_vp_plv: bool
+    has_viral: bool
+    has_hit: bool
+    is_flanking: bool
+    flank_position: str | None
 
 
 @dataclass
@@ -257,10 +293,9 @@ class ControlStats:
 def build_gene_taxonomy_record(
     tax: GeneTaxonomy,
     is_flanking: bool = False,
-    flank_position: Optional[str] = None,
-) -> dict[str, Any]:
-    """
-    Build standardized gene taxonomy record for evidence synthesis.
+    flank_position: str | None = None,
+) -> GeneTaxonomyRecord:
+    """Build standardized gene taxonomy record for evidence synthesis.
 
     Converts GeneTaxonomy object to dict format expected by verify_eve_task.
     Handles prefix stripping (EUK__ → EUK) for output compatibility.
@@ -271,18 +306,11 @@ def build_gene_taxonomy_record(
         flank_position: "upstream" or "downstream" if is_flanking=True
 
     Returns:
-        Dictionary with standardized taxonomy fields
+        Serialized taxonomy record with zero-based, half-open coordinates.
     """
-
     # Strip trailing underscores from prefixes
-    top1_prefix_stripped = (
-        tax.top1_prefix.rstrip("_") if tax.top1_prefix else "UNKNOWN"
-    )
-    top10_prefixes_stripped = (
-        [p.rstrip("_") for p in tax.top10_prefixes]
-        if tax.top10_prefixes
-        else []
-    )
+    top1_prefix_stripped = tax.top1_prefix.rstrip("_") if tax.top1_prefix else "UNKNOWN"
+    top10_prefixes_stripped = [p.rstrip("_") for p in tax.top10_prefixes] if tax.top10_prefixes else []
 
     # Serialize taxonomy_fingerprint so host signature scoring can use it
     fp_dict = None
@@ -340,8 +368,7 @@ class pORF:
 
 
 def extract_prefix(target_id: str) -> str:
-    """
-    Extract taxonomy prefix from target ID.
+    """Extract taxonomy prefix from target ID.
 
     Returns prefix WITH trailing underscores for consistency.
 
@@ -366,8 +393,7 @@ def extract_prefix(target_id: str) -> str:
 
 
 def extract_organism(target_id: str) -> str:
-    """
-    Extract organism name from target ID.
+    """Extract organism name from target ID.
 
     Args:
         target_id: Target sequence ID (e.g., "EUK__Arabidopsis_thaliana|protein123")
@@ -386,8 +412,7 @@ def extract_organism(target_id: str) -> str:
 
 
 def build_proteome_index(proteome_fasta: Path) -> dict[str, list[pORF]]:
-    """
-    Build an index of pORFs organized by scaffold.
+    """Build an index of pORFs organized by scaffold.
 
     Args:
         proteome_fasta: Path to proteome FASTA file
@@ -424,7 +449,6 @@ def missing_boundary_taxonomy_ids(
     proteome_index: dict[str, list[pORF]],
 ) -> list[str]:
     """Return overlapping proteome genes that have no taxonomy record."""
-
     return [
         porf.id
         for porf in proteome_index.get(scaffold, [])
@@ -437,8 +461,7 @@ def collect_query_proteins(
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
 ) -> GenomeDiamondQuery:
-    """
-    Collect all proteins needed for Diamond from ALL seeds.
+    """Collect all proteins needed for Diamond from ALL seeds.
 
     This is called ONCE per genome to build a single query file.
 
@@ -467,11 +490,13 @@ def collect_query_proteins(
 
     # Log git SHA if available (for verifying which code is running)
     try:
-        git_sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            cwd=Path(__file__).parent
-        ).decode().strip()
+        git_sha = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, cwd=Path(__file__).parent
+            )
+            .decode()
+            .strip()
+        )
         active_logger.info("Git SHA: %s", git_sha)
     except Exception as e:
         active_logger.debug("Git SHA unavailable: %s", e)
@@ -525,26 +550,25 @@ def collect_query_proteins(
         downstream_porf_ids_ordered = [p.id for p in downstream_porfs]
 
         # Log per-EVE region collection
-        active_logger.info("EVE %s: collected %d EVE genes, boundary: upstream=%d, downstream=%d",
-                          seed_id, len(eve_porfs), len(upstream_porfs), len(downstream_porfs))
+        active_logger.info(
+            "EVE %s: collected %d EVE genes, boundary: upstream=%d, downstream=%d",
+            seed_id,
+            len(eve_porfs),
+            len(upstream_porfs),
+            len(downstream_porfs),
+        )
 
         # Calculate flanking bounds for boundary constraint enforcement
-        flank_start_bp = scaffold_porfs[boundary_start_idx].start if boundary_start_idx < len(scaffold_porfs) else seed.start
-        flank_end_bp = max(
-            p.end
-            for p in scaffold_porfs[boundary_start_idx : boundary_end_idx + 1]
+        flank_start_bp = (
+            scaffold_porfs[boundary_start_idx].start if boundary_start_idx < len(scaffold_porfs) else seed.start
         )
+        flank_end_bp = max(p.end for p in scaffold_porfs[boundary_start_idx : boundary_end_idx + 1])
 
         # Search all overlaps of the fixed envelope, including edge genes and
         # gaps between start-sorted seed genes. Keep the trim walk unchanged.
-        query_indices = {
-            i for i, p in enumerate(scaffold_porfs)
-            if p.start < flank_end_bp and p.end > flank_start_bp
-        }
+        query_indices = {i for i, p in enumerate(scaffold_porfs) if p.start < flank_end_bp and p.end > flank_start_bp}
         eve_index_set = set(eve_indices)
-        boundary_porf_ids[seed_id] = [
-            scaffold_porfs[i].id for i in sorted(query_indices - eve_index_set)
-        ]
+        boundary_porf_ids[seed_id] = [scaffold_porfs[i].id for i in sorted(query_indices - eve_index_set)]
 
         # Create SeedGeneMapping for boundary enforcement
         seed_gene_mappings[seed_id] = SeedGeneMapping(
@@ -584,12 +608,20 @@ def collect_query_proteins(
 
     # Single source of truth: compute expected counts from actual collected genes
     active_logger.info("Collected %d EVE regions", len(eve_porf_ids))
-    active_logger.info("Before dedup - EVE: %d, Boundary: %d, Controls: %d, Total: %d",
-                      total_eve_genes_before_dedup, total_boundary_genes_before_dedup,
-                      len(control_porf_ids), total_before_dedup)
-    active_logger.info("EXPECTED (computed): EVE: %d, Boundary: %d, Controls: %d, Total: %d",
-                      total_eve_genes_before_dedup, total_boundary_genes_before_dedup,
-                      len(control_porf_ids), total_before_dedup)
+    active_logger.info(
+        "Before dedup - EVE: %d, Boundary: %d, Controls: %d, Total: %d",
+        total_eve_genes_before_dedup,
+        total_boundary_genes_before_dedup,
+        len(control_porf_ids),
+        total_before_dedup,
+    )
+    active_logger.info(
+        "EXPECTED (computed): EVE: %d, Boundary: %d, Controls: %d, Total: %d",
+        total_eve_genes_before_dedup,
+        total_boundary_genes_before_dedup,
+        len(control_porf_ids),
+        total_before_dedup,
+    )
 
     # Build union of all pORF IDs (ordered, deduplicated)
     seen = set()
@@ -655,8 +687,13 @@ def collect_query_proteins(
     )
 
     # Final logging before return
-    active_logger.info("Deduplication: %d duplicates found (EVE: %d, Boundary: %d, Control: %d)",
-                      total_duplicates, eve_duplicates, boundary_duplicates, control_duplicates)
+    active_logger.info(
+        "Deduplication: %d duplicates found (EVE: %d, Boundary: %d, Control: %d)",
+        total_duplicates,
+        eve_duplicates,
+        boundary_duplicates,
+        control_duplicates,
+    )
     active_logger.info("COLLECT_QUERY_PROTEINS RETURN - %d total genes (after dedup)", len(all_porf_ids))
     active_logger.info("=" * 80)
 
@@ -677,8 +714,7 @@ def sample_control_porfs_genome_wide(
     rng: random.Random,
     stretch_size: int = 11,
 ) -> list[str]:
-    """
-    Sample control pORFs from regions distant from ALL EVEs.
+    """Sample control pORFs from regions distant from ALL EVEs.
 
     Sampling is:
     - Deterministic (seeded RNG)
@@ -706,9 +742,7 @@ def sample_control_porfs_genome_wide(
         # Expand exclusion zone by min_distance
         expanded_excluded = set()
         for idx in excluded:
-            expanded_excluded.update(
-                range(max(0, idx - min_distance), min(len(porfs), idx + min_distance + 1))
-            )
+            expanded_excluded.update(range(max(0, idx - min_distance), min(len(porfs), idx + min_distance + 1)))
 
         # Find contiguous eligible regions
         current_stretch_start = None
@@ -721,21 +755,19 @@ def sample_control_porfs_genome_wide(
                 if current_stretch_start is not None:
                     stretch_length = i - current_stretch_start
                     if stretch_length >= stretch_size:
-                        eligible_stretches.append(
-                            (scaffold, current_stretch_start, i, porfs[current_stretch_start:i])
-                        )
+                        eligible_stretches.append((scaffold, current_stretch_start, i, porfs[current_stretch_start:i]))
                     current_stretch_start = None
 
         # Handle stretch at end of scaffold
         if current_stretch_start is not None:
             stretch_length = len(porfs) - current_stretch_start
             if stretch_length >= stretch_size:
-                eligible_stretches.append(
-                    (scaffold, current_stretch_start, len(porfs), porfs[current_stretch_start:])
-                )
+                eligible_stretches.append((scaffold, current_stretch_start, len(porfs), porfs[current_stretch_start:]))
 
     if not eligible_stretches:
-        logger.warning("No eligible control stretches found (min_distance=%d, stretch_size=%d)", min_distance, stretch_size)
+        logger.warning(
+            "No eligible control stretches found (min_distance=%d, stretch_size=%d)", min_distance, stretch_size
+        )
         return []
 
     # Step 2: Create sampling windows of stretch_size genes
@@ -802,8 +834,7 @@ def extract_sequences(
     porf_ids: Iterable[str],
     output_fasta: Path,
 ) -> int:
-    """
-    Extract sequences for specified pORF IDs to output FASTA.
+    """Extract sequences for specified pORF IDs to output FASTA.
 
     Args:
         proteome_fasta: Path to full proteome FASTA
@@ -835,8 +866,7 @@ def run_diamond_blastp(
     evalue: float = 1e-5,
     search_backend: str = "diamond",
 ) -> None:
-    """
-    Run protein sequence search.
+    """Run protein sequence search.
 
     Args:
         query: Query FASTA file
@@ -861,8 +891,7 @@ def run_diamond_blastp(
 
 
 def parse_diamond_output(output_file: Path) -> dict[str, list[DiamondHit]]:
-    """
-    Parse Diamond output TSV into hits by query.
+    """Parse Diamond output TSV into hits by query.
 
     Args:
         output_file: Diamond output TSV
@@ -918,7 +947,6 @@ def run_full_proteome_diamond(
     raw pORF IDs so one result can be sliced for both host trimming and boundary
     refinement.
     """
-
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / "full_proteome.tsv"
     run_diamond_blastp(
@@ -937,14 +965,10 @@ def classify_cached_diamond_query(
     diamond_hits: dict[str, list[DiamondHit]],
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
-    taxonomy_lookup: Optional[dict] = None,
+    taxonomy_lookup: dict | None = None,
 ) -> dict[str, GeneTaxonomy]:
     """Classify an exact boundary query by slicing full-proteome raw hits."""
-
-    selected_hits = {
-        porf_id: diamond_hits.get(porf_id, [])[: config.top_k]
-        for porf_id in query.all_porf_ids
-    }
+    selected_hits = {porf_id: diamond_hits.get(porf_id, [])[: config.top_k] for porf_id in query.all_porf_ids}
     return classify_all_porfs(
         all_porf_ids=query.all_porf_ids,
         diamond_hits=selected_hits,
@@ -960,8 +984,7 @@ def split_fasta(
     chunk_size: int,
     output_dir: Path,
 ) -> list[Path]:
-    """
-    Split FASTA file into chunks of specified size.
+    """Split FASTA file into chunks of specified size.
 
     Args:
         input_fasta: Input FASTA file
@@ -1009,8 +1032,7 @@ def run_diamond_chunked(
     threads: int,
     search_backend: str = "diamond",
 ) -> dict[str, list[DiamondHit]]:
-    """
-    Run Diamond in chunks for large query sets.
+    """Run Diamond in chunks for large query sets.
 
     Chunks are processed sequentially to avoid memory issues.
     Results are merged.
@@ -1057,11 +1079,10 @@ def classify_all_porfs(
     diamond_hits: dict[str, list[DiamondHit]],
     proteome_index: dict[str, list[pORF]],
     host_prefix: str,
-    taxonomy_lookup: Optional[dict] = None,
+    taxonomy_lookup: dict | None = None,
     taxonomy_weight_mode: str = "rank",
 ) -> dict[str, GeneTaxonomy]:
-    """
-    Classify all pORFs, including those with no Diamond hits.
+    """Classify all pORFs, including those with no Diamond hits.
 
     IMPORTANT: Explicitly materializes "no hit" entries so downstream
     code can distinguish between "no hit" and "missing data".
@@ -1142,9 +1163,7 @@ def classify_all_porfs(
             # Calculate taxonomy fingerprint if lookup available
             fingerprint = None
             if taxonomy_lookup:
-                top10_tuples = [
-                    (h.target, h.bits, h.pident, h.evalue) for h in top10
-                ]
+                top10_tuples = [(h.target, h.bits, h.pident, h.evalue) for h in top10]
                 fingerprint = aggregate_taxonomy_substrings(
                     top10_tuples,
                     taxonomy_lookup,
@@ -1182,8 +1201,7 @@ def build_host_baseline_fingerprint(
     min_token_count: int = 3,
     min_weight_fraction: float = 0.10,
 ) -> dict[str, float]:
-    """
-    Build host baseline fingerprint from control genes.
+    """Build host baseline fingerprint from control genes.
 
     Filters to host-prefix genes only to avoid viral contamination,
     then aggregates tokens that appear frequently enough.
@@ -1201,11 +1219,7 @@ def build_host_baseline_fingerprint(
         return {}
 
     # Filter to host-prefix genes only (avoid viral contamination)
-    host_genes = [
-        g
-        for g in control_taxonomy
-        if g.top1_prefix == host_prefix and g.taxonomy_fingerprint
-    ]
+    host_genes = [g for g in control_taxonomy if g.top1_prefix == host_prefix and g.taxonomy_fingerprint]
 
     if len(host_genes) < min_token_count:
         # Not enough control genes - return empty (will use fallback logic)
@@ -1245,10 +1259,9 @@ def run_batched_diamond(
     output_dir: Path,
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
-    taxonomy_lookup: Optional[dict] = None,
+    taxonomy_lookup: dict | None = None,
 ) -> dict[str, GeneTaxonomy]:
-    """
-    Run Diamond ONCE for all proteins in the genome query.
+    """Run Diamond ONCE for all proteins in the genome query.
 
     Returns taxonomy keyed by pORF ID for fast lookup.
 
@@ -1271,8 +1284,9 @@ def run_batched_diamond(
     # WRITE PATH VERIFICATION: Log before writing
     query_fasta = output_dir / "genome_boundary_query.faa"
     active_logger.info("WRITE PATH: About to write %d genes to %s", len(query.all_porf_ids), query_fasta)
-    active_logger.info("WRITE PATH: EVE regions=%d, Control genes=%d",
-                      len(query.eve_porf_ids), len(query.control_porf_ids))
+    active_logger.info(
+        "WRITE PATH: EVE regions=%d, Control genes=%d", len(query.eve_porf_ids), len(query.control_porf_ids)
+    )
 
     # Write debug artifact to file for post-run inspection.
     debug_file = output_dir / "collect_query_proteins_debug.txt"
@@ -1369,8 +1383,7 @@ def filter_taxonomy_to_boundary(
     taxonomy_map: dict[str, GeneTaxonomy],
     refined_boundary,
 ) -> list[GeneTaxonomy]:
-    """
-    Filter pre-computed taxonomy to refined boundary.
+    """Filter pre-computed taxonomy to refined boundary.
 
     Called AFTER trimming to get taxonomy for final EVE region.
     Does NOT re-run Diamond.
@@ -1398,10 +1411,9 @@ def get_flanking_taxonomy(
     proteome_index: dict[str, list[pORF]],
     refined_boundary,
     flank_genes: int = 10,
-    seed_mapping: Optional[SeedGeneMapping] = None,
+    seed_mapping: SeedGeneMapping | None = None,
 ) -> tuple[list[GeneTaxonomy], list[GeneTaxonomy]]:
-    """
-    Get flanking gene taxonomy for genes outside but near an EVE boundary.
+    """Get flanking gene taxonomy for genes outside but near an EVE boundary.
 
     Returns genes that are:
     - On the same scaffold as the boundary
@@ -1442,24 +1454,15 @@ def get_flanking_taxonomy(
             last_eve_idx + 1 + flank_genes,
         )
         upstream_porfs = scaffold_porfs[upstream_start_idx:first_eve_idx]
-        downstream_porfs = scaffold_porfs[last_eve_idx + 1:downstream_end_idx]
+        downstream_porfs = scaffold_porfs[last_eve_idx + 1 : downstream_end_idx]
 
-        upstream_taxonomy = [
-            taxonomy_map[porf.id]
-            for porf in upstream_porfs
-            if porf.id in taxonomy_map
-        ]
-        downstream_taxonomy = [
-            taxonomy_map[porf.id]
-            for porf in downstream_porfs
-            if porf.id in taxonomy_map
-        ]
+        upstream_taxonomy = [taxonomy_map[porf.id] for porf in upstream_porfs if porf.id in taxonomy_map]
+        downstream_taxonomy = [taxonomy_map[porf.id] for porf in downstream_porfs if porf.id in taxonomy_map]
         missing_upstream = len(upstream_porfs) - len(upstream_taxonomy)
         missing_downstream = len(downstream_porfs) - len(downstream_taxonomy)
         if missing_upstream > 0 or missing_downstream > 0:
             logger.warning(
-                "Flanking gene taxonomy incomplete for %s:%d-%d: "
-                "%d/%d upstream missing, %d/%d downstream missing",
+                "Flanking gene taxonomy incomplete for %s:%d-%d: %d/%d upstream missing, %d/%d downstream missing",
                 scaffold,
                 refined_boundary.start,
                 refined_boundary.end,
@@ -1509,8 +1512,7 @@ def get_flanking_taxonomy(
         # Log if any flanking genes are missing from taxonomy map
         if missing_upstream > 0 or missing_downstream > 0:
             logger.warning(
-                "Flanking gene taxonomy incomplete for %s: "
-                "%d/%d upstream missing, %d/%d downstream missing",
+                "Flanking gene taxonomy incomplete for %s: %d/%d upstream missing, %d/%d downstream missing",
                 seed_mapping.seed_id,
                 missing_upstream,
                 len(seed_mapping.upstream_porf_ids),
@@ -1521,8 +1523,7 @@ def get_flanking_taxonomy(
         # Log if any flanking genes were filtered (now inside refined boundary)
         if filtered_upstream > 0 or filtered_downstream > 0:
             logger.debug(
-                "Flanking genes filtered for %s (now inside refined boundary): "
-                "%d upstream, %d downstream",
+                "Flanking genes filtered for %s (now inside refined boundary): %d upstream, %d downstream",
                 seed_mapping.seed_id,
                 filtered_upstream,
                 filtered_downstream,
@@ -1537,8 +1538,7 @@ def compute_control_stats(
     control_taxonomy: list[GeneTaxonomy],
     host_prefix: str,
 ) -> ControlStats:
-    """
-    Compute statistics from control region for comparison.
+    """Compute statistics from control region for comparison.
 
     Uses consistent prefix format (with __).
     Handles no-hit entries explicitly.
@@ -1565,16 +1565,10 @@ def compute_control_stats(
     n_no_hits = sum(1 for g in control_taxonomy if not g.has_hit)
     n_host = sum(1 for g in control_taxonomy if g.top1_prefix == host_prefix)
 
-    host_pidents = [
-        g.top1_pident for g in control_taxonomy if g.top1_prefix == host_prefix
-    ]
+    host_pidents = [g.top1_pident for g in control_taxonomy if g.top1_prefix == host_prefix]
 
     # Count organisms
-    organisms = [
-        extract_organism(g.top1_target)
-        for g in control_taxonomy
-        if g.top1_prefix == host_prefix
-    ]
+    organisms = [extract_organism(g.top1_target) for g in control_taxonomy if g.top1_prefix == host_prefix]
     org_counts = Counter(organisms)
     dominant = org_counts.most_common(1)[0][0] if org_counts else "unknown"
 
@@ -1591,13 +1585,12 @@ def compute_control_stats(
 
 def build_taxonomy_consensus(
     control_taxonomy: list[GeneTaxonomy],
-    taxonomy_lookup: Optional[dict[str, str]] = None,
+    taxonomy_lookup: dict[str, str] | None = None,
     host_prefix: str = "EUK__",
     min_token_length: int = 3,
     weight_mode: str = "rank",
 ) -> str:
-    """
-    Build taxonomic consensus lineage from control genes.
+    """Build taxonomic consensus lineage from control genes.
 
     Uses taxonomy lookup table to get full taxonomy strings for control genes,
     splits at "|" to extract taxonomy levels, weights hits by rank/bitscore,
@@ -1657,8 +1650,7 @@ def write_taxonomy_map(
     taxonomy_map: dict[str, GeneTaxonomy],
     output_path: Path,
 ) -> None:
-    """
-    Write taxonomy map to TSV file.
+    """Write taxonomy map to TSV file.
 
     Args:
         taxonomy_map: Dict mapping pORF ID to GeneTaxonomy
@@ -1697,8 +1689,7 @@ def write_control_stats(
     control_stats: ControlStats,
     output_path: Path,
 ) -> None:
-    """
-    Write control statistics to JSON file.
+    """Write control statistics to JSON file.
 
     Args:
         control_stats: ControlStats object

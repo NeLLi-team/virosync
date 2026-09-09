@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,10 +129,7 @@ def _write_tmvec2_bundle(root: Path, monkeypatch) -> dict:
                     "doi": "10.5281/zenodo.13993145",
                     "license": "CC BY 4.0",
                     "license_url": "https://creativecommons.org/licenses/by/4.0/",
-                    "changes": (
-                        "Converted BFVD protein sequences to "
-                        "Lobster-24M/TMVec2 embeddings."
-                    ),
+                    "changes": ("Converted BFVD protein sequences to Lobster-24M/TMVec2 embeddings."),
                 },
                 "embeddings": {
                     "path": "bfvd/bfvd_embeddings.npy",
@@ -394,9 +391,7 @@ def test_tmvec_zero_embedding_disables_hits_when_gpu_not_required(
 
     searcher._load_db = _unexpected_load_db
 
-    assert searcher.search_batch([("p1", "M" * 50)], databases=["bfvd"]) == {
-        "p1": {"bfvd": None}
-    }
+    assert searcher.search_batch([("p1", "M" * 50)], databases=["bfvd"]) == {"p1": {"bfvd": None}}
 
 
 def test_tmvec2_loads_local_checkpoint_strictly(
@@ -407,12 +402,7 @@ def test_tmvec2_loads_local_checkpoint_strictly(
     model_dir.mkdir(parents=True)
     config = tmvec_predictor.TMvecConfig()
     (model_dir / "params.json").write_text(
-        json.dumps(
-            {
-                name: getattr(config, name)
-                for name in config.__dataclass_fields__
-            }
-        ),
+        json.dumps({name: getattr(config, name) for name in config.__dataclass_fields__}),
         encoding="utf-8",
     )
     torch.save(
@@ -491,9 +481,7 @@ def test_tmvec2_uses_lobster_attention_mask_for_padding() -> None:
         "max_length": 512,
         "return_tensors": "pt",
     }
-    assert predictor._tmvec_model.padding_mask.tolist() == [
-        [False, False, False, True]
-    ]
+    assert predictor._tmvec_model.padding_mask.tolist() == [[False, False, False, True]]
 
 
 def test_tmvec_database_passes_local_model_root(monkeypatch, tmp_path: Path) -> None:
@@ -582,7 +570,6 @@ def test_tmvec_database_loads_hash_bound_tsv_metadata(
 def test_tmvec2_rejects_unbuilt_database_keys(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported TMVec2 database"):
         TMVecDatabaseSearch(database_root=tmp_path, databases=["cath"])
-
 
 
 def test_phase3_honors_explicit_cpu_when_cuda_is_available(monkeypatch) -> None:
@@ -781,9 +768,7 @@ def test_manifestless_core_resource_checks_use_legacy_combined_hmm(
     assert ViroSyncDatabaseManager.default_paths(root)["hmm_db"] == root / "models" / "combined.hmm"
     assert ViroSyncDatabaseManager.default_paths(root)["marker_faa_db"] == root / "marker" / "marker.faa"
     assert ViroSyncDatabaseManager._check_missing_files(root) == []
-    assert ViroSyncDatabaseManager.required_files_for_path(root) == list(
-        LEGACY_RUNTIME_RESOURCE_FILES
-    )
+    assert ViroSyncDatabaseManager.required_files_for_path(root) == list(LEGACY_RUNTIME_RESOURCE_FILES)
 
 
 def test_core_resource_checks_reject_combined_ga_only_bundle(tmp_path: Path) -> None:
@@ -791,12 +776,8 @@ def test_core_resource_checks_reject_combined_ga_only_bundle(tmp_path: Path) -> 
     _write_core_resource_files(root, "combined_ga.hmm")
 
     assert ViroSyncDatabaseManager.default_paths(root)["hmm_db"] == root / "models" / "combined.hmm"
-    assert ViroSyncDatabaseManager.required_files_for_path(root) == list(
-        LEGACY_RUNTIME_RESOURCE_FILES
-    )
-    assert ViroSyncDatabaseManager._check_missing_files(root) == [
-        "models/combined.hmm"
-    ]
+    assert ViroSyncDatabaseManager.required_files_for_path(root) == list(LEGACY_RUNTIME_RESOURCE_FILES)
+    assert ViroSyncDatabaseManager._check_missing_files(root) == ["models/combined.hmm"]
 
 
 def test_core_resource_checks_report_missing_hmm_group(tmp_path: Path) -> None:

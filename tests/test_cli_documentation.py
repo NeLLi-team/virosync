@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 import click
 import pytest
 
 from virosync.cli.main import cli
 from virosync.orchestration.cli import orchestrate
-
 
 REFERENCE_PATH = Path(__file__).parents[1] / "docs" / "reference" / "cli.md"
 

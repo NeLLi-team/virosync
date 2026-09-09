@@ -1,5 +1,4 @@
-"""
-Atomic file write utilities to prevent corruption on crash.
+"""Atomic file write utilities to prevent corruption on crash.
 
 Usage:
     from virosync.utils.atomic_write import atomic_write
@@ -15,14 +14,12 @@ Usage:
 import logging
 import tempfile
 from pathlib import Path
-from typing import Union
 
 logger = logging.getLogger(__name__)
 
 
-def atomic_write(path: Union[Path, str], content: str, encoding: str = "utf-8") -> None:
-    """
-    Write file atomically to prevent corruption on crash.
+def atomic_write(path: Path | str, content: str, encoding: str = "utf-8") -> None:
+    """Write file atomically to prevent corruption on crash.
 
     Writes to a temporary file in the same directory, then atomically
     renames it to the target path. This ensures the file is either
@@ -62,8 +59,7 @@ def atomic_write(path: Union[Path, str], content: str, encoding: str = "utf-8") 
 
 
 class atomic_write_context:
-    """
-    Context manager for atomic file writes.
+    """Context manager for atomic file writes.
 
     Usage:
         with atomic_write_context(output_path) as f:
@@ -71,7 +67,7 @@ class atomic_write_context:
             f.write("line 2\n")
     """
 
-    def __init__(self, path: Union[Path, str], mode: str = "w", encoding: str = "utf-8"):
+    def __init__(self, path: Path | str, mode: str = "w", encoding: str = "utf-8"):
         self.path = Path(path)
         self.mode = mode
         self.encoding = encoding

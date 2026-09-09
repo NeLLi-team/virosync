@@ -74,9 +74,7 @@ def test_mixed_no_mcp_atpase_only_is_gated_out() -> None:
 
 
 def test_mixed_no_mcp_single_hallmark_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(
-        _result(has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"])
-    )
+    decision = evaluate_v2_quality_gate(_result(has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"]))
     assert not decision.kept
     assert decision.reason == "mixed_high_medium_gate"
 
@@ -104,9 +102,7 @@ def test_mixed_low_no_mcp_one_non_atpase_is_gated_out() -> None:
     # applies the same rule as the tiers above it. See
     # tests/test_v2_gate_monotonicity.py for the general property.
     decision = evaluate_v2_quality_gate(
-        _result(
-            confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"]
-        )
+        _result(confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"])
     )
     assert not decision.kept
     assert decision.reason == "mixed_low_gate"
@@ -114,9 +110,7 @@ def test_mixed_low_no_mcp_one_non_atpase_is_gated_out() -> None:
 
 def test_mixed_low_atpase_only_is_gated_out() -> None:
     decision = evaluate_v2_quality_gate(
-        _result(
-            confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["GVOGm0760"]
-        )
+        _result(confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["GVOGm0760"])
     )
     assert not decision.kept
     assert decision.reason == "mixed_low_gate"
@@ -159,9 +153,7 @@ def test_mixed_low_bridge_does_not_override_concrete_classification() -> None:
 def test_mixed_resolved_from_classification_field_only() -> None:
     # ds27/ds29 output shape: region_classification empty, classification=MIXED.
     assert (
-        _resolve_eve_class(
-            SimpleNamespace(region_classification="", classification="MIXED", likely_family="")
-        )
+        _resolve_eve_class(SimpleNamespace(region_classification="", classification="MIXED", likely_family=""))
         == "MIXED"
     )
 
@@ -169,9 +161,7 @@ def test_mixed_resolved_from_classification_field_only() -> None:
 def test_concrete_family_wins_over_mixed_region_label() -> None:
     # A concrete fallback family must take precedence over a MIXED region label.
     assert (
-        _resolve_eve_class(
-            SimpleNamespace(region_classification="MIXED", classification="PPV", likely_family="")
-        )
+        _resolve_eve_class(SimpleNamespace(region_classification="MIXED", classification="PPV", likely_family=""))
         == "PPV"
     )
 
@@ -179,9 +169,7 @@ def test_concrete_family_wins_over_mixed_region_label() -> None:
 def test_concrete_likely_family_wins_over_mixed_classification() -> None:
     # classification="MIXED" must NOT shadow a concrete likely_family.
     assert (
-        _resolve_eve_class(
-            SimpleNamespace(region_classification="", classification="MIXED", likely_family="PPV")
-        )
+        _resolve_eve_class(SimpleNamespace(region_classification="", classification="MIXED", likely_family="PPV"))
         == "PPV"
     )
 
@@ -189,9 +177,7 @@ def test_concrete_likely_family_wins_over_mixed_classification() -> None:
 def test_concrete_likely_family_wins_over_unknown_classification() -> None:
     # classification="UNKNOWN" must NOT shadow a concrete likely_family.
     assert (
-        _resolve_eve_class(
-            SimpleNamespace(region_classification="", classification="UNKNOWN", likely_family="PPV")
-        )
+        _resolve_eve_class(SimpleNamespace(region_classification="", classification="UNKNOWN", likely_family="PPV"))
         == "PPV"
     )
 

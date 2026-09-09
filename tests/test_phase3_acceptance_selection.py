@@ -103,10 +103,7 @@ def test_a6_distinguishes_normal_low_promotion_from_bypass_retention() -> None:
 
     assert selection.canonical_results == (promoted, bypassed)
     assert selection.promoted_low_results == (promoted,)
-    assert [
-        candidate.normal_gate_decision.kept
-        for candidate in selection.candidates
-    ] == [True, False]
+    assert [candidate.normal_gate_decision.kept for candidate in selection.candidates] == [True, False]
     assert selection.intervention_counts == InterventionCounts(
         opportunities=2,
         interventions=1,
@@ -166,9 +163,7 @@ def _rescue_candidate(
     )
     if rescued:
         result.seed_sources = ["frameshift_rescue", "hhg", "marker_validation"]
-        result.frameshift_rescue_marker_ids = [
-            f"{eve_id}_VSR0123456789abcdef"
-        ]
+        result.frameshift_rescue_marker_ids = [f"{eve_id}_VSR0123456789abcdef"]
         result.hallmark_count = 2
         result.hallmark_genes = ["VS000087", "POLB"]
     return result
@@ -307,10 +302,7 @@ def test_rescue_loser_does_not_bridge_nonoverlapping_rescue_alternative() -> Non
     )
 
     assert selection.canonical_results == (ordinary, rescue_alternative)
-    assert (
-        rescue_loser.canonical_selection_outcome
-        == "overlap_suppressed_by:ordinary"
-    )
+    assert rescue_loser.canonical_selection_outcome == "overlap_suppressed_by:ordinary"
 
 
 def test_rescue_candidate_that_lost_its_marker_is_detailed_only() -> None:
@@ -410,6 +402,4 @@ def test_rescued_protein_id_reaches_verification_result() -> None:
         ],
     )
 
-    assert result.frameshift_rescue_marker_ids == [
-        "scaffold_VSR0123456789abcdef"
-    ]
+    assert result.frameshift_rescue_marker_ids == ["scaffold_VSR0123456789abcdef"]

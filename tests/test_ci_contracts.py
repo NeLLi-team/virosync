@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import tomllib
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = (
@@ -22,7 +21,9 @@ def test_ruff_version_and_local_ci_command_are_locked() -> None:
     with (ROOT / "pixi.toml").open("rb") as handle:
         manifest = tomllib.load(handle)
     assert manifest["feature"]["dev"]["dependencies"]["ruff"] == "==0.15.21"
-    assert manifest["tasks"]["lint"] == "ruff check src tests scripts"
+    assert manifest["tasks"]["lint"] == (
+        "ruff check src tests scripts && ruff format --check src tests scripts src/virosync/report/eve_analysis.py"
+    )
     lock = _text(ROOT / "pixi.lock")
     assert lock.count("/ruff-0.15.21-") >= 2
     tests_workflow = _text(ROOT / ".github/workflows/tests.yml")
@@ -32,14 +33,8 @@ def test_ruff_version_and_local_ci_command_are_locked() -> None:
 
 def test_ci_pixi_binary_url_and_checksum_are_exact() -> None:
     installer = _text(ROOT / "scripts/ci/install_pixi.sh")
-    assert (
-        "https://github.com/prefix-dev/pixi/releases/download/v0.72.0/"
-        "pixi-x86_64-unknown-linux-musl"
-    ) in installer
-    assert (
-        "6304fe3178f3036e2c95151bbb318592fae5c31a77f5a6f4319bb023a479d4b9"
-        in installer
-    )
+    assert ("https://github.com/prefix-dev/pixi/releases/download/v0.72.0/pixi-x86_64-unknown-linux-musl") in installer
+    assert "6304fe3178f3036e2c95151bbb318592fae5c31a77f5a6f4319bb023a479d4b9" in installer
     assert "sha256sum" in installer
 
 
@@ -49,18 +44,14 @@ def test_workflow_permissions_actions_and_installs_are_pinned() -> None:
     for path in WORKFLOWS:
         workflow = _text(path)
         assert re.search(r"(?m)^permissions:\n\s+contents: read$", workflow)
-        references = re.findall(
-            r"(?m)^\s*-?\s*uses:\s*[^@\s]+@([^\s#]+)", workflow
-        )
+        references = re.findall(r"(?m)^\s*-?\s*uses:\s*[^@\s]+@([^\s#]+)", workflow)
         assert references
         assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in references)
         checkout_count += workflow.count("uses: actions/checkout@")
         persist_count += workflow.count("persist-credentials: false")
         assert "pixi.sh/install.sh" not in workflow
         assert "scripts/ci/install_pixi.sh" in workflow
-        for command in re.findall(
-            r"(?m)^\s*run:\s*(pixi install[^\n]*)", workflow
-        ):
+        for command in re.findall(r"(?m)^\s*run:\s*(pixi install[^\n]*)", workflow):
             assert "--locked" in command
         if "runs-on: ubuntu" in workflow:
             assert "runs-on: ubuntu-24.04" in workflow
@@ -109,11 +100,7 @@ def test_production_guard_checks_public_resource_size() -> None:
 
 def test_frameshift_example_task_is_explicit_opt_in() -> None:
     pixi = _text(ROOT / "pixi.toml")
-    task = next(
-        line
-        for line in pixi.splitlines()
-        if line.startswith("example-frameshift = ")
-    )
+    task = next(line for line in pixi.splitlines() if line.startswith("example-frameshift = "))
     assert "example/frameshift/trichomonas-g3.fna" in task
     assert "results/example-frameshift/" in task
     assert "--frameshift-screening" in task

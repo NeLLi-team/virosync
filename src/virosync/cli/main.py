@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-ViroSync CLI - Main Entry Point.
-
-A next-generation framework for detecting Giant Endogenous Viral Elements
-(EVEs) in eukaryotic genomes.
+"""Run ViroSync commands with deferred imports for optional runtimes.
 
 Usage:
     virosync run -i genome.fasta -o results/ --config config/orchestration.yaml
@@ -12,14 +8,14 @@ Usage:
 
 import logging
 import os
-from pathlib import Path
 import sys
-from typing import Optional
+from pathlib import Path
+from typing import Any
 
 import click
+
 from virosync import __version__
 
-# Configure root logger
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -33,12 +29,10 @@ _GLOBAL_CLI_FLAGS = {"-v", "--verbose", "-q", "--quiet"}
 def _configure_logging(verbose: bool) -> None:
     """Show ViroSync diagnostics without third-party debug payloads."""
     logging.getLogger().setLevel(logging.ERROR)
-    logging.getLogger("virosync").setLevel(
-        logging.DEBUG if verbose else logging.ERROR
-    )
+    logging.getLogger("virosync").setLevel(logging.DEBUG if verbose else logging.ERROR)
 
 
-def print_banner(database_version: str = "not resolved"):
+def print_banner(database_version: str = "not resolved") -> None:
     """Print ViroSync banner."""
     banner = f"""
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -66,7 +60,7 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-essential output")
 @click.version_option(version=__version__, prog_name="virosync")
 @click.pass_context
-def cli(ctx, verbose: bool, quiet: bool):
+def cli(ctx: click.Context, verbose: bool, quiet: bool) -> None:
     """ViroSync - Detect Giant Endogenous Viral Elements in genomes."""
     ctx.ensure_object(dict)
 
@@ -94,10 +88,10 @@ def cli(ctx, verbose: bool, quiet: bool):
     show_default=True,
     help="Configuration used to resolve the database root",
 )
-def info(config_path: Path):
+def info(config_path: Path) -> None:
     """Show ViroSync configuration and system info."""
-    import torch
     import psutil
+    import torch
     import yaml
 
     from virosync.utils.database_manager import ViroSyncDatabaseManager
@@ -105,16 +99,12 @@ def info(config_path: Path):
     configured_root = None
     if config_path.is_file():
         try:
-            payload = yaml.safe_load(config_path.read_text()) or {}
-            configured_root = (payload.get("orchestration") or {}).get(
-                "database_root"
-            )
+            payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            configured_root = (payload.get("orchestration") or {}).get("database_root")
         except (OSError, TypeError, yaml.YAMLError):
             configured_root = None
     database_root_value = (
-        os.environ.get("VIROSYNC_DB_ROOT")
-        or configured_root
-        or ViroSyncDatabaseManager.default_database_path()
+        os.environ.get("VIROSYNC_DB_ROOT") or configured_root or ViroSyncDatabaseManager.default_database_path()
     )
     database_root = Path(database_root_value)
     if configured_root and not database_root.is_absolute():
@@ -137,43 +127,35 @@ def info(config_path: Path):
     click.echo(f"  RAM: {psutil.virtual_memory().total / (1024**3):.1f} GB")
 
 
-# ---------------------------------------------------------------------------
-# Lazy-loading wrappers: defer orchestration imports until actually needed
-# ---------------------------------------------------------------------------
-
 class _LazyRunCommand(click.Command):
     """Lazy proxy that exposes ``orchestrate run`` as top-level ``virosync run``."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             name="run",
             help="Run ViroSync on one or more genomes.",
             context_settings=CONTEXT_SETTINGS,
         )
-        self._real = None
+        self._real: click.Command | None = None
 
-    def _load(self):
+    def _load(self) -> click.Command:
         if self._real is None:
             from virosync.orchestration.cli import orchestrate
+
             self._real = orchestrate.commands["run"]
+        return self._real
 
-    # -- Click overrides that delegate to the real command --
+    def get_params(self, ctx: click.Context) -> list[click.Parameter]:
+        return self._load().get_params(ctx)
 
-    def get_params(self, ctx):
-        self._load()
-        return self._real.get_params(ctx)
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        return self._load().parse_args(ctx, args)
 
-    def parse_args(self, ctx, args):
-        self._load()
-        return self._real.parse_args(ctx, args)
+    def invoke(self, ctx: click.Context) -> object:
+        return self._load().invoke(ctx)
 
-    def invoke(self, ctx):
-        self._load()
-        return self._real.invoke(ctx)
-
-    def format_help(self, ctx, formatter):
-        self._load()
-        return self._real.format_help(ctx, formatter)
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        self._load().format_help(ctx, formatter)
 
 
 cli.add_command(_LazyRunCommand())
@@ -190,40 +172,37 @@ class _LazyOrchestrateGroup(click.Group):
         "setup": "Install ViroSync resources and optional databases.",
     }
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._real = None
+        self._real: click.Group | None = None
 
-    def _load(self):
+    def _load(self) -> click.Group:
         if self._real is None:
             from virosync.orchestration.cli import orchestrate
-            self._real = orchestrate
 
-    def parse_args(self, ctx, args):
+            self._real = orchestrate
+        return self._real
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         if not args:
             click.echo(ctx.get_help())
             ctx.exit(0)
         return super().parse_args(ctx, args)
 
-    def list_commands(self, ctx):
+    def list_commands(self, ctx: click.Context) -> list[str]:
         if self._real is None:
             return sorted(self._STATIC_COMMANDS)
         return self._real.list_commands(ctx)
 
-    def get_command(self, ctx, cmd_name):
-        self._load()
-        return self._real.get_command(ctx, cmd_name)
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        return self._load().get_command(ctx, cmd_name)
 
-    def format_commands(self, ctx, formatter):
-        if self._real is None:
-            commands = [
-                (name, desc) for name, desc in sorted(self._STATIC_COMMANDS.items())
-            ]
-            if commands:
-                with formatter.section("Commands"):
-                    formatter.write_dl(commands)
-        else:
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        if self._real is not None:
             super().format_commands(ctx, formatter)
+            return
+        with formatter.section("Commands"):
+            formatter.write_dl(sorted(self._STATIC_COMMANDS.items()))
 
 
 cli.add_command(
@@ -235,11 +214,7 @@ cli.add_command(
 )
 
 
-# ---------------------------------------------------------------------------
-# Bare ``virosync -i … -o …`` shortcut  →  ``virosync run -i … -o …``
-# ---------------------------------------------------------------------------
-
-def _first_non_global_token(argv: list[str]) -> Optional[str]:
+def _first_non_global_token(argv: list[str]) -> str | None:
     """Return first argv token after top-level global flags."""
     idx = 0
     while idx < len(argv) and argv[idx] in _GLOBAL_CLI_FLAGS:
@@ -253,14 +228,8 @@ def _is_bare_run(argv: list[str]) -> bool:
     if first_token is None or not first_token.startswith("-"):
         return False
 
-    has_input = any(
-        token in {"-i", "--input"} or token.startswith("--input=")
-        for token in argv
-    )
-    has_output = any(
-        token in {"-o", "--output"} or token.startswith("--output=")
-        for token in argv
-    )
+    has_input = any(token in {"-i", "--input"} or token.startswith("--input=") for token in argv)
+    has_output = any(token in {"-o", "--output"} or token.startswith("--output=") for token in argv)
     return has_input and has_output
 
 
@@ -272,8 +241,8 @@ def _inject_run(argv: list[str]) -> list[str]:
     return [*argv[:idx], "run", *argv[idx:]]
 
 
-def main():
-    """Main entry point."""
+def main() -> int | None:
+    """Forward bare input/output options to ``run`` and invoke the CLI."""
     argv = sys.argv[1:]
     if _is_bare_run(argv):
         sys.argv = [sys.argv[0], *_inject_run(argv)]
@@ -281,4 +250,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

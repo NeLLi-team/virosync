@@ -29,15 +29,9 @@ from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 # the same effective class.
 _CLASS_LABELS = {
     "PPV": dict(region_classification="PPV", classification="PPV", likely_family="PPV"),
-    "MIXED": dict(
-        region_classification="MIXED", classification="MIXED", likely_family="UNKNOWN"
-    ),
-    "NCLDV": dict(
-        region_classification="NCLDV", classification="NCLDV", likely_family="NCLDV"
-    ),
-    "MIRUS": dict(
-        region_classification="MIRUS", classification="MIRUS", likely_family="MIRUS"
-    ),
+    "MIXED": dict(region_classification="MIXED", classification="MIXED", likely_family="UNKNOWN"),
+    "NCLDV": dict(region_classification="NCLDV", classification="NCLDV", likely_family="NCLDV"),
+    "MIRUS": dict(region_classification="MIRUS", classification="MIRUS", likely_family="MIRUS"),
 }
 
 # (end, hallmark_count, hallmark_genes, has_mcp)
@@ -96,10 +90,7 @@ def test_v2_gate_is_monotone_in_confidence_tier() -> None:
             }
             if not decisions["LOW"].kept:
                 continue
-            context = (
-                f"{eve_class} len={end} hallmark={hallmark_count} "
-                f"genes={hallmark_genes} mcp={has_mcp}"
-            )
+            context = f"{eve_class} len={end} hallmark={hallmark_count} genes={hallmark_genes} mcp={has_mcp}"
             for tier in ("MEDIUM", "HIGH"):
                 assert decisions[tier].kept, (
                     f"{context}: accepted at LOW ({decisions['LOW'].reason}) but "
@@ -116,19 +107,14 @@ def test_mcp_substring_does_not_earn_the_priority_marker_floor() -> None:
     """
     decoy = _region()
     decoy.hallmark_genes = ["ncmcp_pseudoprotein"]
-    decoy.final_confidence = calculate_eve_confidence(
-        decoy, crf_confidence=0.0, priority_markers=["mcp"]
-    )
+    decoy.final_confidence = calculate_eve_confidence(decoy, crf_confidence=0.0, priority_markers=["mcp"])
     assert decoy.final_confidence < 0.2, (
-        f"a name merely containing 'mcp' earned the priority floor "
-        f"({decoy.final_confidence:.4f})"
+        f"a name merely containing 'mcp' earned the priority floor ({decoy.final_confidence:.4f})"
     )
     assert assign_confidence_tier(decoy) == "LOW"
 
     genuine = _region()
     genuine.hallmark_genes = ["GVOGm0003"]
-    genuine.final_confidence = calculate_eve_confidence(
-        genuine, crf_confidence=0.0, priority_markers=["mcp"]
-    )
+    genuine.final_confidence = calculate_eve_confidence(genuine, crf_confidence=0.0, priority_markers=["mcp"])
     assert genuine.final_confidence >= 0.55
     assert assign_confidence_tier(genuine) != "LOW"

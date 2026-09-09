@@ -1,11 +1,16 @@
 """Phase 1 subflow: HMM scan -> marker validation -> region assembly."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from virosync.ablation import AblationID, InterventionCounts
-from virosync.utils.atomic_write import atomic_write_context
+from virosync.config import PipelineConfig
+from virosync.orchestration._flows.utils import (
+    build_marker_faa,
+    ensure_combined_faa,
+    log_region_statistics,
+)
 from virosync.orchestration.runtime import call_task
 from virosync.orchestration.tasks import (
     frameshift_screening_task,
@@ -18,11 +23,7 @@ from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
-from virosync.orchestration._flows.utils import (
-    build_marker_faa,
-    ensure_combined_faa,
-    log_region_statistics,
-)
+from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
     _empty_prediction_summary,
@@ -36,12 +37,31 @@ from .phase1_state import (
 from .reports import _generate_required_reports
 
 
+@dataclass(frozen=True, slots=True)
+class Phase1Result:
+    """Inputs produced for boundary refinement."""
+
+    merged_seeds: list
+    validated_markers: list
+    host_signature_model: object
+    host_signatures: set[str]
+    host_deviation_summary: dict | None
+    elapsed: float
+    ablation_counts: InterventionCounts = InterventionCounts()
+
+
+@dataclass(frozen=True, slots=True)
+class Phase1Terminal:
+    """A complete public flow result produced before Phase 2."""
+
+    result: dict[str, object]
+
+
 def _seed_annotation_markers(
     validated_markers: list,
     *additional_marker_groups: list,
 ) -> list:
     """Preserve the historical marker surface used to annotate existing seeds."""
-
     markers = list(validated_markers)
     for group in additional_marker_groups:
         for marker in group:
@@ -52,78 +72,91 @@ def _seed_annotation_markers(
 
 def _region_coordinate_surface(regions: list) -> set[tuple[str, int, int]]:
     """Return the normalized seed-coordinate surface for a region collection."""
-
     return {(region.scaffold, region.start, region.end) for region in regions}
 
 
+def _candidate_regions_to_seeds(
+    candidate_regions: list,
+    validated_markers: list,
+    seedable_deviation_markers: list,
+    extension_markers: list,
+) -> list:
+    """Convert assembled regions into the stable seed surface for Phase 2."""
+    from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
+    from virosync.pipeline.phase1.seed_merger import MergedSeed
+
+    merged_seeds = []
+    anchor_markers = _seed_annotation_markers(
+        validated_markers,
+        seedable_deviation_markers,
+        extension_markers,
+    )
+    for region in candidate_regions:
+        anchors = []
+        region_anchor_markers = region.markers if getattr(region, "predicted_family", "") == "CRESS" else anchor_markers
+        for marker in region_anchor_markers:
+            if marker.scaffold != region.scaffold:
+                continue
+            if marker.start >= region.end or marker.end <= region.start:
+                continue
+            porf_id = getattr(marker, "porf_id", None) or getattr(marker, "query_porf", "")
+            anchors.append(
+                Anchor(
+                    porf_id=porf_id,
+                    scaffold=marker.scaffold,
+                    start=marker.start,
+                    end=marker.end,
+                    strand=getattr(marker, "strand", "+"),
+                    hallmark_gene=marker.hmm_target,
+                    score=marker.hmm_score,
+                    evalue=getattr(marker, "hmm_evalue", 0.0),
+                )
+            )
+        has_rescued_marker = any(is_rescued_protein_id(marker.query_porf) for marker in region.markers)
+        has_ordinary_marker = any(not is_rescued_protein_id(marker.query_porf) for marker in region.markers)
+        sources = ["hhg", "marker_validation"] if has_ordinary_marker else []
+        if has_rescued_marker:
+            sources.append("frameshift_rescue")
+        merged_seeds.append(
+            MergedSeed(
+                scaffold=region.scaffold,
+                start=region.start,
+                end=region.end,
+                sources=sources,
+                confidence="high" if any(is_mcp_gene(anchor.hallmark_gene) for anchor in anchors) else "medium",
+                hhg_score=len(anchors) * 10.0,
+                novelty_score=0.0,
+                compositional_score=0.0,
+                mean_kfd=0.0,
+                max_kfd=0.0,
+                mean_composite=0.0,
+                max_composite=0.0,
+                gc_deviation=0.0,
+                n_windows=0,
+                cluster_ids=[],
+                anchors=anchors,
+                hhg_anchors=anchors,
+                predicted_family=getattr(region, "predicted_family", ""),
+            )
+        )
+
+    for index, seed in enumerate(merged_seeds):
+        seed.seed_id = f"seed_{index}_{seed.scaffold}_{seed.start}"
+    return merged_seeds
+
+
 def _run_phase1_subflow(
-    # Core inputs (from Phase 0)
     masked_path: Path,
     proteome_path: Path,
-    repeat_regions: list,
-    # Core identifiers
     output_dir: Path,
     genome_id: str,
-    # HMM & Database parameters
-    hmm_database: Optional[Path],
-    hmm_allowlist: Optional[Path],
-    hmm_chunk_size: Optional[int],
-    frameshift_screening_enabled: bool,
-    marker_faa_db: Optional[Path],
-    marker_faa_dir: Optional[Path],
-    marker_db: Optional[Path],
-    faa_dir: Optional[Path],
-    gene_taxonomy_faa_db: Optional[Path],
-    # Taxonomy parameters
-    taxonomy_labels_file: Optional[Path],
-    host_prefixes: list[str],
-    host_label: str,
-    taxonomy_weight_mode: str,
-    # Host taxonomy deviation parameters
-    host_taxonomy_deviation_enabled: bool,
-    host_taxonomy_deviation_allow_seeds: bool,
-    host_taxonomy_deviation_min_token_len: int,
-    host_taxonomy_deviation_min_tokens: int,
-    host_taxonomy_deviation_overlap_threshold: float,
-    host_taxonomy_deviation_max_pident: float,
-    host_taxonomy_deviation_max_hits: int,
-    host_taxonomy_deviation_window_bp: int,
-    host_taxonomy_deviation_window_count: int,
-    host_taxonomy_deviation_window_seed: int,
-    host_taxonomy_deviation_window_min_markers: int,
-    host_taxonomy_deviation_seed_window_bp: int,
-    host_taxonomy_deviation_seed_min_markers: int,
-    marker_validation_top_k: int,
-    novel_marker_min_score: float,
-    novel_marker_min_coverage: float,
-    novel_marker_require_cluster: bool,
-    # Region assembly parameters
-    initial_window_bp: int,
-    initial_window_genes: int,
-    min_markers_initial: int,
-    extension_kb: int,
-    merge_distance: int,
-    # Host signature parameter shared with Phase 2.
-    boundary_host_signature_min_token_len: int,
-    # Workflow configuration
-    rebuild_db: bool,
-    assembly_mode: str,
-    extended_output: bool,
-    resume: bool,
-    # Threading
-    threads: int,
-    # Search backend
-    search_backend: str,
-    # Logger
+    config: PipelineConfig,
     logger,
-    # Resume config fingerprint (written to early-exit completion manifests)
-    config_fingerprint: Optional[str] = None,
-    # Set only after schema-v3 marker validation by the orchestrator.
+    config_fingerprint: str | None = None,
     resume_authorized: bool = False,
-    ablation_id: AblationID = AblationID.A0,
-) -> dict:
-    """
-    Phase 1: Seeding (HMM scan -> marker validation -> region assembly).
+    threads: int | None = None,
+) -> Phase1Result | Phase1Terminal:
+    """Phase 1: Seeding (HMM scan -> marker validation -> region assembly).
 
     This phase identifies candidate viral regions through:
     1. HMM search for viral markers
@@ -135,29 +168,62 @@ def _run_phase1_subflow(
     Args:
         masked_path: Path to masked genome FASTA (from Phase 0)
         proteome_path: Path to protein FASTA (from Phase 0)
-        repeat_regions: List of RepeatRegion objects (from Phase 0)
         output_dir: Base output directory
         genome_id: Genome identifier for logging
-        hmm_database: Path to HMM database
-        hmm_allowlist: Path to HMM allowlist file
-        ... (see function signature for all parameters)
+        config: Resolved pipeline configuration.
         logger: Logger instance
 
     Returns:
-        dict with keys:
-            - merged_seeds: List of MergedSeed objects
-            - validated_markers: List of validated marker hits
-            - host_signature_model: HostSignatureModel for host taxonomy
-            - host_signatures: Set of host taxonomy signatures
-            - background: Background nucleotide composition model
-            - gene_data: Gene prediction data
-            - host_deviation_summary: Summary of host taxonomy deviation analysis
-            - elapsed: Phase 1 elapsed time in seconds
-
-        Or error dict with keys:
-            - genome_id, success=False, error, predictions=0, accepted=0, output_files
+        Inputs for Phase 2, or a terminal public flow result.
     """
     import time
+
+    databases = config.databases
+    compute = config.compute
+    host = config.host
+    phase1 = config.phase1
+    phase2 = config.phase2
+    phase3 = config.phase3
+    resume = config.execution.resume
+    ablation_id = config.ablation.id
+    threads = threads if threads is not None else compute.effective_threads()
+    assembly_mode = phase1.assembly_mode.value
+    search_backend = compute.search_backend.value
+    hmm_database = databases.hmm_database
+    hmm_allowlist = databases.hmm_allowlist
+    marker_faa_db = databases.marker_faa_db
+    marker_faa_dir = databases.marker_faa_dir
+    marker_db = databases.marker_db
+    faa_dir = databases.faa_dir
+    taxonomy_labels_file = databases.taxonomy_labels_file
+    host_prefixes = host.prefixes
+    taxonomy_weight_mode = phase2.taxonomy_weight_mode
+    boundary_host_signature_min_token_len = phase2.host_signature_min_token_len
+    extended_output = phase3.extended_output
+    hmm_chunk_size = phase1.hmm_chunk_size
+    frameshift_screening_enabled = phase1.frameshift_screening_enabled
+    initial_window_bp = phase1.initial_window_bp
+    initial_window_genes = phase1.initial_window_genes
+    min_markers_initial = phase1.min_markers_initial
+    extension_kb = phase1.extension_kb
+    merge_distance = phase1.merge_distance
+    host_taxonomy_deviation_enabled = phase1.host_taxonomy_deviation_enabled
+    host_taxonomy_deviation_allow_seeds = phase1.host_taxonomy_deviation_allow_seeds
+    host_taxonomy_deviation_min_token_len = phase1.host_taxonomy_deviation_min_token_len
+    host_taxonomy_deviation_min_tokens = phase1.host_taxonomy_deviation_min_tokens
+    host_taxonomy_deviation_overlap_threshold = phase1.host_taxonomy_deviation_overlap_threshold
+    host_taxonomy_deviation_max_pident = phase1.host_taxonomy_deviation_max_pident
+    host_taxonomy_deviation_max_hits = phase1.host_taxonomy_deviation_max_hits
+    host_taxonomy_deviation_window_bp = phase1.host_taxonomy_deviation_window_bp
+    host_taxonomy_deviation_window_count = phase1.host_taxonomy_deviation_window_count
+    host_taxonomy_deviation_window_seed = phase1.host_taxonomy_deviation_window_seed
+    host_taxonomy_deviation_window_min_markers = phase1.host_taxonomy_deviation_window_min_markers
+    host_taxonomy_deviation_seed_window_bp = phase1.host_taxonomy_deviation_seed_window_bp
+    host_taxonomy_deviation_seed_min_markers = phase1.host_taxonomy_deviation_seed_min_markers
+    marker_validation_top_k = phase1.marker_validation_top_k
+    novel_marker_min_score = phase1.novel_marker_min_score
+    novel_marker_min_coverage = phase1.novel_marker_min_coverage
+    novel_marker_require_cluster = phase1.novel_marker_require_cluster
 
     phase1_start = time.time()
     logger.info("-" * 60)
@@ -171,8 +237,6 @@ def _run_phase1_subflow(
     host_signatures: set[str] = set()
     host_signature_model = None
     host_signature_model_payload = None
-    background = None
-    gene_data = None
     host_deviation_summary: dict | None = None
     merged_seeds = []
     frameshift_hits = []
@@ -191,26 +255,13 @@ def _run_phase1_subflow(
             set_taxonomy_lookup(tax_lookup)
 
         if not phase1_state_path.is_file():
-            raise ValueError(
-                "authenticated Phase 1 is missing phase1/resume_state.json"
-            )
-        confirmed_frameshift_faa = (
-            output_dir
-            / "phase1"
-            / "frameshift_screening"
-            / "confirmed_frameshift_proteins.faa"
-        )
+            raise ValueError("authenticated Phase 1 is missing phase1/resume_state.json")
+        confirmed_frameshift_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
         if frameshift_screening_enabled and not confirmed_frameshift_faa.is_file():
-            raise ValueError(
-                "authenticated Phase 1 is missing the confirmed frameshift protein FAA"
-            )
-        confirmed_frameshift_tsv = confirmed_frameshift_faa.with_name(
-            "confirmed_frameshift_markers.tsv"
-        )
+            raise ValueError("authenticated Phase 1 is missing the confirmed frameshift protein FAA")
+        confirmed_frameshift_tsv = confirmed_frameshift_faa.with_name("confirmed_frameshift_markers.tsv")
         if frameshift_screening_enabled and not confirmed_frameshift_tsv.is_file():
-            raise ValueError(
-                "authenticated Phase 1 is missing the confirmed frameshift marker table"
-            )
+            raise ValueError("authenticated Phase 1 is missing the confirmed frameshift marker table")
         logger.info("Phase 1 resume: loading exact cached Phase-1 state")
         phase1_state = load_phase1_state(phase1_state_path)
         validated_markers = phase1_state.validated_markers
@@ -238,41 +289,43 @@ def _run_phase1_subflow(
         if classification_counts:
             logger.info(f"Seed classifications: {classification_counts}")
 
-        return {
-            "merged_seeds": merged_seeds,
-            "validated_markers": validated_markers,
-            "host_signature_model": host_signature_model,
-            "host_signatures": host_signatures,
-            "background": background,
-            "gene_data": gene_data,
-            "host_deviation_summary": host_deviation_summary,
-            "elapsed": phase1_elapsed,
-        }
+        return Phase1Result(
+            merged_seeds=merged_seeds,
+            validated_markers=validated_markers,
+            host_signature_model=host_signature_model,
+            host_signatures=host_signatures,
+            host_deviation_summary=host_deviation_summary,
+            elapsed=phase1_elapsed,
+        )
 
     # === HMM-GATED WORKFLOW ===
     logger.info("Using HMM-gated Diamond workflow")
 
     if not hmm_database or not Path(hmm_database).exists():
         logger.error("HMM-gated workflow requires HMM database")
-        return {
-            "genome_id": genome_id,
-            "success": False,
-            "error": "HMM database required for HMM-gated workflow",
-            "predictions": 0,
-            "accepted": 0,
-            "output_files": {},
-        }
+        return Phase1Terminal(
+            {
+                "genome_id": genome_id,
+                "success": False,
+                "error": "HMM database required for HMM-gated workflow",
+                "predictions": 0,
+                "accepted": 0,
+                "output_files": {},
+            }
+        )
 
     if not faa_dir and not marker_db:
         logger.error("HMM-gated workflow requires combined FAA database directory")
-        return {
-            "genome_id": genome_id,
-            "success": False,
-            "error": "Combined FAA database required for HMM-gated workflow",
-            "predictions": 0,
-            "accepted": 0,
-            "output_files": {},
-        }
+        return Phase1Terminal(
+            {
+                "genome_id": genome_id,
+                "success": False,
+                "error": "Combined FAA database required for HMM-gated workflow",
+                "predictions": 0,
+                "accepted": 0,
+                "output_files": {},
+            }
+        )
 
     # Get combined FAA database (for Diamond marker validation)
     combined_faa = None
@@ -289,14 +342,16 @@ def _run_phase1_subflow(
             marker_faa_dir_path = Path(marker_faa_dir) if marker_faa_dir else None
             if not marker_faa_dir_path:
                 logger.error("HMM-gated workflow requires marker FAA DB or directory for validation")
-                return {
-                    "genome_id": genome_id,
-                    "success": False,
-                    "error": "Marker FAA DB or directory required for HMM-gated workflow",
-                    "predictions": 0,
-                    "accepted": 0,
-                    "output_files": {},
-                }
+                return Phase1Terminal(
+                    {
+                        "genome_id": genome_id,
+                        "success": False,
+                        "error": "Marker FAA DB or directory required for HMM-gated workflow",
+                        "predictions": 0,
+                        "accepted": 0,
+                        "output_files": {},
+                    }
+                )
             marker_faa = build_marker_faa(
                 marker_faa_dir_path,
                 derived_database_dir / "marker.faa",
@@ -304,14 +359,16 @@ def _run_phase1_subflow(
                 rebuild=True,
             )
             if not marker_faa:
-                return {
-                    "genome_id": genome_id,
-                    "success": False,
-                    "error": "Failed to build marker.faa for HMM-gated workflow",
-                    "predictions": 0,
-                    "accepted": 0,
-                    "output_files": {},
-                }
+                return Phase1Terminal(
+                    {
+                        "genome_id": genome_id,
+                        "success": False,
+                        "error": "Failed to build marker.faa for HMM-gated workflow",
+                        "predictions": 0,
+                        "accepted": 0,
+                        "output_files": {},
+                    }
+                )
 
         combined_faa = ensure_combined_faa(
             Path(faa_dir),
@@ -321,14 +378,16 @@ def _run_phase1_subflow(
             output_path=derived_database_dir / "combined.faa",
         )
     if not combined_faa:
-        return {
-            "genome_id": genome_id,
-            "success": False,
-            "error": "Failed to build combined.faa for HMM-gated workflow",
-            "predictions": 0,
-            "accepted": 0,
-            "output_files": {},
-        }
+        return Phase1Terminal(
+            {
+                "genome_id": genome_id,
+                "success": False,
+                "error": "Failed to build combined.faa for HMM-gated workflow",
+                "predictions": 0,
+                "accepted": 0,
+                "output_files": {},
+            }
+        )
 
     if frameshift_screening_enabled:
         from virosync.pipeline.phase1.frameshift_screening import (
@@ -343,12 +402,7 @@ def _run_phase1_subflow(
             threads=threads,
         )
         logger.info("Frameshift screening event-bearing hits: %d", len(frameshift_hits))
-        confirmed_frameshift_faa = (
-            output_dir
-            / "phase1"
-            / "frameshift_screening"
-            / "confirmed_frameshift_proteins.faa"
-        )
+        confirmed_frameshift_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
         confirmed_frameshift_faa.parent.mkdir(parents=True, exist_ok=True)
         with atomic_write_context(confirmed_frameshift_faa, "w"):
             pass
@@ -387,25 +441,20 @@ def _run_phase1_subflow(
                 proteins=pfam_query_proteins,
                 proteome_path=hmm_query_fasta,
                 pfam_hmm_path=pfam_hmm_path,
-                model_annotations_path=(
-                    model_dir / "model_annotations_with_interpro.tsv"
-                ),
+                model_annotations_path=(model_dir / "model_annotations_with_interpro.tsv"),
                 output_path=output_dir / "phase1" / "pfam_arbitration.tsv",
                 threads=threads,
             )
             logger.info("HMM hits after Pfam arbitration: %d", len(hhg_hits))
         else:
             logger.warning(
-                "Pfam arbitration skipped for %d ambiguous proteins: "
-                "the selected resource does not contain %s",
+                "Pfam arbitration skipped for %d ambiguous proteins: the selected resource does not contain %s",
                 len(pfam_query_proteins),
                 pfam_hmm_path,
             )
 
     if not hhg_hits and not frameshift_hits:
-        logger.warning(
-            "No protein HMM or frameshift hits found - pipeline complete with 0 predictions"
-        )
+        logger.warning("No protein HMM or frameshift hits found - pipeline complete with 0 predictions")
         elapsed_sec = time.time() - phase1_start
         output_files_empty = call_task(
             generate_outputs_task,
@@ -434,32 +483,34 @@ def _run_phase1_subflow(
             output_files=output_files,
             fingerprint=config_fingerprint,
         )
-        return {
-            "genome_id": genome_id,
-            "success": True,
-            **_empty_prediction_summary(),
-            "output_files": output_files,
-            "elapsed_sec": elapsed_sec,
-            "ablation_counts": InterventionCounts(),
-        }
+        return Phase1Terminal(
+            {
+                "genome_id": genome_id,
+                "success": True,
+                **_empty_prediction_summary(),
+                "output_files": output_files,
+                "elapsed_sec": elapsed_sec,
+                "ablation_counts": InterventionCounts(),
+            }
+        )
 
     # Import here to avoid circular dependency
     from virosync.orchestration.tasks import (
         marker_validation_task,
         region_assembly_task,
     )
+    from virosync.pipeline.host_signatures import (
+        TaxonomyLabelLookup,
+        build_host_signature_model,
+        set_taxonomy_lookup,
+        summarize_host_signature_bits,
+        summarize_host_signature_model,
+    )
     from virosync.pipeline.phase1.marker_validation import (
-        NovelMarkerCriteria,
         VALIDATED_PREFIXES,
         VALIDATION_MIN_PIDENT,
+        NovelMarkerCriteria,
         collect_host_signatures,
-    )
-    from virosync.pipeline.host_signatures import (
-        build_host_signature_model,
-        TaxonomyLabelLookup,
-        set_taxonomy_lookup,
-        summarize_host_signature_model,
-        summarize_host_signature_bits,
     )
 
     # Initialize taxonomy lookup for full lineage-based host signature comparison
@@ -507,12 +558,8 @@ def _run_phase1_subflow(
 
         frameshift_dir = output_dir / "phase1" / "frameshift_screening"
         candidate_faa = frameshift_dir / "frameshift_candidates.faa"
-        candidate_lengths = {
-            record.id: len(record.seq) for record in SeqIO.parse(candidate_faa, "fasta")
-        }
-        frameshift_by_protein_id = {
-            rescued_protein_id(hit): hit for hit in frameshift_hits
-        }
+        candidate_lengths = {record.id: len(record.seq) for record in SeqIO.parse(candidate_faa, "fasta")}
+        frameshift_by_protein_id = {rescued_protein_id(hit): hit for hit in frameshift_hits}
         rescue_hmm_hits = [
             HMMHit(
                 query_name=protein_id,
@@ -534,9 +581,7 @@ def _run_phase1_subflow(
             output_dir=frameshift_validation_dir,
             genome_path=masked_path,
             threads=threads,
-            taxonomy_labels_file=(
-                Path(taxonomy_labels_file) if taxonomy_labels_file else None
-            ),
+            taxonomy_labels_file=(Path(taxonomy_labels_file) if taxonomy_labels_file else None),
             taxonomy_weight_mode=taxonomy_weight_mode,
             search_backend=search_backend,
             max_seqs=marker_validation_top_k,
@@ -568,10 +613,7 @@ def _run_phase1_subflow(
         logger.info(
             "Frameshift rescue validation: candidates=%d diamond_validated=%d confirmed_loci=%d faa_records=%d",
             len(frameshift_hits),
-            sum(
-                marker.validation_status == "validated"
-                for marker in rescue_validation
-            ),
+            sum(marker.validation_status == "validated" for marker in rescue_validation),
             len(confirmed_frameshift_markers),
             confirmed_proteins,
         )
@@ -597,14 +639,13 @@ def _run_phase1_subflow(
     # Write extended taxonomy with full lineage strings (if taxonomy lookup available)
     if tax_lookup:
         from virosync.pipeline.phase1.marker_validation import write_extended_taxonomy
+
         marker_val_dir = output_dir / "phase1" / "marker_validation"
         diamond_top10_tsv = marker_val_dir / "diamond_top10.tsv"
         if diamond_top10_tsv.exists():
             write_extended_taxonomy(diamond_top10_tsv, marker_val_dir, tax_lookup)
 
-    single_marker_min_score = get_assembly_mode(
-        assembly_mode
-    ).single_marker_min_score
+    single_marker_min_score = get_assembly_mode(assembly_mode).single_marker_min_score
     marker_roles = {
         id(hit): decide_marker_hit_role(
             hit,
@@ -613,21 +654,9 @@ def _run_phase1_subflow(
         )
         for hit in validated_markers
     }
-    production_validated_markers = [
-        hit
-        for hit in validated_markers
-        if marker_roles[id(hit)].is_production_validated
-    ]
-    validated_only = [
-        hit
-        for hit in validated_markers
-        if marker_roles[id(hit)].is_retained_evidence
-    ]
-    tier1_bypassed_markers = [
-        hit
-        for hit in validated_markers
-        if marker_roles[id(hit)].is_tier1_bypassed
-    ]
+    production_validated_markers = [hit for hit in validated_markers if marker_roles[id(hit)].is_production_validated]
+    validated_only = [hit for hit in validated_markers if marker_roles[id(hit)].is_retained_evidence]
+    tier1_bypassed_markers = [hit for hit in validated_markers if marker_roles[id(hit)].is_tier1_bypassed]
     phase1_ablation_counts = InterventionCounts(
         opportunities=len(tier1_bypassed_markers),
         interventions=len(tier1_bypassed_markers),
@@ -664,9 +693,7 @@ def _run_phase1_subflow(
             )
             for token, weight, count in summary:
                 logger.info("  %s\t%.4f\t%d", token, weight, count)
-        debug_summary = summarize_host_signature_bits(
-            host_signature_model, top_k=50, max_bits=10
-        )
+        debug_summary = summarize_host_signature_bits(host_signature_model, top_k=50, max_bits=10)
         if debug_summary:
             debug_path = output_dir / "phase1" / "marker_validation" / "host_signature_model_debug.tsv"
             with debug_path.open("w") as debug_handle:
@@ -680,11 +707,12 @@ def _run_phase1_subflow(
     host_deviation_markers: list = []
     seedable_deviation_markers: list = []
     if host_taxonomy_deviation_enabled:
-        from virosync.pipeline.phase1.taxonomy_expansion import (
-            identify_host_deviation_markers,
-            filter_deviation_seed_markers,
-        )
         from virosync.pipeline.phase1.region_assembly import assemble_candidate_regions
+        from virosync.pipeline.phase1.taxonomy_expansion import (
+            filter_deviation_seed_markers,
+            identify_host_deviation_markers,
+        )
+
         deviation_dir = output_dir / "phase1" / "marker_validation"
         deviation_regions = None
         if host_taxonomy_deviation_window_count > 0:
@@ -734,10 +762,7 @@ def _run_phase1_subflow(
                 with baseline_path.open() as handle:
                     baseline_payload = json.load(handle)
             except Exception as e:
-                logger.warning(
-                    "Failed to load host taxonomy baseline from %s: %s",
-                    baseline_path, e
-                )
+                logger.warning("Failed to load host taxonomy baseline from %s: %s", baseline_path, e)
                 baseline_payload = None
         host_deviation_summary = {
             "enabled": True,
@@ -788,14 +813,16 @@ def _run_phase1_subflow(
             output_files=output_files,
             fingerprint=config_fingerprint,
         )
-        return {
-            "genome_id": genome_id,
-            "success": True,
-            **_empty_prediction_summary(),
-            "output_files": output_files,
-            "elapsed_sec": elapsed_sec,
-            "ablation_counts": phase1_ablation_counts,
-        }
+        return Phase1Terminal(
+            {
+                "genome_id": genome_id,
+                "success": True,
+                **_empty_prediction_summary(),
+                "output_files": output_files,
+                "elapsed_sec": elapsed_sec,
+                "ablation_counts": phase1_ablation_counts,
+            }
+        )
 
     seed_markers = validated_only
     extension_markers = host_deviation_markers
@@ -844,88 +871,16 @@ def _run_phase1_subflow(
             write_outputs=False,
         )
         changed_seed_regions = len(
-            _region_coordinate_surface(candidate_regions)
-            - _region_coordinate_surface(counterfactual_regions)
+            _region_coordinate_surface(candidate_regions) - _region_coordinate_surface(counterfactual_regions)
         )
 
-    # Simply convert candidate_regions to MergedSeed format for Phase 2
-    # Boundary refinement will handle boundaries (no composition expansion needed)
-    from virosync.pipeline.phase1.frameshift_screening import (
-        is_rescued_protein_id,
-    )
-    from virosync.pipeline.phase1.seed_merger import MergedSeed
-
-    logger.info("Converting %d marker-based regions to seeds",
-               len(candidate_regions))
-
-    merged_seeds = []
-    anchor_markers = _seed_annotation_markers(
+    logger.info("Converting %d marker-based regions to seeds", len(candidate_regions))
+    merged_seeds = _candidate_regions_to_seeds(
+        candidate_regions,
         validated_markers,
         seedable_deviation_markers,
         extension_markers,
     )
-    for region in candidate_regions:
-        anchors = []
-        region_anchor_markers = (
-            region.markers
-            if getattr(region, "predicted_family", "") == "CRESS"
-            else anchor_markers
-        )
-        for marker in region_anchor_markers:
-            if marker.scaffold != region.scaffold:
-                continue
-            if marker.start >= region.end or marker.end <= region.start:
-                continue
-            porf_id = getattr(marker, "porf_id", None) or getattr(marker, "query_porf", "")
-            anchors.append(
-                Anchor(
-                    porf_id=porf_id,
-                    scaffold=marker.scaffold,
-                    start=marker.start,
-                    end=marker.end,
-                    strand=getattr(marker, "strand", "+"),
-                    hallmark_gene=marker.hmm_target,
-                    score=marker.hmm_score,
-                    evalue=getattr(marker, "hmm_evalue", 0.0),
-                )
-            )
-        has_rescued_marker = any(
-            is_rescued_protein_id(marker.query_porf) for marker in region.markers
-        )
-        has_ordinary_marker = any(
-            not is_rescued_protein_id(marker.query_porf) for marker in region.markers
-        )
-        sources = ["hhg", "marker_validation"] if has_ordinary_marker else []
-        if has_rescued_marker:
-            sources.append("frameshift_rescue")
-        merged_seeds.append(MergedSeed(
-            scaffold=region.scaffold,
-            start=region.start,
-            end=region.end,
-            sources=sources,
-            confidence="high" if any(
-                is_mcp_gene(a.hallmark_gene) for a in anchors
-            ) else "medium",
-            hhg_score=len(anchors) * 10.0,
-            novelty_score=0.0,
-            compositional_score=0.0,
-            mean_kfd=0.0,
-            max_kfd=0.0,
-            mean_composite=0.0,
-            max_composite=0.0,
-            gc_deviation=0.0,
-            n_windows=0,
-            cluster_ids=[],
-            anchors=anchors,
-            hhg_anchors=anchors,
-            predicted_family=getattr(region, "predicted_family", ""),
-        ))
-
-    # Assign stable seed_id (same format as seed_merger.py line 328-330)
-    for idx, seed in enumerate(merged_seeds):
-        seed.seed_id = f"seed_{idx}_{seed.scaffold}_{seed.start}"
-
-
 
     phase1_elapsed = time.time() - phase1_start
     logger.info(f"Phase 1 complete: {phase1_elapsed:.1f}s")
@@ -959,14 +914,12 @@ def _run_phase1_subflow(
     )
     logger.info("Phase 1 resume state written to %s", phase1_state_path)
 
-    return {
-        "merged_seeds": merged_seeds,
-        "validated_markers": validated_markers,
-        "host_signature_model": host_signature_model,
-        "host_signatures": host_signatures,
-        "background": background,
-        "gene_data": gene_data,
-        "host_deviation_summary": host_deviation_summary,
-        "elapsed": phase1_elapsed,
-        "ablation_counts": phase1_ablation_counts,
-    }
+    return Phase1Result(
+        merged_seeds=merged_seeds,
+        validated_markers=validated_markers,
+        host_signature_model=host_signature_model,
+        host_signatures=host_signatures,
+        host_deviation_summary=host_deviation_summary,
+        elapsed=phase1_elapsed,
+        ablation_counts=phase1_ablation_counts,
+    )

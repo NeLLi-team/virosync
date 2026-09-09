@@ -4,7 +4,6 @@ import csv
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +13,9 @@ def run_gvclass_batch(
     output_dir: Path,
     gvclass_path: Path,
     threads: int = 8,
-    gvclass_db: Optional[Path] = None,
-) -> Optional[Path]:
-    """
-    Run GVClass on EVE nucleotide sequences.
+    gvclass_db: Path | None = None,
+) -> Path | None:
+    """Run GVClass on EVE nucleotide sequences.
 
     Args:
         eve_fasta_dir: Directory with EVE .fna files (phase3_synthesis/gvclass_input/nucleotide/)
@@ -40,8 +38,10 @@ def run_gvclass_batch(
     cmd = [
         str(gvclass_path / "gvclass"),
         str(eve_fasta_dir),
-        "-o", str(output_dir),
-        "-t", str(threads),
+        "-o",
+        str(output_dir),
+        "-t",
+        str(threads),
         "--mode-fast",
     ]
 
@@ -118,20 +118,16 @@ def load_gvclass_id_map(manifest_path: Path) -> dict[str, str]:
             encoded_stem = _strip_fna_suffix(Path(relative_path).name)
             prior = id_map.get(encoded_stem)
             if prior is not None and prior != raw_id:
-                raise ValueError(
-                    f"GVClass manifest ID collision for {encoded_stem!r}: "
-                    f"{prior!r} and {raw_id!r}"
-                )
+                raise ValueError(f"GVClass manifest ID collision for {encoded_stem!r}: {prior!r} and {raw_id!r}")
             id_map[encoded_stem] = raw_id
     return id_map
 
 
 def parse_gvclass_results(
     summary_path: Path,
-    id_map: Optional[dict[str, str]] = None,
+    id_map: dict[str, str] | None = None,
 ) -> dict[str, dict]:
-    """
-    Parse GVClass summary output.
+    """Parse GVClass summary output.
 
     Args:
         summary_path: Path to GVClass summary TSV
@@ -172,11 +168,7 @@ def parse_gvclass_results(
             # mapping is available. Without a manifest, preserve legacy behavior.
             legacy_id = _strip_fna_suffix(parts[0])
             encoded_stem = _strip_fna_suffix(Path(parts[0]).name)
-            eve_id = (
-                id_map.get(encoded_stem, legacy_id)
-                if id_map is not None
-                else legacy_id
-            )
+            eve_id = id_map.get(encoded_stem, legacy_id) if id_map is not None else legacy_id
 
             # Build result dict based on available columns
             result = {
@@ -218,8 +210,7 @@ def parse_gvclass_results(
 
 
 def write_gvclass_results_tsv(results: dict[str, dict], output_path: Path) -> Path:
-    """
-    Write parsed GVClass results to a simplified TSV file.
+    """Write parsed GVClass results to a simplified TSV file.
 
     Args:
         results: Dictionary from parse_gvclass_results()
@@ -232,9 +223,7 @@ def write_gvclass_results_tsv(results: dict[str, dict], output_path: Path) -> Pa
 
     with open(output_path, "w", newline="") as f:
         writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-        writer.writerow(
-            ["eve_id", "gvclass_domain", "gvog_count", "mcp_count", "mirus_count"]
-        )
+        writer.writerow(["eve_id", "gvclass_domain", "gvog_count", "mcp_count", "mirus_count"])
         for eve_id, data in sorted(results.items()):
             writer.writerow(
                 [

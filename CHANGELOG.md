@@ -2,10 +2,7 @@
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
-
-These changes describe the current `main` branch. The software version remains
-1.0.0; the tagged v1.0.0 release does not contain these changes.
+## [1.0.1] - 2026-09-08
 
 ### Added
 
@@ -54,6 +51,12 @@ These changes describe the current `main` branch. The software version remains
 
 ### Changed
 
+- Python formatting, import order, type syntax and docstring spacing are
+  consistent across the source tree. The lint task now checks formatting.
+- Internal orchestration takes nested configuration and returns named phase
+  results. Scoring, boundary merging, CLI handling and report generation use
+  separate functions for their main steps. Public parameters and scientific
+  decisions are preserved.
 - TMVec2 uses only the matching BFVD embedding database. Existing configs must
   set `phase3.tmvec_databases` to `[bfvd]`. A requested TMVec2 run now exits
   before analysis if its runtime, models, manifest, or BFVD query check fails.
@@ -111,6 +114,9 @@ These changes describe the current `main` branch. The software version remains
 
 ### Fixed
 
+- Per-EVE gene-taxonomy exports use the E-value field for `best_hit_evalue`
+  and preserve numeric-zero coordinate aliases. Combined taxonomy output is
+  written atomically.
 - Boundary searches and region exports retain genes that overlap the final
   interval, including genes outside the initial selected gene range.
 - Novel-marker validation calculates HMM coverage against the full protein

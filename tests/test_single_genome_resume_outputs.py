@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from virosync.orchestration._flows.single_genome import (
-    _completed_run_artifacts,
-    _summarize_predictions_tsv,
-)
 from test_single_genome_resume import (
     _publish_schema3_success,
     _start_schema3_run,
+)
+
+from virosync.orchestration._flows.single_genome import (
+    _completed_run_artifacts,
+    _summarize_predictions_tsv,
 )
 
 
@@ -22,9 +23,7 @@ def test_completed_run_artifacts_requires_final_root_outputs(tmp_path) -> None:
     (output_dir / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
     assert _completed_run_artifacts(output_dir) is None
 
-    (output_dir / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (output_dir / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     assert _completed_run_artifacts(output_dir) is None
 
     _publish_schema3_success(output_dir, run_fingerprint)
@@ -49,9 +48,7 @@ def test_completed_run_artifacts_rejects_mutated_prediction_headers(tmp_path) ->
     predictions = phase3_dir / "virosync_predictions.tsv"
     predictions.write_text("eve_id\n")
     (output_dir / "virosync_predictions_detailed.tsv").write_text("eve_id\n")
-    (output_dir / "run.log").write_text(
-        "# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n"
-    )
+    (output_dir / "run.log").write_text("# ViroSync Run Log: demo\n\n## Results Summary\nCanonical GEVEs: 0\n")
     _publish_schema3_success(output_dir, run_fingerprint)
     predictions.write_text("not_eve_id\n")
 

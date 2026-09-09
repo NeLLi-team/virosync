@@ -8,8 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from virosync.config import PipelineConfig
 from virosync.orchestration._flows.single_genome import phase1 as phase1_module
 from virosync.orchestration._flows.single_genome.phase1 import (
+    Phase1Terminal,
     _run_phase1_subflow,
 )
 from virosync.orchestration._flows.single_genome.phase1_state import (
@@ -155,58 +157,43 @@ def _write_complete_state(path: Path) -> None:
 
 
 def _phase1_kwargs(tmp_path: Path, output_dir: Path) -> dict[str, object]:
+    config = PipelineConfig().with_overrides(
+        taxonomy_weight_mode="rank",
+        host_taxonomy_deviation_min_token_len=3,
+        host_taxonomy_deviation_min_tokens=2,
+        host_taxonomy_deviation_overlap_threshold=0.5,
+        host_taxonomy_deviation_max_pident=80.0,
+        host_taxonomy_deviation_max_hits=10,
+        host_taxonomy_deviation_window_bp=10000,
+        host_taxonomy_deviation_window_count=10,
+        host_taxonomy_deviation_window_seed=17,
+        host_taxonomy_deviation_window_min_markers=2,
+        host_taxonomy_deviation_seed_window_bp=10000,
+        host_taxonomy_deviation_seed_min_markers=2,
+        initial_window_bp=20000,
+        initial_window_genes=10,
+        extension_kb=10,
+        merge_distance=10000,
+        extended_output=False,
+        threads=1,
+    )
+    config.host.prefixes = ["EUK__"]
+    config.host.label = "EUK__"
     return {
         "masked_path": tmp_path / "masked.fna",
         "proteome_path": tmp_path / "proteome.faa",
-        "repeat_regions": [],
         "output_dir": output_dir,
         "genome_id": "genome-a",
-        "hmm_database": None,
-        "hmm_allowlist": None,
-        "hmm_chunk_size": None,
-        "frameshift_screening_enabled": False,
-        "marker_faa_db": None,
-        "marker_faa_dir": None,
-        "marker_db": None,
-        "faa_dir": None,
-        "gene_taxonomy_faa_db": None,
-        "taxonomy_labels_file": None,
-        "host_prefixes": ["EUK__"],
-        "host_label": "EUK__",
-        "taxonomy_weight_mode": "rank",
-        "host_taxonomy_deviation_enabled": False,
-        "host_taxonomy_deviation_allow_seeds": False,
-        "host_taxonomy_deviation_min_token_len": 3,
-        "host_taxonomy_deviation_min_tokens": 2,
-        "host_taxonomy_deviation_overlap_threshold": 0.5,
-        "host_taxonomy_deviation_max_pident": 80.0,
-        "host_taxonomy_deviation_max_hits": 10,
-        "host_taxonomy_deviation_window_bp": 10000,
-        "host_taxonomy_deviation_window_count": 10,
-        "host_taxonomy_deviation_window_seed": 17,
-        "host_taxonomy_deviation_window_min_markers": 2,
-        "host_taxonomy_deviation_seed_window_bp": 10000,
-        "host_taxonomy_deviation_seed_min_markers": 2,
-        "marker_validation_top_k": 10,
-        "novel_marker_min_score": 30.0,
-        "novel_marker_min_coverage": 0.5,
-        "novel_marker_require_cluster": True,
-        "initial_window_bp": 20000,
-        "initial_window_genes": 10,
-        "min_markers_initial": 1,
-        "extension_kb": 10,
-        "merge_distance": 10000,
-        "boundary_host_signature_min_token_len": 3,
-        "rebuild_db": False,
-        "assembly_mode": "default",
-        "extended_output": False,
-        "resume": True,
-        "threads": 1,
-        "search_backend": "diamond",
+        "config": config,
         "logger": logging.getLogger("test-phase1-resume-state"),
         "config_fingerprint": "f" * 64,
         "resume_authorized": True,
     }
+
+
+def _terminal_payload(result: object) -> dict[str, object]:
+    assert isinstance(result, Phase1Terminal)
+    return result.result
 
 
 def test_phase1_state_file_round_trip_preserves_every_consumed_field(
@@ -260,9 +247,7 @@ def test_phase1_state_rejects_schema_drift_and_lossy_values() -> None:
         phase1_state_from_document(rounded_boolean)
 
     nonfinite_model = copy.deepcopy(document)
-    nonfinite_model["host_signature_model"]["token_bits"]["amoebozoa"][0] = float(
-        "nan"
-    )
+    nonfinite_model["host_signature_model"]["token_bits"]["amoebozoa"][0] = float("nan")
     with pytest.raises(Phase1StateError, match="token_bits.*must be finite"):
         phase1_state_from_document(nonfinite_model)
 
@@ -354,11 +339,11 @@ def test_authenticated_phase1_resume_loads_only_exact_state(
 
     result = _run_phase1_subflow(**_phase1_kwargs(tmp_path, output_dir))
 
-    assert result["validated_markers"] == [_complete_marker()]
-    assert result["merged_seeds"] == [_complete_seed()]
-    assert result["host_signature_model"] == _complete_host_model()
-    assert result["host_signatures"] == {"Amoebozoa", "Eukaryota"}
-    assert result["host_deviation_summary"] == _complete_deviation_summary()
+    assert result.validated_markers == [_complete_marker()]
+    assert result.merged_seeds == [_complete_seed()]
+    assert result.host_signature_model == _complete_host_model()
+    assert result.host_signatures == {"Amoebozoa", "Eukaryota"}
+    assert result.host_deviation_summary == _complete_deviation_summary()
     assert not (output_dir / "phase1" / "marker_validation").exists()
     assert not (output_dir / "phase1" / "region_assembly").exists()
 
@@ -370,17 +355,12 @@ def test_enabled_phase1_resume_requires_confirmed_frameshift_faa(
     state_path = output_dir / "phase1" / PHASE1_STATE_FILENAME
     _write_complete_state(state_path)
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["frameshift_screening_enabled"] = True
+    kwargs["config"].phase1.frameshift_screening_enabled = True
 
     with pytest.raises(ValueError, match="confirmed frameshift protein FAA"):
         _run_phase1_subflow(**kwargs)
 
-    confirmed_faa = (
-        output_dir
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_proteins.faa"
-    )
+    confirmed_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     confirmed_faa.parent.mkdir(parents=True)
     confirmed_faa.write_text("")
     with pytest.raises(ValueError, match="confirmed frameshift marker table"):
@@ -402,15 +382,15 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
-    kwargs["frameshift_screening_enabled"] = enabled
+    kwargs["config"].phase1.frameshift_screening_enabled = enabled
     hmm_database = tmp_path / "markers.hmm"
     marker_db = tmp_path / "markers.dmnd"
     hmm_database.write_text("HMM\n")
     marker_db.write_text("DB\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db
     events: list[str] = []
 
     def fake_call_task(task, **task_kwargs):
@@ -419,7 +399,7 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
                 "masked_fasta": kwargs["masked_path"],
                 "hmm_database": hmm_database,
                 "output_dir": output_dir / "phase1" / "frameshift_screening",
-                "threads": kwargs["threads"],
+                "threads": kwargs["config"].compute.threads,
             }
             events.append("frameshift")
             return []
@@ -435,7 +415,7 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _terminal_payload(_run_phase1_subflow(**kwargs))
 
     assert result["success"] is True
     assert events[: len(expected_prefix)] == expected_prefix
@@ -450,9 +430,9 @@ def test_phase1_selects_prebuilt_or_run_local_marker_database(
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
-    kwargs["rebuild_db"] = not use_prebuilt
+    kwargs["config"].phase1.rebuild_db = not use_prebuilt
 
     hmm_database = tmp_path / "markers.hmm"
     marker_db = tmp_path / "installed-marker.dmnd"
@@ -464,10 +444,10 @@ def test_phase1_selects_prebuilt_or_run_local_marker_database(
     faa_dir.mkdir()
     (marker_faa_dir / "marker-a.faa").write_text(">marker-a\nAAAA\n")
     (faa_dir / "reference.faa").write_text(">reference\nAAAA\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db if use_prebuilt else None
-    kwargs["marker_faa_dir"] = marker_faa_dir
-    kwargs["faa_dir"] = faa_dir
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db if use_prebuilt else None
+    kwargs["config"].databases.marker_faa_dir = marker_faa_dir
+    kwargs["config"].databases.faa_dir = faa_dir
     builder_calls: list[str] = []
 
     def fake_build_marker_faa(*args, **task_kwargs):
@@ -495,7 +475,7 @@ def test_phase1_selects_prebuilt_or_run_local_marker_database(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _terminal_payload(_run_phase1_subflow(**kwargs))
 
     assert result["success"] is True
     assert builder_calls == ([] if use_prebuilt else ["marker", "combined"])
@@ -507,7 +487,7 @@ def test_pfam_contradiction_stops_before_marker_validation(
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
     hmm_database = tmp_path / "models" / "combined.hmm"
     hmm_database.parent.mkdir()
@@ -515,8 +495,8 @@ def test_pfam_contradiction_stops_before_marker_validation(
     (hmm_database.parent / "pfam_virosync_screening.hmm").write_text("PFAM\n")
     marker_db = tmp_path / "markers.dmnd"
     marker_db.write_text("DB\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db
     hits = [
         HMMHit("protein-1", "VS000806", 100.0, 1e-20, 90.0, 1, 100),
         HMMHit("protein-1", "VS000369", 90.0, 1e-18, 80.0, 1, 100),
@@ -543,7 +523,7 @@ def test_pfam_contradiction_stops_before_marker_validation(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _terminal_payload(_run_phase1_subflow(**kwargs))
 
     assert result["success"] is True
     assert events == ["hmm", "pfam", "outputs"]
@@ -555,15 +535,15 @@ def test_missing_pfam_resource_skips_arbitration_and_preserves_marker_validation
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
     hmm_database = tmp_path / "models" / "combined.hmm"
     hmm_database.parent.mkdir()
     hmm_database.write_text("HMM\n")
     marker_db = tmp_path / "markers.dmnd"
     marker_db.write_text("DB\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db
     hits = [
         HMMHit("protein-1", "model-a", 100.0, 1e-20, 90.0, 1, 100),
         HMMHit("protein-1", "model-b", 90.0, 1e-18, 80.0, 1, 100),
@@ -589,7 +569,7 @@ def test_missing_pfam_resource_skips_arbitration_and_preserves_marker_validation
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _terminal_payload(_run_phase1_subflow(**kwargs))
 
     assert result["success"] is True
     assert events == ["hmm", "marker", "outputs"]
@@ -601,17 +581,17 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
-    kwargs["frameshift_screening_enabled"] = True
+    kwargs["config"].phase1.frameshift_screening_enabled = True
     kwargs["masked_path"].write_text(">contig_1\n" + "A" * 500 + "\n")
     kwargs["proteome_path"].write_text("")
     hmm_database = tmp_path / "markers.hmm"
     marker_db = tmp_path / "markers.dmnd"
     hmm_database.write_text("HMM\n")
     marker_db.write_text("DB\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db
     hit = FrameshiftHit(
         annotation_class=ANNOTATION_CLASS,
         hit_id="1",
@@ -663,9 +643,7 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
             (frameshift_dir / "frameshift_candidates.faa").write_text(
                 f">{protein_id} # 101 # 300 # 1 # "
                 f"ID=0_{protein_id.rsplit('_', 1)[1]};"
-                "annotation=frameshift_rescued_domain\n"
-                + "M" * 80
-                + "\n"
+                "annotation=frameshift_rescued_domain\n" + "M" * 80 + "\n"
             )
             return [hit]
         if task is phase1_module.hhg_seeding_task:
@@ -697,16 +675,11 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
 
     result = _run_phase1_subflow(**kwargs)
 
-    assert result["validated_markers"] == [marker]
-    assert len(result["merged_seeds"]) == 1
-    assert result["merged_seeds"][0].anchors[0].porf_id == marker.query_porf
-    assert result["merged_seeds"][0].sources == ["frameshift_rescue"]
-    confirmed_faa = (
-        output_dir
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_proteins.faa"
-    )
+    assert result.validated_markers == [marker]
+    assert len(result.merged_seeds) == 1
+    assert result.merged_seeds[0].anchors[0].porf_id == marker.query_porf
+    assert result.merged_seeds[0].sources == ["frameshift_rescue"]
+    confirmed_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     assert protein_id in confirmed_faa.read_text()
 
 
@@ -716,14 +689,14 @@ def test_fresh_phase1_writes_exact_state_after_classification(
 ) -> None:
     output_dir = tmp_path / "output"
     kwargs = _phase1_kwargs(tmp_path, output_dir)
-    kwargs["resume"] = False
+    kwargs["config"].execution.resume = False
     kwargs["resume_authorized"] = False
     hmm_database = tmp_path / "markers.hmm"
     marker_db = tmp_path / "markers.dmnd"
     hmm_database.write_text("HMM\n")
     marker_db.write_text("DB\n")
-    kwargs["hmm_database"] = hmm_database
-    kwargs["marker_db"] = marker_db
+    kwargs["config"].databases.hmm_database = hmm_database
+    kwargs["config"].databases.marker_db = marker_db
     marker = _complete_marker()
 
     def fake_call_task(task, **task_kwargs):
@@ -761,11 +734,11 @@ def test_fresh_phase1_writes_exact_state_after_classification(
     loaded = load_phase1_state(state_path)
 
     assert state_path.is_file()
-    assert loaded.validated_markers == result["validated_markers"]
-    assert loaded.merged_seeds == result["merged_seeds"]
-    assert loaded.host_signature_model == result["host_signature_model"]
-    assert loaded.host_signatures == result["host_signatures"]
-    assert loaded.host_deviation_summary == result["host_deviation_summary"]
+    assert loaded.validated_markers == result.validated_markers
+    assert loaded.merged_seeds == result.merged_seeds
+    assert loaded.host_signature_model == result.host_signature_model
+    assert loaded.host_signatures == result.host_signatures
+    assert loaded.host_deviation_summary == result.host_deviation_summary
     assert loaded.validated_markers[0].hmm_score == 123.456789012345
     assert loaded.validated_markers[0].has_plv == 1
     assert loaded.validated_markers[0].has_vp == 1

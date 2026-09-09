@@ -15,9 +15,7 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
 )
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 
-_SKANI_HEADER = (
-    "Ref_file\tQuery_file\tANI\tAlign_fraction_ref\tAlign_fraction_query\n"
-)
+_SKANI_HEADER = "Ref_file\tQuery_file\tANI\tAlign_fraction_ref\tAlign_fraction_query\n"
 
 
 def _result(eve_id: str, *, taxonomy_class: str, has_mcp: bool) -> VerificationResult:
@@ -50,12 +48,9 @@ def _fake_skani(monkeypatch, edges: list[tuple[str, str, float, float, float]]):
 
     def run(command, capture_output=True, text=True):
         listed = Path(command[command.index("-l") + 1]).read_text().split()
-        file_by_eve = {
-            Path(path).read_text().splitlines()[0][1:]: path for path in listed
-        }
+        file_by_eve = {Path(path).read_text().splitlines()[0][1:]: path for path in listed}
         rows = "".join(
-            f"{file_by_eve[eve_a]}\t{file_by_eve[eve_b]}\t"
-            f"{ani}\t{af_a}\t{af_b}\n"
+            f"{file_by_eve[eve_a]}\t{file_by_eve[eve_b]}\t{ani}\t{af_a}\t{af_b}\n"
             for eve_a, eve_b, ani, af_a, af_b in edges
         )
         Path(command[command.index("-o") + 1]).write_text(_SKANI_HEADER + rows)
@@ -65,11 +60,7 @@ def _fake_skani(monkeypatch, edges: list[tuple[str, str, float, float, float]]):
 
 
 def _edge_rows(output_dir: Path) -> list[str]:
-    lines = (
-        (output_dir / "phase3_synthesis" / "eve_ani_edges.tsv")
-        .read_text()
-        .splitlines()
-    )
+    lines = (output_dir / "phase3_synthesis" / "eve_ani_edges.tsv").read_text().splitlines()
     assert lines[0].split("\t") == ["eve_a", "eve_b", "ani", "af_a", "af_b"]
     return lines[1:]
 
@@ -260,10 +251,9 @@ def test_uniform_mcp_state_clusters_leave_classes_untouched(
 def _no_skani_output(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: "/fake/skani")
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: SimpleNamespace(
-            returncode=1, stderr="ERROR No genomes/sketches found.\n"
-        ),
+        subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=1, stderr="ERROR No genomes/sketches found.\n"),
     )
 
 
@@ -274,8 +264,8 @@ def _no_skani_binary(monkeypatch):
 @pytest.mark.parametrize(
     "arrange,eve_count",
     [
-        (_no_skani_output, 2),   # skani ran and could not sketch the sequences
-        (_no_skani_binary, 2),   # skani is not installed
+        (_no_skani_output, 2),  # skani ran and could not sketch the sequences
+        (_no_skani_binary, 2),  # skani is not installed
         (lambda monkeypatch: None, 1),  # only one EVE, nothing to compare
     ],
 )
@@ -293,22 +283,22 @@ def test_every_no_op_path_writes_a_header_only_table_and_changes_nothing(
     ][:eve_count]
     arrange(monkeypatch)
 
-    cluster_accepted_eves(
-        results, genome_fasta=_genome(tmp_path), output_dir=tmp_path, threads=1
-    )
+    cluster_accepted_eves(results, genome_fasta=_genome(tmp_path), output_dir=tmp_path, threads=1)
 
     assert _edge_rows(tmp_path) == []
     assert [r.cluster_id for r in results] == [-1] * eve_count
     assert [r.cluster_size for r in results] == [1] * eve_count
-    assert [r.taxonomy_class for r in results] == [
-        "NCLDV", "VIRAL_UNKNOWN"
-    ][:eve_count]
+    assert [r.taxonomy_class for r in results] == ["NCLDV", "VIRAL_UNKNOWN"][:eve_count]
 
 
 def _accepted(eve_id: str, taxonomy_class: str, *, hallmarks: int, cluster_id: int):
     result = VerificationResult(
-        eve_id=eve_id, scaffold="ctg1", start=0, end=600,
-        taxonomy_class=taxonomy_class, hallmark_count=hallmarks,
+        eve_id=eve_id,
+        scaffold="ctg1",
+        start=0,
+        end=600,
+        taxonomy_class=taxonomy_class,
+        hallmark_count=hallmarks,
     )
     result.cluster_id = cluster_id
     return result
@@ -352,8 +342,12 @@ def test_a_weight_settled_class_does_not_make_an_eve_a_donor() -> None:
     from virosync.pipeline.phase3.evidence_synthesizer import EvidenceSynthesizer
 
     marker = lambda prefixes, gene, porf: {  # noqa: E731
-        "hallmark_gene": gene, "porf_id": porf, "top10_prefixes": prefixes,
-        "top10_pidents": "80", "top10_targets": "", "validation_status": "validated",
+        "hallmark_gene": gene,
+        "porf_id": porf,
+        "top10_prefixes": prefixes,
+        "top10_pidents": "80",
+        "top10_targets": "",
+        "validation_status": "validated",
         "score": 100.0,
     }
     result = VerificationResult(eve_id="EVE_x", scaffold="ctg1", start=0, end=600)
@@ -378,9 +372,7 @@ def test_cluster_sizes_are_recounted_after_a_drop(monkeypatch, tmp_path: Path) -
     results = [survivor, dropped]
     _fake_skani(monkeypatch, [("EVE_1", "EVE_2", 99.1, 88.0, 90.0)])
 
-    _edges, pairs = cluster_accepted_eves(
-        results, genome_fasta=_genome(tmp_path), output_dir=tmp_path, threads=1
-    )
+    _edges, pairs = cluster_accepted_eves(results, genome_fasta=_genome(tmp_path), output_dir=tmp_path, threads=1)
     assert [r.cluster_size for r in results] == [2, 2]
 
     # Neither carries a marker, so nothing rescues the UNKNOWN member.

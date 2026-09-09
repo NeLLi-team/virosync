@@ -13,7 +13,6 @@ from pyhmmer.plan7 import HMMFile
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
 from virosync.utils.atomic_write import atomic_write_context
 
-
 CRESS_REP_SCOPE = "CRESS_REP"
 CRESS_REP_DISCRIMINATING_DOMAIN = "Gemini_AL1"
 
@@ -41,7 +40,6 @@ class PfamArbitrationRecord:
 
 def _hit_rank(hit: HMMHit) -> tuple[float, str]:
     """Return a deterministic best-first rank for an HMM hit."""
-
     return (-hit.score, hit.target_name)
 
 
@@ -54,13 +52,11 @@ def _best_candidate_hits(hits: list[HMMHit]) -> dict[str, dict[str, HMMHit]]:
 
 def ambiguous_proteins(hits: list[HMMHit]) -> set[str]:
     """Return proteins hit by at least two distinct ViroSync models."""
-
     return {protein for protein, candidates in _best_candidate_hits(hits).items() if len(candidates) >= 2}
 
 
 def load_model_pfam_annotations(path: Path) -> dict[str, ModelPfamAnnotation]:
     """Load the enriched model annotation columns needed for arbitration."""
-
     with Path(path).open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         required = {"model_name", "pfam_signature", "source_scope"}
@@ -86,7 +82,6 @@ def scan_pfam_domains(
     threads: int,
 ) -> dict[str, set[str]]:
     """Scan selected proteins with Pfam gathering thresholds."""
-
     if not proteins:
         return {}
     alphabet = pyhmmer.easel.Alphabet.amino()
@@ -112,9 +107,7 @@ def scan_pfam_domains(
         domain_name = hmm.name.decode()
         sequence_cutoff, domain_cutoff = hmm.cutoffs.gathering
         for hit in top_hits:
-            if hit.score >= sequence_cutoff and any(
-                domain.score >= domain_cutoff for domain in hit.domains
-            ):
+            if hit.score >= sequence_cutoff and any(domain.score >= domain_cutoff for domain in hit.domains):
                 domains_by_protein[hit.name.decode()].add(domain_name)
     return domains_by_protein
 
@@ -125,7 +118,6 @@ def arbitrate_hits(
     annotations: dict[str, ModelPfamAnnotation],
 ) -> tuple[list[HMMHit], list[PfamArbitrationRecord]]:
     """Apply the handoff's Pfam arbitration rules to ambiguous proteins."""
-
     best_by_protein = _best_candidate_hits(hits)
     ambiguous = {protein for protein, candidates in best_by_protein.items() if len(candidates) >= 2}
     records = []
@@ -185,7 +177,6 @@ def write_pfam_arbitration(
     output_path: Path,
 ) -> None:
     """Write the per-protein Pfam decision audit."""
-
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with atomic_write_context(output_path, "w") as handle:
@@ -225,7 +216,6 @@ def run_pfam_arbitration(
     threads: int,
 ) -> list[HMMHit]:
     """Scan ambiguous proteins, arbitrate their candidates, and write an audit."""
-
     annotations = load_model_pfam_annotations(model_annotations_path)
     domains = scan_pfam_domains(
         proteome_path,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import subprocess
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -17,9 +17,7 @@ def test_resource_release_surfaces_parse_and_cross_check() -> None:
 
 
 def test_resource_release_guard_rejects_database_source_drift(monkeypatch) -> None:
-    source = dict(
-        check_production_ready.ViroSyncDatabaseManager.DATABASE_SOURCES[0]
-    )
+    source = dict(check_production_ready.ViroSyncDatabaseManager.DATABASE_SOURCES[0])
     source["manifest_sha256"] = "0" * 64
     monkeypatch.setattr(
         check_production_ready.ViroSyncDatabaseManager,
@@ -63,24 +61,18 @@ def test_production_guard_reports_graphviz_render_failure(monkeypatch) -> None:
 
     check_production_ready.check_graphviz_runtime(failures)
 
-    assert failures == [
-        "Graphviz cannot render the required sfdp PNG report: missing PNG plugin"
-    ]
+    assert failures == ["Graphviz cannot render the required sfdp PNG report: missing PNG plugin"]
 
 
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
         (
-            subprocess.CompletedProcess(
-                ["dot"], 1, stdout=b"", stderr=b"missing PNG plugin"
-            ),
+            subprocess.CompletedProcess(["dot"], 1, stdout=b"", stderr=b"missing PNG plugin"),
             "Graphviz cannot render the required sfdp PNG report: missing PNG plugin",
         ),
         (
-            subprocess.CompletedProcess(
-                ["dot"], 0, stdout=b"not a PNG", stderr=b""
-            ),
+            subprocess.CompletedProcess(["dot"], 0, stdout=b"not a PNG", stderr=b""),
             "Graphviz cannot render the required sfdp PNG report",
         ),
     ],
@@ -109,9 +101,7 @@ def test_graphviz_runtime_reports_missing_executable(monkeypatch) -> None:
     )
     monkeypatch.setattr(graphviz_runtime, "subprocess", stub)
 
-    assert graphviz_runtime.graphviz_runtime_error() == (
-        "Graphviz runtime is unavailable: dot is missing"
-    )
+    assert graphviz_runtime.graphviz_runtime_error() == ("Graphviz runtime is unavailable: dot is missing")
 
 
 def test_graphviz_runtime_times_out(monkeypatch) -> None:

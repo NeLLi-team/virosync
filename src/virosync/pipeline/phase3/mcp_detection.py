@@ -29,15 +29,16 @@ from __future__ import annotations
 
 import re
 
-
-NCLDV_MCP_MODELS: frozenset[str] = frozenset({
-    "og1352",
-    "og484",
-    "vs000086",
-    "vs000309",
-    "gamadvirusmcp",
-    "gvogm0003",
-})
+NCLDV_MCP_MODELS: frozenset[str] = frozenset(
+    {
+        "og1352",
+        "og484",
+        "vs000086",
+        "vs000309",
+        "gamadvirusmcp",
+        "gvogm0003",
+    }
+)
 
 
 MCP_HMM_PREFIXES: tuple[str, ...] = (
@@ -76,7 +77,7 @@ def is_mcp_gene(name: str | None) -> bool:
         return True
     for prefix in MCP_HMM_PREFIXES:
         if lower.startswith(prefix):
-            suffix = lower[len(prefix):]
+            suffix = lower[len(prefix) :]
             if _WORD_CHARS_ONLY.match(suffix):
                 return True
     return False

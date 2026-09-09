@@ -1,5 +1,4 @@
-"""
-Unified sequence search backend for ViroSync.
+"""Unified sequence search backend for ViroSync.
 
 Provides a single entry point for running protein sequence searches
 against Diamond databases. All Diamond call sites delegate to
@@ -46,8 +45,7 @@ def run_sequence_search(
     extra_flags: list[str] | None = None,
     timeout: int = DEFAULT_SEARCH_TIMEOUT,
 ) -> Path:
-    """
-    Run a protein sequence search using the specified backend.
+    """Run a protein sequence search using the specified backend.
 
     Args:
         query_fasta: Path to query FASTA file.
@@ -71,9 +69,7 @@ def run_sequence_search(
     output_tsv.parent.mkdir(parents=True, exist_ok=True)
 
     if backend != "diamond":
-        raise ValueError(
-            f"Unsupported search backend: {backend!r} (only 'diamond' is supported)"
-        )
+        raise ValueError(f"Unsupported search backend: {backend!r} (only 'diamond' is supported)")
     return _run_diamond(
         query_fasta=query_fasta,
         db_path=db_path,
@@ -104,15 +100,9 @@ def run_sequence_search(
 # force a specific retry thread count.
 DIAMOND_RETRY_THREADS = _env_int("VIROSYNC_DIAMOND_RETRY_THREADS", 0)
 DIAMOND_DEFAULT_TIMEOUT = _env_int("VIROSYNC_DIAMOND_TIMEOUT_SEC", 900)
-DIAMOND_NO_PROGRESS_TIMEOUT = _env_int(
-    "VIROSYNC_DIAMOND_NO_PROGRESS_TIMEOUT_SEC", 60
-)
-DIAMOND_NO_PROGRESS_MIN_RUNTIME = _env_int(
-    "VIROSYNC_DIAMOND_NO_PROGRESS_MIN_RUNTIME_SEC", 120
-)
-DIAMOND_WATCHDOG_POLL_INTERVAL = _env_int(
-    "VIROSYNC_DIAMOND_WATCHDOG_POLL_INTERVAL_SEC", 10
-)
+DIAMOND_NO_PROGRESS_TIMEOUT = _env_int("VIROSYNC_DIAMOND_NO_PROGRESS_TIMEOUT_SEC", 60)
+DIAMOND_NO_PROGRESS_MIN_RUNTIME = _env_int("VIROSYNC_DIAMOND_NO_PROGRESS_MIN_RUNTIME_SEC", 120)
+DIAMOND_WATCHDOG_POLL_INTERVAL = _env_int("VIROSYNC_DIAMOND_WATCHDOG_POLL_INTERVAL_SEC", 10)
 
 
 class DiamondNoProgressTimeout(subprocess.TimeoutExpired):
@@ -187,13 +177,21 @@ def _run_diamond(
         db_prefix = db_prefix.with_suffix("")
 
     base_cmd = [
-        "diamond", "blastp",
-        "--query", str(query_fasta),
-        "--db", str(db_prefix),
-        "--out", str(output_tsv),
-        "--evalue", str(evalue),
-        "--max-target-seqs", str(max_target_seqs),
-        "--outfmt", "6", *output_columns,
+        "diamond",
+        "blastp",
+        "--query",
+        str(query_fasta),
+        "--db",
+        str(db_prefix),
+        "--out",
+        str(output_tsv),
+        "--evalue",
+        str(evalue),
+        "--max-target-seqs",
+        str(max_target_seqs),
+        "--outfmt",
+        "6",
+        *output_columns,
     ]
     if extra_flags:
         base_cmd.extend(extra_flags)
@@ -220,11 +218,7 @@ def _run_diamond(
                 env=env,
             )
             start = time.monotonic()
-            effective_timeout = (
-                DIAMOND_DEFAULT_TIMEOUT
-                if timeout == DEFAULT_SEARCH_TIMEOUT
-                else timeout
-            )
+            effective_timeout = DIAMOND_DEFAULT_TIMEOUT if timeout == DEFAULT_SEARCH_TIMEOUT else timeout
             last_activity = _read_process_activity(proc.pid)
             last_activity_at = start
             poll_interval = max(1, DIAMOND_WATCHDOG_POLL_INTERVAL)
@@ -272,21 +266,16 @@ def _run_diamond(
         logger.debug("Diamond completed in %.2f seconds", elapsed)
     except subprocess.TimeoutExpired as e:
         elapsed = time.time() - start_time
-        reason = (
-            "made no CPU/IO progress"
-            if isinstance(e, DiamondNoProgressTimeout)
-            else "timed out"
-        )
+        reason = "made no CPU/IO progress" if isinstance(e, DiamondNoProgressTimeout) else "timed out"
         retry_threads = (
-            DIAMOND_RETRY_THREADS
-            if DIAMOND_RETRY_THREADS > 0
-            else max(1, min(threads, max(8, threads // 2)))
+            DIAMOND_RETRY_THREADS if DIAMOND_RETRY_THREADS > 0 else max(1, min(threads, max(8, threads // 2)))
         )
         logger.warning(
-            "Diamond blastp %s after %.1fs at threads=%d; retrying once "
-            "with threads=%d",
+            "Diamond blastp %s after %.1fs at threads=%d; retrying once with threads=%d",
             reason,
-            elapsed, threads, retry_threads,
+            elapsed,
+            threads,
+            retry_threads,
         )
         if output_tsv.exists():
             output_tsv.unlink()
@@ -294,20 +283,16 @@ def _run_diamond(
         try:
             _invoke(retry_threads)
             logger.info(
-                "Diamond blastp retry succeeded in %.1fs (initial attempt "
-                "stalled; reduced-thread retry cleared it)",
+                "Diamond blastp retry succeeded in %.1fs (initial attempt stalled; reduced-thread retry cleared it)",
                 time.time() - retry_start,
             )
         except subprocess.TimeoutExpired as retry_error:
             total = time.time() - start_time
-            retry_reason = (
-                "NO-PROGRESS"
-                if isinstance(retry_error, DiamondNoProgressTimeout)
-                else "TIMEOUT"
-            )
+            retry_reason = "NO-PROGRESS" if isinstance(retry_error, DiamondNoProgressTimeout) else "TIMEOUT"
             logger.error(
                 "Diamond blastp %s on both attempts (total %.1fs)",
-                retry_reason, total,
+                retry_reason,
+                total,
             )
             raise RuntimeError(
                 f"Diamond blastp timeout after {total:.2f}s including retry. "
@@ -315,14 +300,16 @@ def _run_diamond(
             )
         except subprocess.CalledProcessError as e:
             logger.error(
-                "Diamond blastp retry failed with exit code %d", e.returncode,
+                "Diamond blastp retry failed with exit code %d",
+                e.returncode,
             )
             raise
     except subprocess.CalledProcessError as e:
         elapsed = time.time() - start_time
         logger.error(
             "Diamond blastp failed with exit code %d after %.2fs",
-            e.returncode, elapsed,
+            e.returncode,
+            elapsed,
         )
         raise
     return output_tsv

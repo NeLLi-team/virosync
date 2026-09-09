@@ -19,26 +19,44 @@ from virosync.pipeline.phase3.mcp_detection import (
     is_mcp_model,
 )
 
-
 POSITIVES = [
     # NCLDV MCP models (exact)
-    "og1352", "OG1352", "Og1352",
-    "og484", "OG484",
-    "vs000086", "VS000086",
-    "vs000309", "VS000309",
-    "gamadvirusmcp", "gamadvirusMCP", "GamadvirusMCP",
-    "gvogm0003", "GVOGm0003", "GVOGM0003",
+    "og1352",
+    "OG1352",
+    "Og1352",
+    "og484",
+    "OG484",
+    "vs000086",
+    "VS000086",
+    "vs000309",
+    "VS000309",
+    "gamadvirusmcp",
+    "gamadvirusMCP",
+    "GamadvirusMCP",
+    "gvogm0003",
+    "GVOGm0003",
+    "GVOGM0003",
     # Bare symbolic MCP token
-    "mcp", "MCP",
+    "mcp",
+    "MCP",
     # Family-scoped prefixes with numeric suffixes
-    "plv_mcp_1", "PLV_MCP_1", "plv_mcp_10",
-    "vp_mcp_3", "VP_MCP_3", "vp_mcp_7",
-    "mirus_mcp_2", "Mirus_MCP_2",
+    "plv_mcp_1",
+    "PLV_MCP_1",
+    "plv_mcp_10",
+    "vp_mcp_3",
+    "VP_MCP_3",
+    "vp_mcp_7",
+    "mirus_mcp_2",
+    "Mirus_MCP_2",
     # Bare prefix form
-    "plv_mcp", "vp_mcp", "mirus_mcp",
+    "plv_mcp",
+    "vp_mcp",
+    "mirus_mcp",
     # Alternate orderings (mcp_mirus vs mirus_mcp, mcp_poli)
-    "mcp_mirus", "mcp_Mirus",
-    "mcp_poli", "MCP_POLI",
+    "mcp_mirus",
+    "mcp_Mirus",
+    "mcp_poli",
+    "MCP_POLI",
 ]
 
 

@@ -15,10 +15,7 @@ from virosync.pipeline.phase3.gene_taxonomy import extract_prefix
 
 
 def _write_proteome(path: Path, query: str = "contig_1_1") -> None:
-    path.write_text(
-        f">{query} # 1 # 300 # + # ID=1_1;partial=00\n"
-        f"{'M' * 100}\n"
-    )
+    path.write_text(f">{query} # 1 # 300 # + # ID=1_1;partial=00\n{'M' * 100}\n")
 
 
 def _hmm_hit(query: str = "contig_1_1") -> HMMHit:
@@ -34,10 +31,7 @@ def _hmm_hit(query: str = "contig_1_1") -> HMMHit:
 
 
 def _write_diamond(path: Path, query: str, targets: list[tuple[str, float, float]]) -> None:
-    lines = [
-        f"{query}\t{target}\t1e-40\t{bits}\t{pident}\t95.0\n"
-        for target, bits, pident in targets
-    ]
+    lines = [f"{query}\t{target}\t1e-40\t{bits}\t{pident}\t95.0\n" for target, bits, pident in targets]
     path.write_text("".join(lines))
 
 

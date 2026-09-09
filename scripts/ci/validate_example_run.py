@@ -7,11 +7,10 @@ import argparse
 import csv
 import hashlib
 import json
-from pathlib import Path, PurePath
 import re
 import sys
-from typing import Sequence
-
+from collections.abc import Sequence
+from pathlib import Path, PurePath
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = ROOT / "src"
@@ -24,7 +23,6 @@ from virosync.orchestration._flows.single_genome.run_state import (
     load_run_state,
     plan_resume,
 )
-
 
 SNAPSHOT_SCHEMA_VERSION = 4
 PREDICTION_TABLES = {
@@ -84,13 +82,9 @@ def _nonnegative_int(row: dict[str, str], field: str) -> int:
     try:
         value = int(row[field])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ExampleValidationError(
-            f"batch summary field {field!r} must be an integer"
-        ) from exc
+        raise ExampleValidationError(f"batch summary field {field!r} must be an integer") from exc
     if value < 0:
-        raise ExampleValidationError(
-            f"batch summary field {field!r} must be nonnegative"
-        )
+        raise ExampleValidationError(f"batch summary field {field!r} must be nonnegative")
     return value
 
 
@@ -98,13 +92,9 @@ def _elapsed_seconds(row: dict[str, str]) -> float:
     try:
         value = float(row["elapsed_sec"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ExampleValidationError(
-            "batch summary elapsed_sec must be numeric"
-        ) from exc
+        raise ExampleValidationError("batch summary elapsed_sec must be numeric") from exc
     if value < 0:
-        raise ExampleValidationError(
-            "batch summary elapsed_sec must be nonnegative"
-        )
+        raise ExampleValidationError("batch summary elapsed_sec must be nonnegative")
     return value
 
 
@@ -119,9 +109,7 @@ def _load_batch_rows(output_root: Path) -> list[dict[str, str]]:
         raise ExampleValidationError("batch_summary.tsv has no result rows")
     genome_ids = [row.get("genome_id", "") for row in rows]
     if not all(genome_ids) or len(set(genome_ids)) != len(genome_ids):
-        raise ExampleValidationError(
-            "batch_summary.tsv genome IDs must be nonempty and unique"
-        )
+        raise ExampleValidationError("batch_summary.tsv genome IDs must be nonempty and unique")
     return rows
 
 
@@ -142,14 +130,8 @@ def _load_eve_ids(run_dir: Path, relative_path: Path) -> list[str]:
 
 def _validated_genome_dir(output_root: Path, genome_id: str) -> Path:
     component = PurePath(genome_id)
-    if (
-        component.is_absolute()
-        or len(component.parts) != 1
-        or component.parts[0] in {"", ".", ".."}
-    ):
-        raise ExampleValidationError(
-            f"batch summary contains unsafe genome ID {genome_id!r}"
-        )
+    if component.is_absolute() or len(component.parts) != 1 or component.parts[0] in {"", ".", ".."}:
+        raise ExampleValidationError(f"batch summary contains unsafe genome ID {genome_id!r}")
     run_dir = output_root / genome_id
     if not run_dir.is_dir():
         raise ExampleValidationError(f"missing result directory for {genome_id}")
@@ -172,9 +154,7 @@ def _require_batch_contract(
     if row.get("error", ""):
         raise ExampleValidationError(f"{genome_id}: batch summary reports an error")
     if result.get("benchmark_eligible") is not True:
-        raise ExampleValidationError(
-            f"{genome_id}: authoritative state is not benchmark eligible"
-        )
+        raise ExampleValidationError(f"{genome_id}: authoritative state is not benchmark eligible")
 
     expected_counts = {
         "predictions": result.get("detailed_rows"),
@@ -184,28 +164,18 @@ def _require_batch_contract(
     tier_counts = result.get("tier_counts")
     class_counts = result.get("class_counts")
     if not isinstance(tier_counts, dict) or not isinstance(class_counts, dict):
-        raise ExampleValidationError(
-            f"{genome_id}: authoritative state lacks tier/class counts"
-        )
-    expected_counts.update(
-        {field: tier_counts.get(tier) for field, tier in TIER_FIELDS.items()}
-    )
-    expected_counts.update(
-        {field: class_counts.get(label) for field, label in CLASS_FIELDS.items()}
-    )
+        raise ExampleValidationError(f"{genome_id}: authoritative state lacks tier/class counts")
+    expected_counts.update({field: tier_counts.get(tier) for field, tier in TIER_FIELDS.items()})
+    expected_counts.update({field: class_counts.get(label) for field, label in CLASS_FIELDS.items()})
     for field, expected in expected_counts.items():
         actual = _nonnegative_int(row, field)
         if type(expected) is not int or actual != expected:
-            raise ExampleValidationError(
-                f"{genome_id}: batch {field}={actual} differs from state {expected!r}"
-            )
+            raise ExampleValidationError(f"{genome_id}: batch {field}={actual} differs from state {expected!r}")
     for field in ("genes", "hallmarks"):
         _nonnegative_int(row, field)
     elapsed = _elapsed_seconds(row)
     if require_resume and elapsed != 0:
-        raise ExampleValidationError(
-            f"{genome_id}: unchanged resume elapsed_sec must be 0, got {elapsed}"
-        )
+        raise ExampleValidationError(f"{genome_id}: unchanged resume elapsed_sec must be 0, got {elapsed}")
 
 
 def build_snapshot(
@@ -214,12 +184,9 @@ def build_snapshot(
     require_resume: bool = False,
 ) -> dict[str, object]:
     """Validate *output_root* and return a deterministic, path-free snapshot."""
-
     output_root = Path(output_root)
     if not output_root.is_dir():
-        raise ExampleValidationError(
-            f"example output root is not a directory: {output_root}"
-        )
+        raise ExampleValidationError(f"example output root is not a directory: {output_root}")
     runs: dict[str, object] = {}
     for row in _load_batch_rows(output_root):
         genome_id = row["genome_id"]
@@ -227,29 +194,19 @@ def build_snapshot(
         try:
             state = load_run_state(run_dir)
         except (OSError, TypeError, ValueError) as exc:
-            raise ExampleValidationError(
-                f"{genome_id}: invalid schema-v3 run state: {exc}"
-            ) from exc
+            raise ExampleValidationError(f"{genome_id}: invalid schema-v3 run state: {exc}") from exc
         if state.schema_version != RUN_STATE_SCHEMA_VERSION or state.status != "success":
-            raise ExampleValidationError(
-                f"{genome_id}: authoritative run state is not schema-v3 success"
-            )
+            raise ExampleValidationError(f"{genome_id}: authoritative run state is not schema-v3 success")
         if re.fullmatch(r"[0-9a-f]{64}", state.run_fingerprint) is None:
-            raise ExampleValidationError(
-                f"{genome_id}: run fingerprint is not a SHA-256 digest"
-            )
+            raise ExampleValidationError(f"{genome_id}: run fingerprint is not a SHA-256 digest")
         plan = plan_resume(
             run_dir,
             expected_run_fingerprint=state.run_fingerprint,
         )
         if not plan.completed:
-            raise ExampleValidationError(
-                f"{genome_id}: completion artifacts are stale: {plan.reason}"
-            )
+            raise ExampleValidationError(f"{genome_id}: completion artifacts are stale: {plan.reason}")
         if not isinstance(state.result, dict):
-            raise ExampleValidationError(
-                f"{genome_id}: success state has no result payload"
-            )
+            raise ExampleValidationError(f"{genome_id}: success state has no result payload")
         _require_batch_contract(row, state.result, require_resume=require_resume)
 
         artifacts = [
@@ -270,10 +227,7 @@ def build_snapshot(
             "attempt": state.attempt,
             "result": state.result,
             "artifacts": artifacts,
-            **{
-                field: _load_eve_ids(run_dir, relative_path)
-                for field, relative_path in PREDICTION_TABLES.items()
-            },
+            **{field: _load_eve_ids(run_dir, relative_path) for field, relative_path in PREDICTION_TABLES.items()},
             "run_state_sha256": _sha256(run_dir / RUN_STATE_FILENAME),
             "batch": {field: row[field] for field in SNAPSHOT_SUMMARY_FIELDS},
         }
@@ -289,9 +243,7 @@ def _load_snapshot(path: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ExampleValidationError(f"cannot read snapshot {path}: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
-        raise ExampleValidationError(
-            f"snapshot {path} is not schema v{SNAPSHOT_SCHEMA_VERSION}"
-        )
+        raise ExampleValidationError(f"snapshot {path} is not schema v{SNAPSHOT_SCHEMA_VERSION}")
     return payload
 
 
@@ -313,9 +265,7 @@ def _require_expected_totals(
             totals[field] += int(batch[field])
     for field, expected in (("predictions", predictions), ("accepted", accepted)):
         if expected is not None and totals[field] != expected:
-            raise ExampleValidationError(
-                f"example {field} total {totals[field]} differs from expected {expected}"
-            )
+            raise ExampleValidationError(f"example {field} total {totals[field]} differs from expected {expected}")
 
 
 def _require_expected_eve_ids(
@@ -387,20 +337,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.compare_snapshot is not None:
             expected = _load_snapshot(args.compare_snapshot)
             if current != expected:
-                raise ExampleValidationError(
-                    "authenticated run fingerprint, counts, or artifact identities changed"
-                )
+                raise ExampleValidationError("authenticated run fingerprint, counts, or artifact identities changed")
     except ExampleValidationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     artifact_count = sum(
-        len(run["artifacts"]) for run in current["runs"].values()  # type: ignore[union-attr,index]
+        len(run["artifacts"])
+        for run in current["runs"].values()  # type: ignore[union-attr,index]
     )
-    print(
-        f"Validated {len(current['runs'])} schema-v3 run(s) and "
-        f"{artifact_count} authenticated artifact(s)."
-    )
+    print(f"Validated {len(current['runs'])} schema-v3 run(s) and {artifact_count} authenticated artifact(s).")
     return 0
 
 

@@ -50,10 +50,7 @@ def _application() -> ApplicationConfig:
 
 
 def _disabled_feature_states() -> dict[str, FeatureResolution]:
-    return {
-        name: FeatureResolution(False, False, False)
-        for name in ("boltz", "tmvec", "interproscan")
-    }
+    return {name: FeatureResolution(False, False, False) for name in ("boltz", "tmvec", "interproscan")}
 
 
 def _stub_ready_tmvec_preflight_assets(monkeypatch) -> None:
@@ -111,12 +108,8 @@ def test_legacy_resume_is_absent_from_cli_yaml_and_flow_surfaces() -> None:
         single_genome_flow,
     )
 
-    assert "resume_allow_legacy_fingerprint" not in inspect.signature(
-        single_genome_flow
-    ).parameters
-    assert "resume_allow_legacy_fingerprint" not in inspect.signature(
-        _single_genome_flow_impl
-    ).parameters
+    assert "resume_allow_legacy_fingerprint" not in inspect.signature(single_genome_flow).parameters
+    assert "resume_allow_legacy_fingerprint" not in inspect.signature(_single_genome_flow_impl).parameters
 
 
 def test_build_pipeline_config_applies_explicit_cli_values_once() -> None:
@@ -361,9 +354,7 @@ def _stub_runtime_boundaries(monkeypatch, application, received) -> None:
             _disabled_feature_states(),
         ),
     )
-    monkeypatch.setattr(
-        orchestration_cli, "_validate_runtime_config", lambda config: None
-    )
+    monkeypatch.setattr(orchestration_cli, "_validate_runtime_config", lambda config: None)
 
     def fake_runner(**kwargs):
         received.update(kwargs)
@@ -1058,9 +1049,7 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
             _disabled_feature_states(),
         ),
     )
-    monkeypatch.setattr(
-        orchestration_cli, "_validate_runtime_config", lambda config: None
-    )
+    monkeypatch.setattr(orchestration_cli, "_validate_runtime_config", lambda config: None)
 
     def fake_runner(**kwargs):
         received.update(kwargs)

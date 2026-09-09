@@ -10,21 +10,21 @@ from virosync.orchestration._flows.single_genome.manifest import (
     _empty_prediction_summary,
 )
 from virosync.output_contract import (
-    EFFECTIVE_EVE_CLASSES,
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
+    EFFECTIVE_EVE_CLASSES,
     OUTPUT_SCHEMA_VERSION,
     effective_eve_class_count_total,
     normalize_effective_eve_class,
     normalize_effective_eve_class_counts,
     resolve_effective_eve_class,
 )
-from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     consensus_taxonomy_class,
     infer_likely_family,
     marker_taxonomy_category,
 )
+from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 
 
 def test_effective_class_partition_and_output_schema_are_versioned() -> None:
@@ -230,20 +230,10 @@ def test_marker_votes_with_its_own_top10_taxonomy() -> None:
 def test_markers_without_a_vote_leave_the_denominator() -> None:
     # One NCLDV vote beside one voteless marker is unanimous. Counting the
     # voteless marker would make it 1/2 and demote the EVE to VIRAL_UNKNOWN.
-    assert (
-        consensus_taxonomy_class(
-            [_marker("NCLDV", "80"), _marker("EUK", "90")]
-        )
-        == "NCLDV"
-    )
+    assert consensus_taxonomy_class([_marker("NCLDV", "80"), _marker("EUK", "90")]) == "NCLDV"
     # No vote at all: validated markers still say "viral", nothing says which.
     assert consensus_taxonomy_class([_marker("EUK", "90")]) == "VIRAL_UNKNOWN"
-    assert (
-        consensus_taxonomy_class(
-            [_marker("EUK", "90", validation_status="unvalidated")]
-        )
-        == "UNKNOWN"
-    )
+    assert consensus_taxonomy_class([_marker("EUK", "90", validation_status="unvalidated")]) == "UNKNOWN"
     assert consensus_taxonomy_class([]) == "UNKNOWN"
 
 
@@ -265,20 +255,10 @@ def test_a_marker_gene_confirmed_by_the_all_gene_search_weighs_three() -> None:
     assert consensus_taxonomy_class([ncldv, mirus]) == "VIRAL_UNKNOWN"
     # The all-gene search agreeing with the NCLDV marker takes it to 3 of 5.
     confirming = [_gene("p1", "NCLDV", "80")]
-    assert (
-        consensus_taxonomy_class(
-            [ncldv, mirus], gene_taxonomy_records=confirming
-        )
-        == "NCLDV"
-    )
+    assert consensus_taxonomy_class([ncldv, mirus], gene_taxonomy_records=confirming) == "NCLDV"
     # Disagreeing instead: NCLDV 2, MIRUS 2, PPV 1. Nothing clears half.
     conflicting = [_gene("p1", "PPV", "80")]
-    assert (
-        consensus_taxonomy_class(
-            [ncldv, mirus], gene_taxonomy_records=conflicting
-        )
-        == "VIRAL_UNKNOWN"
-    )
+    assert consensus_taxonomy_class([ncldv, mirus], gene_taxonomy_records=conflicting) == "VIRAL_UNKNOWN"
 
 
 def test_genes_without_a_marker_vote_once() -> None:
@@ -287,9 +267,7 @@ def test_genes_without_a_marker_vote_once() -> None:
     assert consensus_taxonomy_class([], gene_taxonomy_records=genes) == "PPV"
     # Flanking genes are outside the element and never vote.
     flanking = [_gene("g9", "NCLDV", "80", is_flanking=True)] * 5
-    assert (
-        consensus_taxonomy_class([], gene_taxonomy_records=genes + flanking) == "PPV"
-    )
+    assert consensus_taxonomy_class([], gene_taxonomy_records=genes + flanking) == "PPV"
 
 
 def test_a_single_mcp_vote_overrides_every_other_gene() -> None:
@@ -326,24 +304,13 @@ def test_disagreeing_mcp_markers_are_settled_by_the_weighted_vote() -> None:
         == "NCLDV"
     )
     # Two MCPs agreeing is not a tie at all; it is a single override.
-    assert (
-        consensus_taxonomy_class([ncldv_mcp, _marker("NCLDV", "80", gene="vp_mcp_3")])
-        == "NCLDV"
-    )
+    assert consensus_taxonomy_class([ncldv_mcp, _marker("NCLDV", "80", gene="vp_mcp_3")]) == "NCLDV"
 
 
 def test_gvmag_and_preplasmiviricota_phage_namespaces_fold_to_their_lineage() -> None:
-    assert (
-        consensus_taxonomy_class([_marker("GVMAG", "80", targets="GVMAG__x|p1")])
-        == "NCLDV"
-    )
+    assert consensus_taxonomy_class([_marker("GVMAG", "80", targets="GVMAG__x|p1")]) == "NCLDV"
     # A marker mixing the GVMAG namespace with NCLDV proper is still NCLDV.
-    assert (
-        consensus_taxonomy_class(
-            [_marker("GVMAG,NCLDV", "80,80", targets="GVMAG__x|p1,NCLDV__y|p1")]
-        )
-        == "NCLDV"
-    )
+    assert consensus_taxonomy_class([_marker("GVMAG,NCLDV", "80,80", targets="GVMAG__x|p1,NCLDV__y|p1")]) == "NCLDV"
 
     legacy_phage = _marker(
         "PHAGE",
@@ -392,9 +359,7 @@ def _expands_empty_summary(node: ast.Dict) -> bool:
 
 
 def _has_literal_key(node: ast.Dict, expected: str) -> bool:
-    return any(
-        isinstance(key, ast.Constant) and key.value == expected for key in node.keys
-    )
+    return any(isinstance(key, ast.Constant) and key.value == expected for key in node.keys)
 
 
 def test_all_successful_phase1_phase2_zero_returns_use_full_summary() -> None:
@@ -413,9 +378,7 @@ def test_a_marker_gene_is_never_counted_twice() -> None:
 
     marker = _marker("NCLDV", "80", porf_id="p1")
     # Confirmed by its own all-gene record: weight 3, not 2 plus a separate 1.
-    assert taxonomy_class_votes(
-        [marker], gene_taxonomy_records=[_gene("p1", "NCLDV", "80")]
-    ) == {"NCLDV": 3}
+    assert taxonomy_class_votes([marker], gene_taxonomy_records=[_gene("p1", "NCLDV", "80")]) == {"NCLDV": 3}
     # The HMM domain suffix must not break the join.
     assert taxonomy_class_votes(
         [_marker("NCLDV", "80", porf_id="p1|aa1")],
@@ -437,13 +400,8 @@ def test_an_mcp_weighs_exactly_five_even_when_its_own_gene_search_disagrees() ->
     # p1's all-gene record contradicts its capsid call and must add nothing.
     records = [_gene("p1", "PPV", "80"), _gene("p2", "PPV", "80")]
 
-    assert taxonomy_class_votes(
-        [ncldv_mcp, ppv_mcp], gene_taxonomy_records=records
-    ) == {"NCLDV": 5, "PPV": 5}
-    assert (
-        consensus_taxonomy_class([ncldv_mcp, ppv_mcp], gene_taxonomy_records=records)
-        == "VIRAL_UNKNOWN"
-    )
+    assert taxonomy_class_votes([ncldv_mcp, ppv_mcp], gene_taxonomy_records=records) == {"NCLDV": 5, "PPV": 5}
+    assert consensus_taxonomy_class([ncldv_mcp, ppv_mcp], gene_taxonomy_records=records) == "VIRAL_UNKNOWN"
 
 
 def test_an_mcp_profile_is_not_hidden_by_a_higher_scoring_profile() -> None:
@@ -459,13 +417,9 @@ def test_an_mcp_profile_is_not_hidden_by_a_higher_scoring_profile() -> None:
         return dict(_marker("PPV", "80", gene=gene, porf_id="p1"), hmm_score=score)
 
     # Same protein: the MCP wins despite the lower HMM score.
-    assert taxonomy_class_votes([hit("vp_mcp_3", 80.0), hit("gvogm0100", 90.0)]) == {
-        "PPV": 5
-    }
+    assert taxonomy_class_votes([hit("vp_mcp_3", 80.0), hit("gvogm0100", 90.0)]) == {"PPV": 5}
     # Order must not matter.
-    assert taxonomy_class_votes([hit("gvogm0100", 90.0), hit("vp_mcp_3", 80.0)]) == {
-        "PPV": 5
-    }
+    assert taxonomy_class_votes([hit("gvogm0100", 90.0), hit("vp_mcp_3", 80.0)]) == {"PPV": 5}
     # Distinct proteins still vote separately: 5 for the MCP, 2 for the marker.
     other = dict(_marker("PPV", "80", gene="gvogm0100", porf_id="p2"), hmm_score=90.0)
     assert taxonomy_class_votes([hit("vp_mcp_3", 80.0), other]) == {"PPV": 7}

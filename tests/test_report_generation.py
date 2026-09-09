@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import csv
-from collections import Counter, defaultdict
 import json
 import os
 import re
 import struct
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import pandas as pd
 import pytest
+from matplotlib.lines import Line2D
 
 from virosync.pipeline.phase3.eve_ani_clustering import (
     MIN_CLUSTER_ALIGNED_FRACTION,
@@ -100,11 +100,7 @@ def test_notebook_source_is_valid_jupytext_with_parameters_cell() -> None:
 
     assert report_generate._SOURCE.exists()
     notebook = jupytext.read(report_generate._SOURCE)
-    tagged = [
-        cell
-        for cell in notebook.cells
-        if "parameters" in cell.get("metadata", {}).get("tags", [])
-    ]
+    tagged = [cell for cell in notebook.cells if "parameters" in cell.get("metadata", {}).get("tags", [])]
     assert tagged, "notebook source is missing a 'parameters'-tagged cell"
 
 
@@ -119,9 +115,7 @@ def _notebook_cell(needle: str) -> str:
 def _notebook_code() -> str:
     jupytext = pytest.importorskip("jupytext")
     notebook = jupytext.read(report_generate._SOURCE)
-    return "\n".join(
-        cell.source for cell in notebook.cells if cell.cell_type == "code"
-    )
+    return "\n".join(cell.source for cell in notebook.cells if cell.cell_type == "code")
 
 
 def _standalone_helper_cell() -> str:
@@ -130,17 +124,13 @@ def _standalone_helper_cell() -> str:
     Anchored on the MCP detector because that helper mirrors a pipeline
     predicate and is parity-tested below, so it cannot quietly leave the cell.
     """
-    return _notebook_cell("def _report_is_mcp_gene(name):")
+    return _notebook_cell("def _report_is_mcp_gene(")
 
 
 def _parameter_defaults() -> dict[str, object]:
     jupytext = pytest.importorskip("jupytext")
     notebook = jupytext.read(report_generate._SOURCE)
-    cells = [
-        cell.source
-        for cell in notebook.cells
-        if "parameters" in cell.get("metadata", {}).get("tags", [])
-    ]
+    cells = [cell.source for cell in notebook.cells if "parameters" in cell.get("metadata", {}).get("tags", [])]
     assert len(cells) == 1
     namespace: dict[str, object] = {}
     exec(cells[0], namespace)
@@ -169,15 +159,11 @@ def test_notebook_reads_published_taxonomy_class_not_likely_family() -> None:
     """canon_family owns the only remaining read of the retired label."""
     jupytext = pytest.importorskip("jupytext")
     notebook = jupytext.read(report_generate._SOURCE)
-    cells = [
-        cell.source
-        for cell in notebook.cells
-        if cell.cell_type == "code" and "likely_family" in cell.source
-    ]
+    cells = [cell.source for cell in notebook.cells if cell.cell_type == "code" and "likely_family" in cell.source]
 
     assert len(cells) == 1, "likely_family is read outside canon_family"
-    assert "def canon_family(profile):" in cells[0]
-    assert "profile.get('taxonomy_class') or profile.get('likely_family')" in cells[0]
+    assert "def canon_family(" in cells[0]
+    assert 'profile.get("taxonomy_class") or profile.get("likely_family")' in cells[0]
     assert "canon_family(" in _notebook_code()
 
 
@@ -205,16 +191,25 @@ def _ani_namespace(tmp_path: Path) -> dict[str, object]:
     (tmp_path / "phase3_synthesis").mkdir()
     profiles = {
         "EVE_demo|contig_1_10-90": {
-            "taxonomy_class": "NCLDV", "has_mcp": True,
-            "cluster_id": 0, "cluster_size": 2, "confidence_tier": "HIGH",
+            "taxonomy_class": "NCLDV",
+            "has_mcp": True,
+            "cluster_id": 0,
+            "cluster_size": 2,
+            "confidence_tier": "HIGH",
         },
         "EVE_demo|contig_2_10-90": {
-            "taxonomy_class": "NCLDV", "has_mcp": False,
-            "cluster_id": 0, "cluster_size": 2, "confidence_tier": "HIGH",
+            "taxonomy_class": "NCLDV",
+            "has_mcp": False,
+            "cluster_id": 0,
+            "cluster_size": 2,
+            "confidence_tier": "HIGH",
         },
         "EVE_demo|contig_3_10-90": {
-            "taxonomy_class": "PPV", "has_mcp": False,
-            "cluster_id": -1, "cluster_size": 1, "confidence_tier": "LOW",
+            "taxonomy_class": "PPV",
+            "has_mcp": False,
+            "cluster_id": -1,
+            "cluster_size": 1,
+            "confidence_tier": "LOW",
         },
         # Pre-clustering result file: no cluster_id, no taxonomy_class.
         "EVE_demo|contig_4_10-90": {"likely_family": "VP", "confidence_tier": "LOW"},
@@ -327,10 +322,7 @@ def test_notebook_dense_network_renders_with_bounded_dimensions(tmp_path: Path) 
     assert width <= 3_840
     assert height <= 3_840
     assert namespace["graph"].engine == ANI_NETWORK_ENGINE
-    assert {
-        name: namespace["graph"].graph_attr[name]
-        for name in ANI_NETWORK_RENDER_ATTR
-    } == ANI_NETWORK_RENDER_ATTR
+    assert {name: namespace["graph"].graph_attr[name] for name in ANI_NETWORK_RENDER_ATTR} == ANI_NETWORK_RENDER_ATTR
     assert len(namespace["network_eves"]) == len(node_ids)
     assert len(namespace["network_edges"]) == 96
 
@@ -409,9 +401,7 @@ def test_notebook_mcp_helper_matches_canonical_detector() -> None:
         "",
         None,
     ]
-    assert [report_is_mcp_gene(name) for name in corpus] == [
-        is_mcp_gene(name) for name in corpus
-    ]
+    assert [report_is_mcp_gene(name) for name in corpus] == [is_mcp_gene(name) for name in corpus]
 
 
 def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
@@ -456,9 +446,7 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
     marker_dir = tmp_path / "phase1" / "marker_validation"
     marker_dir.mkdir(parents=True)
     marker_dir.joinpath("validated_marker_hits.tsv").write_text(
-        "query_porf\thmm_target\tvalidation_status\n"
-        "contig_4\tMCP\tvalidated_novel\n"
-        "contig_3\tMCP\tunvalidated\n"
+        "query_porf\thmm_target\tvalidation_status\ncontig_4\tMCP\tvalidated_novel\ncontig_3\tMCP\tunvalidated\n"
     )
 
     helper_namespace: dict[str, object] = {"pd": pd}
@@ -474,6 +462,7 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         "re": re,
         "csv": csv,
         "_report_is_mcp_gene": helper_namespace["_report_is_mcp_gene"],
+        "_report_prodigal_gene": helper_namespace["_report_prodigal_gene"],
     }
     exec(_notebook_cell("# ---- Load data ----"), namespace)
 
@@ -505,10 +494,7 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
     )
     exec(_notebook_cell("def _make_gene_record(gene, region):"), namespace)
 
-    genes = {
-        gene["porf_id"]: gene
-        for gene in namespace["eve_genes_extended"]["EVE_contig_0-150"]["eve_genes"]
-    }
+    genes = {gene["porf_id"]: gene for gene in namespace["eve_genes_extended"]["EVE_contig_0-150"]["eve_genes"]}
     assert (genes["contig_1"]["is_mcp"], genes["contig_1"]["fold_type"]) == (
         True,
         "HK97",
@@ -565,24 +551,14 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         namespace,
     )
 
-    marker_lines = [
-        line for line in namespace["ax"].lines if line.get_marker() in {"o", "*"}
-    ]
-    circles = {
-        float(line.get_xdata()[0])
-        for line in marker_lines
-        if line.get_marker() == "o"
-    }
+    marker_lines = [line for line in namespace["ax"].lines if line.get_marker() in {"o", "*"}]
+    circles = {float(line.get_xdata()[0]) for line in marker_lines if line.get_marker() == "o"}
     stars = {
-        float(line.get_xdata()[0]): line.get_markeredgecolor()
-        for line in marker_lines
-        if line.get_marker() == "*"
+        float(line.get_xdata()[0]): line.get_markeredgecolor() for line in marker_lines if line.get_marker() == "*"
     }
     assert circles == {15.0, 45.0, 105.0}
     assert stars == {15.0: "#CC3311", 75.0: "#000000", 135.0: "#0077BB"}
-    legend_labels = [
-        text.get_text() for text in namespace["ax"].get_legend().get_texts()
-    ]
+    legend_labels = [text.get_text() for text in namespace["ax"].get_legend().get_texts()]
     assert "Supported MCP" in legend_labels
     assert "HK97 fold classification" in legend_labels
     assert "DJR fold classification" in legend_labels
@@ -596,9 +572,7 @@ def test_notebook_taxonomy_resolver_matches_pipeline() -> None:
 
     taxonomy_lookup = {
         "EUK__EP00224": "Eukaryota|Chlorophyta",
-        "PHAGE__GCA-000906975-1": (
-            "Viruses|Varidnaviria|Bamfordvirae|Preplasmiviricota"
-        ),
+        "PHAGE__GCA-000906975-1": ("Viruses|Varidnaviria|Bamfordvirae|Preplasmiviricota"),
     }
     targets = [
         "EUK__EP00224|protein",
@@ -638,27 +612,36 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
     assert csv_values("NCLDV__,GVMAG__") == ["NCLDV__", "GVMAG__"]
     assert canonical("PHAGE", "PHAGE__plv|protein", taxonomy_lookup) == "PPV"
     assert canonical("GVMAG", "GVMAG__example|protein", taxonomy_lookup) == "GVMAG"
-    assert report_viral(
-        {
-            "top10_prefixes": "EUK__,GVMAG__",
-            "top10_targets": "EUK__host|protein,GVMAG__example|protein",
-            "top10_pidents": "99.0,31.0",
-        },
-        taxonomy_lookup,
-    ) == "GVMAG"
-    assert report_viral(
-        {
-            "top10_prefixes": "GVMAG__,EUK__,NCLDV__",
-            "top10_targets": "GVMAG__example|protein",
-            "top10_pidents": "not-a-number,99.0",
-        },
-        taxonomy_lookup,
-    ) is None
-    assert report_viral(
-        {
-            "top10_prefixes": "GVMAG__",
-            "top10_targets": "GVMAG__example|protein",
-            "top10_pidents": str(MIN_VIRAL_HIT_PIDENT - 0.1),
-        },
-        taxonomy_lookup,
-    ) is None
+    assert (
+        report_viral(
+            {
+                "top10_prefixes": "EUK__,GVMAG__",
+                "top10_targets": "EUK__host|protein,GVMAG__example|protein",
+                "top10_pidents": "99.0,31.0",
+            },
+            taxonomy_lookup,
+        )
+        == "GVMAG"
+    )
+    assert (
+        report_viral(
+            {
+                "top10_prefixes": "GVMAG__,EUK__,NCLDV__",
+                "top10_targets": "GVMAG__example|protein",
+                "top10_pidents": "not-a-number,99.0",
+            },
+            taxonomy_lookup,
+        )
+        is None
+    )
+    assert (
+        report_viral(
+            {
+                "top10_prefixes": "GVMAG__",
+                "top10_targets": "GVMAG__example|protein",
+                "top10_pidents": str(MIN_VIRAL_HIT_PIDENT - 0.1),
+            },
+            taxonomy_lookup,
+        )
+        is None
+    )

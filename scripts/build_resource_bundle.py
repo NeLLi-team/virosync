@@ -15,18 +15,18 @@ Example
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 import gzip
 import io
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
 
 # Keep the documented ``pixi run python scripts/...`` invocation independent of
 # whether the project has been installed in editable mode.
@@ -36,8 +36,8 @@ if str(_SRC_DIR) not in sys.path:
 
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
-    RUNTIME_RESOURCE_FILES,
     RESOURCE_MANIFEST_NAME,
+    RUNTIME_RESOURCE_FILES,
     SOURCE_RESOURCE_FILES,
     DiamondSequenceCounter,
     ResourceManifestError,
@@ -93,7 +93,6 @@ def _count_prefixed_lines(path: Path, prefix: bytes) -> int:
 
 def _validate_pfam_hmm(path: Path) -> int:
     """Return the Pfam model count after requiring a GA line for every model."""
-
     model_count = 0
     current_name = None
     has_ga = False
@@ -101,9 +100,7 @@ def _validate_pfam_hmm(path: Path) -> int:
         for line in handle:
             if line.startswith("NAME"):
                 if current_name is not None and not has_ga:
-                    raise ResourceManifestError(
-                        f"Pfam model {current_name!r} has no GA cutoff"
-                    )
+                    raise ResourceManifestError(f"Pfam model {current_name!r} has no GA cutoff")
                 fields = line.split()
                 if len(fields) < 2:
                     raise ResourceManifestError("Pfam HMM contains an invalid NAME line")
@@ -126,8 +123,7 @@ def _validate_pfam_annotations(path: Path) -> None:
     missing = required - header
     if missing:
         raise ResourceManifestError(
-            "model_annotations_with_interpro.tsv is missing required Pfam columns: "
-            f"{sorted(missing)}"
+            f"model_annotations_with_interpro.tsv is missing required Pfam columns: {sorted(missing)}"
         )
 
 
@@ -205,10 +201,7 @@ def _derived_overrides(
             if not Path(f"{combined_hmm}{suffix}").is_file()
         ]
         if missing:
-            raise ResourceManifestError(
-                "--skip-hmmpress requires all four existing indices; "
-                f"missing={missing}"
-            )
+            raise ResourceManifestError(f"--skip-hmmpress requires all four existing indices; missing={missing}")
     else:
         hmmpress = _require_tool("hmmpress", tool_finder)
         staged_hmm = staging_dir / "models" / "combined.hmm"
@@ -219,17 +212,13 @@ def _derived_overrides(
             relative = f"models/combined.hmm{suffix}"
             staged_index = Path(f"{staged_hmm}{suffix}")
             if not staged_index.is_file() or staged_index.stat().st_size <= 0:
-                raise ResourceManifestError(
-                    f"hmmpress did not create a non-empty {relative}"
-                )
+                raise ResourceManifestError(f"hmmpress did not create a non-empty {relative}")
             overrides[relative] = staged_index
 
     marker_dmnd = resources_dir / "marker/marker.dmnd"
     if skip_marker_dmnd:
         if not marker_dmnd.is_file() or marker_dmnd.stat().st_size <= 0:
-            raise ResourceManifestError(
-                "--skip-marker-dmnd requires an existing non-empty marker/marker.dmnd"
-            )
+            raise ResourceManifestError("--skip-marker-dmnd requires an existing non-empty marker/marker.dmnd")
     else:
         diamond = _require_tool("diamond", tool_finder)
         staged_stem = staging_dir / "marker" / "marker"
@@ -249,9 +238,7 @@ def _derived_overrides(
         )
         staged_dmnd = staged_stem.with_suffix(".dmnd")
         if not staged_dmnd.is_file() or staged_dmnd.stat().st_size <= 0:
-            raise ResourceManifestError(
-                "diamond makedb did not create a non-empty marker/marker.dmnd"
-            )
+            raise ResourceManifestError("diamond makedb did not create a non-empty marker/marker.dmnd")
         overrides["marker/marker.dmnd"] = staged_dmnd
 
     return overrides
@@ -298,7 +285,6 @@ def create_deterministic_archive(
     payload_files: tuple[str, ...] = CORE_RESOURCE_FILES,
 ) -> None:
     """Write a canonical gzip archive and atomically publish it."""
-
     output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output.name}.",
@@ -354,7 +340,6 @@ def build_resource_bundle(
     diamond_sequence_counter: DiamondSequenceCounter | None = None,
 ) -> BundleBuildResult:
     """Build a complete bundle without modifying ``resources_dir``."""
-
     if _VERSION_RE.fullmatch(version) is None:
         raise ResourceManifestError("version must have the form vMAJOR.MINOR.PATCH")
     if not isinstance(threads, int) or isinstance(threads, bool) or threads < 1:
@@ -363,19 +348,14 @@ def build_resource_bundle(
     logical_resources_dir = Path(resources_dir).expanduser()
     if logical_resources_dir.name != "virosync":
         raise ResourceManifestError(
-            "resources directory must be addressed through a path named 'virosync': "
-            f"{logical_resources_dir}"
+            f"resources directory must be addressed through a path named 'virosync': {logical_resources_dir}"
         )
     resources_dir = logical_resources_dir.resolve(strict=True)
     if not resources_dir.is_dir():
-        raise ResourceManifestError(
-            f"resources directory must be an existing directory: {resources_dir}"
-        )
+        raise ResourceManifestError(f"resources directory must be an existing directory: {resources_dir}")
     output = Path(output).expanduser().resolve(strict=False)
     if output == resources_dir or resources_dir in output.parents:
-        raise ResourceManifestError(
-            "bundle output must be outside the resources directory"
-        )
+        raise ResourceManifestError("bundle output must be outside the resources directory")
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
@@ -391,16 +371,14 @@ def build_resource_bundle(
             command_runner=command_runner,
             tool_finder=tool_finder,
         )
-        overrides["DB_VERSION"] = f"{version}\n".encode("utf-8")
+        overrides["DB_VERSION"] = f"{version}\n".encode()
         overrides["DATABASE_README.txt"] = _readme_bytes(resources_dir, version)
 
         if diamond_sequence_counter is None:
 
             def _count(payload: ResourcePayload) -> int:
                 if not isinstance(payload, Path):
-                    raise ResourceManifestError(
-                        "DIAMOND database override must be a file path"
-                    )
+                    raise ResourceManifestError("DIAMOND database override must be a file path")
                 return diamond_sequence_count(payload, command_runner=command_runner)
 
             diamond_sequence_counter = _count
@@ -440,7 +418,6 @@ def build_split_resource_bundles(
     diamond_sequence_counter: DiamondSequenceCounter | None = None,
 ) -> SplitBundleBuildResult:
     """Build bound runtime and source bundles without modifying ``resources_dir``."""
-
     if _VERSION_RE.fullmatch(version) is None:
         raise ResourceManifestError("version must have the form vMAJOR.MINOR.PATCH")
     if not isinstance(threads, int) or isinstance(threads, bool) or threads < 1:
@@ -453,15 +430,9 @@ def build_split_resource_bundles(
         )
     resources_dir = logical_resources_dir.resolve(strict=True)
     if not resources_dir.is_dir():
-        raise ResourceManifestError(
-            f"resources directory must be an existing directory: {resources_dir}"
-        )
-    pfam_count = _validate_pfam_hmm(
-        resources_dir / "models/pfam_virosync_screening.hmm"
-    )
-    _validate_pfam_annotations(
-        resources_dir / "models/model_annotations_with_interpro.tsv"
-    )
+        raise ResourceManifestError(f"resources directory must be an existing directory: {resources_dir}")
+    pfam_count = _validate_pfam_hmm(resources_dir / "models/pfam_virosync_screening.hmm")
+    _validate_pfam_annotations(resources_dir / "models/model_annotations_with_interpro.tsv")
 
     runtime_output = Path(runtime_output).expanduser().resolve(strict=False)
     source_output = Path(source_output).expanduser().resolve(strict=False)
@@ -469,13 +440,9 @@ def build_split_resource_bundles(
         raise ResourceManifestError("runtime and source bundle outputs must differ")
     for output in (runtime_output, source_output):
         if output == resources_dir or resources_dir in output.parents:
-            raise ResourceManifestError(
-                "bundle output must be outside the resources directory"
-            )
+            raise ResourceManifestError("bundle output must be outside the resources directory")
         if output.exists() and output.is_dir():
-            raise ResourceManifestError(
-                f"bundle output must not be a directory: {output}"
-            )
+            raise ResourceManifestError(f"bundle output must not be a directory: {output}")
         output.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
@@ -491,7 +458,7 @@ def build_split_resource_bundles(
             command_runner=command_runner,
             tool_finder=tool_finder,
         )
-        overrides["DB_VERSION"] = f"{version}\n".encode("utf-8")
+        overrides["DB_VERSION"] = f"{version}\n".encode()
         overrides["DATABASE_README.txt"] = _readme_bytes(
             resources_dir,
             version,
@@ -503,9 +470,7 @@ def build_split_resource_bundles(
 
             def _count(payload: ResourcePayload) -> int:
                 if not isinstance(payload, Path):
-                    raise ResourceManifestError(
-                        "DIAMOND database override must be a file path"
-                    )
+                    raise ResourceManifestError("DIAMOND database override must be a file path")
                 return diamond_sequence_count(payload, command_runner=command_runner)
 
             diamond_sequence_counter = _count
@@ -593,12 +558,8 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="source tarball output for --split",
     )
-    parser.add_argument(
-        "--threads", type=int, default=8, help="threads for diamond makedb"
-    )
-    parser.add_argument(
-        "--skip-hmmpress", action="store_true", help="reuse existing .h3* indices"
-    )
+    parser.add_argument("--threads", type=int, default=8, help="threads for diamond makedb")
+    parser.add_argument("--skip-hmmpress", action="store_true", help="reuse existing .h3* indices")
     parser.add_argument(
         "--skip-marker-dmnd",
         action="store_true",
@@ -617,19 +578,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.no_proteome:
         parser.error(
-            "--no-proteome cannot produce a schema-v1 release bundle; "
-            "genomes/combined_proteome.dmnd is required"
+            "--no-proteome cannot produce a schema-v1 release bundle; genomes/combined_proteome.dmnd is required"
         )
     if args.source_output is not None and not args.split:
         parser.error("--source-output requires --split")
     try:
         if args.split:
-            runtime_output = args.output or Path(
-                f"resources_{args.version.replace('.', '_')}_runtime.tar.gz"
-            )
-            source_output = args.source_output or Path(
-                f"resources_{args.version.replace('.', '_')}_source.tar.gz"
-            )
+            runtime_output = args.output or Path(f"resources_{args.version.replace('.', '_')}_runtime.tar.gz")
+            source_output = args.source_output or Path(f"resources_{args.version.replace('.', '_')}_source.tar.gz")
             split_result = build_split_resource_bundles(
                 args.resources_dir,
                 runtime_output,
@@ -640,9 +596,7 @@ def main(argv: list[str] | None = None) -> int:
                 skip_marker_dmnd=args.skip_marker_dmnd,
             )
         else:
-            output = args.output or Path(
-                f"resources_{args.version.replace('.', '_')}.tar.gz"
-            )
+            output = args.output or Path(f"resources_{args.version.replace('.', '_')}.tar.gz")
             result = build_resource_bundle(
                 args.resources_dir,
                 output,

@@ -6,14 +6,13 @@ but performs no I/O and imports no configuration or orchestration code.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import json
 from types import MappingProxyType
 from typing import Final
-
 
 ABLATION_CONTRACT_SCHEMA: Final = "virosync.ablation_contract/v1"
 ABLATION_EVENTS_SCHEMA: Final = "virosync.ablation_events/v1"
@@ -155,7 +154,6 @@ _validate_policy_registry()
 
 def ablation_policy(ablation_id: AblationID) -> AblationPolicy:
     """Return the frozen policy for an already validated ablation ID."""
-
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
     return ABLATION_POLICIES[ablation_id]
@@ -173,7 +171,6 @@ def _canonical_json_bytes(document: object) -> bytes:
 
 def ablation_contract_document() -> dict[str, object]:
     """Return a new JSON-compatible copy of the complete frozen contract."""
-
     return {
         "schema": ABLATION_CONTRACT_SCHEMA,
         "counter_fields": ["opportunities", "interventions", "changed"],
@@ -198,7 +195,6 @@ def ablation_contract_document() -> dict[str, object]:
 
 def ablation_contract_bytes() -> bytes:
     """Return the sole canonical byte representation of the policy contract."""
-
     return _canonical_json_bytes(ablation_contract_document())
 
 
@@ -239,12 +235,10 @@ class InterventionCounts:
     @property
     def is_zero(self) -> bool:
         """Return whether the counter group records no activity."""
-
         return not (self.opportunities or self.interventions or self.changed)
 
     def to_document(self) -> dict[str, int]:
         """Return a JSON-compatible counter document."""
-
         return {
             "opportunities": self.opportunities,
             "interventions": self.interventions,
@@ -259,7 +253,6 @@ class InterventionCounts:
         context: str,
     ) -> InterventionCounts:
         """Parse one counter group with an exact, closed field set."""
-
         if not isinstance(document, Mapping):
             raise AblationContractError(f"{context} must be an object")
         required = {"opportunities", "interventions", "changed"}
@@ -302,14 +295,12 @@ class AblationCounters:
 
     def for_key(self, key: InterventionKey) -> InterventionCounts:
         """Return one named counter group."""
-
         if not isinstance(key, InterventionKey):
             raise TypeError("key must be an InterventionKey")
         return getattr(self, key.value)
 
     def validate_for(self, ablation_id: AblationID) -> None:
         """Reject activity outside the counter group selected by an arm."""
-
         active = frozenset(ablation_policy(ablation_id).active_intervention_keys)
         invalid = [key.value for key in InterventionKey if key not in active and not self.for_key(key).is_zero]
         if invalid:
@@ -329,13 +320,11 @@ class AblationCounters:
 
     def to_document(self) -> dict[str, dict[str, int]]:
         """Return every counter group, including required zero groups."""
-
         return {key.value: self.for_key(key).to_document() for key in InterventionKey}
 
     @classmethod
     def from_document(cls, document: object) -> AblationCounters:
         """Parse the complete closed counter schema."""
-
         if not isinstance(document, Mapping):
             raise AblationContractError("counters must be an object")
         required = {key.value for key in InterventionKey}
@@ -361,7 +350,6 @@ class AblationCounters:
         changed: int = 0,
     ) -> AblationCounters:
         """Build a counter set with activity only in the selected group."""
-
         counts = InterventionCounts(
             opportunities=opportunities,
             interventions=interventions,
@@ -393,7 +381,6 @@ class AblationEvents:
 
     def to_document(self) -> dict[str, object]:
         """Return the exact JSON document authenticated for this run."""
-
         return {
             "schema": ABLATION_EVENTS_SCHEMA,
             "contract_sha256": ABLATION_CONTRACT_SHA256,
@@ -403,13 +390,11 @@ class AblationEvents:
 
     def to_bytes(self) -> bytes:
         """Return the sole canonical UTF-8 JSON representation."""
-
         return _canonical_json_bytes(self.to_document())
 
     @classmethod
     def from_document(cls, document: object) -> AblationEvents:
         """Validate a decoded ablation-events document."""
-
         if not isinstance(document, Mapping):
             raise AblationContractError("ablation events document must be an object")
         required = {"schema", "contract_sha256", "ablation_id", "counters"}
@@ -432,7 +417,6 @@ class AblationEvents:
     @classmethod
     def from_bytes(cls, content: bytes) -> AblationEvents:
         """Validate exact canonical artifact bytes and return typed content."""
-
         if type(content) is not bytes:
             raise TypeError("ablation events content must be bytes")
         if len(content) > MAX_ABLATION_EVENTS_BYTES:
@@ -449,11 +433,9 @@ class AblationEvents:
 
 def validate_ablation_events_document(document: object) -> AblationEvents:
     """Validate a decoded event document using the closed current contract."""
-
     return AblationEvents.from_document(document)
 
 
 def validate_ablation_events_bytes(content: bytes) -> AblationEvents:
     """Validate canonical event bytes using the closed current contract."""
-
     return AblationEvents.from_bytes(content)

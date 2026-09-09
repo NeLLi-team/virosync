@@ -6,11 +6,10 @@ to a notebook, parameterized for the genome, and executed with papermill so the
 shipped ``.ipynb`` carries rendered figures and outputs.
 """
 
-from dataclasses import dataclass
 import logging
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class EveReportPaths:
 def generate_eve_report(
     output_dir: Path,
     genome_id: str,
-    tax_labels_path: Optional[Path] = None,
+    tax_labels_path: Path | None = None,
 ) -> EveReportPaths:
     """Render the per-genome EVE analysis notebook.
 
@@ -45,9 +44,7 @@ def generate_eve_report(
         import jupytext
         import papermill as pm
     except ImportError as exc:
-        raise RuntimeError(
-            "jupytext and papermill are required to generate the EVE report"
-        ) from exc
+        raise RuntimeError("jupytext and papermill are required to generate the EVE report") from exc
 
     jupyter_dir = output_dir / "notebooks" / "jupyter"
     jupyter_dir.mkdir(parents=True, exist_ok=True)

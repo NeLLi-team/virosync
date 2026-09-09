@@ -1,5 +1,4 @@
-"""
-Compositional features for EVE detection.
+"""Compositional features for EVE detection.
 
 This module measures sequence composition relative to a background model.
 Composition can differ for viral or cellular reasons; these features alone
@@ -37,8 +36,7 @@ class BackgroundModel:
 
     @classmethod
     def from_sequence(cls, sequence: str, k: int = 4) -> "BackgroundModel":
-        """
-        Compute background model from a genome sequence.
+        """Compute background model from a genome sequence.
 
         Args:
             sequence: Full genome sequence (uppercase, may contain N)
@@ -52,16 +50,16 @@ class BackgroundModel:
         # Compute k-mer frequencies
         kmer_counts = Counter()
         for i in range(len(sequence) - k + 1):
-            kmer = sequence[i:i+k]
-            if 'N' not in kmer:
+            kmer = sequence[i : i + k]
+            if "N" not in kmer:
                 kmer_counts[kmer] += 1
 
         total_kmers = sum(kmer_counts.values())
         kmer_freqs = {kmer: count / total_kmers for kmer, count in kmer_counts.items()} if total_kmers > 0 else {}
 
         # Compute GC content
-        gc_count = sequence.count('G') + sequence.count('C')
-        valid_bases = len(sequence) - sequence.count('N')
+        gc_count = sequence.count("G") + sequence.count("C")
+        valid_bases = len(sequence) - sequence.count("N")
         gc_content = gc_count / valid_bases if valid_bases > 0 else 0.5
 
         return cls(
@@ -76,8 +74,7 @@ def calculate_kfd(
     background_freqs: dict[str, float],
     k: int = 4,
 ) -> float:
-    """
-    Calculate K-mer Frequency Deviation using Jensen-Shannon distance.
+    """Calculate K-mer Frequency Deviation using Jensen-Shannon distance.
 
     KFD measures how different the k-mer composition of a local window is
     from the genome-wide background. Viral insertions often have distinct
@@ -105,20 +102,20 @@ def calculate_kfd(
     if len(sequence) < k:
         return 0.0
 
-    n_count = sequence.count('N')
+    n_count = sequence.count("N")
     if n_count / len(sequence) > 0.5:
         return 0.0
 
     # Generate all possible k-mers for the alphabet
-    alphabet = 'ATGC'
-    all_kmers = [''.join(p) for p in product(alphabet, repeat=k)]
+    alphabet = "ATGC"
+    all_kmers = ["".join(p) for p in product(alphabet, repeat=k)]
     kmer_map = {kmer: i for i, kmer in enumerate(all_kmers)}
 
     # Calculate k-mer frequencies for the local sequence window
     window_counts = Counter()
     for i in range(len(sequence) - k + 1):
-        kmer = sequence[i:i+k]
-        if 'N' not in kmer:
+        kmer = sequence[i : i + k]
+        if "N" not in kmer:
             window_counts[kmer] += 1
 
     total_window_kmers = sum(window_counts.values())
@@ -151,8 +148,7 @@ def calculate_kfd(
 
 
 def calculate_gc_content(sequence: str) -> float:
-    """
-    Calculate GC content of a sequence.
+    """Calculate GC content of a sequence.
 
     Args:
         sequence: DNA sequence (may contain N)
@@ -161,14 +157,13 @@ def calculate_gc_content(sequence: str) -> float:
         GC fraction (0-1), or 0.5 if sequence has no valid bases
     """
     sequence = sequence.upper()
-    gc_count = sequence.count('G') + sequence.count('C')
-    valid_bases = len(sequence) - sequence.count('N')
+    gc_count = sequence.count("G") + sequence.count("C")
+    valid_bases = len(sequence) - sequence.count("N")
     return gc_count / valid_bases if valid_bases > 0 else 0.5
 
 
 def calculate_gc_deviation(sequence: str, background_gc: float) -> float:
-    """
-    Calculate deviation of local GC content from background.
+    """Calculate deviation of local GC content from background.
 
     Args:
         sequence: Local DNA sequence

@@ -1,5 +1,4 @@
-"""
-Hierarchical Hallmark Graph (HHG) Seeding.
+"""Hierarchical Hallmark Graph (HHG) Seeding.
 
 Path A of Phase 1: Identifies EVE seeds based on viral hallmark gene HMM hits.
 
@@ -27,29 +26,28 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import pyhmmer
 from Bio import SeqIO
 from pyhmmer.easel import SequenceFile
-from pyhmmer.plan7 import HMMFile, HMM
+from pyhmmer.plan7 import HMM, HMMFile
 
-from virosync.pipeline.phase0.translation import PORF
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
+from virosync.pipeline.phase0.translation import PORF
+from virosync.pipeline.phase1.coordinates import aa_to_nt_coords, parse_frame_id
+from virosync.pipeline.phase1.marker_validation import (
+    ValidatedMarkerHit,
+    extract_hmm_hit_sequences,
+    filter_validated_markers,
+    run_diamond_on_hmm_hits,
+)
 from virosync.pipeline.phase1.viral_markers import (
+    ALL_DIAGNOSTIC_MARKERS,
     VIRAL_FAMILIES,
     AssemblyMode,
     get_assembly_mode,
     get_family_for_markers,
-    ALL_DIAGNOSTIC_MARKERS,
 )
-from virosync.pipeline.phase1.marker_validation import (
-    extract_hmm_hit_sequences,
-    run_diamond_on_hmm_hits,
-    filter_validated_markers,
-    ValidatedMarkerHit,
-)
-from virosync.pipeline.phase1.coordinates import parse_frame_id, aa_to_nt_coords
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +94,7 @@ class HHGSeed:
     anchors: list[Anchor] = field(default_factory=list)
     neighbor_score: float = 0.0
     source: str = "hhg"
-    predicted_family: Optional[str] = None  # Predicted viral family (ncldv, mriyavirus, etc.)
+    predicted_family: str | None = None  # Predicted viral family (ncldv, mriyavirus, etc.)
 
     @property
     def length(self) -> int:
@@ -114,10 +112,9 @@ class HHGSeed:
 
 def load_hmm_profiles(
     hmm_file: Path,
-    allowlist: Optional[set[str]] = None,
+    allowlist: set[str] | None = None,
 ) -> list[HMM]:
-    """
-    Load HMM profiles from a file.
+    """Load HMM profiles from a file.
 
     Args:
         hmm_file: Path to HMM profile file (can contain multiple profiles)
@@ -137,7 +134,7 @@ def load_hmm_profiles(
     return profiles
 
 
-def load_hmm_allowlist(allowlist_path: Optional[Path]) -> Optional[set[str]]:
+def load_hmm_allowlist(allowlist_path: Path | None) -> set[str] | None:
     """Load allowed HMM names (one per line)."""
     if not allowlist_path:
         return None
@@ -155,7 +152,7 @@ def load_hmm_allowlist(allowlist_path: Optional[Path]) -> Optional[set[str]]:
     return allowlist if allowlist else None
 
 
-def load_faa_markers(marker_faa_dir: Optional[Path]) -> Optional[set[str]]:
+def load_faa_markers(marker_faa_dir: Path | None) -> set[str] | None:
     """Load marker names from FAA filenames (stem)."""
     if not marker_faa_dir:
         return None
@@ -249,10 +246,9 @@ def validate_hmm_hits_with_markers(
     threads: int = 4,
     top_k: int = 10,
     neighbor_genes: int = 5,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
 ) -> list[HMMHit]:
-    """
-    Validate HMM hits with marker-specific FAA databases.
+    """Validate HMM hits with marker-specific FAA databases.
 
     For each HMM hit:
       1) BLAST (Diamond) query pORFs against corresponding marker FAA.
@@ -334,8 +330,7 @@ def validate_hmm_hits_with_markers(
                 top_targets = [t for _, t in hits_list[:top_k]]
                 for rank, (bits_val, target) in enumerate(hits_list[:top_k], start=1):
                     is_validated = any(
-                        target.startswith(p)
-                        for p in ("NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__")
+                        target.startswith(p) for p in ("NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__")
                     )
                     diamond_top_hits.append(
                         (
@@ -371,10 +366,7 @@ def validate_hmm_hits_with_markers(
 
     # Neighbor support: another validated marker within +/- neighbor_genes
     porf_order = _load_porf_order(proteome_fasta)
-    porf_index = {
-        scaffold: {porf_id: idx for idx, porf_id in enumerate(ids)}
-        for scaffold, ids in porf_order.items()
-    }
+    porf_index = {scaffold: {porf_id: idx for idx, porf_id in enumerate(ids)} for scaffold, ids in porf_order.items()}
     neighbor_supported: set[str] = set()
     for hit in hits:
         if hit.query_name not in validated:
@@ -416,11 +408,10 @@ def validate_hmm_hits_with_combined_db(
     threads: int = 4,
     top_k: int = 10,
     evalue: float = 1e-5,
-    output_dir: Optional[Path] = None,
-    genome_fasta: Optional[Path] = None,
+    output_dir: Path | None = None,
+    genome_fasta: Path | None = None,
 ) -> tuple[list[HMMHit], list[ValidatedMarkerHit]]:
-    """
-    Validate HMM hits using HMM-gated Diamond workflow (PIPELINE_HMM_GATED_PLAN.md Steps 2-3).
+    """Validate HMM hits using HMM-gated Diamond workflow (PIPELINE_HMM_GATED_PLAN.md Steps 2-3).
 
     This is the KEY OPTIMIZATION: Only run Diamond on HMM-hit pORFs, not all pORFs.
     This reduces runtime from hours to minutes on large genomes.
@@ -506,18 +497,18 @@ def validate_hmm_hits_with_combined_db(
             diamond_out_path = output_dir / "diamond_top10.tsv"
             if diamond_output.exists():
                 import shutil
+
                 shutil.copy(diamond_output, diamond_out_path)
                 logger.info(f"Copied Diamond top-10 results to: {diamond_out_path}")
 
     # Filter to only "validated" and "supported" markers
     validated_porf_ids = {
-        vm.query_porf for vm in validated_markers
-        if vm.validation_status in ("validated", "supported")
+        vm.query_porf for vm in validated_markers if vm.validation_status in ("validated", "supported")
     }
 
     validated_hits = [h for h in hits if h.query_name in validated_porf_ids]
 
-    logger.info(f"Marker validation complete:")
+    logger.info("Marker validation complete:")
     logger.info(f"  Total HMM hits: {len(hits)}")
     logger.info(f"  Validated/Supported: {len(validated_hits)}")
     logger.info(f"  Reduction: {len(hits) - len(validated_hits)} hits filtered")
@@ -545,13 +536,12 @@ CAPS_BITSCORE_FLOOR = 75.0
 def run_hmmsearch(
     proteome_fasta: Path,
     hmm_profiles: list[HMM],
-    evalue_cutoff: Optional[float] = None,
+    evalue_cutoff: float | None = None,
     threads: int = 4,
-    chunk_size: Optional[int] = None,
+    chunk_size: int | None = None,
     enforce_ga_cutoffs: bool = False,
 ) -> list[HMMHit]:
-    """
-    Run HMM search using pyhmmer.
+    """Run HMM search using pyhmmer.
 
     Args:
         proteome_fasta: Path to conceptual proteome FASTA
@@ -704,14 +694,11 @@ def run_hmmsearch(
     return hits
 
 
-
-
 def parse_porf_coordinates(
     porf_id: str,
-    coord_lookup: Optional[dict[str, tuple[str, int, int, str]]] = None,
-) -> Optional[tuple[str, int, int, str]]:
-    """
-    Parse pORF ID to extract genomic coordinates.
+    coord_lookup: dict[str, tuple[str, int, int, str]] | None = None,
+) -> tuple[str, int, int, str] | None:
+    """Parse pORF ID to extract genomic coordinates.
 
     Expected format: pORF_1|scaffold:start-end_strand:+_frame:1
 
@@ -730,11 +717,10 @@ def identify_anchors(
     hits: list[HMMHit],
     min_score: float = 50.0,
     min_evalue: float = 1e-5,
-    genome_lengths: Optional[dict[str, int]] = None,
-    coord_lookup: Optional[dict[str, tuple[str, int, int, str]]] = None,
+    genome_lengths: dict[str, int] | None = None,
+    coord_lookup: dict[str, tuple[str, int, int, str]] | None = None,
 ) -> list[Anchor]:
-    """
-    Identify anchor pORFs from HMM hits.
+    """Identify anchor pORFs from HMM hits.
 
     Anchors are pORFs with strong hits to viral hallmark genes.
     If a pORF has multiple hits, the best scoring hit is used.
@@ -804,8 +790,7 @@ def calculate_neighbor_scores(
     all_hits: list[HMMHit],
     window_size: int = 50000,
 ) -> dict[str, float]:
-    """
-    Calculate neighbor density score for each anchor.
+    """Calculate neighbor density score for each anchor.
 
     The neighbor score measures the concentration of other viral-like pORFs
     in the genomic vicinity of an anchor.
@@ -873,8 +858,7 @@ def form_seeds(
     allow_isolated_anchors: bool = True,
     isolated_anchor_min_score: float = 100.0,
 ) -> list[HHGSeed]:
-    """
-    Form seed regions from qualified anchors.
+    """Form seed regions from qualified anchors.
 
     Seeds are formed by:
     1. Filtering anchors by neighbor score threshold
@@ -942,10 +926,7 @@ def form_seeds(
                 current_end = max(current_end, anchor_end)
             else:
                 # Emit current seed
-                max_neighbor_score = max(
-                    neighbor_scores.get(a.porf_id, 0)
-                    for a in current_anchors
-                )
+                max_neighbor_score = max(neighbor_scores.get(a.porf_id, 0) for a in current_anchors)
                 seeds.append(
                     HHGSeed(
                         scaffold=scaffold,
@@ -961,10 +942,7 @@ def form_seeds(
                 current_end = anchor_end
 
         # Emit final seed
-        max_neighbor_score = max(
-            neighbor_scores.get(a.porf_id, 0)
-            for a in current_anchors
-        )
+        max_neighbor_score = max(neighbor_scores.get(a.porf_id, 0) for a in current_anchors)
         seeds.append(
             HHGSeed(
                 scaffold=scaffold,
@@ -984,10 +962,9 @@ def filter_seeds_by_diversity(
     min_marker_types: int = 2,
     high_diversity_threshold: int = 3,
     high_neighbor_score_threshold: float = 5.0,
-    assembly_mode: Optional[AssemblyMode] = None,
+    assembly_mode: AssemblyMode | None = None,
 ) -> list[HHGSeed]:
-    """
-    Filter seeds requiring marker diversity.
+    """Filter seeds requiring marker diversity.
 
     Real NCLDV EVEs contain multiple different hallmark genes. Seeds with only
     one marker type (especially universal markers like PolB, RNAPL) are likely
@@ -1074,10 +1051,7 @@ def filter_seeds_by_diversity(
 
             # Accept ANY marker with high enough score in fragmented mode,
             # subject to the family-specific floor and marker-count gate.
-            if (
-                family_marker_gate_ok
-                and max_anchor_score >= family_single_min_score
-            ):
+            if family_marker_gate_ok and max_anchor_score >= family_single_min_score:
                 logger.debug(
                     f"Accepted seed {seed.scaffold}:{seed.start}-{seed.end}: "
                     f"high-scoring marker (score={max_anchor_score:.1f}, markers={marker_types}, "
@@ -1110,8 +1084,7 @@ def filter_seeds_by_diversity(
             marker_name = next(iter(marker_types))
             if marker_name.startswith("gvogm"):
                 logger.debug(
-                    f"Accepted seed {seed.scaffold}:{seed.start}-{seed.end}: "
-                    f"single GVOGm marker ({marker_name})"
+                    f"Accepted seed {seed.scaffold}:{seed.start}-{seed.end}: single GVOGm marker ({marker_name})"
                 )
                 seed.predicted_family = predicted_family
                 filtered.append(seed)
@@ -1142,8 +1115,7 @@ def filter_seeds_by_diversity(
         virus_specific = marker_types & (VIRUS_SPECIFIC_MARKERS | ALL_DIAGNOSTIC_MARKERS)
         if virus_specific:
             logger.debug(
-                f"Accepted seed {seed.scaffold}:{seed.start}-{seed.end}: "
-                f"has virus-specific marker(s): {virus_specific}"
+                f"Accepted seed {seed.scaffold}:{seed.start}-{seed.end}: has virus-specific marker(s): {virus_specific}"
             )
             seed.predicted_family = predicted_family
             filtered.append(seed)
@@ -1203,29 +1175,28 @@ def filter_seeds_by_diversity(
 def hhg_seeding_pipeline(
     proteome_fasta: Path,
     hmm_file: Path,
-    genome_fasta: Optional[Path] = None,
-    hmm_allowlist: Optional[Path] = None,
-    marker_faa_dir: Optional[Path] = None,
-    marker_db: Optional[Path] = None,
+    genome_fasta: Path | None = None,
+    hmm_allowlist: Path | None = None,
+    marker_faa_dir: Path | None = None,
+    marker_db: Path | None = None,
     marker_top_k: int = 10,
     marker_neighbor_genes: int = 5,
-    evalue_cutoff: Optional[float] = None,
+    evalue_cutoff: float | None = None,
     min_anchor_score: float = 50.0,
     min_neighbor_score: float = 5.0,
     window_size: int = 50000,
     threads: int = 4,
-    hmm_chunk_size: Optional[int] = None,
+    hmm_chunk_size: int | None = None,
     enforce_ga_cutoffs: bool = True,
     min_marker_types: int = 2,
     high_diversity_threshold: int = 3,
     allow_isolated_anchors: bool = True,
     isolated_anchor_min_score: float = 100.0,
-    assembly_mode: Optional[str] = None,
+    assembly_mode: str | None = None,
     return_hits: bool = False,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
 ) -> list[HHGSeed] | tuple[list[HHGSeed], list[HMMHit]]:
-    """
-    Full HHG seeding pipeline.
+    """Full HHG seeding pipeline.
 
     This is the main entry point for Path A of Phase 1.
 
@@ -1307,9 +1278,7 @@ def hhg_seeding_pipeline(
     faa_markers = load_faa_markers(marker_faa_dir) if marker_faa_dir else None
     if faa_markers is not None:
         allowlist = allowlist & faa_markers if allowlist else faa_markers
-        logger.info(
-            "Filtered HMMs to %d markers with FAA files", len(allowlist)
-        )
+        logger.info("Filtered HMMs to %d markers with FAA files", len(allowlist))
     hmm_profiles = load_hmm_profiles(hmm_file, allowlist=allowlist)
 
     # Step 2: Run HMM search
@@ -1389,10 +1358,7 @@ def hhg_seeding_pipeline(
     logger.info("Step 3: Identifying anchor sequences from HMM hits...")
     genome_lengths = None
     if genome_fasta:
-        genome_lengths = {
-            rec.id: len(rec.seq)
-            for rec in SeqIO.parse(genome_fasta, "fasta")
-        }
+        genome_lengths = {rec.id: len(rec.seq) for rec in SeqIO.parse(genome_fasta, "fasta")}
     coord_lookup = {}
     try:
         for record in SeqIO.parse(proteome_fasta, "fasta"):
@@ -1447,9 +1413,7 @@ def hhg_seeding_pipeline(
             for idx, seed in enumerate(seeds, start=1):
                 name = f"HHG_{idx}_{seed.scaffold}_{seed.start}_{seed.end}"
                 score = min(int(seed.neighbor_score * 100), 1000)
-                handle.write(
-                    f"{seed.scaffold}\t{seed.start}\t{seed.end}\t{name}\t{score}\t.\n"
-                )
+                handle.write(f"{seed.scaffold}\t{seed.start}\t{seed.end}\t{name}\t{score}\t.\n")
         logger.info("Wrote HHG seeds BED: %s", bed_path)
 
     # Log summary
@@ -1460,7 +1424,7 @@ def hhg_seeding_pipeline(
         for s in seeds:
             unique_hallmarks.update(s.hallmark_genes)
 
-        logger.info(f"HHG seeding complete:")
+        logger.info("HHG seeding complete:")
         logger.info(f"  Seeds: {len(seeds)}")
         logger.info(f"  Total coverage: {total_length:,} bp")
         logger.info(f"  Total anchors: {total_anchors}")

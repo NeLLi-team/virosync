@@ -1,5 +1,4 @@
-"""
-Phylogenetic Validation for Phase 3 Evidence Synthesis.
+"""Phylogenetic Validation for Phase 3 Evidence Synthesis.
 
 This module provides final validation of EVE predictions using:
 1. GVClass: Phylogenetic classification against NCLDV/MIRUS reference genomes
@@ -17,11 +16,10 @@ evidence that can confirm or reject candidate regions:
 
 import logging
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
-from collections import Counter
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -50,21 +48,22 @@ UNCERTAIN_DOMAINS = {"UNKNOWN", "PHAGE"}  # UNKNOWN = novel/uncertain, not non-v
 
 class PhylogeneticVerdict(Enum):
     """Verdict from phylogenetic validation."""
-    CONFIRMED_VIRAL = "confirmed_viral"      # Strong viral signal
-    LIKELY_VIRAL = "likely_viral"            # Moderate viral signal
-    AMBIGUOUS = "ambiguous"                  # Mixed or weak signal
-    LIKELY_NON_VIRAL = "likely_non_viral"    # Moderate non-viral signal
+
+    CONFIRMED_VIRAL = "confirmed_viral"  # Strong viral signal
+    LIKELY_VIRAL = "likely_viral"  # Moderate viral signal
+    AMBIGUOUS = "ambiguous"  # Mixed or weak signal
+    LIKELY_NON_VIRAL = "likely_non_viral"  # Moderate non-viral signal
     CONFIRMED_NON_VIRAL = "confirmed_non_viral"  # Strong non-viral signal
 
 
 @dataclass
 class GVClassValidation:
-    """
-    GVClass validation result for a single EVE region.
+    """GVClass validation result for a single EVE region.
 
     GVClass provides phylogenetic classification based on marker genes
     and k-nearest neighbors against NCLDV/MIRUS reference genomes.
     """
+
     eve_id: str
     domain: str  # Best/primary domain: NCLDV, MIRUS, EUK, BAC, etc.
     domain_percent: float  # Percentage of nearest neighbors in this domain
@@ -76,9 +75,8 @@ class GVClassValidation:
     all_domains: dict[str, tuple[int, float]] = field(default_factory=dict)
 
     @property
-    def is_viral(self) -> Optional[bool]:
-        """
-        Whether classified as viral.
+    def is_viral(self) -> bool | None:
+        """Whether classified as viral.
 
         Returns:
             True: Domain is viral (NCLDV, MIRUS)
@@ -105,8 +103,7 @@ class GVClassValidation:
 
     @property
     def has_viral_in_neighbors(self) -> bool:
-        """
-        Whether ANY nearest neighbor is viral (NCLDV or MIRUS).
+        """Whether ANY nearest neighbor is viral (NCLDV or MIRUS).
 
         This is used to avoid rejecting regions where the best domain is cellular
         but viral domains are present among the top neighbors. Such cases may
@@ -119,8 +116,7 @@ class GVClassValidation:
 
     @property
     def confidence_score(self) -> float:
-        """
-        Confidence score (0-1) for viral classification.
+        """Confidence score (0-1) for viral classification.
 
         Based on domain percentage and marker count.
 
@@ -154,12 +150,12 @@ class GVClassValidation:
 
 @dataclass
 class DiamondValidation:
-    """
-    Diamond BLASTp validation result for a single EVE region.
+    """Diamond BLASTp validation result for a single EVE region.
 
     Diamond provides protein-level classification by searching ALL
     predicted proteins against reference proteomes.
     """
+
     eve_id: str
     total_proteins: int
     proteins_with_hits: int
@@ -178,8 +174,7 @@ class DiamondValidation:
 
     @property
     def confidence_score(self) -> float:
-        """
-        Confidence score (0-1) for viral classification.
+        """Confidence score (0-1) for viral classification.
 
         Based on proportion of viral vs non-viral hits.
         """
@@ -196,8 +191,7 @@ class DiamondValidation:
 
     @property
     def contamination_score(self) -> float:
-        """
-        Score indicating potential contamination (0-1).
+        """Score indicating potential contamination (0-1).
 
         High score means region contains mixed viral/host proteins,
         suggesting integration boundaries may be imprecise.
@@ -220,8 +214,7 @@ class DiamondValidation:
 
     @property
     def has_viral_in_neighbors(self) -> bool:
-        """
-        Whether ANY of the top 5 hits for any protein is viral (NCLDV or PHAGE).
+        """Whether ANY of the top 5 hits for any protein is viral (NCLDV or PHAGE).
 
         This is used to avoid rejecting regions where the best domain is cellular
         but viral domains are present among the top hits.
@@ -240,19 +233,19 @@ class DiamondValidation:
 
 @dataclass
 class PhylogeneticValidationResult:
-    """
-    Combined phylogenetic validation result.
+    """Combined phylogenetic validation result.
 
     Integrates GVClass and Diamond results into a single verdict.
     """
+
     eve_id: str
     scaffold: str
     start: int
     end: int
 
     # Component results
-    gvclass: Optional[GVClassValidation] = None
-    diamond: Optional[DiamondValidation] = None
+    gvclass: GVClassValidation | None = None
+    diamond: DiamondValidation | None = None
 
     # Combined verdict
     verdict: PhylogeneticVerdict = PhylogeneticVerdict.AMBIGUOUS
@@ -264,8 +257,7 @@ class PhylogeneticValidationResult:
     is_chimeric: bool = False  # Mixed viral/host signal
 
     def compute_verdict(self) -> None:
-        """
-        Compute combined verdict from GVClass and Diamond results.
+        """Compute combined verdict from GVClass and Diamond results.
 
         Logic:
         1. If both agree viral with high confidence -> CONFIRMED_VIRAL
@@ -316,7 +308,9 @@ class PhylogeneticValidationResult:
                 self.verdict = PhylogeneticVerdict.LIKELY_NON_VIRAL
         elif gv_viral is False or dm_viral is False:
             # One says non-viral
-            self.verdict = PhylogeneticVerdict.LIKELY_NON_VIRAL if self.combined_score < 0.4 else PhylogeneticVerdict.AMBIGUOUS
+            self.verdict = (
+                PhylogeneticVerdict.LIKELY_NON_VIRAL if self.combined_score < 0.4 else PhylogeneticVerdict.AMBIGUOUS
+            )
         else:
             self.verdict = PhylogeneticVerdict.AMBIGUOUS
 
@@ -330,8 +324,7 @@ class PhylogeneticValidationResult:
 
     @property
     def has_viral_in_any_neighbor(self) -> bool:
-        """
-        Whether ANY neighbor (from GVClass or Diamond) is viral.
+        """Whether ANY neighbor (from GVClass or Diamond) is viral.
 
         This is used to avoid rejecting regions that have viral signal
         among their top 5 nearest neighbors, even if the best hit is cellular.
@@ -343,8 +336,7 @@ class PhylogeneticValidationResult:
 
     @property
     def rejects_viral(self) -> bool:
-        """
-        Whether phylogenetic evidence rejects viral classification.
+        """Whether phylogenetic evidence rejects viral classification.
 
         IMPORTANT: Does NOT reject if viral signal is found among any
         of the top 5 neighbors from GVClass or Diamond. This allows
@@ -360,8 +352,7 @@ class PhylogeneticValidationResult:
 
 
 class PhylogeneticValidator:
-    """
-    Phylogenetic validation engine for Phase 3.
+    """Phylogenetic validation engine for Phase 3.
 
     Runs GVClass and Diamond on final EVE predictions to provide
     independent phylogenetic confirmation or rejection.
@@ -371,13 +362,12 @@ class PhylogeneticValidator:
         self,
         genome_path: Path,
         work_dir: Path,
-        gvclass_db: Optional[Path] = None,
-        diamond_db: Optional[Path] = None,
+        gvclass_db: Path | None = None,
+        diamond_db: Path | None = None,
         threads: int = 16,
         min_region_size: int = 20000,
     ):
-        """
-        Initialize phylogenetic validator.
+        """Initialize phylogenetic validator.
 
         Args:
             genome_path: Path to input genome FASTA
@@ -406,9 +396,7 @@ class PhylogeneticValidator:
     def genome_seqs(self) -> dict:
         """Lazy load genome sequences."""
         if self._genome_seqs is None:
-            self._genome_seqs = {
-                rec.id: rec for rec in SeqIO.parse(self.genome_path, "fasta")
-            }
+            self._genome_seqs = {rec.id: rec for rec in SeqIO.parse(self.genome_path, "fasta")}
         return self._genome_seqs
 
     def validate_eve(
@@ -420,8 +408,7 @@ class PhylogeneticValidator:
         run_gvclass: bool = True,
         run_diamond: bool = True,
     ) -> PhylogeneticValidationResult:
-        """
-        Validate a single EVE region.
+        """Validate a single EVE region.
 
         Args:
             eve_id: EVE identifier
@@ -461,9 +448,7 @@ class PhylogeneticValidator:
         # Run GVClass
         if run_gvclass:
             try:
-                result.gvclass = self._run_gvclass(
-                    eve_id, str(region_seq), actual_start, actual_end
-                )
+                result.gvclass = self._run_gvclass(eve_id, str(region_seq), actual_start, actual_end)
             except EvidenceToolError:
                 raise
             except Exception as e:
@@ -472,9 +457,7 @@ class PhylogeneticValidator:
         # Run Diamond
         if run_diamond and self.diamond_db:
             try:
-                result.diamond = self._run_diamond(
-                    eve_id, str(region_seq)
-                )
+                result.diamond = self._run_diamond(eve_id, str(region_seq))
             except EvidenceToolError:
                 raise
             except Exception as e:
@@ -491,7 +474,7 @@ class PhylogeneticValidator:
         sequence: str,
         start: int,
         end: int,
-    ) -> Optional[GVClassValidation]:
+    ) -> GVClassValidation | None:
         """Run GVClass on a single region."""
         filename_component = safe_filename_component(eve_id)
         self.gvclass_dir.mkdir(parents=True, exist_ok=True)
@@ -513,8 +496,10 @@ class PhylogeneticValidator:
         cmd = [
             "gvclass",
             str(input_dir),
-            "-o", str(output_dir),
-            "-t", str(self.threads),
+            "-o",
+            str(output_dir),
+            "-t",
+            str(self.threads),
             "--mode-fast",
         ]
 
@@ -533,8 +518,7 @@ class PhylogeneticValidator:
 
             if result.returncode != 0:
                 raise EvidenceToolError(
-                    f"GVClass exited {result.returncode} for {eve_id}: "
-                    f"{(result.stderr or '').strip()[-400:]}"
+                    f"GVClass exited {result.returncode} for {eve_id}: {(result.stderr or '').strip()[-400:]}"
                 )
 
         except subprocess.TimeoutExpired as exc:
@@ -557,7 +541,7 @@ class PhylogeneticValidator:
         self,
         eve_id: str,
         summary_path: Path,
-    ) -> Optional[GVClassValidation]:
+    ) -> GVClassValidation | None:
         """Parse GVClass summary file, capturing ALL domains from nearest neighbors."""
         with open(summary_path) as f:
             f.readline()  # Skip header
@@ -626,7 +610,7 @@ class PhylogeneticValidator:
         self,
         eve_id: str,
         sequence: str,
-    ) -> Optional[DiamondValidation]:
+    ) -> DiamondValidation | None:
         """Run Diamond BLASTp on proteins from region."""
         filename_component = safe_filename_component(eve_id)
         self.diamond_dir.mkdir(parents=True, exist_ok=True)
@@ -683,9 +667,18 @@ class PhylogeneticValidator:
                 evalue=1e-5,
                 max_target_seqs=5,
                 output_columns=[
-                    "qseqid", "sseqid", "pident", "length", "mismatch",
-                    "gapopen", "qstart", "qend", "sstart", "send",
-                    "evalue", "bitscore",
+                    "qseqid",
+                    "sseqid",
+                    "pident",
+                    "length",
+                    "mismatch",
+                    "gapopen",
+                    "qstart",
+                    "qend",
+                    "sstart",
+                    "send",
+                    "evalue",
+                    "bitscore",
                 ],
                 extra_flags=["--sensitive"],
                 timeout=600,

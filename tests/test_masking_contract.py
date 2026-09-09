@@ -9,6 +9,9 @@ from types import SimpleNamespace
 import click
 import pytest
 
+import virosync.orchestration._flows.single_genome.orchestrator as orchestrator
+import virosync.pipeline.phase0.masking as masking
+import virosync.utils.provenance as provenance
 from virosync.config import (
     ApplicationConfig,
     ConfigError,
@@ -24,9 +27,6 @@ from virosync.orchestration._flows.single_genome.resume import (
     _valid_completion_manifest,
 )
 from virosync.orchestration.cli import _build_pipeline_config
-import virosync.orchestration._flows.single_genome.orchestrator as orchestrator
-import virosync.pipeline.phase0.masking as masking
-import virosync.utils.provenance as provenance
 
 
 def _fasta(path: Path, sequence: str = "ACGTACGT", seq_id: str = "demo") -> Path:
@@ -206,11 +206,7 @@ def test_backend_version_probe_uses_verified_dash_v(
 
     def _run(command, **_kwargs):
         calls.append(list(command))
-        text = (
-            "Tandem Repeats Finder, Version 4.10.0-rc.2"
-            if command[0] == "trf"
-            else "RepeatMasker version 4.2.2"
-        )
+        text = "Tandem Repeats Finder, Version 4.10.0-rc.2" if command[0] == "trf" else "RepeatMasker version 4.2.2"
         return SimpleNamespace(returncode=0, stdout=text + "\n", stderr="")
 
     monkeypatch.setattr(masking.subprocess, "run", _run)
@@ -250,11 +246,14 @@ def test_off_mode_spawns_no_tools_and_writes_valid_status(
     assert result.output_path == input_fasta
     assert result.masked_bases == 0
     assert result.benchmark_eligible
-    assert masking.load_masking_result(
-        result.status_path,
-        expected_config=MaskingConfig(),
-        expected_input=input_fasta,
-    ) == result
+    assert (
+        masking.load_masking_result(
+            result.status_path,
+            expected_config=MaskingConfig(),
+            expected_input=input_fasta,
+        )
+        == result
+    )
 
 
 def test_self_fingerprinted_illegal_off_state_is_ineligible_and_rejected(
@@ -277,9 +276,7 @@ def test_self_fingerprinted_illegal_off_state_is_ineligible_and_rejected(
     payload["requested_backend"] = "trf"
     payload["effective_backend"] = "trf"
     payload["benchmark_eligible"] = False
-    result.status_path.write_text(
-        json.dumps(_reseal_status_payload(payload), indent=2, sort_keys=True) + "\n"
-    )
+    result.status_path.write_text(json.dumps(_reseal_status_payload(payload), indent=2, sort_keys=True) + "\n")
     with pytest.raises(ValueError, match="invalid masking state.*off status"):
         masking.load_masking_result(result.status_path)
 
@@ -573,9 +570,7 @@ def test_subprocess_permission_error_uses_configured_off_fallback(
     monkeypatch.setattr(
         masking.subprocess,
         "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            PermissionError("execution denied")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("execution denied")),
     )
     result = masking.mask_genome_pipeline(
         input_fasta,
@@ -753,15 +748,18 @@ def test_combined_failure_uses_named_trf_fallback_and_is_ineligible(
     assert result.configured_fallback_backend is MaskingBackend.TRF
     assert result.fallback_backend is MaskingBackend.TRF
     assert not result.benchmark_eligible
-    assert masking.load_masking_result(
-        result.status_path,
-        repeat_regions=result.repeat_regions,
-        expected_config=_species_config(
-            policy=MaskingFailurePolicy.FALLBACK,
-            fallback=MaskingBackend.TRF,
-        ),
-        expected_input=input_fasta,
-    ) == result
+    assert (
+        masking.load_masking_result(
+            result.status_path,
+            repeat_regions=result.repeat_regions,
+            expected_config=_species_config(
+                policy=MaskingFailurePolicy.FALLBACK,
+                fallback=MaskingBackend.TRF,
+            ),
+            expected_input=input_fasta,
+        )
+        == result
+    )
 
 
 def test_failed_named_fallback_is_fatal(tmp_path: Path, monkeypatch) -> None:

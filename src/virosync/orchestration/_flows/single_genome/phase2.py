@@ -1,27 +1,28 @@
 """Phase 2 subflow: boundary refinement (host-trim, taxonomy, Diamond)."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from virosync.ablation import AblationID, InterventionCounts
-from virosync.utils.atomic_write import atomic_write_context
+from virosync.config import PipelineConfig
 from virosync.orchestration.runtime import call_task
 from virosync.orchestration.tasks import generate_outputs_task
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
-    GenomeDiamondQuery,
-    GeneTaxonomy,
     ControlStats,
-    collect_query_proteins,
+    GeneTaxonomy,
+    GenomeDiamondQuery,
+    build_proteome_index,
     classify_cached_diamond_query,
+    collect_query_proteins,
+    compute_control_stats,
     run_batched_diamond,
     run_full_proteome_diamond,
-    compute_control_stats,
-    build_proteome_index,
-    write_taxonomy_map,
     write_control_stats,
+    write_taxonomy_map,
 )
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
     _empty_prediction_summary,
@@ -42,11 +43,42 @@ from .reports import _generate_required_reports
 from .resume import _require_phase2b_gene_taxonomy_db
 
 
+@dataclass(frozen=True, slots=True)
+class Phase2Result:
+    """Inputs produced for evidence synthesis."""
+
+    refined_boundaries: list[RefinedBoundary]
+    boundary_taxonomy_map: dict[str, GeneTaxonomy]
+    boundary_control_stats: ControlStats | None
+    boundary_diamond_query: GenomeDiamondQuery | None
+    proteome_index: dict
+    boundaries_bed: Path
+    elapsed: float
+    goto_phase3: bool = False
+    phase_outcome: str = "complete"
+    ablation_counts: InterventionCounts = InterventionCounts()
+
+
+@dataclass(frozen=True, slots=True)
+class Phase2Terminal:
+    """A complete public flow result produced before Phase 3."""
+
+    result: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundaryEvidence:
+    """Genome-wide taxonomy evidence used for boundary refinement."""
+
+    taxonomy_map: dict[str, GeneTaxonomy]
+    control_stats: ControlStats
+    query: GenomeDiamondQuery
+
+
 def _sum_intervention_counts(
     *counts: InterventionCounts,
 ) -> InterventionCounts:
     """Sum candidate-level counts from independent hooks in one phase."""
-
     return InterventionCounts(
         opportunities=sum(item.opportunities for item in counts),
         interventions=sum(item.interventions for item in counts),
@@ -58,7 +90,6 @@ def _seeds_to_refined_boundaries(
     merged_seeds: list,
 ) -> list[RefinedBoundary]:
     """Convert exact seed intervals to Phase-2 boundaries."""
-
     return [
         RefinedBoundary(
             scaffold=seed.scaffold,
@@ -113,7 +144,6 @@ def _recalculate_boundary_composition(
     masked_path: Path,
 ) -> None:
     """Set GC and k-mer deviations from each boundary's current coordinates."""
-
     from Bio import SeqIO
 
     from virosync.features.compositional import (
@@ -139,11 +169,7 @@ def _recalculate_boundary_composition(
             background_chunks.append(seq[:remaining])
             sampled_bases += min(len(seq), remaining)
         background_seq = "".join(background_chunks)
-        bg_model = (
-            BackgroundModel.from_sequence(background_seq, k=4)
-            if len(background_seq) >= 100
-            else None
-        )
+        bg_model = BackgroundModel.from_sequence(background_seq, k=4) if len(background_seq) >= 100 else None
 
         for boundary in boundaries:
             boundary.gc_deviation = 0.0
@@ -176,20 +202,14 @@ def _write_phase2_checkpoints(
     boundary_diamond_query,
 ) -> Path:
     """Write the lossless Phase-2 state and its BED report."""
-
     phase2_dir = output_dir / "phase2"
     phase2_dir.mkdir(parents=True, exist_ok=True)
     boundaries_bed_path = phase2_dir / "refined_boundaries.bed"
     with atomic_write_context(boundaries_bed_path, "w") as handle:
         for boundary in refined_boundaries:
-            eve_id = (
-                f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
-            )
+            eve_id = f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
             score = int(boundary.confidence * 1000)
-            handle.write(
-                f"{boundary.scaffold}\t{boundary.start}\t{boundary.end}\t"
-                f"{eve_id}\t{score}\t.\n"
-            )
+            handle.write(f"{boundary.scaffold}\t{boundary.start}\t{boundary.end}\t{eve_id}\t{score}\t.\n")
     write_phase2_state(
         phase2_dir / PHASE2_STATE_FILENAME,
         refined_boundaries,
@@ -204,71 +224,119 @@ def _write_phase2_checkpoints(
     return boundaries_bed_path
 
 
+def _run_boundary_diamond(
+    *,
+    merged_seeds: list,
+    proteome_index: dict,
+    proteome_path: Path,
+    gene_taxonomy_db: Path,
+    output_dir: Path,
+    config: PipelineConfig,
+    superset_diamond_hits: dict | None,
+    logger: object,
+) -> _BoundaryEvidence:
+    """Classify the shared seed, flank, and control protein query."""
+    phase2 = config.phase2
+    threads = config.compute.gene_taxonomy_threads or config.compute.effective_threads()
+    target_control_genes = max(1, phase2.diamond_control_sample_size)
+    control_min_distance = max(1, phase2.diamond_control_min_distance)
+    logger.info(
+        "Phase 2b: Control sampling target: %d controls (min_distance=%d genes)",
+        target_control_genes,
+        control_min_distance,
+    )
+    diamond_config = BoundaryDiamondConfig(
+        flank_genes=phase2.diamond_flank_genes,
+        control_sample_size=target_control_genes,
+        control_min_distance=control_min_distance,
+        control_region_genes=11,
+        top_k=phase2.diamond_top_k,
+        chunk_size=phase2.diamond_chunk_size,
+        threads=threads,
+        random_seed=phase2.diamond_random_seed,
+        host_prefix=f"{config.host.label}__",
+        taxonomy_weight_mode=phase2.taxonomy_weight_mode,
+        search_backend=config.compute.search_backend.value,
+    )
+    query = collect_query_proteins(
+        merged_seeds=merged_seeds,
+        proteome_index=proteome_index,
+        config=diamond_config,
+    )
+    logger.info(
+        "Phase 2b: Collected %d query proteins (%d EVE regions, %d controls)",
+        len(query.all_porf_ids),
+        len(query.eve_porf_ids),
+        len(query.control_porf_ids),
+    )
+
+    diamond_dir = output_dir / "phase2" / "boundary_diamond"
+    diamond_dir.mkdir(parents=True, exist_ok=True)
+    tax_lookup = None
+    taxonomy_labels_file = config.databases.taxonomy_labels_file
+    if taxonomy_labels_file and taxonomy_labels_file.exists():
+        from virosync.pipeline.host_signatures import TaxonomyLabelLookup
+
+        tax_lookup = TaxonomyLabelLookup.load(taxonomy_labels_file)
+        logger.info(
+            "Phase 2b: Loaded taxonomy labels for fingerprinting (%d entries)",
+            len(tax_lookup),
+        )
+
+    if superset_diamond_hits is not None:
+        taxonomy_map = classify_cached_diamond_query(
+            query=query,
+            diamond_hits=superset_diamond_hits,
+            proteome_index=proteome_index,
+            config=diamond_config,
+            taxonomy_lookup=tax_lookup,
+        )
+    else:
+        taxonomy_map = run_batched_diamond(
+            query=query,
+            proteome_fasta=proteome_path,
+            diamond_db=gene_taxonomy_db,
+            output_dir=diamond_dir,
+            proteome_index=proteome_index,
+            config=diamond_config,
+            taxonomy_lookup=tax_lookup,
+        )
+    logger.info("Phase 2b: Diamond complete (%d pORFs classified)", len(taxonomy_map))
+
+    control_taxonomy = [taxonomy_map[pid] for pid in query.control_porf_ids if pid in taxonomy_map]
+    control_stats = compute_control_stats(control_taxonomy, diamond_config.host_prefix)
+    logger.info(
+        "Phase 2b: Control stats: n_genes=%d, host_freq=%.2f, no_hit_freq=%.2f, dominant=%s",
+        control_stats.n_genes,
+        control_stats.host_frequency,
+        control_stats.no_hit_frequency,
+        control_stats.dominant_organism,
+    )
+    write_taxonomy_map(taxonomy_map, diamond_dir / "taxonomy_map.tsv")
+    write_control_stats(control_stats, diamond_dir / "control_stats.json")
+    return _BoundaryEvidence(
+        taxonomy_map=taxonomy_map,
+        control_stats=control_stats,
+        query=query,
+    )
+
+
 def _run_phase2_subflow(
-    # Core inputs from Phase 0
     masked_path: Path,
     proteome_path: Path,
-    # Core inputs from Phase 1
     merged_seeds: list,
     validated_markers: list,
     host_signature_model,
-    # Core identifiers
     output_dir: Path,
     genome_id: str,
-    # Resume configuration
-    resume: bool,
-    refined_bed: Path,
-    # Database parameters
-    gene_taxonomy_faa_db: Optional[Path],
-    marker_db: Optional[Path],
-    taxonomy_labels_file: Optional[Path],
-    # Host configuration
-    host_prefixes: list[str],
-    host_label: str,
-    high_pident_host_threshold: float,
-    # Phase 2a: Host-signature trimming parameters
-    boundary_host_trim_enabled: bool,
-    boundary_host_trim_window_bp: int,
-    boundary_host_trim_step_bp: int,
-    boundary_host_trim_max_host_fraction: float,
-    boundary_host_trim_min_viral_fraction: float,
-    boundary_host_trim_score_threshold: float,
-    boundary_host_trim_buffer_kb: int,
-    boundary_host_trim_min_overlap_score: float,
-    boundary_host_signature_min_token_len: int,
-    taxonomy_weight_mode: str,
-    boundary_taxonomy_ml_enabled: bool,
-    boundary_taxonomy_ml_model: str,
-    boundary_taxonomy_ml_threshold: float,
-    boundary_taxonomy_ml_neighbor_window: int,
-    # Phase 2b: Batched Diamond parameters
-    boundary_diamond_flank_genes: int,
-    boundary_diamond_control_sample_size: int,
-    boundary_diamond_control_min_distance: int,
-    boundary_diamond_top_k: int,
-    boundary_diamond_chunk_size: int,
-    boundary_diamond_random_seed: int,
-    # Threading
-    threads: int,
-    gene_taxonomy_threads: Optional[int],
-    # Output configuration
-    extended_output: bool,
-    # Search backend
-    search_backend: str,
-    # Timing reference
+    config: PipelineConfig,
     genome_start_time: float,
-    # Logger
     logger,
-    # Resume config fingerprint (written to early-exit completion manifests)
-    config_fingerprint: Optional[str] = None,
-    # Opt-in research prototype: search the full proteome once for Phase 2a/2b.
-    boundary_diamond_superset_prototype_enabled: bool = False,
-    # Set only after schema-v3 marker validation by the orchestrator.
+    config_fingerprint: str | None = None,
     resume_authorized: bool = False,
-    ablation_id: AblationID = AblationID.A0,
-) -> dict:
-    """
-    Phase 2: Boundary refinement (gene extension, Diamond taxonomy, host trimming).
+    threads: int | None = None,
+) -> Phase2Result | Phase2Terminal:
+    """Phase 2: Boundary refinement (gene extension, Diamond taxonomy, host trimming).
 
     This phase refines seed boundaries through:
     - Gene-based seed extension (±5 genes, merge overlapping)
@@ -281,41 +349,59 @@ def _run_phase2_subflow(
     Args:
         masked_path: Path to masked genome FASTA
         proteome_path: Path to protein FASTA
-        repeat_regions: List of RepeatRegion objects
         merged_seeds: List of MergedSeed objects from Phase 1
         validated_markers: List of validated marker hits from Phase 1
         host_signature_model: HostSignatureModel from Phase 1
-        ... (see function signature for all parameters)
+        config: Resolved pipeline configuration.
         logger: Logger instance
 
     Returns:
-        dict with keys:
-            - refined_boundaries: List of RefinedBoundary objects
-            - boundary_taxonomy_map: Dict mapping pORF ID to GeneTaxonomy
-            - boundary_control_stats: ControlStats object
-            - boundary_diamond_query: GenomeDiamondQuery object
-            - proteome_index: Dict mapping scaffold to pORF list
-            - goto_phase3: Bool indicating if resuming from BED
-            - elapsed: Phase 2 elapsed time in seconds
-
-        Or error dict with keys:
-            - genome_id, success=True, predictions=0, accepted=0, output_files, elapsed_sec
+        Inputs for Phase 3, or a terminal public flow result.
     """
     import time
+
+    databases = config.databases
+    compute = config.compute
+    host = config.host
+    phase2 = config.phase2
+    phase3 = config.phase3
+    resume = config.execution.resume
+    ablation_id = config.ablation.id
+    threads = threads if threads is not None else compute.effective_threads()
+    gene_taxonomy_faa_db = databases.gene_taxonomy_faa_db
+    taxonomy_labels_file = databases.taxonomy_labels_file
+    host_label = host.label
+    high_pident_host_threshold = host.high_pident_threshold
+    boundary_host_trim_enabled = phase2.host_trim_enabled
+    boundary_host_trim_window_bp = phase2.host_trim_window_bp
+    boundary_host_trim_step_bp = phase2.host_trim_step_bp
+    boundary_host_trim_max_host_fraction = phase2.host_trim_max_host_fraction
+    boundary_host_trim_min_viral_fraction = phase2.host_trim_min_viral_fraction
+    boundary_host_trim_score_threshold = phase2.host_trim_score_threshold
+    boundary_host_trim_buffer_kb = phase2.host_trim_buffer_kb
+    boundary_host_trim_min_overlap_score = phase2.host_trim_min_overlap_score
+    boundary_host_signature_min_token_len = phase2.host_signature_min_token_len
+    taxonomy_weight_mode = phase2.taxonomy_weight_mode
+    boundary_taxonomy_ml_enabled = phase2.taxonomy_ml_enabled
+    boundary_taxonomy_ml_model = phase2.taxonomy_ml_model
+    boundary_taxonomy_ml_threshold = phase2.taxonomy_ml_threshold
+    boundary_taxonomy_ml_neighbor_window = phase2.taxonomy_ml_neighbor_window
+    boundary_diamond_flank_genes = phase2.diamond_flank_genes
+    boundary_diamond_top_k = phase2.diamond_top_k
+    boundary_diamond_random_seed = phase2.diamond_random_seed
+    boundary_diamond_superset_prototype_enabled = phase2.diamond_superset_prototype_enabled
+    gene_taxonomy_threads = compute.gene_taxonomy_threads
+    extended_output = phase3.extended_output
+    search_backend = compute.search_backend.value
+    refined_bed = output_dir / "phase2" / "refined_boundaries.bed"
 
     phase2_start = time.time()
     host_coordinate_counts = InterventionCounts()
 
     # === PHASE 2a: Host-signature trimming (optional) ===
     phase2_state_path = output_dir / "phase2" / PHASE2_STATE_FILENAME
-    phase2_resume_state_path = (
-        output_dir / "phase2" / PHASE2_RESUME_STATE_FILENAME
-    )
-    if (
-        ablation_id is AblationID.A3
-        and merged_seeds
-        and not (resume and resume_authorized)
-    ):
+    phase2_resume_state_path = output_dir / "phase2" / PHASE2_RESUME_STATE_FILENAME
+    if ablation_id is AblationID.A3 and merged_seeds and not (resume and resume_authorized):
         logger.info(
             "A3: forwarding %d exact Phase-1 seed intervals to Phase 3",
             len(merged_seeds),
@@ -333,30 +419,25 @@ def _run_phase2_subflow(
             boundary_control_stats=None,
             boundary_diamond_query=None,
         )
-        return {
-            "refined_boundaries": refined_boundaries,
-            "boundary_taxonomy_map": {},
-            "boundary_control_stats": None,
-            "boundary_diamond_query": None,
-            "proteome_index": proteome_index,
-            "goto_phase3": False,
-            "boundaries_bed": boundaries_bed_path,
-            "elapsed": time.time() - phase2_start,
-            "phase_outcome": "passthrough",
-            "ablation_counts": InterventionCounts(
+        return Phase2Result(
+            refined_boundaries=refined_boundaries,
+            boundary_taxonomy_map={},
+            boundary_control_stats=None,
+            boundary_diamond_query=None,
+            proteome_index=proteome_index,
+            boundaries_bed=boundaries_bed_path,
+            elapsed=time.time() - phase2_start,
+            phase_outcome="passthrough",
+            ablation_counts=InterventionCounts(
                 opportunities=len(merged_seeds),
                 interventions=len(refined_boundaries),
                 changed=0,
             ),
-        }
+        )
 
     superset_diamond_hits = None
     superset_proteome_index = None
-    if (
-        boundary_diamond_superset_prototype_enabled
-        and not (resume and resume_authorized)
-        and merged_seeds
-    ):
+    if boundary_diamond_superset_prototype_enabled and not (resume and resume_authorized) and merged_seeds:
         superset_db = _require_phase2b_gene_taxonomy_db(
             gene_taxonomy_faa_db,
             has_seeds=True,
@@ -364,8 +445,7 @@ def _run_phase2_subflow(
         superset_proteome_index = build_proteome_index(proteome_path)
         superset_top_k = max(10, boundary_diamond_top_k)
         logger.info(
-            "Phase 2 superset prototype: searching the full proteome once "
-            "(top_k=%d)",
+            "Phase 2 superset prototype: searching the full proteome once (top_k=%d)",
             superset_top_k,
         )
         superset_diamond_hits = run_full_proteome_diamond(
@@ -377,11 +457,7 @@ def _run_phase2_subflow(
             search_backend=search_backend,
         )
     if resume and resume_authorized:
-        missing_state = [
-            path
-            for path in (phase2_state_path, phase2_resume_state_path)
-            if not path.is_file()
-        ]
+        missing_state = [path for path in (phase2_state_path, phase2_resume_state_path) if not path.is_file()]
         if missing_state:
             raise ValueError(
                 "authenticated Phase 2 is missing lossless resume state: "
@@ -462,18 +538,9 @@ def _run_phase2_subflow(
             host_coordinate_counts = _sum_intervention_counts(
                 host_coordinate_counts,
                 InterventionCounts(
-                    opportunities=sum(
-                        int(row["host_coordinate_change_opportunities"])
-                        for row in trim_summaries
-                    ),
-                    interventions=sum(
-                        int(row["host_coordinate_change_interventions"])
-                        for row in trim_summaries
-                    ),
-                    changed=sum(
-                        int(row["host_coordinate_change_changed"])
-                        for row in trim_summaries
-                    ),
+                    opportunities=sum(int(row["host_coordinate_change_opportunities"]) for row in trim_summaries),
+                    interventions=sum(int(row["host_coordinate_change_interventions"]) for row in trim_summaries),
+                    changed=sum(int(row["host_coordinate_change_changed"]) for row in trim_summaries),
                 ),
             )
             if trim_summaries and len(trim_summaries) == len(merged_seeds):
@@ -533,25 +600,22 @@ def _run_phase2_subflow(
             output_files=output_files,
             fingerprint=config_fingerprint,
         )
-        return {
-            "genome_id": genome_id,
-            "success": True,
-            **_empty_prediction_summary(),
-            "output_files": output_files,
-            "elapsed_sec": total_elapsed,
-            "ablation_counts": host_coordinate_counts,
-        }
+        return Phase2Terminal(
+            {
+                "genome_id": genome_id,
+                "success": True,
+                **_empty_prediction_summary(),
+                "output_files": output_files,
+                "elapsed_sec": total_elapsed,
+                "ablation_counts": host_coordinate_counts,
+            }
+        )
 
     if resume and resume_authorized:
         resume_state = load_phase2_resume_state(phase2_resume_state_path)
         boundary_report_state = load_phase2_state(phase2_state_path)
-        if phase2_state_to_document(
-            resume_state.refined_boundaries
-        ) != phase2_state_to_document(boundary_report_state):
-            raise ValueError(
-                "authenticated Phase 2 boundary and resume "
-                "checkpoints disagree"
-            )
+        if phase2_state_to_document(resume_state.refined_boundaries) != phase2_state_to_document(boundary_report_state):
+            raise ValueError("authenticated Phase 2 boundary and resume checkpoints disagree")
 
         refined_boundaries = resume_state.refined_boundaries
         boundary_taxonomy_map = resume_state.boundary_taxonomy_map
@@ -559,24 +623,23 @@ def _run_phase2_subflow(
         boundary_diamond_query = resume_state.boundary_diamond_query
         proteome_index = build_proteome_index(proteome_path)
         logger.info(
-            "Phase 2 resume: loaded %d boundaries, %d taxonomy records, and "
-            "the exact Diamond query from %s",
+            "Phase 2 resume: loaded %d boundaries, %d taxonomy records, and the exact Diamond query from %s",
             len(refined_boundaries),
             len(boundary_taxonomy_map),
             phase2_resume_state_path,
         )
 
         phase2_elapsed = time.time() - phase2_start
-        return {
-            "refined_boundaries": refined_boundaries,
-            "boundary_taxonomy_map": boundary_taxonomy_map,
-            "boundary_control_stats": boundary_control_stats,
-            "boundary_diamond_query": boundary_diamond_query,
-            "proteome_index": proteome_index,
-            "goto_phase3": True,
-            "boundaries_bed": refined_bed,
-            "elapsed": phase2_elapsed,
-        }
+        return Phase2Result(
+            refined_boundaries=refined_boundaries,
+            boundary_taxonomy_map=boundary_taxonomy_map,
+            boundary_control_stats=boundary_control_stats,
+            boundary_diamond_query=boundary_diamond_query,
+            proteome_index=proteome_index,
+            goto_phase3=True,
+            boundaries_bed=refined_bed,
+            elapsed=phase2_elapsed,
+        )
 
     # === Gene-based seed extension ===
     # Extend each seed by ±5 genes and merge overlapping seeds BEFORE Diamond.
@@ -585,17 +648,18 @@ def _run_phase2_subflow(
         from virosync.pipeline.phase2.boundary_refiner import extend_seeds_by_genes
 
         proteome_index = (
-            superset_proteome_index
-            if superset_proteome_index is not None
-            else build_proteome_index(proteome_path)
+            superset_proteome_index if superset_proteome_index is not None else build_proteome_index(proteome_path)
         )
         pre_extend_count = len(merged_seeds)
         merged_seeds = extend_seeds_by_genes(
-            merged_seeds, proteome_index, extension_genes=5,
+            merged_seeds,
+            proteome_index,
+            extension_genes=5,
         )
         logger.info(
             "Phase 2: Extended seeds by ±5 genes and merged overlapping: %d -> %d seeds",
-            pre_extend_count, len(merged_seeds),
+            pre_extend_count,
+            len(merged_seeds),
         )
 
     # === PHASE 2b: Batched Diamond for boundary refinement ===
@@ -603,8 +667,8 @@ def _run_phase2_subflow(
     # Phase 2b is MANDATORY for flanking gene integration - provides taxonomy for all genes
     # within the max boundary extension range (+/-flank_genes from each seed)
     boundary_taxonomy_map: dict[str, GeneTaxonomy] = {}
-    boundary_control_stats: Optional[ControlStats] = None
-    boundary_diamond_query: Optional[GenomeDiamondQuery] = None
+    boundary_control_stats: ControlStats | None = None
+    boundary_diamond_query: GenomeDiamondQuery | None = None
 
     phase2b_db = _require_phase2b_gene_taxonomy_db(
         gene_taxonomy_faa_db,
@@ -612,111 +676,26 @@ def _run_phase2_subflow(
     )
 
     if phase2b_db and merged_seeds:
-        gene_taxonomy_db = phase2b_db
         logger.info("-" * 60)
         logger.info("Phase 2b: Running batched Diamond for boundary refinement")
-
-        # proteome_index already built above during seed extension
         logger.info(
             "Phase 2b: Proteome index: %d scaffolds, %d total pORFs",
             len(proteome_index),
             sum(len(porfs) for porfs in proteome_index.values()),
         )
-
-        # Create config for batched Diamond.
-        target_control_genes = max(1, boundary_diamond_control_sample_size)
-        control_min_distance = max(1, boundary_diamond_control_min_distance)
-        logger.info(
-            "Phase 2b: Control sampling target: %d controls (min_distance=%d genes)",
-            target_control_genes,
-            control_min_distance,
-        )
-        boundary_diamond_config = BoundaryDiamondConfig(
-            flank_genes=boundary_diamond_flank_genes,
-            control_sample_size=target_control_genes,
-            control_min_distance=control_min_distance,
-            control_region_genes=11,
-            top_k=boundary_diamond_top_k,
-            chunk_size=boundary_diamond_chunk_size,
-            threads=gene_taxonomy_threads or threads,
-            random_seed=boundary_diamond_random_seed,
-            host_prefix=f"{host_label}__",
-            taxonomy_weight_mode=taxonomy_weight_mode,
-            search_backend=search_backend,
-        )
-
-        # Collect query proteins from ALL seeds at once
-        boundary_diamond_query = collect_query_proteins(
+        boundary_evidence = _run_boundary_diamond(
             merged_seeds=merged_seeds,
             proteome_index=proteome_index,
-            config=boundary_diamond_config,
+            proteome_path=proteome_path,
+            gene_taxonomy_db=phase2b_db,
+            output_dir=output_dir,
+            config=config,
+            superset_diamond_hits=superset_diamond_hits,
+            logger=logger,
         )
-        logger.info(
-            "Phase 2b: Collected %d query proteins (%d EVE regions, %d controls)",
-            len(boundary_diamond_query.all_porf_ids),
-            len(boundary_diamond_query.eve_porf_ids),
-            len(boundary_diamond_query.control_porf_ids),
-        )
-
-        # Run Diamond ONCE for entire genome
-        boundary_diamond_dir = output_dir / "phase2" / "boundary_diamond"
-        boundary_diamond_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load taxonomy lookup if available (needed for fingerprinting)
-        tax_lookup_dict = None
-        if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
-            from virosync.pipeline.host_signatures import TaxonomyLabelLookup
-
-            tax_lookup_dict = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
-            logger.info(
-                "Phase 2b: Loaded taxonomy labels for fingerprinting (%d entries)",
-                len(tax_lookup_dict),
-            )
-
-        if superset_diamond_hits is not None:
-            boundary_taxonomy_map = classify_cached_diamond_query(
-                query=boundary_diamond_query,
-                diamond_hits=superset_diamond_hits,
-                proteome_index=proteome_index,
-                config=boundary_diamond_config,
-                taxonomy_lookup=tax_lookup_dict,
-            )
-        else:
-            boundary_taxonomy_map = run_batched_diamond(
-                query=boundary_diamond_query,
-                proteome_fasta=proteome_path,
-                diamond_db=gene_taxonomy_db,
-                output_dir=boundary_diamond_dir,
-                proteome_index=proteome_index,
-                config=boundary_diamond_config,
-                taxonomy_lookup=tax_lookup_dict,
-            )
-        logger.info(
-            "Phase 2b: Diamond complete (%d pORFs classified)",
-            len(boundary_taxonomy_map),
-        )
-
-        # Compute control stats (shared across all seeds)
-        control_taxonomy = [
-            boundary_taxonomy_map[pid]
-            for pid in boundary_diamond_query.control_porf_ids
-            if pid in boundary_taxonomy_map
-        ]
-        boundary_control_stats = compute_control_stats(
-            control_taxonomy,
-            boundary_diamond_config.host_prefix,
-        )
-        logger.info(
-            "Phase 2b: Control stats: n_genes=%d, host_freq=%.2f, no_hit_freq=%.2f, dominant=%s",
-            boundary_control_stats.n_genes,
-            boundary_control_stats.host_frequency,
-            boundary_control_stats.no_hit_frequency,
-            boundary_control_stats.dominant_organism,
-        )
-
-        # Write outputs for debugging/inspection
-        write_taxonomy_map(boundary_taxonomy_map, boundary_diamond_dir / "taxonomy_map.tsv")
-        write_control_stats(boundary_control_stats, boundary_diamond_dir / "control_stats.json")
+        boundary_taxonomy_map = boundary_evidence.taxonomy_map
+        boundary_control_stats = boundary_evidence.control_stats
+        boundary_diamond_query = boundary_evidence.query
 
     # === PHASE 2c: Taxonomy-based seed refinement ===
     if merged_seeds and boundary_taxonomy_map and boundary_diamond_query:
@@ -789,16 +768,13 @@ def _run_phase2_subflow(
                     )
                 else:
                     logger.info(
-                        "Phase 2c: Taxonomy ML refinement produced no boundary updates; "
-                        "using heuristic fallback"
+                        "Phase 2c: Taxonomy ML refinement produced no boundary updates; using heuristic fallback"
                     )
 
         if taxonomy_refined_seeds is None:
-            taxonomy_evaluation = (
-                taxonomy_seed_refiner.evaluate_taxonomy_seed_refinement(
-                    **heuristic_kwargs,
-                    ablation_id=ablation_id,
-                )
+            taxonomy_evaluation = taxonomy_seed_refiner.evaluate_taxonomy_seed_refinement(
+                **heuristic_kwargs,
+                ablation_id=ablation_id,
             )
             taxonomy_refined_seeds = list(taxonomy_evaluation.selected_seeds)
             host_coordinate_counts = _sum_intervention_counts(
@@ -834,8 +810,8 @@ def _run_phase2_subflow(
 
     # Phase 2f: Host Taxonomy Trimming
     if refined_boundaries and boundary_taxonomy_map and boundary_control_stats and boundary_diamond_query:
-        from virosync.pipeline.phase2.boundary_refiner import trim_boundary_by_host_taxonomy
         from virosync.pipeline.phase2.boundary_diamond import build_taxonomy_consensus
+        from virosync.pipeline.phase2.boundary_refiner import trim_boundary_by_host_taxonomy
 
         logger.info("-" * 60)
         logger.info("Phase 2c: Host Taxonomy Trimming")
@@ -849,8 +825,8 @@ def _run_phase2_subflow(
         ]
 
         # Build host baseline fingerprint from control genes
-        from virosync.pipeline.phase2.boundary_diamond import build_host_baseline_fingerprint
         from virosync.pipeline.host_signatures import TaxonomyLabelLookup
+        from virosync.pipeline.phase2.boundary_diamond import build_host_baseline_fingerprint
 
         host_baseline_fingerprint = {}
         taxonomy_consensus = "unknown"
@@ -878,9 +854,7 @@ def _run_phase2_subflow(
                     len(host_baseline_fingerprint),
                 )
             else:
-                logger.warning(
-                    "Phase 2c: Host baseline fingerprint empty - using fallback prefix matching"
-                )
+                logger.warning("Phase 2c: Host baseline fingerprint empty - using fallback prefix matching")
 
         # Log host taxonomy consensus with full lineage
         logger.info(f"Host Taxonomy Consensus (from {boundary_control_stats.n_genes} control genes):")
@@ -933,12 +907,8 @@ def _run_phase2_subflow(
                 host_coordinate_counts = _sum_intervention_counts(
                     host_coordinate_counts,
                     InterventionCounts(
-                        opportunities=int(
-                            stats["host_coordinate_change_opportunities"]
-                        ),
-                        interventions=int(
-                            stats["host_coordinate_change_interventions"]
-                        ),
+                        opportunities=int(stats["host_coordinate_change_opportunities"]),
+                        interventions=int(stats["host_coordinate_change_interventions"]),
                         changed=int(stats["host_coordinate_change_changed"]),
                     ),
                 )
@@ -1039,13 +1009,10 @@ def _run_phase2_subflow(
             annotate_boundaries_with_marker_floor,
         )
 
-        n_marker_floored = annotate_boundaries_with_marker_floor(
-            refined_boundaries, validated_markers
-        )
+        n_marker_floored = annotate_boundaries_with_marker_floor(refined_boundaries, validated_markers)
         if n_marker_floored:
             logger.info(
-                "Validated-marker floor recorded on %d/%d boundaries "
-                "(Phase-3 re-admit candidates)",
+                "Validated-marker floor recorded on %d/%d boundaries (Phase-3 re-admit candidates)",
                 n_marker_floored,
                 len(refined_boundaries),
             )
@@ -1083,10 +1050,7 @@ def _run_phase2_subflow(
         # No merged_seeds for comparison (e.g., resume)
         total_bp = sum(b.end - b.start for b in refined_boundaries)
         avg_bp = total_bp // len(refined_boundaries) if refined_boundaries else 0
-        logger.info(
-            f"Refined boundaries: {len(refined_boundaries)} regions, "
-            f"total={total_bp:,}bp, avg={avg_bp:,}bp"
-        )
+        logger.info(f"Refined boundaries: {len(refined_boundaries)} regions, total={total_bp:,}bp, avg={avg_bp:,}bp")
     else:
         logger.info("Refined boundaries: 0")
 
@@ -1139,23 +1103,24 @@ def _run_phase2_subflow(
             output_files=output_files,
             fingerprint=config_fingerprint,
         )
-        return {
-            "genome_id": genome_id,
-            "success": True,
-            **_empty_prediction_summary(),
-            "output_files": output_files,
-            "elapsed_sec": total_elapsed,
-            "ablation_counts": host_coordinate_counts,
-        }
+        return Phase2Terminal(
+            {
+                "genome_id": genome_id,
+                "success": True,
+                **_empty_prediction_summary(),
+                "output_files": output_files,
+                "elapsed_sec": total_elapsed,
+                "ablation_counts": host_coordinate_counts,
+            }
+        )
 
-    return {
-        "refined_boundaries": refined_boundaries,
-        "boundary_taxonomy_map": boundary_taxonomy_map,
-        "boundary_control_stats": boundary_control_stats,
-        "boundary_diamond_query": boundary_diamond_query,
-        "proteome_index": proteome_index,
-        "goto_phase3": False,
-        "boundaries_bed": boundaries_bed_path,
-        "elapsed": phase2_elapsed,
-        "ablation_counts": host_coordinate_counts,
-    }
+    return Phase2Result(
+        refined_boundaries=refined_boundaries,
+        boundary_taxonomy_map=boundary_taxonomy_map,
+        boundary_control_stats=boundary_control_stats,
+        boundary_diamond_query=boundary_diamond_query,
+        proteome_index=proteome_index,
+        boundaries_bed=boundaries_bed_path,
+        elapsed=phase2_elapsed,
+        ablation_counts=host_coordinate_counts,
+    )

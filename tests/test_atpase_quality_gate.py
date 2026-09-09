@@ -29,17 +29,13 @@ def _result(**overrides) -> SimpleNamespace:
 
 
 def test_atpase_only_high_medium_plv_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(
-        _result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2)
-    )
+    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2))
     assert not decision.kept
     assert decision.reason == "small_dna_high_medium_gate"
 
 
 def test_non_atpase_hallmark_high_medium_plv_passes() -> None:
-    decision = evaluate_v2_quality_gate(
-        _result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2)
-    )
+    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2))
     assert decision.kept
     assert decision.reason == "small_dna_high_medium_pass"
 
@@ -53,9 +49,7 @@ def test_mcp_only_high_medium_plv_passes() -> None:
 
 
 def test_atpase_only_low_plv_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(
-        _result(confidence_tier="LOW", hallmark_genes=["PLV_PC_054"], hallmark_count=1)
-    )
+    decision = evaluate_v2_quality_gate(_result(confidence_tier="LOW", hallmark_genes=["PLV_PC_054"], hallmark_count=1))
     assert not decision.kept
     assert decision.reason == "small_dna_low_gate"
 

@@ -1,5 +1,4 @@
-"""
-ViroSync orchestration entry points.
+"""ViroSync orchestration entry points.
 
 This module is the canonical import location for orchestration functions.
 Internal implementations are in _flows/ package.

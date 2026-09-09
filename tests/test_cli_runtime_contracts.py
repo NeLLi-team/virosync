@@ -7,8 +7,8 @@ B3  resource download uses bounded retries + timeouts (curl -f fails on 4xx/5xx)
 from __future__ import annotations
 
 import io
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +23,6 @@ from virosync.utils.resource_installer import (
     _download_error_detail,
     copy_or_download_archive,
 )
-
 
 # --- B2: thread cap by max_concurrent_genomes --------------------------------
 
@@ -82,6 +81,7 @@ def test_gpu_id_uses_numeric_selector_when_uuid_lookup_fails(monkeypatch) -> Non
     assert orchestration_cli.os.environ["CUDA_VISIBLE_DEVICES"] == "3"
     assert orchestration_cli.os.environ["VIROSYNC_GPU"] == "3"
 
+
 def test_cap_threads_reduces_when_oversubscribed() -> None:
     # 48 threads across 6 concurrent genomes -> 8 each; 16 requested -> reduced + warned
     capped, warning = _cap_threads_per_worker(16, max_threads=48, max_concurrent_genomes=6)
@@ -109,6 +109,7 @@ def test_cap_threads_floor_is_one() -> None:
 
 # --- B3: hardened download ---------------------------------------------------
 
+
 def test_download_archive_uses_hardened_flags(tmp_path, monkeypatch) -> None:
     captured: list[list[str]] = []
     captured_kwargs: list[dict] = []
@@ -119,9 +120,7 @@ def test_download_archive_uses_hardened_flags(tmp_path, monkeypatch) -> None:
         return subprocess.CompletedProcess(args=command, returncode=1, stdout="", stderr="boom")
 
     monkeypatch.setattr(dm.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        dm.ViroSyncDatabaseManager, "_certifi_ca_bundle", classmethod(lambda cls: None)
-    )
+    monkeypatch.setattr(dm.ViroSyncDatabaseManager, "_certifi_ca_bundle", classmethod(lambda cls: None))
 
     with pytest.raises(RuntimeError) as exc_info:
         dm.ViroSyncDatabaseManager._copy_or_download_archive(

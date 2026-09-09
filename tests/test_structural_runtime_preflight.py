@@ -22,8 +22,7 @@ def test_interproscan_preflight_rejects_non_executable_script(
     script.chmod(0o644)
     config = tmp_path / "config.yaml"
     config.write_text(
-        "phase3:\n"
-        f"  interproscan_dir: {interproscan_dir}\n",
+        f"phase3:\n  interproscan_dir: {interproscan_dir}\n",
         encoding="utf-8",
     )
 
@@ -75,10 +74,7 @@ def test_tmvec_preflight_rejects_unknown_device(
 ) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(
-        "compute:\n"
-        "  device: gpu\n"
-        "phase3:\n"
-        "  use_tmvec_database: true\n",
+        "compute:\n  device: gpu\nphase3:\n  use_tmvec_database: true\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -145,23 +141,17 @@ def test_tmvec_preflight_uses_production_search_and_upstream_reference(
 
         def search_batch(self, proteins, databases):
             calls.append(("search_batch", proteins, databases))
-            return {
-                "query-1": {
-                    "bfvd": SimpleNamespace(target_id="BFVD-1", tm_score=0.9)
-                }
-            }
+            return {"query-1": {"bfvd": SimpleNamespace(target_id="BFVD-1", tm_score=0.9)}}
 
     monkeypatch.setattr(
         "virosync.pipeline.phase3.tmvec_database.TMVecDatabaseSearch",
         Searcher,
     )
 
-    parity_ok, parity_message, query_ok, query_message = (
-        structural_runtime._check_tmvec_real_query(
-            tmp_path,
-            device="cpu",
-            require_gpu=False,
-        )
+    parity_ok, parity_message, query_ok, query_message = structural_runtime._check_tmvec_real_query(
+        tmp_path,
+        device="cpu",
+        require_gpu=False,
     )
 
     assert parity_ok is True

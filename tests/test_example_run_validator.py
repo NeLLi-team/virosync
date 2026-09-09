@@ -58,9 +58,7 @@ def _write_batch(output_root: Path, *, accepted: int = 2, elapsed: str = "9.5") 
         "elapsed_sec": elapsed,
         "error": "",
     }
-    with (output_root / "batch_summary.tsv").open(
-        "w", newline="", encoding="utf-8"
-    ) as handle:
+    with (output_root / "batch_summary.tsv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
         writer.writeheader()
         writer.writerow(row)
@@ -169,12 +167,7 @@ def test_resume_comparison_requires_zero_elapsed_and_exact_snapshot(
 ) -> None:
     output_root, _state_bytes = valid_example
     snapshot_path = tmp_path / "snapshot.json"
-    assert (
-        validate_example_run.main(
-            [str(output_root), "--write-snapshot", str(snapshot_path)]
-        )
-        == 0
-    )
+    assert validate_example_run.main([str(output_root), "--write-snapshot", str(snapshot_path)]) == 0
 
     _write_batch(output_root, elapsed="0")
     assert (
@@ -219,12 +212,7 @@ def test_validator_enforces_expected_example_totals(valid_example) -> None:
         )
         == 0
     )
-    assert (
-        validate_example_run.main(
-            [str(output_root), "--expect-accepted", "3"]
-        )
-        == 1
-    )
+    assert validate_example_run.main([str(output_root), "--expect-accepted", "3"]) == 1
 
 
 def test_validator_enforces_exact_eve_ids(valid_example) -> None:

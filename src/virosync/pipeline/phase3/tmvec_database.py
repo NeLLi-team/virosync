@@ -1,5 +1,4 @@
-"""
-TMVec database search for structural similarity.
+"""TMVec database search for structural similarity.
 
 Loads manifest-bound BFVD TMVec2 embeddings and runs cosine-similarity search
 against query embeddings.
@@ -12,7 +11,6 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -42,10 +40,10 @@ class TMVecHit:
     target_id: str
     tm_score: float
     database: str
-    protein_name: Optional[str] = None
-    organism: Optional[str] = None
-    lineage: Optional[str] = None
-    keywords: Optional[str] = None
+    protein_name: str | None = None
+    organism: str | None = None
+    lineage: str | None = None
+    keywords: str | None = None
 
 
 class TMVecDatabaseSearch:
@@ -54,9 +52,9 @@ class TMVecDatabaseSearch:
     def __init__(
         self,
         device: str = "cuda",
-        databases: Optional[list[str]] = None,
+        databases: list[str] | None = None,
         min_tm: float = 0.0,
-        database_root: Optional[Path] = None,
+        database_root: Path | None = None,
         require_gpu: bool = False,
         fail_on_unavailable: bool = False,
     ) -> None:
@@ -64,9 +62,7 @@ class TMVecDatabaseSearch:
         self.databases = databases or ["bfvd"]
         unsupported = sorted(set(self.databases) - {"bfvd"})
         if unsupported:
-            raise ValueError(
-                "Unsupported TMVec2 database key(s): " + ", ".join(unsupported)
-            )
+            raise ValueError("Unsupported TMVec2 database key(s): " + ", ".join(unsupported))
         self.min_tm = min_tm
         if database_root is None:
             raise ValueError(
@@ -126,9 +122,7 @@ class TMVecDatabaseSearch:
                 if not self._predictor.available:
                     logger.warning("TMVec predictor not available on device=%s", self.device)
                     if self._must_fail:
-                        raise RuntimeError(
-                            f"TMVec predictor unavailable on device={self.device}."
-                        )
+                        raise RuntimeError(f"TMVec predictor unavailable on device={self.device}.")
                     self._predictor = None
             except RuntimeError as e:
                 logger.warning("TMVec predictor initialization failed: %s", e)
@@ -142,7 +136,7 @@ class TMVecDatabaseSearch:
                 self._predictor = None
         return self._predictor
 
-    def _load_db(self, name: str) -> Optional[dict]:
+    def _load_db(self, name: str) -> dict | None:
         if name in self._db_cache:
             return self._db_cache[name]
 
@@ -164,9 +158,7 @@ class TMVecDatabaseSearch:
         emb_path = paths.get("embeddings")
         if not emb_path or not emb_path.is_file():
             if self._must_fail:
-                raise RuntimeError(
-                    f"TMVec database {name} embeddings not found: {emb_path}"
-                )
+                raise RuntimeError(f"TMVec database {name} embeddings not found: {emb_path}")
             logger.warning("TMVec database %s embeddings not found: %s", name, emb_path)
             return None
 
@@ -177,10 +169,7 @@ class TMVecDatabaseSearch:
             or embeddings.shape[1] != TMVEC_EMBEDDING_WIDTH
             or embeddings.dtype.kind not in "iuf"
         ):
-            message = (
-                f"TMVec database {name} has invalid embeddings "
-                f"shape={embeddings.shape} dtype={embeddings.dtype}"
-            )
+            message = f"TMVec database {name} has invalid embeddings shape={embeddings.shape} dtype={embeddings.dtype}"
             if self._must_fail:
                 raise RuntimeError(message)
             logger.warning("%s", message)
@@ -200,15 +189,12 @@ class TMVecDatabaseSearch:
             elif metadata_path.suffix == ".jsonl":
                 annotations = [json.loads(line) for line in handle if line.strip()]
             else:
-                raise RuntimeError(
-                    "TMVec BFVD metadata must use TSV or JSONL, not pickle"
-                )
+                raise RuntimeError("TMVec BFVD metadata must use TSV or JSONL, not pickle")
         ids = [str(item["id"]) for item in annotations]
 
         if len(ids) != embeddings.shape[0]:
             message = (
-                f"TMVec database {name} embedding/metadata row count mismatch: "
-                f"{embeddings.shape[0]} != {len(ids)}"
+                f"TMVec database {name} embedding/metadata row count mismatch: {embeddings.shape[0]} != {len(ids)}"
             )
             if self._must_fail:
                 raise RuntimeError(message)
@@ -226,7 +212,7 @@ class TMVecDatabaseSearch:
     def search_sequence(
         self,
         sequence: str,
-        databases: Optional[list[str]] = None,
+        databases: list[str] | None = None,
         top_k: int = 1,
     ) -> dict[str, TMVecHit | None]:
         predictor = self.predictor
@@ -293,10 +279,9 @@ class TMVecDatabaseSearch:
     def search_batch(
         self,
         proteins: list[tuple[str, str]],
-        databases: Optional[list[str]] = None,
+        databases: list[str] | None = None,
     ) -> dict[str, dict[str, TMVecHit | None]]:
-        """
-        Batch search for multiple proteins at once.
+        """Batch search for multiple proteins at once.
 
         This is much more efficient than calling search_sequence for each protein
         because it:
@@ -339,8 +324,7 @@ class TMVecDatabaseSearch:
         porf_ids = [pid for pid, _ in proteins]
         sequences = [seq for _, seq in proteins]
 
-        logger.info("TMVec batch: embedding %d proteins with %s...",
-                   len(sequences), type(predictor).__name__)
+        logger.info("TMVec batch: embedding %d proteins with %s...", len(sequences), type(predictor).__name__)
 
         # Embed all proteins with the predictor's token-budgeted batches.
         try:
@@ -353,9 +337,7 @@ class TMVecDatabaseSearch:
             return {pid: {name: None for name in db_names} for pid in porf_ids}
 
         # Initialize results
-        results: dict[str, dict[str, TMVecHit | None]] = {
-            pid: {} for pid in porf_ids
-        }
+        results: dict[str, dict[str, TMVecHit | None]] = {pid: {} for pid in porf_ids}
 
         if query_embeddings.ndim != 2 or query_embeddings.shape[0] != len(porf_ids):
             msg = (
@@ -369,20 +351,11 @@ class TMVecDatabaseSearch:
 
         embedding_norms = np.linalg.norm(query_embeddings, axis=1)
         valid_embeddings = (
-            np.isfinite(query_embeddings).all(axis=1)
-            & np.isfinite(embedding_norms)
-            & (embedding_norms > 1e-8)
+            np.isfinite(query_embeddings).all(axis=1) & np.isfinite(embedding_norms) & (embedding_norms > 1e-8)
         )
-        invalid_porf_ids = [
-            porf_id
-            for porf_id, is_valid in zip(porf_ids, valid_embeddings)
-            if not bool(is_valid)
-        ]
+        invalid_porf_ids = [porf_id for porf_id, is_valid in zip(porf_ids, valid_embeddings) if not bool(is_valid)]
         if invalid_porf_ids:
-            msg = (
-                "TMVec produced invalid or zero embeddings for "
-                f"{len(invalid_porf_ids)} protein(s)"
-            )
+            msg = f"TMVec produced invalid or zero embeddings for {len(invalid_porf_ids)} protein(s)"
             if self._must_fail:
                 raise RuntimeError(msg)
             logger.warning("%s; those proteins will have no TMVec hits", msg)
@@ -393,10 +366,7 @@ class TMVecDatabaseSearch:
         # Normalize query embeddings for cosine similarity. Invalid rows stay
         # zero and are skipped below.
         query_norms = np.zeros_like(query_embeddings, dtype=np.float32)
-        query_norms[valid_embeddings] = (
-            query_embeddings[valid_embeddings]
-            / embedding_norms[valid_embeddings, None]
-        )
+        query_norms[valid_embeddings] = query_embeddings[valid_embeddings] / embedding_norms[valid_embeddings, None]
 
         # Search each database sequentially
         for db_name in db_names:
@@ -410,9 +380,7 @@ class TMVecDatabaseSearch:
             try:
                 # Normalize database embeddings
                 db_embeddings = db["embeddings"]
-                db_norms = db_embeddings / (
-                    np.linalg.norm(db_embeddings, axis=1, keepdims=True) + 1e-8
-                )
+                db_norms = db_embeddings / (np.linalg.norm(db_embeddings, axis=1, keepdims=True) + 1e-8)
 
                 # Compute all similarities: [n_queries, n_db]
                 similarities = query_norms @ db_norms.T
@@ -461,6 +429,5 @@ class TMVecDatabaseSearch:
                 for pid in porf_ids:
                     results[pid][db_name] = None
 
-        logger.info("TMVec batch: completed %d proteins across %d databases",
-                   len(proteins), len(db_names))
+        logger.info("TMVec batch: completed %d proteins across %d databases", len(proteins), len(db_names))
         return results

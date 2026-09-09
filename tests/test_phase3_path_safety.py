@@ -11,7 +11,11 @@ import pytest
 import virosync.pipeline.phase3 as phase3_package
 from virosync.orchestration import (
     resource_monitor,
+)
+from virosync.orchestration import (
     tasks as orchestration_tasks,
+)
+from virosync.orchestration import (
     utils as orchestration_utils,
 )
 from virosync.orchestration.resource_monitor import ResourceMonitor
@@ -76,10 +80,7 @@ def test_batch_gene_taxonomy_rejects_duplicate_raw_ids_before_writing(
 ) -> None:
     raw_id = "EVE_duplicate"
     output_dir = tmp_path / "taxonomy"
-    regions = [
-        {"eve_id": raw_id, "scaffold": "contig_1", "start": index, "end": index + 10}
-        for index in range(2)
-    ]
+    regions = [{"eve_id": raw_id, "scaffold": "contig_1", "start": index, "end": index + 10} for index in range(2)]
 
     with pytest.raises(ValueError, match="EVE_duplicate.*indices 0, 1"):
         gene_taxonomy.run_gene_taxonomy_diamond_batch(
@@ -216,9 +217,7 @@ def test_resource_metrics_filenames_encode_and_disambiguate_raw_task_ids(
 
     metric_files = list((tmp_path / "output" / "resource_metrics").glob("*.json"))
     assert len(metric_files) == 2
-    assert {json.loads(path.read_text())["task_id"] for path in metric_files} == set(
-        raw_task_ids
-    )
+    assert {json.loads(path.read_text())["task_id"] for path in metric_files} == set(raw_task_ids)
     assert sentinel.read_bytes() == b"parent sentinel\n"
 
 
@@ -281,9 +280,7 @@ def test_boltz_yaml_batch_encodes_aliases_and_rejects_duplicates(
     assert analyzer.analyze_batch([(raw_id, "M" * 10) for raw_id in raw_ids], work_dir) == []
 
     yaml_dir = work_dir / "boltz_yaml"
-    assert {path.name for path in yaml_dir.glob("*.yaml")} == {
-        f"{component}.yaml" for component in components.values()
-    }
+    assert {path.name for path in yaml_dir.glob("*.yaml")} == {f"{component}.yaml" for component in components.values()}
     assert not (tmp_path / "a").exists()
 
     duplicate_work_dir = tmp_path / "duplicate_boltz"
@@ -347,10 +344,7 @@ def test_gvclass_manifest_round_trip_restores_raw_ids(tmp_path: Path) -> None:
     summary = tmp_path / "gvclass_summary.tsv"
     summary.write_text(
         "file\tdomain\tgvog_count\tmcp_count\tmirus_count\n"
-        + "\n".join(
-            f"/tmp/gvclass/{components[raw_id]}.fna\tNCLDV\t3\t2\t1"
-            for raw_id in raw_ids
-        )
+        + "\n".join(f"/tmp/gvclass/{components[raw_id]}.fna\tNCLDV\t3\t2\t1" for raw_id in raw_ids)
         + "\n"
     )
 
@@ -362,9 +356,7 @@ def test_gvclass_manifest_round_trip_restores_raw_ids(tmp_path: Path) -> None:
     with output_tsv.open(newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
     assert [row["eve_id"] for row in rows] == raw_ids
-    assert list(parse_gvclass_results(summary)) == [
-        f"/tmp/gvclass/{components[raw_id]}" for raw_id in raw_ids
-    ]
+    assert list(parse_gvclass_results(summary)) == [f"/tmp/gvclass/{components[raw_id]}" for raw_id in raw_ids]
 
 
 @pytest.mark.filterwarnings("ignore:Partial codon")

@@ -9,6 +9,13 @@ import pytest
 from Bio import SeqIO
 
 from virosync.ablation import AblationID
+from virosync.output_contract import (
+    COORDINATE_CONVENTION,
+    COORDINATE_SCHEMA_VERSION,
+    DETAILED_PREDICTION_COLUMNS,
+    DETAILED_PREDICTION_EXTENDED_COLUMNS,
+    OUTPUT_SCHEMA_VERSION,
+)
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     merge_adjacent_viral_boundaries,
@@ -29,14 +36,6 @@ from virosync.pipeline.phase3.output_generator import (
     OutputGenerator,
     evaluate_v2_quality_gate,
 )
-from virosync.output_contract import (
-    COORDINATE_CONVENTION,
-    COORDINATE_SCHEMA_VERSION,
-    DETAILED_PREDICTION_COLUMNS,
-    DETAILED_PREDICTION_EXTENDED_COLUMNS,
-    OUTPUT_SCHEMA_VERSION,
-)
-
 
 CANONICAL_BASE_FIELDS = (
     "eve_id",
@@ -108,14 +107,10 @@ CANONICAL_EXTENDED_FIELDS = (
     "seed_marker_patterns",
     "other_marker_patterns",
 )
+
+
 def _write_genome_fasta(path: Path) -> None:
-    path.write_text(
-        ">contig_1\n"
-        + ("A" * 160)
-        + "\n>contig_10\n"
-        + ("C" * 120)
-        + "\n"
-    )
+    path.write_text(">contig_1\n" + ("A" * 160) + "\n>contig_10\n" + ("C" * 120) + "\n")
 
 
 def _write_proteome_fasta(path: Path) -> None:
@@ -201,12 +196,7 @@ def test_write_gvclass_export_includes_confirmed_frameshift_proteins(
 ) -> None:
     genome_fasta = tmp_path / "genome.fna"
     proteome_fasta = tmp_path / "proteome.faa"
-    confirmed_faa = (
-        tmp_path
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_proteins.faa"
-    )
+    confirmed_faa = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     confirmed_faa.parent.mkdir(parents=True)
     _write_genome_fasta(genome_fasta)
     _write_proteome_fasta(proteome_fasta)
@@ -257,12 +247,7 @@ def test_write_gvclass_export_writes_rescue_when_ordinary_proteome_is_empty(
 ) -> None:
     genome_fasta = tmp_path / "genome.fna"
     proteome_fasta = tmp_path / "proteome.faa"
-    confirmed_faa = (
-        tmp_path
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_proteins.faa"
-    )
+    confirmed_faa = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     confirmed_faa.parent.mkdir(parents=True)
     _write_genome_fasta(genome_fasta)
     proteome_fasta.write_text("")
@@ -289,9 +274,7 @@ def test_write_gvclass_export_writes_rescue_when_ordinary_proteome_is_empty(
     export_dir = generator.write_gvclass_export([result], tmp_path / "gvclass")
     records = list(SeqIO.parse(export_dir / "protein" / "EVE_1.faa", "fasta"))
 
-    assert [record.id for record in records] == [
-        "contig_1_VSR0123456789abcdef"
-    ]
+    assert [record.id for record in records] == ["contig_1_VSR0123456789abcdef"]
 
 
 def test_detailed_tsv_does_not_count_rescue_as_an_ordinary_protein(
@@ -299,12 +282,7 @@ def test_detailed_tsv_does_not_count_rescue_as_an_ordinary_protein(
 ) -> None:
     genome_fasta = tmp_path / "genome.fna"
     proteome_fasta = tmp_path / "proteome.faa"
-    confirmed_faa = (
-        tmp_path
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_proteins.faa"
-    )
+    confirmed_faa = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     confirmed_faa.parent.mkdir(parents=True)
     _write_genome_fasta(genome_fasta)
     _write_proteome_fasta(proteome_fasta)
@@ -446,6 +424,103 @@ def test_gene_taxonomy_uses_safe_filename_without_changing_raw_output_key(
     assert output_path.is_file()
     assert (tmp_path / "gene_taxonomy").resolve() in output_path.resolve().parents
     assert "/" not in output_path.name
+
+
+@pytest.mark.parametrize(
+    ("record", "expected_start", "expected_evalue", "expected_combined_score"),
+    [
+        pytest.param(
+            {
+                "porf_id": "phase2-current",
+                "scaffold": "contig_1",
+                "start": 0,
+                "end": 100,
+                "top1_prefix": "EUK",
+                "top1_target": "current-hit",
+                "top1_pident": 87.5,
+                "top1_evalue": 1e-20,
+            },
+            "0",
+            "1e-20",
+            "87.5",
+            id="phase2-current-coordinates",
+        ),
+        pytest.param(
+            {
+                "porf_id": "phase2-alias",
+                "scaffold": "contig_1",
+                "porf_start": 0,
+                "porf_end": 100,
+                "top1_prefix": "EUK",
+                "top1_target": "alias-hit",
+                "top1_pident": 76.5,
+                "top1_evalue": 2e-30,
+            },
+            "0",
+            "2e-30",
+            "76.5",
+            id="phase2-zero-coordinate-alias",
+        ),
+        pytest.param(
+            {
+                "porf_id": "legacy",
+                "scaffold": "contig_1",
+                "start": 0,
+                "end": 100,
+                "best_hit_origin": "EUK",
+                "best_hit_target": "legacy-hit",
+                "best_hit_evalue": 3e-40,
+            },
+            "0",
+            "3e-40",
+            "3e-40",
+            id="legacy-evalue",
+        ),
+        pytest.param(
+            {
+                "porf_id": "hybrid-legacy-row",
+                "top1_prefix": "EUK",
+                "top1_target": "phase2-hit",
+                "top1_pident": 66.5,
+                "top1_evalue": 4e-50,
+                "best_hit_origin": "LEGACY",
+                "best_hit_target": "legacy-hit",
+                "best_hit_evalue": 9e-9,
+            },
+            "",
+            "9e-09",
+            "66.5",
+            id="legacy-per-eve-with-phase2-combined-fields",
+        ),
+    ],
+)
+def test_gene_taxonomy_preserves_metric_and_zero_coordinate_contract(
+    tmp_path: Path,
+    record: dict[str, object],
+    expected_start: str,
+    expected_evalue: str,
+    expected_combined_score: str,
+) -> None:
+    result = _build_result(
+        eve_id="EVE_METRIC",
+        scaffold="contig_1",
+        start=0,
+        end=100,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+    result.gene_taxonomy_records = [record]
+
+    output_files = OutputGenerator(output_dir=tmp_path).write_gene_taxonomy([result])
+
+    with output_files["gene_taxonomy_EVE_METRIC"].open(encoding="utf-8", newline="") as handle:
+        per_eve = next(csv.DictReader(handle, delimiter="\t"))
+    with output_files["gene_taxonomy_all"].open(encoding="utf-8", newline="") as handle:
+        combined = next(csv.DictReader(handle, delimiter="\t"))
+    assert per_eve["start"] == expected_start
+    assert combined["start"] == expected_start
+    assert per_eve["best_hit_evalue"] == expected_evalue
+    assert combined["best_hit_score"] == expected_combined_score
 
 
 def test_per_eve_export_rejects_duplicate_raw_ids_before_writing(
@@ -631,12 +706,8 @@ def test_a0_preselected_output_matches_generator_gate_fallback(
     results = [normal_keep, promoted_low, normal_drop]
     selection = select_phase3_acceptance(results, AblationID.A0)
 
-    fallback_files = OutputGenerator(
-        output_dir=tmp_path / "fallback"
-    ).generate_all(results)
-    preselected_files = OutputGenerator(
-        output_dir=tmp_path / "preselected"
-    ).generate_all(
+    fallback_files = OutputGenerator(output_dir=tmp_path / "fallback").generate_all(results)
+    preselected_files = OutputGenerator(output_dir=tmp_path / "preselected").generate_all(
         list(selection.detailed_results),
         canonical_results=list(selection.canonical_results),
         promoted_low_results=list(selection.promoted_low_results),
@@ -647,27 +718,19 @@ def test_a0_preselected_output_matches_generator_gate_fallback(
         "EVE_LOW_PROMOTED",
     ]
     for key in ("predictions_tsv", "predictions_bed", "predictions_detailed_tsv"):
-        assert Path(preselected_files[key]).read_bytes() == Path(
-            fallback_files[key]
-        ).read_bytes()
+        assert Path(preselected_files[key]).read_bytes() == Path(fallback_files[key]).read_bytes()
     fallback_gff = [
-        line
-        for line in Path(fallback_files["predictions_gff"]).read_text().splitlines()
-        if not line.startswith("#")
+        line for line in Path(fallback_files["predictions_gff"]).read_text().splitlines() if not line.startswith("#")
     ]
     preselected_gff = [
-        line
-        for line in Path(preselected_files["predictions_gff"]).read_text().splitlines()
-        if not line.startswith("#")
+        line for line in Path(preselected_files["predictions_gff"]).read_text().splitlines() if not line.startswith("#")
     ]
     assert preselected_gff == fallback_gff
     assert json.loads(Path(preselected_files["evidence_json"]).read_text()) == json.loads(
         Path(fallback_files["evidence_json"]).read_text()
     )
     fallback_summary = json.loads(Path(fallback_files["summary_json"]).read_text())
-    preselected_summary = json.loads(
-        Path(preselected_files["summary_json"]).read_text()
-    )
+    preselected_summary = json.loads(Path(preselected_files["summary_json"]).read_text())
     assert preselected_summary["statistics"] == fallback_summary["statistics"]
     assert preselected_summary["per_scaffold"] == fallback_summary["per_scaffold"]
 
@@ -708,12 +771,7 @@ def test_malformed_confirmed_table_does_not_discard_ordinary_marker_hits(
         "validation_status\n"
         "ordinary\tctg\t20\t30\t+\tOG000001\t100\tvalidated\n"
     )
-    confirmed = (
-        tmp_path
-        / "phase1"
-        / "frameshift_screening"
-        / "confirmed_frameshift_markers.tsv"
-    )
+    confirmed = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_markers.tsv"
     confirmed.parent.mkdir(parents=True)
     confirmed.write_text("bad_header\nvalue\n")
     generator = OutputGenerator(output_dir=phase3_dir)
@@ -786,17 +844,16 @@ def test_prediction_tsv_writers_publish_the_taxonomy_class(
         rows = list(reader)
     assert reader.fieldnames is not None
     if writer_name == "write_predictions_tsv":
-        expected_fields = CANONICAL_BASE_FIELDS + (
-            CANONICAL_EXTENDED_FIELDS
-            if extended_output
-            else ("interproscan_score",)
-        ) + ("effective_eve_class",)
+        expected_fields = (
+            CANONICAL_BASE_FIELDS
+            + (CANONICAL_EXTENDED_FIELDS if extended_output else ("interproscan_score",))
+            + ("effective_eve_class",)
+        )
     else:
         expected_fields = tuple(
             column
             for column in DETAILED_PREDICTION_COLUMNS
-            if extended_output
-            or column not in DETAILED_PREDICTION_EXTENDED_COLUMNS
+            if extended_output or column not in DETAILED_PREDICTION_EXTENDED_COLUMNS
         )
     assert reader.fieldnames == list(expected_fields)
     assert rows[0]["effective_eve_class"] == "MIRUS"
@@ -896,9 +953,7 @@ def test_evidence_profile_serialization_does_not_follow_set_iteration_order() ->
     # Every type co-occurs in every window, so all edge weights tie exactly.
     # Truncating to the strongest 5 must still keep the same 5 pairs each run.
     connections = emitted["graph_summary"]["strongest_connections"]
-    assert [(u, v) for u, v, _ in connections] == list(
-        itertools.combinations(expected, 2)
-    )[:5]
+    assert [(u, v) for u, v, _ in connections] == list(itertools.combinations(expected, 2))[:5]
 
 
 def test_merged_seed_sources_are_ordered_like_the_detailed_tsv_field() -> None:

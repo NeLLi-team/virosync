@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from click.testing import CliRunner
 import pytest
 import yaml
+from click.testing import CliRunner
 
 from virosync.cli.main import cli
 from virosync.config import ApplicationConfig
@@ -18,10 +18,7 @@ from virosync.orchestration.cli import (
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.resource_manifest import ResourceValidationResult
 
-
-MANIFEST_SHA256 = (
-    "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
-)
+MANIFEST_SHA256 = "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
 ARCHIVE_SHA256 = "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
 _REAL_RESOLVE_CONFIG_PATHS = ViroSyncDatabaseManager.resolve_config_paths.__func__
 
@@ -55,7 +52,7 @@ def test_run_resource_resolution_honors_environment_database_root(
             "hmm_database": None,
             "marker_db": None,
             "gene_taxonomy_faa_db": None,
-        }
+        },
     )
 
     assert calls == [database_root]
@@ -347,13 +344,9 @@ def test_setup_forwards_optional_targets_force_and_config_writes(
     assert optional_calls[0]["archive_sha256"] == "3" * 64
     assert optional_calls[1]["archive_sha256"] == "4" * 64
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert payload["orchestration"]["tmvec_resources_url"] == str(
-        tmp_path / "tmvec.tar.gz"
-    )
+    assert payload["orchestration"]["tmvec_resources_url"] == str(tmp_path / "tmvec.tar.gz")
     assert payload["orchestration"]["tmvec_resources_sha256"] == "3" * 64
-    assert payload["orchestration"]["interproscan_resources_url"] == str(
-        tmp_path / "interproscan.tar.gz"
-    )
+    assert payload["orchestration"]["interproscan_resources_url"] == str(tmp_path / "interproscan.tar.gz")
     assert payload["orchestration"]["interproscan_resources_sha256"] == "4" * 64
     assert payload["phase3"]["tmvec_database_dir"] == str(tmvec_dir)
     assert payload["phase3"]["interproscan_dir"] == str(interproscan_dir)
@@ -402,9 +395,7 @@ def test_setup_tmvec_default_target_tracks_custom_core_root(
     )
 
     assert result.exit_code == 0, result.output
-    assert optional_calls[0]["target_path"] == (
-        database_root.parent / "virosync-optional" / "tmvec"
-    )
+    assert optional_calls[0]["target_path"] == (database_root.parent / "virosync-optional" / "tmvec")
 
 
 def test_setup_custom_tmvec_url_does_not_reuse_configured_checksum(
@@ -417,7 +408,7 @@ def test_setup_custom_tmvec_url_does_not_reuse_configured_checksum(
         "schema_version: 1\n"
         "orchestration:\n"
         "  tmvec_resources_url: https://example.test/default.tar.gz\n"
-        f"  tmvec_resources_sha256: \"{'5' * 64}\"\n",
+        f'  tmvec_resources_sha256: "{"5" * 64}"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -428,11 +419,7 @@ def test_setup_custom_tmvec_url_does_not_reuse_configured_checksum(
     monkeypatch.setattr(
         ViroSyncDatabaseManager,
         "setup_optional_archive",
-        classmethod(
-            lambda cls, **_kwargs: pytest.fail(
-                "TMVec setup started without the custom archive checksum"
-            )
-        ),
+        classmethod(lambda cls, **_kwargs: pytest.fail("TMVec setup started without the custom archive checksum")),
     )
 
     result = CliRunner().invoke(
@@ -462,11 +449,7 @@ def test_setup_interproscan_url_requires_checksum(
     monkeypatch.setattr(
         ViroSyncDatabaseManager,
         "setup_database",
-        classmethod(
-            lambda cls, **_kwargs: pytest.fail(
-                "core setup started before InterProScan identity validation"
-            )
-        ),
+        classmethod(lambda cls, **_kwargs: pytest.fail("core setup started before InterProScan identity validation")),
     )
 
     result = CliRunner().invoke(
@@ -497,9 +480,9 @@ def test_interactive_decline_clears_optional_archive_identities(
         "schema_version: 1\n"
         "orchestration:\n"
         "  tmvec_resources_url: https://example.test/tmvec.tar.gz\n"
-        f"  tmvec_resources_sha256: \"{'5' * 64}\"\n"
+        f'  tmvec_resources_sha256: "{"5" * 64}"\n'
         "  interproscan_resources_url: https://example.test/interproscan.tar.gz\n"
-        f"  interproscan_resources_sha256: \"{'6' * 64}\"\n",
+        f'  interproscan_resources_sha256: "{"6" * 64}"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -510,11 +493,7 @@ def test_interactive_decline_clears_optional_archive_identities(
     monkeypatch.setattr(
         ViroSyncDatabaseManager,
         "setup_optional_archive",
-        classmethod(
-            lambda cls, **_kwargs: pytest.fail(
-                "optional setup started after the operator declined"
-            )
-        ),
+        classmethod(lambda cls, **_kwargs: pytest.fail("optional setup started after the operator declined")),
     )
     monkeypatch.setattr(
         ViroSyncDatabaseManager,
@@ -638,17 +617,13 @@ def test_fresh_setup_prompts_before_starting_progress(
     assert result.exit_code == 0, result.output
     assert "Download size: 5.88 GB (5,877,324,818 bytes)" in result.output
     assert "Resource payload: 13.14 GB (13,137,477,318 bytes)" in result.output
-    assert result.output.index("Download and install to") < result.output.index(
-        "Progress:"
-    )
+    assert result.output.index("Download and install to") < result.output.index("Progress:")
 
 
 def test_database_version_is_read_from_installed_bundle_only(tmp_path: Path) -> None:
     database_root = tmp_path / "resources"
     hmm_path = database_root / "models" / "combined.hmm"
-    config = ApplicationConfig.from_dict(
-        {"databases": {"hmm_database": str(hmm_path)}}
-    ).pipeline
+    config = ApplicationConfig.from_dict({"databases": {"hmm_database": str(hmm_path)}}).pipeline
 
     assert _database_version(config) == "unknown"
     database_root.mkdir(parents=True)
@@ -712,9 +687,7 @@ def test_setup_writes_null_when_runtime_bundle_has_no_marker_source(
     assert result.exit_code == 0, result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["databases"]["marker_faa_db"] is None
-    assert payload["databases"]["marker_db"] == str(
-        database_root / "marker" / "marker.dmnd"
-    )
+    assert payload["databases"]["marker_db"] == str(database_root / "marker" / "marker.dmnd")
 
 
 def test_pipeline_resolution_clears_absent_auto_marker_source(

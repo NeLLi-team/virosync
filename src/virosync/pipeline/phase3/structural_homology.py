@@ -1,5 +1,4 @@
-"""
-Structural Homology Module for EVE Verification.
+"""Structural Homology Module for EVE Verification.
 
 Primary pipeline path uses Boltz-2 structure prediction (optional),
 followed by FoldSeek searches against viral protein structure databases.
@@ -15,7 +14,6 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -81,11 +79,11 @@ class FoldSeekHit:
     tm_score: float  # Always available - primary metric
 
     # Issue #4 fix: These are Optional - only set when from real structural alignment
-    evalue: Optional[float] = None  # Only from FoldSeek, not TMvec
-    score: Optional[float] = None  # Bitscore from alignment
-    qcov: Optional[float] = None  # Query coverage from alignment
-    tcov: Optional[float] = None  # Target coverage from alignment
-    lddt: Optional[float] = None  # Local distance difference test
+    evalue: float | None = None  # Only from FoldSeek, not TMvec
+    score: float | None = None  # Bitscore from alignment
+    qcov: float | None = None  # Query coverage from alignment
+    tcov: float | None = None  # Target coverage from alignment
+    lddt: float | None = None  # Local distance difference test
     target_taxonomy: str = ""
 
     # Issue #4 fix: Flag indicating source of hit
@@ -97,12 +95,12 @@ class StructuralHomologyResult:
     """Combined result of structure prediction and database search."""
 
     porf_id: str
-    prediction: Optional[StructurePrediction]
+    prediction: StructurePrediction | None
     foldseek_hits: list[FoldSeekHit] = field(default_factory=list)
 
     # Classification
     has_viral_hit: bool = False
-    best_viral_hit: Optional[FoldSeekHit] = None
+    best_viral_hit: FoldSeekHit | None = None
     viral_taxonomy: str = ""
 
     # Confidence
@@ -115,20 +113,18 @@ class StructuralHomologyResult:
 
 
 class FoldSeekSearcher:
-    """
-    Structure-based homology search using FoldSeek.
+    """Structure-based homology search using FoldSeek.
 
     Searches predicted structures against viral protein structure databases.
     """
 
     def __init__(
         self,
-        database_path: Optional[Path] = None,
+        database_path: Path | None = None,
         threads: int = 8,
         sensitivity: float = 7.5,
     ):
-        """
-        Initialize FoldSeek searcher.
+        """Initialize FoldSeek searcher.
 
         Args:
             database_path: Path to FoldSeek database (created if not exists)
@@ -156,10 +152,9 @@ class FoldSeekSearcher:
     def search(
         self,
         query_pdb: Path,
-        output_prefix: Optional[str] = None,
+        output_prefix: str | None = None,
     ) -> list[FoldSeekHit]:
-        """
-        Search a query structure against the database.
+        """Search a query structure against the database.
 
         Args:
             query_pdb: Path to query PDB file
@@ -225,10 +220,9 @@ class FoldSeekSearcher:
     def search_batch(
         self,
         pdb_files: list[Path],
-        output_dir: Optional[Path] = None,
+        output_dir: Path | None = None,
     ) -> dict[str, list[FoldSeekHit]]:
-        """
-        Search multiple structures against the database.
+        """Search multiple structures against the database.
 
         Args:
             pdb_files: List of PDB file paths
@@ -289,15 +283,14 @@ class FoldSeekSearcher:
 
 
 class BoltzFoldSeekAnalyzer:
-    """
-    Structural analysis using Boltz-2 predictions + FoldSeek search.
+    """Structural analysis using Boltz-2 predictions + FoldSeek search.
 
     This is optional and should be used only for MCP candidates due to runtime cost.
     """
 
     def __init__(
         self,
-        viral_db_path: Optional[Path],
+        viral_db_path: Path | None,
         device: str = "cuda",
         threads: int = 8,
         use_msa_server: bool = False,
@@ -312,8 +305,8 @@ class BoltzFoldSeekAnalyzer:
         self.min_seq_len = min_seq_len
         self.max_seq_len = max_seq_len
         self.no_kernels = no_kernels
-        self._searcher: Optional[FoldSeekSearcher] = None
-        self._boltz_executable: Optional[str] = None
+        self._searcher: FoldSeekSearcher | None = None
+        self._boltz_executable: str | None = None
 
     def available(self) -> bool:
         if self.viral_db_path is None:
@@ -351,13 +344,7 @@ class BoltzFoldSeekAnalyzer:
     def _write_boltz_yaml(self, protein_id: str, sequence: str, yaml_dir: Path) -> Path:
         yaml_path = yaml_dir / f"{protein_id}.yaml"
         require_strict_child(yaml_dir, yaml_path)
-        yaml_content = (
-            "version: 1\n"
-            "sequences:\n"
-            "  - protein:\n"
-            "      id: A\n"
-            f"      sequence: {sequence}\n"
-        )
+        yaml_content = f"version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: {sequence}\n"
         yaml_path.write_text(yaml_content)
         return yaml_path
 
@@ -432,9 +419,7 @@ class BoltzFoldSeekAnalyzer:
             return []
 
         eligible_porfs = [
-            (porf_id, sequence)
-            for porf_id, sequence in porfs
-            if self.min_seq_len <= len(sequence) <= self.max_seq_len
+            (porf_id, sequence) for porf_id, sequence in porfs if self.min_seq_len <= len(sequence) <= self.max_seq_len
         ]
         filename_components = safe_filename_components(
             (porf_id for porf_id, _sequence in eligible_porfs),

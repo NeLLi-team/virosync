@@ -1,5 +1,4 @@
-"""
-pORF coordinate model.
+"""pORF coordinate model.
 
 Defines the PORF dataclass used to encode/decode pORF coordinates in FASTA
 headers. The legacy six-frame translation helpers were retired; gene calling
@@ -24,8 +23,7 @@ class PORF:
 
     @classmethod
     def parse_header(cls, header: str) -> Optional["PORF"]:
-        """
-        Parse a pORF FASTA header to extract coordinates.
+        """Parse a pORF FASTA header to extract coordinates.
 
         Header format: pORF_1|scaffold:start-end_strand:+_frame:1
         Note: Scaffold names may contain underscores (e.g., NC_057019.1)

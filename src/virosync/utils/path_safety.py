@@ -9,7 +9,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote
 
-
 _PORTABLE_FILENAME_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 _MAX_FILENAME_COMPONENT_LENGTH = 180
 
@@ -38,9 +37,7 @@ def require_strict_child(root: Path, candidate: Path) -> Path:
         raise ValueError(f"could not resolve path safely: {candidate}") from exc
 
     if resolved_candidate == resolved_root or resolved_root not in resolved_candidate.parents:
-        raise ValueError(
-            f"path must be a strict child of {resolved_root}: {resolved_candidate}"
-        )
+        raise ValueError(f"path must be a strict child of {resolved_root}: {resolved_candidate}")
     return resolved_candidate
 
 
@@ -84,11 +81,7 @@ def safe_filename_components(
     for index, value in enumerate(raw_values):
         indices_by_value.setdefault(value, []).append(index)
 
-    duplicates = {
-        value: indices
-        for value, indices in indices_by_value.items()
-        if len(indices) > 1
-    }
+    duplicates = {value: indices for value, indices in indices_by_value.items() if len(indices) > 1}
     if duplicates:
         details = "; ".join(
             f"{value!r} at indices {', '.join(str(index) for index in indices)}"
@@ -102,10 +95,7 @@ def safe_filename_components(
         component = safe_filename_component(value)
         conflicting_value = raw_value_by_component.get(component)
         if conflicting_value is not None:
-            raise ValueError(
-                f"{label} filename encoding collision: "
-                f"{conflicting_value!r} and {value!r}"
-            )
+            raise ValueError(f"{label} filename encoding collision: {conflicting_value!r} and {value!r}")
         components[value] = component
         raw_value_by_component[component] = value
     return components

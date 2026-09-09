@@ -1,5 +1,4 @@
-"""
-Invariant checks for ``virosync_predictions_detailed.tsv`` outputs.
+"""Invariant checks for ``virosync_predictions_detailed.tsv`` outputs.
 
 This module is used in two ways:
 1) Automatically from the orchestration flow after each run.
@@ -13,7 +12,6 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 EMPTY_VALUES = {"", ".", "NA", "None", "null", "NULL"}
 BOOL_TRUE_VALUES = {"1", "true", "True", "yes", "YES"}
@@ -30,12 +28,10 @@ class InvariantIssue:
 class TSVInvariantError(RuntimeError):
     """Raised after fatal detailed-TSV diagnostics have been written."""
 
-    def __init__(self, report: "InvariantReport", report_path: Path):
+    def __init__(self, report: InvariantReport, report_path: Path):
         self.report = report
         self.report_path = Path(report_path)
-        preview = ", ".join(
-            f"{issue.eve_id}:{issue.check}" for issue in report.fatal_issues[:5]
-        )
+        preview = ", ".join(f"{issue.eve_id}:{issue.check}" for issue in report.fatal_issues[:5])
         detail = f" ({preview})" if preview else ""
         super().__init__(
             "Detailed TSV invariant check failed: "
@@ -55,21 +51,13 @@ class InvariantReport:
 
     @property
     def warning_issues(self) -> list[InvariantIssue]:
-        return [
-            issue
-            for issue in self.issues
-            if issue.severity.strip().lower() == "warning"
-        ]
+        return [issue for issue in self.issues if issue.severity.strip().lower() == "warning"]
 
     @property
     def fatal_issues(self) -> list[InvariantIssue]:
         # Fail closed: a misspelled or future severity must not silently turn a
         # scientific inconsistency into a successful run.
-        return [
-            issue
-            for issue in self.issues
-            if issue.severity.strip().lower() != "warning"
-        ]
+        return [issue for issue in self.issues if issue.severity.strip().lower() != "warning"]
 
     @property
     def warning_count(self) -> int:
@@ -98,7 +86,7 @@ def _is_empty(value: object) -> bool:
     return str(value).strip() in EMPTY_VALUES
 
 
-def _parse_int(value: object) -> Optional[int]:
+def _parse_int(value: object) -> int | None:
     if _is_empty(value):
         return 0
     try:
@@ -107,7 +95,7 @@ def _parse_int(value: object) -> Optional[int]:
         return None
 
 
-def _parse_float(value: object) -> Optional[float]:
+def _parse_float(value: object) -> float | None:
     if _is_empty(value):
         return 0.0
     try:
@@ -116,7 +104,7 @@ def _parse_float(value: object) -> Optional[float]:
         return None
 
 
-def _parse_taxonomy_counts(raw: str) -> tuple[dict[str, int], Optional[str]]:
+def _parse_taxonomy_counts(raw: str) -> tuple[dict[str, int], str | None]:
     counts: dict[str, int] = {}
     if _is_empty(raw):
         return counts, None
@@ -149,7 +137,7 @@ def _count_name_tokens(raw: object, sep: str = ",") -> int:
     return len([token.strip() for token in str(raw).split(sep) if token.strip()])
 
 
-def _parse_counted_name_blob(raw: object, sep: str = ",") -> tuple[dict[str, int], Optional[str]]:
+def _parse_counted_name_blob(raw: object, sep: str = ",") -> tuple[dict[str, int], str | None]:
     if _is_empty(raw):
         return {}, None
 
@@ -173,11 +161,9 @@ def _parse_counted_name_blob(raw: object, sep: str = ",") -> tuple[dict[str, int
 
 
 def _load_gene_taxonomy_totals(
-    gene_taxonomy_all_tsv: Optional[Path],
+    gene_taxonomy_all_tsv: Path | None,
 ) -> dict[str, dict[str, int]]:
-    """
-    Load per-EVE interior-gene taxonomy summaries from gene_taxonomy_all.tsv.
-    """
+    """Load per-EVE interior-gene taxonomy summaries from gene_taxonomy_all.tsv."""
     if gene_taxonomy_all_tsv is None or not gene_taxonomy_all_tsv.exists():
         return {}
 
@@ -222,11 +208,9 @@ def _load_gene_taxonomy_totals(
 
 def run_tsv_invariant_checks(
     detailed_tsv: Path,
-    gene_taxonomy_all_tsv: Optional[Path] = None,
+    gene_taxonomy_all_tsv: Path | None = None,
 ) -> InvariantReport:
-    """
-    Check core TSV invariants that previously regressed.
-    """
+    """Check core TSV invariants that previously regressed."""
     issues: list[InvariantIssue] = []
     rows_checked = 0
 
@@ -320,9 +304,7 @@ def run_tsv_invariant_checks(
             if host_sig_fraction is None:
                 host_sig_fraction = 0.0
 
-            taxonomy_counts, taxonomy_error = _parse_taxonomy_counts(
-                str(row.get("taxonomy_best_hits", "")).strip()
-            )
+            taxonomy_counts, taxonomy_error = _parse_taxonomy_counts(str(row.get("taxonomy_best_hits", "")).strip())
             if taxonomy_error:
                 add_issue("taxonomy_best_hits_format", taxonomy_error)
             elif taxonomy_counts:
@@ -454,18 +436,12 @@ def run_tsv_invariant_checks(
                     str(row.get("other_marker_patterns", "")),
                 ]
             )
-            if (
-                _has_marker_token(marker_blob, og_pattern)
-                and (og_count + og_unvalidated_count) == 0
-            ):
+            if _has_marker_token(marker_blob, og_pattern) and (og_count + og_unvalidated_count) == 0:
                 add_issue(
                     "og_marker_evidence_zero_count",
                     "Marker columns contain OG identifiers but both og_count and og_unvalidated_count are 0",
                 )
-            if (
-                _has_marker_token(marker_blob, gvogm_pattern)
-                and (gvogm_count + gvogm_unvalidated_count) == 0
-            ):
+            if _has_marker_token(marker_blob, gvogm_pattern) and (gvogm_count + gvogm_unvalidated_count) == 0:
                 add_issue(
                     "gvogm_marker_evidence_zero_count",
                     "Marker columns contain GVOGm identifiers but both gvogm_count and gvogm_unvalidated_count are 0",
@@ -523,9 +499,7 @@ def run_tsv_invariant_checks(
 
 
 def write_tsv_invariant_report(report: InvariantReport, output_path: Path) -> Path:
-    """
-    Write invariant-check results as a TSV report.
-    """
+    """Write invariant-check results as a TSV report."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t")
@@ -557,7 +531,7 @@ def write_tsv_invariant_report(report: InvariantReport, output_path: Path) -> Pa
 def enforce_tsv_invariants(
     detailed_tsv: Path,
     report_out: Path,
-    gene_taxonomy_all_tsv: Optional[Path] = None,
+    gene_taxonomy_all_tsv: Path | None = None,
 ) -> InvariantReport:
     """Write diagnostics and raise only for fatal detailed-TSV issues.
 
@@ -605,10 +579,8 @@ def enforce_tsv_invariants(
     return report
 
 
-def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Check invariants in virosync detailed TSV outputs."
-    )
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Check invariants in virosync detailed TSV outputs.")
     parser.add_argument(
         "--detailed-tsv",
         required=True,
@@ -635,7 +607,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     detailed_tsv = args.detailed_tsv
     if not detailed_tsv.exists():

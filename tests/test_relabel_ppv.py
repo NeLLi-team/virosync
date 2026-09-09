@@ -49,10 +49,7 @@ def test_remap_lineage_remaps_every_field() -> None:
         == "PPV|Virophaviricetes|VP_unclassified|PPV__Ace"
     )
     # ...and the embedded id gets the SAME __vpdup dedup as col0 on a collision
-    assert (
-        rp.remap_lineage("VP|Virophaviricetes|VP__Dup", {"Dup"})
-        == "PPV|Virophaviricetes|PPV__Dup__vpdup"
-    )
+    assert rp.remap_lineage("VP|Virophaviricetes|VP__Dup", {"Dup"}) == "PPV|Virophaviricetes|PPV__Dup__vpdup"
     # single-underscore lifestyle tag preserved; a non-domain VP-ish token untouched
     assert rp.remap_lineage("EUK|Stramenopiles|VP_like", set()) == "EUK|Stramenopiles|VP_like"
 

@@ -1,6 +1,6 @@
-from dataclasses import FrozenInstanceError
 import hashlib
 import json
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -21,7 +21,6 @@ from virosync.ablation import (
     validate_ablation_events_bytes,
     validate_ablation_events_document,
 )
-
 
 EXPECTED_POLICIES = {
     AblationID.A0: (

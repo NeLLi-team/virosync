@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from virosync.config import PipelineConfig
 from virosync.orchestration._flows.single_genome import phase2
 from virosync.orchestration._flows.single_genome.phase2_resume_state import (
     PHASE2_RESUME_STATE_ARTIFACT_TYPE,
@@ -149,15 +150,13 @@ def _assert_phase3_inputs_equal(
     expected: Phase2ResumeState,
     observed: Phase2ResumeState,
 ) -> None:
-    assert phase2_state_to_document(
-        observed.refined_boundaries
-    ) == phase2_state_to_document(expected.refined_boundaries)
+    assert phase2_state_to_document(observed.refined_boundaries) == phase2_state_to_document(
+        expected.refined_boundaries
+    )
     assert observed.boundary_taxonomy_map == expected.boundary_taxonomy_map
     assert observed.boundary_control_stats == expected.boundary_control_stats
     assert observed.boundary_diamond_query == expected.boundary_diamond_query
-    assert list(observed.boundary_taxonomy_map) == list(
-        expected.boundary_taxonomy_map
-    )
+    assert list(observed.boundary_taxonomy_map) == list(expected.boundary_taxonomy_map)
     assert list(observed.boundary_diamond_query.eve_porf_ids) == [
         "seed-b",
         "seed-a",
@@ -186,20 +185,14 @@ def test_phase2_resume_state_round_trip_preserves_exact_phase3_inputs(
     _assert_phase3_inputs_equal(original, loaded)
     assert loaded.boundary_taxonomy_map["porf-under"].top1_pident == 69.999
     assert loaded.boundary_taxonomy_map["porf-over"].top1_pident == 70.001
-    expected_fingerprint = original.boundary_taxonomy_map[
-        "porf-under"
-    ].taxonomy_fingerprint
-    assert (
-        loaded.boundary_taxonomy_map["porf-under"].taxonomy_fingerprint
-        == expected_fingerprint
-    )
+    expected_fingerprint = original.boundary_taxonomy_map["porf-under"].taxonomy_fingerprint
+    assert loaded.boundary_taxonomy_map["porf-under"].taxonomy_fingerprint == expected_fingerprint
     payload = json.loads(state_path.read_text())
     assert payload["artifact_type"] == PHASE2_RESUME_STATE_ARTIFACT_TYPE
     assert payload["schema_version"] == PHASE2_RESUME_STATE_SCHEMA_VERSION
 
 
-def test_phase2_resume_state_round_trip_preserves_optional_none_values(
-) -> None:
+def test_phase2_resume_state_round_trip_preserves_optional_none_values() -> None:
     state = Phase2ResumeState(
         refined_boundaries=[],
         boundary_taxonomy_map={},
@@ -207,15 +200,12 @@ def test_phase2_resume_state_round_trip_preserves_optional_none_values(
         boundary_diamond_query=None,
     )
 
-    loaded = phase2_resume_state_from_document(
-        phase2_resume_state_to_document(state)
-    )
+    loaded = phase2_resume_state_from_document(phase2_resume_state_to_document(state))
 
     assert loaded == state
 
 
-def test_phase2_resume_state_rejects_schema_drift_and_duplicate_mapping_keys(
-) -> None:
+def test_phase2_resume_state_rejects_schema_drift_and_duplicate_mapping_keys() -> None:
     document = phase2_resume_state_to_document(_state())
 
     unknown_schema = copy.deepcopy(document)
@@ -227,17 +217,13 @@ def test_phase2_resume_state_rejects_schema_drift_and_duplicate_mapping_keys(
         phase2_resume_state_from_document(unknown_schema)
 
     extra_seed_field = copy.deepcopy(document)
-    seed_document = extra_seed_field["boundary_diamond_query"][
-        "seed_gene_mappings"
-    ][0]["value"]
+    seed_document = extra_seed_field["boundary_diamond_query"]["seed_gene_mappings"][0]["value"]
     seed_document["runtime_class"] = "arbitrary.Type"
     with pytest.raises(Phase2ResumeStateError, match="extra=.*runtime_class"):
         phase2_resume_state_from_document(extra_seed_field)
 
     duplicate_taxonomy = copy.deepcopy(document)
-    duplicate_taxonomy["boundary_taxonomy_map"].append(
-        copy.deepcopy(duplicate_taxonomy["boundary_taxonomy_map"][0])
-    )
+    duplicate_taxonomy["boundary_taxonomy_map"].append(copy.deepcopy(duplicate_taxonomy["boundary_taxonomy_map"][0]))
     with pytest.raises(
         Phase2ResumeStateError,
         match="duplicate key 'porf-over'",
@@ -297,14 +283,33 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
         boundary_control_stats=original.boundary_control_stats,
         boundary_diamond_query=original.boundary_diamond_query,
     )
-    proteome_index = {
-        "scaffold/alpha": ["derived-from-authenticated-proteome"]
-    }
+    proteome_index = {"scaffold/alpha": ["derived-from-authenticated-proteome"]}
     monkeypatch.setattr(
         phase2,
         "build_proteome_index",
         lambda _path: proteome_index,
     )
+    config = PipelineConfig().with_overrides(
+        resume=True,
+        boundary_host_trim_enabled=False,
+        boundary_host_trim_window_bp=1000,
+        boundary_host_trim_step_bp=500,
+        boundary_host_trim_max_host_fraction=0.5,
+        boundary_host_trim_min_viral_fraction=0.1,
+        boundary_host_trim_score_threshold=0.5,
+        boundary_host_trim_buffer_kb=1,
+        boundary_host_trim_min_overlap_score=0.2,
+        boundary_taxonomy_ml_model="logreg",
+        boundary_taxonomy_ml_neighbor_window=1,
+        threads=1,
+        gene_taxonomy_threads=1,
+        extended_output=False,
+    )
+    config.host.prefixes = []
+    config.phase2.diamond_flank_genes = 17
+    config.phase2.diamond_control_sample_size = 23
+    config.phase2.diamond_control_min_distance = 11
+    config.phase2.diamond_chunk_size = 100
 
     result = phase2._run_phase2_subflow(
         masked_path=tmp_path / "masked.fna",
@@ -314,49 +319,18 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
         host_signature_model=None,
         output_dir=tmp_path,
         genome_id="genome",
-        resume=True,
-        refined_bed=phase2_dir / "refined_boundaries.bed",
-        gene_taxonomy_faa_db=None,
-        marker_db=None,
-        taxonomy_labels_file=None,
-        host_prefixes=[],
-        host_label="EUK",
-        high_pident_host_threshold=70.0,
-        boundary_host_trim_enabled=False,
-        boundary_host_trim_window_bp=1000,
-        boundary_host_trim_step_bp=500,
-        boundary_host_trim_max_host_fraction=0.5,
-        boundary_host_trim_min_viral_fraction=0.1,
-        boundary_host_trim_score_threshold=0.5,
-        boundary_host_trim_buffer_kb=1,
-        boundary_host_trim_min_overlap_score=0.2,
-        boundary_host_signature_min_token_len=3,
-        taxonomy_weight_mode="rank",
-        boundary_taxonomy_ml_enabled=False,
-        boundary_taxonomy_ml_model="logistic",
-        boundary_taxonomy_ml_threshold=0.5,
-        boundary_taxonomy_ml_neighbor_window=1,
-        boundary_diamond_flank_genes=17,
-        boundary_diamond_control_sample_size=23,
-        boundary_diamond_control_min_distance=11,
-        boundary_diamond_top_k=10,
-        boundary_diamond_chunk_size=100,
-        boundary_diamond_random_seed=42,
-        threads=1,
-        gene_taxonomy_threads=1,
-        extended_output=False,
-        search_backend="diamond",
+        config=config,
         genome_start_time=0.0,
         logger=logging.getLogger(__name__),
         resume_authorized=True,
     )
 
     resumed = Phase2ResumeState(
-        refined_boundaries=result["refined_boundaries"],
-        boundary_taxonomy_map=result["boundary_taxonomy_map"],
-        boundary_control_stats=result["boundary_control_stats"],
-        boundary_diamond_query=result["boundary_diamond_query"],
+        refined_boundaries=result.refined_boundaries,
+        boundary_taxonomy_map=result.boundary_taxonomy_map,
+        boundary_control_stats=result.boundary_control_stats,
+        boundary_diamond_query=result.boundary_diamond_query,
     )
     _assert_phase3_inputs_equal(original, resumed)
-    assert result["proteome_index"] is proteome_index
-    assert result["goto_phase3"] is True
+    assert result.proteome_index is proteome_index
+    assert result.goto_phase3 is True

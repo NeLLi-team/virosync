@@ -1,5 +1,4 @@
-"""
-Viral family marker definitions and classification.
+"""Viral family marker definitions and classification.
 
 This module defines marker gene profiles for different giant virus families,
 enabling detection of diverse viral lineages beyond just NCLDVs.
@@ -17,18 +16,13 @@ References:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
-
-CRESS_MARKER_MODELS = frozenset(
-    f"VS{model_number:06d}" for model_number in range(792, 809)
-)
+CRESS_MARKER_MODELS = frozenset(f"VS{model_number:06d}" for model_number in range(792, 809))
 CRESS_MIN_PIDENT = 25.0
 
 
 def base_marker_gene_id(query_porf: str) -> str:
     """Return the protein ID without an HMM domain suffix."""
-
     return str(query_porf or "").split("|aa", 1)[0]
 
 
@@ -38,18 +32,13 @@ def is_identity_qualified_cress_marker(
     min_pident: float = CRESS_MIN_PIDENT,
 ) -> bool:
     """Require a CRESS HMM plus paired CRESS reference identity support."""
-
     if isinstance(hit, dict):
         model = str(hit.get("hallmark_gene") or hit.get("hmm_target") or "")
         validation_status = str(hit.get("validation_status") or "")
         raw_prefixes = hit.get("top10_prefixes") or ""
         raw_pidents = hit.get("top10_pidents") or ""
     else:
-        model = str(
-            getattr(hit, "hallmark_gene", "")
-            or getattr(hit, "hmm_target", "")
-            or ""
-        )
+        model = str(getattr(hit, "hallmark_gene", "") or getattr(hit, "hmm_target", "") or "")
         validation_status = str(getattr(hit, "validation_status", "") or "")
         raw_prefixes = getattr(hit, "top10_prefixes", "") or ""
         raw_pidents = getattr(hit, "top10_pidents", "") or ""
@@ -57,16 +46,8 @@ def is_identity_qualified_cress_marker(
     if model not in CRESS_MARKER_MODELS or validation_status != "validated":
         return False
 
-    prefixes = (
-        raw_prefixes.split(",")
-        if isinstance(raw_prefixes, str)
-        else list(raw_prefixes)
-    )
-    pident_values = (
-        raw_pidents.split(",")
-        if isinstance(raw_pidents, str)
-        else list(raw_pidents)
-    )
+    prefixes = raw_prefixes.split(",") if isinstance(raw_prefixes, str) else list(raw_prefixes)
+    pident_values = raw_pidents.split(",") if isinstance(raw_pidents, str) else list(raw_pidents)
     for prefix, pident_value in zip(prefixes, pident_values):
         try:
             pident = float(pident_value)
@@ -79,23 +60,14 @@ def is_identity_qualified_cress_marker(
 
 def is_cress_specific_top1_marker(hit: object) -> bool:
     """Return whether a qualified CRESS marker has a CRESS-specific top hit."""
-
     if not is_identity_qualified_cress_marker(hit):
         return False
 
     if isinstance(hit, dict):
         raw_targets = hit.get("top10_targets") or hit.get("best_hit_target") or ""
     else:
-        raw_targets = (
-            getattr(hit, "top10_targets", "")
-            or getattr(hit, "best_hit_target", "")
-            or ""
-        )
-    targets = (
-        raw_targets.split(",")
-        if isinstance(raw_targets, str)
-        else list(raw_targets)
-    )
+        raw_targets = getattr(hit, "top10_targets", "") or getattr(hit, "best_hit_target", "") or ""
+    targets = raw_targets.split(",") if isinstance(raw_targets, str) else list(raw_targets)
     if not targets:
         return False
     top1 = str(targets[0]).strip()
@@ -121,7 +93,6 @@ class ViralFamilyProfile:
     single_marker_min_score: float = 100.0
 
 
-
 # =============================================================================
 # VIRAL FAMILY DEFINITIONS
 # =============================================================================
@@ -129,18 +100,18 @@ class ViralFamilyProfile:
 NCLDV_PROFILE = ViralFamilyProfile(
     name="Nucleocytoviricota (NCLDVs)",
     diagnostic_markers={
-        "mcp",      # Major Capsid Protein - most diagnostic
-        "a32",      # ATPase A32
-        "d5",       # D5 helicase-primase
-        "vltf3",    # Virus late transcription factor 3
-        "mrnac",    # mRNA capping enzyme
+        "mcp",  # Major Capsid Protein - most diagnostic
+        "a32",  # ATPase A32
+        "d5",  # D5 helicase-primase
+        "vltf3",  # Virus late transcription factor 3
+        "mrnac",  # mRNA capping enzyme
     },
     supporting_markers={
-        "polb",     # DNA polymerase B - also in eukaryotes
-        "rnapl",    # RNA polymerase large subunit - also in eukaryotes
-        "rnaps",    # RNA polymerase small subunit - also in eukaryotes
-        "rnr",      # Ribonucleotide reductase - also in eukaryotes
-        "sfii",     # Superfamily II helicase - widespread
+        "polb",  # DNA polymerase B - also in eukaryotes
+        "rnapl",  # RNA polymerase large subunit - also in eukaryotes
+        "rnaps",  # RNA polymerase small subunit - also in eukaryotes
+        "rnr",  # Ribonucleotide reductase - also in eukaryotes
+        "sfii",  # Superfamily II helicase - widespread
     },
     min_markers_fragmented=1,
     single_marker_min_score=80.0,  # MCP at 80+ is quite diagnostic
@@ -149,18 +120,18 @@ NCLDV_PROFILE = ViralFamilyProfile(
 MRIYAVIRUS_PROFILE = ViralFamilyProfile(
     name="Mriyaviricetes (Mriyaviruses)",
     diagnostic_markers={
-        "mcp",          # Major Capsid Protein (double jelly-roll)
-        "vltf2",        # Virus late transcription factor 2 - very diagnostic
-        "vltf3",        # Virus late transcription factor 3
-        "atpase_pkg",   # DNA packaging ATPase
-        "huh_endo",     # HUH endonuclease (rolling circle replication)
+        "mcp",  # Major Capsid Protein (double jelly-roll)
+        "vltf2",  # Virus late transcription factor 2 - very diagnostic
+        "vltf3",  # Virus late transcription factor 3
+        "atpase_pkg",  # DNA packaging ATPase
+        "huh_endo",  # HUH endonuclease (rolling circle replication)
     },
     supporting_markers={
-        "ruvc",         # RuvC Holliday junction resolvase
-        "pddexk",       # PDDEXK endonuclease
-        "sf3_hel",      # SF3 helicase
-        "sf2_hel",      # SF2 helicase with primase domain
-        "ssb",          # ssDNA binding protein
+        "ruvc",  # RuvC Holliday junction resolvase
+        "pddexk",  # PDDEXK endonuclease
+        "sf3_hel",  # SF3 helicase
+        "sf2_hel",  # SF2 helicase with primase domain
+        "ssb",  # ssDNA binding protein
     },
     # Tightened 2026-04: min_markers=1 @ 60 bit was matching widespread
     # TE-borne HUH endonuclease / SF3 helicase homologs and calling them
@@ -175,13 +146,13 @@ MRIYAVIRUS_PROFILE = ViralFamilyProfile(
 MIRUSVIRUS_PROFILE = ViralFamilyProfile(
     name="Mirusviricota (Mirusviruses)",
     diagnostic_markers={
-        "mcp_mirus",    # Mirusvirus MCP (distinct from NCLDV)
-        "polb_mirus",   # Mirusvirus-specific PolB
-        "hel_mirus",    # Mirusvirus helicase
+        "mcp_mirus",  # Mirusvirus MCP (distinct from NCLDV)
+        "polb_mirus",  # Mirusvirus-specific PolB
+        "hel_mirus",  # Mirusvirus helicase
     },
     supporting_markers={
-        "polb",         # Generic DNA polymerase B
-        "sfii",         # SF2 helicase
+        "polb",  # Generic DNA polymerase B
+        "sfii",  # SF2 helicase
     },
     min_markers_fragmented=1,
     single_marker_min_score=80.0,
@@ -190,13 +161,13 @@ MIRUSVIRUS_PROFILE = ViralFamilyProfile(
 POLINTOVIRUS_PROFILE = ViralFamilyProfile(
     name="Polintoviruses",
     diagnostic_markers={
-        "mcp_poli",     # Polintovirus MCP
-        "ppolb",        # Protein-primed PolB
-        "pro_c1",       # C1 cysteine protease
+        "mcp_poli",  # Polintovirus MCP
+        "ppolb",  # Protein-primed PolB
+        "pro_c1",  # C1 cysteine protease
     },
     supporting_markers={
-        "atpase",       # Packaging ATPase
-        "int_tyr",      # Tyrosine integrase
+        "atpase",  # Packaging ATPase
+        "int_tyr",  # Tyrosine integrase
     },
     min_markers_fragmented=1,
     single_marker_min_score=70.0,
@@ -206,15 +177,28 @@ VP_PLV_PROFILE = ViralFamilyProfile(
     name="Virophages and Polinton-like Viruses",
     diagnostic_markers={
         # VP MCP markers (>95% VP/PLV purity)
-        "vp_mcp_1", "vp_mcp_2", "vp_mcp_3", "vp_mcp_4",
-        "vp_mcp_5", "vp_mcp_6", "vp_mcp_7",
+        "vp_mcp_1",
+        "vp_mcp_2",
+        "vp_mcp_3",
+        "vp_mcp_4",
+        "vp_mcp_5",
+        "vp_mcp_6",
+        "vp_mcp_7",
         # VP ATPase markers
-        "vp_atpase_1", "vp_atpase_2", "vp_atpase_3", "vp_atpase_4",
+        "vp_atpase_1",
+        "vp_atpase_2",
+        "vp_atpase_3",
+        "vp_atpase_4",
         # VP Penton markers
-        "vp_penton_1", "vp_penton_2", "vp_penton_3", "vp_penton_4",
-        "vp_penton_6", "vp_penton_7",
+        "vp_penton_1",
+        "vp_penton_2",
+        "vp_penton_3",
+        "vp_penton_4",
+        "vp_penton_6",
+        "vp_penton_7",
         # VP Protease markers
-        "vp_pro_1", "vp_pro_2",
+        "vp_pro_1",
+        "vp_pro_2",
         # PLV markers
         "plv_pc_054",
     },
@@ -245,11 +229,8 @@ for profile in VIRAL_FAMILIES.values():
     ALL_SUPPORTING_MARKERS.update(m.lower() for m in profile.supporting_markers)
 
 
-
-
-def get_family_for_markers(marker_set: set[str]) -> Optional[str]:
-    """
-    Determine the most likely viral family given a set of markers.
+def get_family_for_markers(marker_set: set[str]) -> str | None:
+    """Determine the most likely viral family given a set of markers.
 
     Args:
         marker_set: Set of marker names found in a region
@@ -309,8 +290,7 @@ class AssemblyMode:
 
     @classmethod
     def fragmented(cls) -> "AssemblyMode":
-        """
-        Mode for fragmented assemblies (MAGs, highly fragmented genomes).
+        """Mode for fragmented assemblies (MAGs, highly fragmented genomes).
 
         Key differences:
         - Accept single diagnostic markers with high scores
@@ -328,8 +308,7 @@ class AssemblyMode:
 
     @classmethod
     def relaxed(cls) -> "AssemblyMode":
-        """
-        Relaxed mode for exploratory analysis.
+        """Relaxed mode for exploratory analysis.
 
         Use when sensitivity is more important than specificity.
         """
@@ -344,8 +323,7 @@ class AssemblyMode:
 
     @classmethod
     def strict(cls) -> "AssemblyMode":
-        """
-        Strict mode for high-confidence predictions only.
+        """Strict mode for high-confidence predictions only.
 
         Use when specificity is critical.
         """
@@ -371,10 +349,7 @@ ASSEMBLY_MODES = {
 def get_assembly_mode(mode_name: str) -> AssemblyMode:
     """Get assembly mode configuration by name."""
     if mode_name not in ASSEMBLY_MODES:
-        raise ValueError(
-            f"Unknown assembly mode: {mode_name}. "
-            f"Available modes: {list(ASSEMBLY_MODES.keys())}"
-        )
+        raise ValueError(f"Unknown assembly mode: {mode_name}. Available modes: {list(ASSEMBLY_MODES.keys())}")
     return ASSEMBLY_MODES[mode_name]()
 
 
@@ -393,10 +368,9 @@ MIRUS_MARKER_PREFIXES = {"mirus_"}
 
 def classify_region_by_markers(
     marker_names: set[str],
-    seed_marker_allowlist: Optional[list[str]] = None,
+    seed_marker_allowlist: list[str] | None = None,
 ) -> str:
-    """
-    Classify a region as NCLDV, VP, PLV, MIRUS, or MIXED based on seed markers.
+    """Classify a region as NCLDV, VP, PLV, MIRUS, or MIXED based on seed markers.
 
     Uses the seed marker allowlist to determine region classification.
     Only markers from the allowlist (>95% purity) count for classification.
@@ -426,9 +400,7 @@ def classify_region_by_markers(
 
     for marker in markers_lower:
         # Check NCLDV markers
-        if marker in NCLDV_MARKER_EXACT or any(
-            marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES
-        ):
+        if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
             ncldv_count += 1
         # Check VP markers
         elif any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
@@ -474,10 +446,9 @@ def classify_region_by_markers(
 
 def get_region_classification_summary(
     marker_names: set[str],
-    seed_marker_allowlist: Optional[list[str]] = None,
+    seed_marker_allowlist: list[str] | None = None,
 ) -> dict:
-    """
-    Get detailed classification summary for a region.
+    """Get detailed classification summary for a region.
 
     Args:
         marker_names: Set of HMM marker target names found in the region
@@ -508,9 +479,7 @@ def get_region_classification_summary(
     mirus_count = 0
 
     for marker in markers_lower:
-        if marker in NCLDV_MARKER_EXACT or any(
-            marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES
-        ):
+        if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
             ncldv_count += 1
         elif any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
             vp_count += 1

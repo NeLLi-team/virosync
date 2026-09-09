@@ -2,10 +2,9 @@
 
 import shutil
 from pathlib import Path
-from typing import Optional
 
 
-def resolve_boltz_executable() -> Optional[str]:
+def resolve_boltz_executable() -> str | None:
     """Return the path to the boltz executable, or None if not found.
 
     Checks:

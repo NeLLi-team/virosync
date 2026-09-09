@@ -25,10 +25,7 @@ def _json_safe(value):
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value):
-        return {
-            item.name: _json_safe(getattr(value, item.name))
-            for item in fields(value)
-        }
+        return {item.name: _json_safe(getattr(value, item.name)) for item in fields(value)}
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -37,8 +34,7 @@ def _json_safe(value):
 
 
 def capture_tool_versions() -> dict[str, str]:
-    """
-    Capture versions of all tools used in the pipeline.
+    """Capture versions of all tools used in the pipeline.
 
     Returns:
         Dictionary mapping tool names to version strings.
@@ -51,6 +47,7 @@ def capture_tool_versions() -> dict[str, str]:
     # ViroSync package version
     try:
         import virosync
+
         versions["virosync"] = getattr(virosync, "__version__", "unknown")
     except Exception:
         versions["virosync"] = "unknown"
@@ -58,12 +55,14 @@ def capture_tool_versions() -> dict[str, str]:
     # PyTorch and PyTorch Geometric
     try:
         import torch
+
         versions["pytorch"] = torch.__version__
     except Exception:
         versions["pytorch"] = "not installed"
 
     try:
         import torch_geometric
+
         versions["pytorch_geometric"] = torch_geometric.__version__
     except Exception:
         versions["pytorch_geometric"] = "not installed"
@@ -71,6 +70,7 @@ def capture_tool_versions() -> dict[str, str]:
     # pyhmmer
     try:
         import pyhmmer
+
         versions["pyhmmer"] = pyhmmer.__version__
     except Exception:
         versions["pyhmmer"] = "not installed"
@@ -93,9 +93,9 @@ def capture_tool_versions() -> dict[str, str]:
             )
             # Parse first line of output (most tools print version there)
             if result.stdout:
-                versions[tool] = result.stdout.strip().split('\n')[0]
+                versions[tool] = result.stdout.strip().split("\n")[0]
             elif result.stderr:
-                versions[tool] = result.stderr.strip().split('\n')[0]
+                versions[tool] = result.stderr.strip().split("\n")[0]
             else:
                 versions[tool] = "version unavailable"
         except FileNotFoundError:
@@ -109,8 +109,7 @@ def capture_tool_versions() -> dict[str, str]:
 
 
 def compute_file_checksum(file_path: Path, algorithm: str = "sha256") -> str:
-    """
-    Compute checksum of a file.
+    """Compute checksum of a file.
 
     Args:
         file_path: Path to file.
@@ -124,9 +123,9 @@ def compute_file_checksum(file_path: Path, algorithm: str = "sha256") -> str:
 
     try:
         hasher = hashlib.new(algorithm)
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             # Read in chunks to handle large files
-            for chunk in iter(lambda: f.read(65536), b''):
+            for chunk in iter(lambda: f.read(65536), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
     except Exception as e:
@@ -135,8 +134,7 @@ def compute_file_checksum(file_path: Path, algorithm: str = "sha256") -> str:
 
 
 def capture_database_info(config: dict[str, Any]) -> dict[str, dict[str, str]]:
-    """
-    Capture database paths and checksums.
+    """Capture database paths and checksums.
 
     Args:
         config: Pipeline configuration dictionary.
@@ -200,8 +198,7 @@ def write_provenance(
     config: dict[str, Any],
     input_genome: Path | None = None,
 ) -> None:
-    """
-    Write complete provenance information to run directory.
+    """Write complete provenance information to run directory.
 
     Args:
         output_dir: Output directory for provenance.json.
@@ -227,10 +224,7 @@ def write_provenance(
             expected_config=expected_masking,
         )
         expected_status_sha256 = config.get("masking_status_sha256")
-        if (
-            expected_status_sha256 is not None
-            and masking_result.status_sha256 != expected_status_sha256
-        ):
+        if expected_status_sha256 is not None and masking_result.status_sha256 != expected_status_sha256:
             raise ValueError("provenance masking status SHA256 mismatch")
         status_payload = json.loads(Path(masking_status_path).read_text(encoding="utf-8"))
         masking_status = {
@@ -267,10 +261,8 @@ def write_provenance(
 
     output_file = output_dir / "provenance.json"
     try:
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             json.dump(provenance, f, indent=2)
         logger.info(f"Provenance information written to {output_file}")
     except Exception as e:
         logger.warning(f"Failed to write provenance file: {e}")
-
-

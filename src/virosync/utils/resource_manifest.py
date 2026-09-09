@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO, TypeAlias
 
 RESOURCE_MANIFEST_NAME = "RESOURCE_MANIFEST.json"
@@ -48,9 +48,7 @@ RUNTIME_RESOURCE_FILES: tuple[str, ...] = (
 )
 
 LEGACY_RUNTIME_RESOURCE_FILES: tuple[str, ...] = tuple(
-    path
-    for path in RUNTIME_RESOURCE_FILES
-    if path != "models/pfam_virosync_screening.hmm"
+    path for path in RUNTIME_RESOURCE_FILES if path != "models/pfam_virosync_screening.hmm"
 )
 
 SOURCE_RESOURCE_FILES: tuple[str, ...] = (
@@ -73,9 +71,7 @@ SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "taxonomy_labels",
 )
 
-LEGACY_SEMANTIC_COUNT_KEYS: tuple[str, ...] = tuple(
-    key for key in SEMANTIC_COUNT_KEYS if key != "pfam_models"
-)
+LEGACY_SEMANTIC_COUNT_KEYS: tuple[str, ...] = tuple(key for key in SEMANTIC_COUNT_KEYS if key != "pfam_models")
 
 REQUIRED_SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "hmm_models",
@@ -123,14 +119,9 @@ class ResourceManifestError(ValueError):
 def _validate_marker_count_parity(semantic_counts: Mapping[str, int]) -> None:
     marker_proteins = semantic_counts.get("marker_proteins")
     marker_diamond = semantic_counts.get("marker_diamond_sequences")
-    if (
-        marker_proteins is not None
-        and marker_diamond is not None
-        and marker_proteins != marker_diamond
-    ):
+    if marker_proteins is not None and marker_diamond is not None and marker_proteins != marker_diamond:
         raise ResourceManifestError(
-            "marker protein and marker DIAMOND sequence counts differ: "
-            f"{marker_proteins} != {marker_diamond}"
+            f"marker protein and marker DIAMOND sequence counts differ: {marker_proteins} != {marker_diamond}"
         )
 
 
@@ -175,7 +166,6 @@ DiamondSequenceCounter: TypeAlias = Callable[[ResourcePayload], int]
 
 def sha256_file(path: Path) -> str:
     """Return the lowercase SHA-256 digest of *path*."""
-
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -204,9 +194,7 @@ def _validate_relative_path(value: object) -> str:
         raise ResourceManifestError(f"invalid resource path: {value!r}")
     path = PurePosixPath(value)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise ResourceManifestError(
-            f"resource path must be relative and normalized: {value!r}"
-        )
+        raise ResourceManifestError(f"resource path must be relative and normalized: {value!r}")
     if str(path) != value:
         raise ResourceManifestError(f"resource path must be normalized: {value!r}")
     return value
@@ -218,9 +206,7 @@ def _object_without_duplicate_keys(
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise ResourceManifestError(
-                f"duplicate JSON key in resource manifest: {key!r}"
-            )
+            raise ResourceManifestError(f"duplicate JSON key in resource manifest: {key!r}")
         result[key] = value
     return result
 
@@ -239,11 +225,7 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
     if not isinstance(document, dict):
         raise ResourceManifestError("resource manifest must be a JSON object")
     schema_version = document.get("schema_version")
-    if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version not in {1, 2}
-    ):
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version not in {1, 2}:
         raise ResourceManifestError("resource manifest schema_version must be 1 or 2")
 
     expected_top_level = {
@@ -261,9 +243,7 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
             "runtime",
             "source",
         }:
-            raise ResourceManifestError(
-                "schema_version 2 resource manifest bundle_kind must be 'runtime' or 'source'"
-            )
+            raise ResourceManifestError("schema_version 2 resource manifest bundle_kind must be 'runtime' or 'source'")
         bundle_kind = raw_bundle_kind
         expected_top_level.add("bundle_kind")
         if bundle_kind == "source":
@@ -280,14 +260,10 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
             "runtime_manifest_sha256",
         )
 
-    resource_version = _validate_version(
-        document["resource_version"], "resource_version"
-    )
+    resource_version = _validate_version(document["resource_version"], "resource_version")
     version = _validate_version(document["version"], "version")
     if resource_version != version:
-        raise ResourceManifestError(
-            f"resource manifest version disagreement: {resource_version!r} != {version!r}"
-        )
+        raise ResourceManifestError(f"resource manifest version disagreement: {resource_version!r} != {version!r}")
 
     raw_files = document["files"]
     if not isinstance(raw_files, list):
@@ -296,28 +272,20 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
     seen_paths: set[str] = set()
     for index, raw_file in enumerate(raw_files):
         if not isinstance(raw_file, dict):
-            raise ResourceManifestError(
-                f"manifest file entry {index} must be an object"
-            )
+            raise ResourceManifestError(f"manifest file entry {index} must be an object")
         if set(raw_file) != {"path", "size", "sha256", "role"}:
-            raise ResourceManifestError(
-                f"manifest file entry {index} must contain path, size, sha256, and role"
-            )
+            raise ResourceManifestError(f"manifest file entry {index} must contain path, size, sha256, and role")
         relative = _validate_relative_path(raw_file["path"])
         if relative in seen_paths:
             raise ResourceManifestError(f"duplicate resource manifest path: {relative}")
         seen_paths.add(relative)
         size = raw_file["size"]
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
-            raise ResourceManifestError(
-                f"manifest size for {relative} must be a positive integer"
-            )
+            raise ResourceManifestError(f"manifest size for {relative} must be a positive integer")
         digest = _validate_sha256(raw_file["sha256"], f"sha256 for {relative}")
         role = raw_file["role"]
         if not isinstance(role, str) or not role.strip():
-            raise ResourceManifestError(
-                f"manifest role for {relative} must be non-empty"
-            )
+            raise ResourceManifestError(f"manifest role for {relative} must be non-empty")
         canonical_role = _CANONICAL_ROLES.get(relative)
         compatible_roles = {canonical_role}
         if schema_version == 1:
@@ -342,25 +310,15 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
             f"missing={sorted(required - present)}, unexpected={sorted(present - required)}"
         )
     if tuple(item.path for item in files) != payload_files:
-        raise ResourceManifestError(
-            "resource manifest files must use canonical payload order"
-        )
+        raise ResourceManifestError("resource manifest files must use canonical payload order")
 
     raw_counts = document["semantic_counts"]
     if not isinstance(raw_counts, dict):
         raise ResourceManifestError("semantic_counts must be an object")
-    required_counts = (
-        set(SEMANTIC_COUNT_KEYS)
-        if schema_version == 2
-        else set(REQUIRED_SEMANTIC_COUNT_KEYS)
-    )
-    allowed_counts = set(
-        SEMANTIC_COUNT_KEYS if schema_version == 2 else LEGACY_SEMANTIC_COUNT_KEYS
-    )
+    required_counts = set(SEMANTIC_COUNT_KEYS) if schema_version == 2 else set(REQUIRED_SEMANTIC_COUNT_KEYS)
+    allowed_counts = set(SEMANTIC_COUNT_KEYS if schema_version == 2 else LEGACY_SEMANTIC_COUNT_KEYS)
     present_counts = set(raw_counts)
-    if not required_counts.issubset(present_counts) or not present_counts.issubset(
-        allowed_counts
-    ):
+    if not required_counts.issubset(present_counts) or not present_counts.issubset(allowed_counts):
         raise ResourceManifestError(
             f"semantic_counts keys differ from schema_version {schema_version}; "
             f"missing={sorted(required_counts - present_counts)}, "
@@ -372,16 +330,10 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
             continue
         value = raw_counts[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-            raise ResourceManifestError(
-                f"semantic_counts.{key} must be a positive integer"
-            )
+            raise ResourceManifestError(f"semantic_counts.{key} must be a positive integer")
         semantic_counts[key] = value
-    if "hmm_index_files" in semantic_counts and semantic_counts[
-        "hmm_index_files"
-    ] != len(_HMM_INDEX_FILES):
-        raise ResourceManifestError(
-            f"semantic_counts.hmm_index_files must be {len(_HMM_INDEX_FILES)}"
-        )
+    if "hmm_index_files" in semantic_counts and semantic_counts["hmm_index_files"] != len(_HMM_INDEX_FILES):
+        raise ResourceManifestError(f"semantic_counts.hmm_index_files must be {len(_HMM_INDEX_FILES)}")
     _validate_marker_count_parity(semantic_counts)
 
     return ResourceManifest(
@@ -403,25 +355,18 @@ def load_resource_manifest(
     expected_runtime_manifest_sha256: str | None = None,
 ) -> ResourceManifest:
     """Load and validate a manifest from a file or resource root."""
-
     candidate = Path(path_or_root)
-    manifest_path = (
-        candidate / RESOURCE_MANIFEST_NAME if candidate.is_dir() else candidate
-    )
+    manifest_path = candidate / RESOURCE_MANIFEST_NAME if candidate.is_dir() else candidate
     descriptor = -1
     try:
         descriptor = os.open(
             manifest_path,
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         opened = os.fstat(descriptor)
         current = manifest_path.lstat()
     except OSError as exc:
-        raise ResourceManifestError(
-            f"missing {RESOURCE_MANIFEST_NAME}: {manifest_path}"
-        ) from exc
+        raise ResourceManifestError(f"missing {RESOURCE_MANIFEST_NAME}: {manifest_path}") from exc
     try:
         if (
             not stat.S_ISREG(opened.st_mode)
@@ -430,13 +375,9 @@ def load_resource_manifest(
             or current.st_nlink != 1
             or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
         ):
-            raise ResourceManifestError(
-                f"{RESOURCE_MANIFEST_NAME} must be a single-link regular file"
-            )
+            raise ResourceManifestError(f"{RESOURCE_MANIFEST_NAME} must be a single-link regular file")
         if opened.st_size <= 0 or opened.st_size > _MANIFEST_MAX_BYTES:
-            raise ResourceManifestError(
-                f"{RESOURCE_MANIFEST_NAME} has invalid size {opened.st_size}"
-            )
+            raise ResourceManifestError(f"{RESOURCE_MANIFEST_NAME} has invalid size {opened.st_size}")
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = -1
             content = handle.read(_MANIFEST_MAX_BYTES + 1)
@@ -444,9 +385,7 @@ def load_resource_manifest(
         if descriptor >= 0:
             os.close(descriptor)
     if len(content) != opened.st_size or len(content) > _MANIFEST_MAX_BYTES:
-        raise ResourceManifestError(
-            f"{RESOURCE_MANIFEST_NAME} changed while it was being read"
-        )
+        raise ResourceManifestError(f"{RESOURCE_MANIFEST_NAME} changed while it was being read")
     manifest_sha256 = _sha256_bytes(content)
     if expected_manifest_sha256 is not None:
         expected_digest = _validate_sha256(
@@ -454,26 +393,20 @@ def load_resource_manifest(
             "expected_manifest_sha256",
         )
         if manifest_sha256 != expected_digest:
-            raise ResourceManifestError(
-                f"resource manifest SHA-256 mismatch: {manifest_sha256} != {expected_digest}"
-            )
+            raise ResourceManifestError(f"resource manifest SHA-256 mismatch: {manifest_sha256} != {expected_digest}")
 
     manifest = _parse_manifest(content, manifest_sha256)
     if expected_version is not None:
         expected = _validate_version(expected_version, "expected_version")
         if manifest.version != expected:
-            raise ResourceManifestError(
-                f"resource version mismatch: {manifest.version!r} != {expected!r}"
-            )
+            raise ResourceManifestError(f"resource version mismatch: {manifest.version!r} != {expected!r}")
     if expected_runtime_manifest_sha256 is not None:
         expected_runtime_digest = _validate_sha256(
             expected_runtime_manifest_sha256,
             "expected_runtime_manifest_sha256",
         )
         if manifest.bundle_kind != "source":
-            raise ResourceManifestError(
-                "expected_runtime_manifest_sha256 requires a source manifest"
-            )
+            raise ResourceManifestError("expected_runtime_manifest_sha256 requires a source manifest")
         if manifest.runtime_manifest_sha256 != expected_runtime_digest:
             raise ResourceManifestError(
                 f"runtime manifest SHA-256 mismatch: {manifest.runtime_manifest_sha256} != {expected_runtime_digest}"
@@ -536,7 +469,6 @@ def diamond_sequence_count(
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> int:
     """Return the sequence count reported by ``diamond dbinfo``."""
-
     database = Path(database)
     try:
         completed = command_runner(
@@ -546,15 +478,11 @@ def diamond_sequence_count(
             text=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ResourceManifestError(
-            f"diamond dbinfo failed for {database}: {exc}"
-        ) from exc
+        raise ResourceManifestError(f"diamond dbinfo failed for {database}: {exc}") from exc
     output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
     match = re.search(r"^\s*Sequences\s+([0-9][0-9,]*)\s*$", output, re.MULTILINE)
     if match is None:
-        raise ResourceManifestError(
-            f"diamond dbinfo did not report a sequence count for {database}"
-        )
+        raise ResourceManifestError(f"diamond dbinfo did not report a sequence count for {database}")
     count = int(match.group(1).replace(",", ""))
     if count <= 0:
         raise ResourceManifestError(f"DIAMOND database has no sequences: {database}")
@@ -569,16 +497,11 @@ def compute_semantic_counts(
     include_diamond: bool = True,
 ) -> dict[str, int]:
     """Compute canonical semantic counts from resource payload contents."""
-
     resource_root = Path(root)
     counts = {
-        "hmm_models": _count_prefixed_lines(
-            _payload_at(resource_root, "models/combined.hmm", overrides), b"NAME"
-        ),
+        "hmm_models": _count_prefixed_lines(_payload_at(resource_root, "models/combined.hmm", overrides), b"NAME"),
         "hmm_index_files": sum(
-            1
-            for relative in _HMM_INDEX_FILES
-            if _payload_size(_payload_at(resource_root, relative, overrides)) > 0
+            1 for relative in _HMM_INDEX_FILES if _payload_size(_payload_at(resource_root, relative, overrides)) > 0
         ),
         "model_annotations": _count_tsv_rows(
             _payload_at(
@@ -592,12 +515,8 @@ def compute_semantic_counts(
             _payload_at(resource_root, "models/og_marker_name_map.tsv", overrides),
             header=True,
         ),
-        "marker_proteins": _count_prefixed_lines(
-            _payload_at(resource_root, "marker/marker.faa", overrides), b">"
-        ),
-        "taxonomy_labels": _count_taxonomy_rows(
-            _payload_at(resource_root, "taxonomy/labels.tsv", overrides)
-        ),
+        "marker_proteins": _count_prefixed_lines(_payload_at(resource_root, "marker/marker.faa", overrides), b">"),
+        "taxonomy_labels": _count_taxonomy_rows(_payload_at(resource_root, "taxonomy/labels.tsv", overrides)),
     }
     pfam_relative = "models/pfam_virosync_screening.hmm"
     pfam_payload = (
@@ -612,9 +531,7 @@ def compute_semantic_counts(
 
             def _count(payload: ResourcePayload) -> int:
                 if not isinstance(payload, Path):
-                    raise ResourceManifestError(
-                        "DIAMOND validation requires a database file path"
-                    )
+                    raise ResourceManifestError("DIAMOND validation requires a database file path")
                 return diamond_sequence_count(payload)
 
             diamond_sequence_counter = _count
@@ -632,9 +549,7 @@ def _payload_size(payload: ResourcePayload) -> int:
 
 
 def _payload_sha256(payload: ResourcePayload) -> str:
-    return (
-        _sha256_bytes(payload) if isinstance(payload, bytes) else sha256_file(payload)
-    )
+    return _sha256_bytes(payload) if isinstance(payload, bytes) else sha256_file(payload)
 
 
 def _manifest_document(
@@ -655,11 +570,7 @@ def _manifest_document(
             }
             for item in files
         ],
-        "semantic_counts": {
-            key: semantic_counts[key]
-            for key in SEMANTIC_COUNT_KEYS
-            if key in semantic_counts
-        },
+        "semantic_counts": {key: semantic_counts[key] for key in SEMANTIC_COUNT_KEYS if key in semantic_counts},
     }
 
 
@@ -676,25 +587,17 @@ def _manifest_files(
             if isinstance(payload, Path):
                 metadata = payload.lstat()
                 if not stat.S_ISREG(metadata.st_mode) or payload.is_symlink():
-                    raise ResourceManifestError(
-                        f"resource payload must be a regular file: {relative}"
-                    )
+                    raise ResourceManifestError(f"resource payload must be a regular file: {relative}")
                 if overrides is None or relative not in overrides:
-                    payload.resolve(strict=True).relative_to(
-                        resource_root.resolve(strict=True)
-                    )
+                    payload.resolve(strict=True).relative_to(resource_root.resolve(strict=True))
             size = _payload_size(payload)
             digest = _payload_sha256(payload)
         except ResourceManifestError:
             raise
         except ValueError as exc:
-            raise ResourceManifestError(
-                f"resource payload escapes resource root: {relative}"
-            ) from exc
+            raise ResourceManifestError(f"resource payload escapes resource root: {relative}") from exc
         except OSError as exc:
-            raise ResourceManifestError(
-                f"missing resource payload {relative}: {exc}"
-            ) from exc
+            raise ResourceManifestError(f"missing resource payload {relative}: {exc}") from exc
         if size <= 0:
             raise ResourceManifestError(f"resource payload is empty: {relative}")
         files.append(
@@ -723,9 +626,7 @@ def _validated_semantic_counts(
     for key in required_keys:
         value = counts.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-            raise ResourceManifestError(
-                f"computed semantic count {key} must be positive"
-            )
+            raise ResourceManifestError(f"computed semantic count {key} must be positive")
     if counts["hmm_index_files"] != len(_HMM_INDEX_FILES):
         raise ResourceManifestError("all four HMM index files are required")
     _validate_marker_count_parity(counts)
@@ -740,7 +641,6 @@ def build_resource_manifest(
     diamond_sequence_counter: DiamondSequenceCounter | None = None,
 ) -> tuple[ResourceManifest, bytes]:
     """Build deterministic manifest bytes for a complete resource tree."""
-
     normalized_version = _validate_version(version, "version")
     resource_root = Path(root)
     immutable_files = _manifest_files(
@@ -780,7 +680,6 @@ def build_split_resource_manifests(
     tuple[ResourceManifest, bytes],
 ]:
     """Build bound schema-v2 runtime and source manifests."""
-
     normalized_version = _validate_version(version, "version")
     resource_root = Path(root)
     counts = _validated_semantic_counts(
@@ -802,9 +701,7 @@ def build_split_resource_manifests(
     )
     runtime_document["schema_version"] = 2
     runtime_document["bundle_kind"] = "runtime"
-    runtime_content = (
-        json.dumps(runtime_document, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    runtime_content = (json.dumps(runtime_document, indent=2, sort_keys=True) + "\n").encode("utf-8")
     runtime_manifest = ResourceManifest(
         schema_version=2,
         resource_version=normalized_version,
@@ -828,9 +725,7 @@ def build_split_resource_manifests(
     source_document["schema_version"] = 2
     source_document["bundle_kind"] = "source"
     source_document["runtime_manifest_sha256"] = runtime_manifest.manifest_sha256
-    source_content = (
-        json.dumps(source_document, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    source_content = (json.dumps(source_document, indent=2, sort_keys=True) + "\n").encode("utf-8")
     source_manifest = ResourceManifest(
         schema_version=2,
         resource_version=normalized_version,
@@ -854,15 +749,11 @@ def _regular_payload(root: Path, item: ManifestFile) -> Path:
     except OSError as exc:
         raise ResourceManifestError(f"missing resource payload: {item.path}") from exc
     if not stat.S_ISREG(metadata.st_mode) or candidate.is_symlink():
-        raise ResourceManifestError(
-            f"resource payload must be a regular file: {item.path}"
-        )
+        raise ResourceManifestError(f"resource payload must be a regular file: {item.path}")
     try:
         candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
     except (OSError, ValueError) as exc:
-        raise ResourceManifestError(
-            f"resource payload escapes resource root: {item.path}"
-        ) from exc
+        raise ResourceManifestError(f"resource payload escapes resource root: {item.path}") from exc
     if metadata.st_size <= 0:
         raise ResourceManifestError(f"resource payload is empty: {item.path}")
     if metadata.st_size != item.size:
@@ -893,17 +784,13 @@ def _validate_tree_inventory(
         relative = candidate.relative_to(root).as_posix()
         metadata = candidate.lstat()
         if stat.S_ISLNK(metadata.st_mode):
-            raise ResourceManifestError(
-                f"resource tree contains an unexpected symlink: {relative}"
-            )
+            raise ResourceManifestError(f"resource tree contains an unexpected symlink: {relative}")
         if stat.S_ISREG(metadata.st_mode):
             actual_files.add(relative)
         elif stat.S_ISDIR(metadata.st_mode):
             actual_directories.add(relative)
         else:
-            raise ResourceManifestError(
-                f"resource tree contains an unexpected special file: {relative}"
-            )
+            raise ResourceManifestError(f"resource tree contains an unexpected special file: {relative}")
     unexpected_files = actual_files - allowed_files
     unexpected_directories = actual_directories - allowed_directories
     if unexpected_files or unexpected_directories:
@@ -922,9 +809,7 @@ def _validate_hmm_annotation_identity(root: Path) -> None:
             if len(fields) >= 2 and fields[0] == "NAME":
                 hmm_names.append(fields[1])
     annotation_names: list[str] = []
-    with (root / "models/model_annotations_with_interpro.tsv").open(
-        "rt", encoding="utf-8"
-    ) as handle:
+    with (root / "models/model_annotations_with_interpro.tsv").open("rt", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle):
             if line_number == 0 or not line.strip():
                 continue
@@ -937,8 +822,7 @@ def _validate_hmm_annotation_identity(root: Path) -> None:
         missing = sorted(set(hmm_names) - set(annotation_names))[:5]
         unexpected = sorted(set(annotation_names) - set(hmm_names))[:5]
         raise ResourceManifestError(
-            "HMM and model-annotation identifiers disagree; "
-            f"missing={missing}, unexpected={unexpected}"
+            f"HMM and model-annotation identifiers disagree; missing={missing}, unexpected={unexpected}"
         )
 
 
@@ -956,12 +840,9 @@ def validate_resource_tree(
     Fast validation performs no child-process calls. ``full=True`` additionally
     asks DIAMOND to inspect both databases and compares their sequence counts.
     """
-
     resource_root = Path(root)
     if not resource_root.is_dir():
-        raise ResourceManifestError(
-            f"resource root is not a directory: {resource_root}"
-        )
+        raise ResourceManifestError(f"resource root is not a directory: {resource_root}")
     manifest = load_resource_manifest(
         resource_root,
         expected_version=expected_version,
@@ -979,21 +860,16 @@ def validate_resource_tree(
             actual_digest = sha256_file(payload)
             if actual_digest != item.sha256:
                 raise ResourceManifestError(
-                    f"resource payload SHA-256 mismatch for {item.path}: "
-                    f"{actual_digest} != {item.sha256}"
+                    f"resource payload SHA-256 mismatch for {item.path}: {actual_digest} != {item.sha256}"
                 )
 
     if "DB_VERSION" in payload_paths:
         try:
-            version_file = (
-                payload_paths["DB_VERSION"].read_text(encoding="utf-8").strip()
-            )
+            version_file = payload_paths["DB_VERSION"].read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError) as exc:
             raise ResourceManifestError(f"invalid DB_VERSION: {exc}") from exc
         if version_file != manifest.version:
-            raise ResourceManifestError(
-                f"DB_VERSION mismatch: {version_file!r} != {manifest.version!r}"
-            )
+            raise ResourceManifestError(f"DB_VERSION mismatch: {version_file!r} != {manifest.version!r}")
 
     if verify_hashes or full:
         if manifest.schema_version == 1:
@@ -1013,15 +889,9 @@ def validate_resource_tree(
                     payload_paths["models/pfam_virosync_screening.hmm"],
                     b"NAME",
                 )
-            hmm_indices = [
-                payload_paths[relative]
-                for relative in _HMM_INDEX_FILES
-                if relative in payload_paths
-            ]
+            hmm_indices = [payload_paths[relative] for relative in _HMM_INDEX_FILES if relative in payload_paths]
             if hmm_indices:
-                actual_counts["hmm_index_files"] = sum(
-                    1 for payload in hmm_indices if payload.stat().st_size > 0
-                )
+                actual_counts["hmm_index_files"] = sum(1 for payload in hmm_indices if payload.stat().st_size > 0)
             if "models/model_annotations_with_interpro.tsv" in payload_paths:
                 actual_counts["model_annotations"] = _count_tsv_rows(
                     payload_paths["models/model_annotations_with_interpro.tsv"],
@@ -1038,15 +908,9 @@ def validate_resource_tree(
                     b">",
                 )
             if "taxonomy/labels.tsv" in payload_paths:
-                actual_counts["taxonomy_labels"] = _count_taxonomy_rows(
-                    payload_paths["taxonomy/labels.tsv"]
-                )
-        if "hmm_index_files" in actual_counts and actual_counts[
-            "hmm_index_files"
-        ] != len(_HMM_INDEX_FILES):
-            raise ResourceManifestError(
-                f"resource tree must contain {len(_HMM_INDEX_FILES)} non-empty HMM index files"
-            )
+                actual_counts["taxonomy_labels"] = _count_taxonomy_rows(payload_paths["taxonomy/labels.tsv"])
+        if "hmm_index_files" in actual_counts and actual_counts["hmm_index_files"] != len(_HMM_INDEX_FILES):
+            raise ResourceManifestError(f"resource tree must contain {len(_HMM_INDEX_FILES)} non-empty HMM index files")
         for key, actual_count in actual_counts.items():
             if actual_count <= 0:
                 raise ResourceManifestError(f"semantic count {key} must be positive")
@@ -1054,9 +918,7 @@ def validate_resource_tree(
                 continue
             expected = manifest.semantic_counts[key]
             if actual_count != expected:
-                raise ResourceManifestError(
-                    f"semantic count mismatch for {key}: {actual_count} != {expected}"
-                )
+                raise ResourceManifestError(f"semantic count mismatch for {key}: {actual_count} != {expected}")
         if {
             "models/combined.hmm",
             "models/model_annotations_with_interpro.tsv",
@@ -1078,9 +940,7 @@ def validate_resource_tree(
         for key, actual_count in diamond_counts.items():
             expected = manifest.semantic_counts[key]
             if actual_count != expected:
-                raise ResourceManifestError(
-                    f"semantic count mismatch for {key}: {actual_count} != {expected}"
-                )
+                raise ResourceManifestError(f"semantic count mismatch for {key}: {actual_count} != {expected}")
 
     return ResourceValidationResult(
         version=manifest.version,

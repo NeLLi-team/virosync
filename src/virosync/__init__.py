@@ -1,12 +1,11 @@
-"""
-ViroSync: Framework for discovering ancient viral elements in eukaryotic genomes.
+"""ViroSync: Framework for discovering ancient viral elements in eukaryotic genomes.
 
 A bioinformatics framework for discovering candidate giant endogenous viral elements
 (EVEs) in eukaryotic genomes using HMM-gated marker discovery, taxonomy-guided
 boundary refinement, and multi-evidence confidence scoring.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "ViroSync Development Team"
 
 from pathlib import Path

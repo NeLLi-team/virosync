@@ -43,35 +43,41 @@ MIN_ALIGNED_FRACTION = 50.0
 FLANK_SIZE = 5000
 
 # %%
-import pandas as pd
 import numpy as np
+import pandas as pd
 from IPython import get_ipython
 
 _ipython = get_ipython()
 if _ipython is not None:
-    _ipython.run_line_magic('matplotlib', 'inline')
+    _ipython.run_line_magic("matplotlib", "inline")
 
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
 import csv
 import json
-from collections import Counter, defaultdict
 
 # %%
 # Keep these helpers self-contained: papermill executes this notebook from the
 # result directory, where the ViroSync source package may not be importable.
 import re
+from collections import Counter, defaultdict
+from collections.abc import Mapping
 from pathlib import Path
+from typing import TypedDict
 
-_REPORT_NCLDV_MCP_MODELS = frozenset({
-    "og1352",
-    "og484",
-    "vs000086",
-    "vs000309",
-    "gamadvirusmcp",
-    "gvogm0003",
-})
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
+
+_REPORT_NCLDV_MCP_MODELS = frozenset(
+    {
+        "og1352",
+        "og484",
+        "vs000086",
+        "vs000309",
+        "gamadvirusmcp",
+        "gvogm0003",
+    }
+)
 _REPORT_MCP_HMM_PREFIXES = (
     "gamadvirusmcp",
     "mcp_mirus",
@@ -86,7 +92,7 @@ _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
 _REPORT_PREDICTION_COLOR = "#E3B341"
 
 
-def _report_is_mcp_gene(name):
+def _report_is_mcp_gene(name: object) -> bool:
     """Mirror the pipeline MCP detector while keeping this notebook portable."""
     if not name:
         return False
@@ -97,83 +103,84 @@ def _report_is_mcp_gene(name):
         return True
     for prefix in _REPORT_MCP_HMM_PREFIXES:
         if lower.startswith(prefix):
-            suffix = lower[len(prefix):]
+            suffix = lower[len(prefix) :]
             if _REPORT_MCP_WORD_CHARS_ONLY.match(suffix):
                 return True
     return False
 
 
-def _csv_values(value):
+def _csv_values(value: object) -> list[str]:
+    """Read list-valued or comma-separated taxonomy fields, omitting missing values."""
     if value is None or (not isinstance(value, (list, tuple)) and pd.isna(value)):
         return []
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
-    return [item for item in str(value).split(',') if item]
+    return [item for item in str(value).split(",") if item]
 
 
-def _report_resolve_taxonomy_target(target, taxonomy_lookup):
+def _report_resolve_taxonomy_target(target: object, taxonomy_lookup: Mapping[str, str]) -> str:
     """Mirror the pipeline target resolver while keeping this notebook portable."""
-    org_id = str(target or '').split('|', 1)[0]
+    org_id = str(target or "").split("|", 1)[0]
     if not taxonomy_lookup or org_id in taxonomy_lookup:
         return org_id
 
     candidates = [org_id]
-    legacy_prefix = 'PHAGE__VARDNA__'
+    legacy_prefix = "PHAGE__VARDNA__"
     if org_id.startswith(legacy_prefix):
-        candidates.append('PHAGE__' + org_id.removeprefix(legacy_prefix))
+        candidates.append("PHAGE__" + org_id.removeprefix(legacy_prefix))
 
     for base in candidates:
         if base in taxonomy_lookup:
             return base
-        if '__' not in base:
+        if "__" not in base:
             continue
-        prefix, suffix = base.split('__', 1)
-        parts = suffix.split('_')
+        prefix, suffix = base.split("__", 1)
+        parts = suffix.split("_")
         for index in range(len(parts) - 1, 0, -1):
-            candidate = prefix + '__' + '_'.join(parts[:index])
+            candidate = prefix + "__" + "_".join(parts[:index])
             if candidate in taxonomy_lookup:
                 return candidate
     return org_id
 
 
-def _report_target_lineage(target, taxonomy_lookup):
+def _report_target_lineage(target: object, taxonomy_lookup: Mapping[str, str]) -> str:
     org_id = _report_resolve_taxonomy_target(target, taxonomy_lookup)
-    return taxonomy_lookup.get(org_id, '')
+    return taxonomy_lookup.get(org_id, "")
 
 
-def _report_canonical_viral_category(prefix, target, taxonomy_lookup):
+def _report_canonical_viral_category(prefix: object, target: object, taxonomy_lookup: Mapping[str, str]) -> str | None:
     """Normalize current and legacy viral taxonomy labels for display."""
-    prefix = str(prefix or '').rstrip('_').upper()
-    if prefix in {'PPV', 'PLV', 'VP', 'VP_PLV'}:
-        return 'PPV'
-    if prefix == 'PHAGE':
+    prefix = str(prefix or "").rstrip("_").upper()
+    if prefix in {"PPV", "PLV", "VP", "VP_PLV"}:
+        return "PPV"
+    if prefix == "PHAGE":
         lineage_tokens = {
             token.strip().lower()
-            for token in _report_target_lineage(target, taxonomy_lookup).split('|')
+            for token in _report_target_lineage(target, taxonomy_lookup).split("|")
             if token.strip()
         }
-        return 'PPV' if 'preplasmiviricota' in lineage_tokens else 'PHAGE'
-    if prefix in {'NCLDV', 'MIRUS', 'CRESS', 'GVMAG'}:
+        return "PPV" if "preplasmiviricota" in lineage_tokens else "PHAGE"
+    if prefix in {"NCLDV", "MIRUS", "CRESS", "GVMAG"}:
         return prefix
     return None
 
 
 def _report_identity_qualified_viral_category(
-    taxonomy_record,
-    taxonomy_lookup,
-):
+    taxonomy_record: Mapping[str, object] | None,
+    taxonomy_lookup: Mapping[str, str],
+) -> str | None:
     """Return the highest-ranked identity-qualified viral class for one gene."""
     if not taxonomy_record:
         return None
-    prefixes = _csv_values(taxonomy_record.get('top10_prefixes'))
-    targets = _csv_values(taxonomy_record.get('top10_targets'))
-    pidents = _csv_values(taxonomy_record.get('top10_pidents'))
+    prefixes = _csv_values(taxonomy_record.get("top10_prefixes"))
+    targets = _csv_values(taxonomy_record.get("top10_targets"))
+    pidents = _csv_values(taxonomy_record.get("top10_pidents"))
     for index, prefix in enumerate(prefixes):
         try:
             pident = float(pidents[index])
         except (IndexError, TypeError, ValueError):
             continue
-        target = targets[index] if index < len(targets) else ''
+        target = targets[index] if index < len(targets) else ""
         category = _report_canonical_viral_category(
             prefix,
             target,
@@ -184,12 +191,53 @@ def _report_identity_qualified_viral_category(
     return None
 
 
-def safe_ratio(numerator, denominator):
+class _ReportGene(TypedDict):
+    """One Prodigal gene with zero-based, half-open nucleotide coordinates."""
+
+    porf_id: str
+    scaffold: str
+    start: int
+    end: int
+    strand: str
+
+
+def _report_prodigal_gene(line: str) -> _ReportGene | None:
+    """Parse a Prodigal FASTA header, skipping nonheaders and invalid coordinates."""
+    if not line.startswith(">"):
+        return None
+    header = line[1:].rstrip("\n")
+    parts = header.split(" # ")
+    if len(parts) < 4:
+        return None
+    porf_id = parts[0].strip().split()[0]
+    try:
+        start = int(parts[1]) - 1
+        end = int(parts[2])
+    except ValueError:
+        return None
+    strand = {"1": "+", "-1": "-"}.get(parts[3].strip())
+    id_match = re.search(r"ID=([^;]+)", header)
+    gene_index = id_match.group(1).rsplit("_", 1)[-1] if id_match else porf_id.rsplit("_", 1)[-1]
+    scaffold = (
+        porf_id[: -(len(gene_index) + 1)]
+        if gene_index and porf_id.endswith(f"_{gene_index}")
+        else porf_id.rsplit("_", 1)[0]
+    )
+    return {
+        "porf_id": porf_id,
+        "scaffold": scaffold,
+        "start": start,
+        "end": end,
+        "strand": strand or ".",
+    }
+
+
+def safe_ratio(numerator: float, denominator: float | None) -> float:
     """Return a finite zero when a report denominator is empty or zero."""
     return numerator / denominator if denominator else 0.0
 
 
-def canon_family(profile):
+def canon_family(profile: Mapping[str, object]) -> str:
     """Return one EVE profile's published taxonomy class.
 
     Reads `taxonomy_class`, the class published by the marker taxonomy consensus,
@@ -197,95 +245,99 @@ def canon_family(profile):
     existed fall back to `likely_family` so they still render. Retired labels fold
     onto their replacements: VP and PLV onto PPV, MIXED onto VIRAL_UNKNOWN.
     """
-    value = profile.get('taxonomy_class') or profile.get('likely_family')
-    token = str(value or 'UNKNOWN').strip().upper()
-    if token in ('VP', 'PLV'):
-        return 'PPV'
-    if token == 'MIXED':
-        return 'VIRAL_UNKNOWN'
+    value = profile.get("taxonomy_class") or profile.get("likely_family")
+    token = str(value or "UNKNOWN").strip().upper()
+    if token in ("VP", "PLV"):
+        return "PPV"
+    if token == "MIXED":
+        return "VIRAL_UNKNOWN"
     return token
 
 
 # %%
 # --- Style setup (beautiful-data-viz) ---
-def set_beautiful_style():
-    plt.rcParams.update({
-        'font.family': 'sans-serif',
-        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size': 10,
-        'axes.titlesize': 13,
-        'axes.labelsize': 11,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 8,
-        'legend.fontsize': 8,
-        'figure.dpi': 150,
-        'savefig.dpi': 300,
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-        'axes.linewidth': 0.8,
-        'xtick.major.width': 0.8,
-        'ytick.major.width': 0.8,
-        'axes.grid': False,
-        'figure.facecolor': 'white',
-        'axes.facecolor': 'white',
-        'savefig.bbox': 'tight',
-        'savefig.facecolor': 'white',
-    })
+def set_beautiful_style() -> None:
+    """Apply the shared plot settings used by every report figure."""
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
+            "font.size": 10,
+            "axes.titlesize": 13,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 8,
+            "legend.fontsize": 8,
+            "figure.dpi": 150,
+            "savefig.dpi": 300,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.linewidth": 0.8,
+            "xtick.major.width": 0.8,
+            "ytick.major.width": 0.8,
+            "axes.grid": False,
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "savefig.bbox": "tight",
+            "savefig.facecolor": "white",
+        }
+    )
 
-def finalize_axes(ax, despine_left=False):
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+
+def finalize_axes(ax: Axes, despine_left: bool = False) -> None:
+    """Hide plot borders while retaining the existing left-axis option."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     if despine_left:
-        ax.spines['left'].set_visible(False)
+        ax.spines["left"].set_visible(False)
+
 
 set_beautiful_style()
 
 # --- Paths ---
 BASE = Path(RESULTS_DIR)
-SYNTHESIS = BASE / 'phase3_synthesis'
-if not (SYNTHESIS / 'evidence_profiles.json').exists():
+SYNTHESIS = BASE / "phase3_synthesis"
+if not (SYNTHESIS / "evidence_profiles.json").exists():
     SYNTHESIS = BASE
 TAX_LABELS_PATH = Path(TAX_LABELS_PATH) if TAX_LABELS_PATH else None
 
 # --- Taxonomy labels ---
 tax_labels = {}
 if TAX_LABELS_PATH is not None and TAX_LABELS_PATH.is_file():
-    with open(TAX_LABELS_PATH) as f:
+    with TAX_LABELS_PATH.open(encoding="utf-8") as f:
         for line in f:
-            parts = line.rstrip('\n').split('\t')
+            parts = line.rstrip("\n").split("\t")
             if len(parts) >= 2:
                 tax_labels[parts[0]] = parts[1]
-    print(f'Loaded {len(tax_labels):,} taxonomy labels')
+    print(f"Loaded {len(tax_labels):,} taxonomy labels")
 else:
     print("Taxonomy labels were not configured -- host detection will be limited")
 
 # --- Resolve taxonomy and infer the dominant host lineage for display ---
-_host_model_path = BASE / 'phase1' / 'marker_validation' / 'host_signature_model.json'
-_boundary_taxonomy_path = BASE / 'phase2' / 'boundary_diamond' / 'taxonomy_map.tsv'
+_host_model_path = BASE / "phase1" / "marker_validation" / "host_signature_model.json"
+_boundary_taxonomy_path = BASE / "phase2" / "boundary_diamond" / "taxonomy_map.tsv"
 _boundary_taxonomy = (
-    pd.read_csv(_boundary_taxonomy_path, sep='\t', engine='python')
+    pd.read_csv(_boundary_taxonomy_path, sep="\t", engine="python")
     if _boundary_taxonomy_path.exists()
     else pd.DataFrame()
 )
 BOUNDARY_TAXONOMY = (
-    _boundary_taxonomy.set_index('porf_id', drop=False).to_dict('index')
-    if not _boundary_taxonomy.empty
-    else {}
+    _boundary_taxonomy.set_index("porf_id", drop=False).to_dict("index") if not _boundary_taxonomy.empty else {}
 )
 
 
-def _target_lineage(target):
+def _target_lineage(target: object) -> str:
     return _report_target_lineage(target, tax_labels)
 
 
-HOST_GENUS = ''
+HOST_GENUS = ""
 HOST_TAXA = set()
 if _host_model_path.exists() and tax_labels:
-    with open(_host_model_path) as _f:
-        _host_weights = json.load(_f).get('token_weights', {})
+    with _host_model_path.open(encoding="utf-8") as _f:
+        _host_weights = json.load(_f).get("token_weights", {})
     _tok_level = {}
     for _lineage in tax_labels.values():
-        for _i, _level in enumerate(_lineage.split('|')):
+        for _i, _level in enumerate(_lineage.split("|")):
             _token = _level.strip().lower()
             if _token in _host_weights and _i < _tok_level.get(_token, 99):
                 _tok_level[_token] = _i
@@ -302,87 +354,83 @@ if _host_model_path.exists() and tax_labels:
         HOST_TAXA.add(_best)
         if _level_index == 5:
             HOST_GENUS = _best
-print(f'Host genus: {HOST_GENUS!r}  Host lineage taxa: {sorted(HOST_TAXA)}')
+print(f"Host genus: {HOST_GENUS!r}  Host lineage taxa: {sorted(HOST_TAXA)}")
 
 
-def is_host_gene(target):
+def is_host_gene(target: object) -> bool:
     """Return whether a best-hit lineage overlaps the run's dominant host lineage."""
-    lineage_tokens = {
-        token.strip().lower()
-        for token in _target_lineage(target).split('|')
-        if token.strip()
-    }
+    lineage_tokens = {token.strip().lower() for token in _target_lineage(target).split("|") if token.strip()}
     return bool(lineage_tokens & HOST_TAXA)
 
 
-def _canonical_viral_category(prefix, target):
+def _canonical_viral_category(prefix: object, target: object) -> str | None:
     return _report_canonical_viral_category(prefix, target, tax_labels)
 
 
-def _report_viral_category(taxonomy_record):
+def _report_viral_category(taxonomy_record: Mapping[str, object] | None) -> str | None:
     """Use the highest-ranked identity-qualified viral hit for any gene."""
     return _report_identity_qualified_viral_category(
         taxonomy_record,
         tax_labels,
     )
 
+
 # --- Colorblind-safe palette (Tol bright) ---
 COLORS = {
-    'PPV':       '#EE7733',
-    'PLV':       '#EE7733',
-    'VP':        '#AA3377',
-    'CRESS':     '#CCBB44',
-    'MIRUS':     '#882255',
-    'NCLDV':     '#009988',
-    'GVMAG':     '#332288',
-    'HOST':      '#0077BB',
-    'EUK_HOST':  '#0077BB',
-    'EUK':       '#33BBEE',
-    'EUK_OTHER': '#33BBEE',
-    'BAC':       '#CC3311',
-    'ARC':       '#AA4499',
-    'PHAGE':     '#FF7F00',
-    'UNKNOWN':   '#BBBBBB',
+    "PPV": "#EE7733",
+    "PLV": "#EE7733",
+    "VP": "#AA3377",
+    "CRESS": "#CCBB44",
+    "MIRUS": "#882255",
+    "NCLDV": "#009988",
+    "GVMAG": "#332288",
+    "HOST": "#0077BB",
+    "EUK_HOST": "#0077BB",
+    "EUK": "#33BBEE",
+    "EUK_OTHER": "#33BBEE",
+    "BAC": "#CC3311",
+    "ARC": "#AA4499",
+    "PHAGE": "#FF7F00",
+    "UNKNOWN": "#BBBBBB",
 }
 
-TIER_COLORS = {'HIGH': '#333333', 'MEDIUM': '#777777', 'LOW': '#BBBBBB'}
+TIER_COLORS = {"HIGH": "#333333", "MEDIUM": "#777777", "LOW": "#BBBBBB"}
 
-print('Setup complete.')
+print("Setup complete.")
 
 # %%
 # ---- Load data ----
 
 # 1. Evidence profiles
-with open(SYNTHESIS / 'evidence_profiles.json') as f:
+with (SYNTHESIS / "evidence_profiles.json").open(encoding="utf-8") as f:
     all_profiles = json.load(f)
 
 # Auto-detect genome prefix from first EVE ID
 if all_profiles:
     _first_eve = list(all_profiles.keys())[0]  # e.g. 'EVE_stena|contig_120_27714-42015'
-    EVE_PREFIX = _first_eve.split('|')[0]       # 'EVE_stena'
+    EVE_PREFIX = _first_eve.split("|")[0]  # 'EVE_stena'
     if not GENOME_ID:
-        GENOME_ID = EVE_PREFIX.replace('EVE_', '')
+        GENOME_ID = EVE_PREFIX.replace("EVE_", "")
 else:
-    EVE_PREFIX = 'EVE'
+    EVE_PREFIX = "EVE"
     if not GENOME_ID:
-        GENOME_ID = 'unknown'
+        GENOME_ID = "unknown"
 
 # FILTER: keep only selected confidence tiers
-profiles = {k: v for k, v in all_profiles.items()
-            if v.get('confidence_tier', '') in SHOW_TIERS}
-print(f'Evidence profiles: {len(all_profiles)} total, {len(profiles)} after filtering to {SHOW_TIERS}')
+profiles = {k: v for k, v in all_profiles.items() if v.get("confidence_tier", "") in SHOW_TIERS}
+print(f"Evidence profiles: {len(all_profiles)} total, {len(profiles)} after filtering to {SHOW_TIERS}")
 
 if not profiles:
-    print(f'\nNo EVEs detected at tiers {SHOW_TIERS}. Nothing to plot.')
+    print(f"\nNo EVEs detected at tiers {SHOW_TIERS}. Nothing to plot.")
 
 # 2. Gene taxonomy (core + flanking in one file)
-gene_tax_path = SYNTHESIS / 'gene_taxonomy' / 'gene_taxonomy_all.tsv'
+gene_tax_path = SYNTHESIS / "gene_taxonomy" / "gene_taxonomy_all.tsv"
 if gene_tax_path.exists() and profiles:
-    gene_tax = pd.read_csv(gene_tax_path, sep='\t', engine='python')
-    gene_tax = gene_tax[gene_tax['eve_id'].isin(profiles.keys())].copy()
-    core_genes = gene_tax[gene_tax['is_flanking'] == 0].copy()
-    flanking_genes = gene_tax[gene_tax['is_flanking'] == 1].copy()
-    print(f'Genes: {len(gene_tax)} total ({len(core_genes)} core, {len(flanking_genes)} flanking)')
+    gene_tax = pd.read_csv(gene_tax_path, sep="\t", engine="python")
+    gene_tax = gene_tax[gene_tax["eve_id"].isin(profiles.keys())].copy()
+    core_genes = gene_tax[gene_tax["is_flanking"] == 0].copy()
+    flanking_genes = gene_tax[gene_tax["is_flanking"] == 1].copy()
+    print(f"Genes: {len(gene_tax)} total ({len(core_genes)} core, {len(flanking_genes)} flanking)")
 else:
     gene_tax = pd.DataFrame()
     core_genes = pd.DataFrame()
@@ -391,117 +439,92 @@ else:
 # 2b. Complete Prodigal gene coordinates and strands
 porf_strands = {}
 proteome_genes_by_scaffold = defaultdict(list)
-_proteome_path = BASE / 'phase0' / 'proteome.fasta'
+_proteome_path = BASE / "phase0" / "proteome.fasta"
 if _proteome_path.exists():
-    with open(_proteome_path) as f:
+    with _proteome_path.open(encoding="utf-8") as f:
         for line in f:
-            if not line.startswith('>'):
+            gene = _report_prodigal_gene(line)
+            if gene is None:
                 continue
-            header = line[1:].rstrip('\n')
-            parts = header.split(' # ')
-            if len(parts) < 4:
-                continue
-            porf_id = parts[0].strip().split()[0]
-            try:
-                start = int(parts[1]) - 1
-                end = int(parts[2])
-            except ValueError:
-                continue
-            strand = {'1': '+', '-1': '-'}.get(parts[3].strip())
-            id_match = re.search(r'ID=([^;]+)', header)
-            gene_index = (
-                id_match.group(1).rsplit('_', 1)[-1]
-                if id_match
-                else porf_id.rsplit('_', 1)[-1]
+            porf_strands[gene["porf_id"]] = gene["strand"]
+            proteome_genes_by_scaffold[gene["scaffold"]].append(
+                {
+                    "porf_id": gene["porf_id"],
+                    "start": gene["start"],
+                    "end": gene["end"],
+                    "strand": gene["strand"],
+                }
             )
-            scaffold = (
-                porf_id[:-(len(gene_index) + 1)]
-                if gene_index and porf_id.endswith(f'_{gene_index}')
-                else porf_id.rsplit('_', 1)[0]
-            )
-            porf_strands[porf_id] = strand or '.'
-            proteome_genes_by_scaffold[scaffold].append({
-                'porf_id': porf_id,
-                'start': start,
-                'end': end,
-                'strand': strand or '.',
-            })
 for scaffold_genes in proteome_genes_by_scaffold.values():
-    scaffold_genes.sort(key=lambda gene: (gene['start'], gene['end'], gene['porf_id']))
-print(
-    f'Prodigal genes: {len(porf_strands):,} across '
-    f'{len(proteome_genes_by_scaffold):,} scaffolds'
-)
+    scaffold_genes.sort(key=lambda gene: (gene["start"], gene["end"], gene["porf_id"]))
+print(f"Prodigal genes: {len(porf_strands):,} across {len(proteome_genes_by_scaffold):,} scaffolds")
 
 # 3. MCP candidate classifications -> porf_id map
 mcp_classification_map = {}
 classifier_supported_mcp_ids = set()
-jr_path = SYNTHESIS / 'virosync_jelly_roll_proteins.tsv'
+jr_path = SYNTHESIS / "virosync_jelly_roll_proteins.tsv"
 if jr_path.exists():
-    with open(jr_path) as f:
-        for row in csv.DictReader(f, delimiter='\t'):
-            protein_id = (row.get('protein_id') or '').strip()
+    with jr_path.open(encoding="utf-8") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            protein_id = (row.get("protein_id") or "").strip()
             if not protein_id:
                 continue
-            m = re.match(r'^(.+)\|aa\d+-\d+$', protein_id)
+            m = re.match(r"^(.+)\|aa\d+-\d+$", protein_id)
             porf_id = m.group(1) if m else protein_id
-            mcp_support = (row.get('mcp_support') or 'candidate').strip()
+            mcp_support = (row.get("mcp_support") or "candidate").strip()
             mcp_classification_map[porf_id] = {
-                'type': (row.get('type') or '').strip().upper(),
-                'confidence': float(row.get('confidence') or 0),
-                'mcp_support': mcp_support,
-                'validation_status': (row.get('validation_status') or '').strip(),
+                "type": (row.get("type") or "").strip().upper(),
+                "confidence": float(row.get("confidence") or 0),
+                "mcp_support": mcp_support,
+                "validation_status": (row.get("validation_status") or "").strip(),
             }
-            if mcp_support in {'sequence_supported', 'structure_supported'}:
+            if mcp_support in {"sequence_supported", "structure_supported"}:
                 classifier_supported_mcp_ids.add(porf_id)
-print(f'MCP classifier records: {len(mcp_classification_map)}')
+print(f"MCP classifier records: {len(mcp_classification_map)}")
 
 # 3b. MCP (major capsid protein) marker genes -> porf_id set.
 # Combine supported classifier records with validated HMM marker hits (for
 # example plv_MCP_* and vp_MCP_*). Candidate classifier rows do not set support.
 mcp_porf_ids = set(classifier_supported_mcp_ids)
-_mh_path = BASE / 'phase1' / 'marker_validation' / 'validated_marker_hits.tsv'
+_mh_path = BASE / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 if _mh_path.exists():
-    with open(_mh_path) as f:
-        _hdr = f.readline().rstrip('\n').split('\t')
+    with _mh_path.open(encoding="utf-8") as f:
+        _hdr = f.readline().rstrip("\n").split("\t")
         try:
-            _qi = _hdr.index('query_porf')
-            _ti = _hdr.index('hmm_target')
-            _vi = _hdr.index('validation_status')
+            _qi = _hdr.index("query_porf")
+            _ti = _hdr.index("hmm_target")
+            _vi = _hdr.index("validation_status")
         except ValueError:
             _qi, _ti, _vi = 0, 5, 7
         for line in f:
-            cols = line.rstrip('\n').split('\t')
+            cols = line.rstrip("\n").split("\t")
             if len(cols) <= max(_qi, _ti, _vi):
                 continue
-            if (
-                _report_is_mcp_gene(cols[_ti])
-                and cols[_vi] in {'validated', 'validated_novel'}
-            ):
-                _m = re.match(r'^(.+)\|aa\d+-\d+$', cols[_qi])
+            if _report_is_mcp_gene(cols[_ti]) and cols[_vi] in {"validated", "validated_novel"}:
+                _m = re.match(r"^(.+)\|aa\d+-\d+$", cols[_qi])
                 mcp_porf_ids.add(_m.group(1) if _m else cols[_qi])
-print(f'MCP marker genes: {len(mcp_porf_ids)}')
+print(f"MCP marker genes: {len(mcp_porf_ids)}")
 
 # 4. RT genes from InterProScan PF00078
 rt_gene_ids = set()
-ipr_path = BASE / 'phase3' / 'interproscan' / 'interproscan_batch.tsv'
+ipr_path = BASE / "phase3" / "interproscan" / "interproscan_batch.tsv"
 if ipr_path.exists():
-    with open(ipr_path) as f:
+    with ipr_path.open(encoding="utf-8") as f:
         for line in f:
-            cols = line.rstrip('\n').split('\t')
-            if len(cols) >= 5 and cols[4] == 'PF00078':
-                pipe_parts = cols[0].split('|')
-                porf_id = pipe_parts[-2] + '|' + pipe_parts[-1]
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) >= 5 and cols[4] == "PF00078":
+                pipe_parts = cols[0].split("|")
+                porf_id = pipe_parts[-2] + "|" + pipe_parts[-1]
                 rt_gene_ids.add(porf_id)
-print(f'RT genes (PF00078): {len(rt_gene_ids)}')
+print(f"RT genes (PF00078): {len(rt_gene_ids)}")
 
 # 5. Predictions detailed
 predictions = pd.DataFrame()
-_det_path = SYNTHESIS / 'virosync_predictions_detailed.tsv'
+_det_path = SYNTHESIS / "virosync_predictions_detailed.tsv"
 if _det_path.exists() and profiles:
-    predictions = pd.read_csv(_det_path, sep='\t', engine='python')
-    predictions = predictions[predictions['eve_id'].isin(profiles)].copy()
-print(f'Predictions: {len(predictions)}')
+    predictions = pd.read_csv(_det_path, sep="\t", engine="python")
+    predictions = predictions[predictions["eve_id"].isin(profiles)].copy()
+print(f"Predictions: {len(predictions)}")
 
 # %% [markdown]
 # ## Host Signature Model
@@ -514,45 +537,45 @@ print(f'Predictions: {len(predictions)}')
 # ---- Host Signature Model Summary ----
 
 # 1. Load the host signature model
-_model_path = BASE / 'phase1' / 'marker_validation' / 'host_signature_model.json'
-_hits_path = BASE / 'phase1' / 'marker_validation' / 'validated_marker_hits.tsv'
+_model_path = BASE / "phase1" / "marker_validation" / "host_signature_model.json"
+_hits_path = BASE / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 
 if _model_path.exists():
-    with open(_model_path) as f:
+    with _model_path.open(encoding="utf-8") as f:
         _host_model = json.load(f)
 
-    _token_weights = _host_model.get('token_weights', {})
-    _token_counts = _host_model.get('token_counts', {})
-    _host_prefixes = _host_model.get('host_prefixes', [])
-    _weight_mode = _host_model.get('weight_mode', 'rank')
+    _token_weights = _host_model.get("token_weights", {})
+    _token_counts = _host_model.get("token_counts", {})
+    _host_prefixes = _host_model.get("host_prefixes", [])
+    _weight_mode = _host_model.get("weight_mode", "rank")
 else:
     _host_model = None
-    print('Host signature model not found (phase1/marker_validation/host_signature_model.json)')
+    print("Host signature model not found (phase1/marker_validation/host_signature_model.json)")
 
 # 2. Load marker hits and classify COG vs BUSCO
 if _hits_path.exists():
-    _hits_df = pd.read_csv(_hits_path, sep='\t', engine='python')
-    _is_cog = _hits_df['hmm_target'].str.startswith('COG')
-    _is_busco = _hits_df['hmm_target'].str.contains('at2759')
+    _hits_df = pd.read_csv(_hits_path, sep="\t", engine="python")
+    _is_cog = _hits_df["hmm_target"].str.startswith("COG")
+    _is_busco = _hits_df["hmm_target"].str.contains("at2759")
     _host_hits = _hits_df[_is_cog | _is_busco].copy()
 
     _n_cog = _is_cog.sum()
     _n_busco = _is_busco.sum()
-    _cog_unique = _hits_df.loc[_is_cog, 'hmm_target'].nunique()
-    _busco_unique = _hits_df.loc[_is_busco, 'hmm_target'].nunique()
+    _cog_unique = _hits_df.loc[_is_cog, "hmm_target"].nunique()
+    _busco_unique = _hits_df.loc[_is_busco, "hmm_target"].nunique()
     _total_markers = len(_hits_df)
 else:
     _host_hits = pd.DataFrame()
 
 # 3. Assign each model token to its taxonomy level
-_LEVEL_NAMES = ['Domain', 'Supergroup', 'Order', 'Suborder', 'Family', 'Genus', 'Species']
+_LEVEL_NAMES = ["Domain", "Supergroup", "Order", "Suborder", "Family", "Genus", "Species"]
 _TOP_N = 5
 
 _level_tokens = defaultdict(list)
 if _host_model and tax_labels:
     _token_to_levels = defaultdict(set)
     for _key, _lineage in tax_labels.items():
-        _levels = _lineage.split('|')
+        _levels = _lineage.split("|")
         for _i, _level in enumerate(_levels):
             _level_lower = _level.strip().lower()
             if _level_lower in _token_weights:
@@ -560,62 +583,60 @@ if _host_model and tax_labels:
 
     for _token, _levels_set in _token_to_levels.items():
         _primary = min(_levels_set)
-        _level_tokens[_primary].append(
-            (_token, _token_weights[_token], _token_counts.get(_token, 0)))
+        _level_tokens[_primary].append((_token, _token_weights[_token], _token_counts.get(_token, 0)))
 
     for _i in range(len(_LEVEL_NAMES)):
         _level_tokens[_i] = sorted(_level_tokens.get(_i, []), key=lambda x: -x[1])
 
     # Inject EUK at Domain level. Domain tokens are excluded from scoring, but
     # the model's host prefixes and marker count still document the source.
-    if 'EUK__' in _host_prefixes and not any(t[0] == 'EUK' for t in _level_tokens.get(0, [])):
+    if "EUK__" in _host_prefixes and not any(t[0] == "EUK" for t in _level_tokens.get(0, [])):
         _euk_hits = len(_host_hits)
-        _level_tokens[0].insert(0, ('EUK', _host_model.get('max_weight', 0), _euk_hits))
+        _level_tokens[0].insert(0, ("EUK", _host_model.get("max_weight", 0), _euk_hits))
 
 # 4. Print summary
 if _host_model:
-    _max_w = _host_model.get('max_weight', 1.0) or 1.0
-    print('Host Signature Model')
-    print(f'  Prefixes:        {", ".join(_host_prefixes)}')
-    print(f'  Weight mode:     {_weight_mode}', end='')
-    if _weight_mode == 'rank':
-        print('  (hit weights: rank1=10, rank2=9, ..., rank10=1)')
+    _max_w = _host_model.get("max_weight", 1.0) or 1.0
+    print("Host Signature Model")
+    print(f"  Prefixes:        {', '.join(_host_prefixes)}")
+    print(f"  Weight mode:     {_weight_mode}", end="")
+    if _weight_mode == "rank":
+        print("  (hit weights: rank1=10, rank2=9, ..., rank10=1)")
     else:
-        print('  (hit weights: bitscore)')
-    print(f'  Tokens:          {len(_token_weights)}')
+        print("  (hit weights: bitscore)")
+    print(f"  Tokens:          {len(_token_weights)}")
     print()
 
     # Per-level breakdown
     for _i, _name in enumerate(_LEVEL_NAMES):
         _tokens = _level_tokens.get(_i, [])[:_TOP_N]
         if not _tokens:
-            print(f'  {_name:<12s}  --')
+            print(f"  {_name:<12s}  --")
             continue
         _best = _tokens[0]
         print(
-            f'  {_name:<12s}  {_best[0]:<30s}  '
-            f'{safe_ratio(_best[1], _max_w)*100:>5.1f}% of max weight  '
-            f'({int(_best[2])} token occurrences)',
-            end='',
+            f"  {_name:<12s}  {_best[0]:<30s}  "
+            f"{safe_ratio(_best[1], _max_w) * 100:>5.1f}% of max weight  "
+            f"({int(_best[2])} token occurrences)",
+            end="",
         )
         if len(_tokens) > 1:
-            _others = ', '.join(
-                f'{t[0]} ({safe_ratio(t[1], _max_w)*100:.0f}% of max)'
-                for t in _tokens[1:3]
-            )
-            print(f'   next: {_others}', end='')
+            _others = ", ".join(f"{t[0]} ({safe_ratio(t[1], _max_w) * 100:.0f}% of max)" for t in _tokens[1:3])
+            print(f"   next: {_others}", end="")
         print()
 
     if not _host_hits.empty:
-        print(f'\n  Based on {_n_cog + _n_busco} host marker hits '
-              f'({_cog_unique} COGs, {_busco_unique} BUSCOs) '
-              f'out of {_total_markers:,} total HMM hits '
-              f'({safe_ratio(_n_cog + _n_busco, _total_markers):.1%})')
+        print(
+            f"\n  Based on {_n_cog + _n_busco} host marker hits "
+            f"({_cog_unique} COGs, {_busco_unique} BUSCOs) "
+            f"out of {_total_markers:,} total HMM hits "
+            f"({safe_ratio(_n_cog + _n_busco, _total_markers):.1%})"
+        )
 
 # 5. Figure: per-level taxonomy breakdown + COG/BUSCO panel
 if _host_model and _level_tokens:
     _n_levels = len(_LEVEL_NAMES)
-    _max_w = _host_model.get('max_weight', 1.0) or 1.0
+    _max_w = _host_model.get("max_weight", 1.0) or 1.0
     _has_markers = not _host_hits.empty
 
     if _has_markers:
@@ -631,10 +652,10 @@ if _host_model and _level_tokens:
         ax = fig.add_subplot(gs[_i, 0])
         _tokens = _level_tokens.get(_i, [])[:_TOP_N]
         if not _tokens:
-            ax.text(0.5, 0.5, 'no tokens', ha='center', va='center',
-                    transform=ax.transAxes, color='#888888', fontsize=9)
-            ax.set_ylabel(_name, fontsize=9, fontweight='bold', rotation=0,
-                          ha='right', va='center', labelpad=65)
+            ax.text(
+                0.5, 0.5, "no tokens", ha="center", va="center", transform=ax.transAxes, color="#888888", fontsize=9
+            )
+            ax.set_ylabel(_name, fontsize=9, fontweight="bold", rotation=0, ha="right", va="center", labelpad=65)
             ax.set_xlim(0, 1)
             for sp in ax.spines.values():
                 sp.set_visible(False)
@@ -648,8 +669,7 @@ if _host_model and _level_tokens:
         _colors = [_cmap(safe_ratio(w, _max_w)) for w in _weights]
 
         y_pos = np.arange(len(_labels))
-        bars = ax.barh(y_pos, _weights, color=_colors, edgecolor='white',
-                        linewidth=0.5, height=0.7)
+        bars = ax.barh(y_pos, _weights, color=_colors, edgecolor="white", linewidth=0.5, height=0.7)
         ax.set_yticks(y_pos)
         ax.set_yticklabels(_labels, fontsize=8)
         ax.set_xlim(0, _max_w * 1.18)
@@ -657,50 +677,56 @@ if _host_model and _level_tokens:
 
         for bar, w, cnt in zip(bars, _weights, _counts):
             pct = safe_ratio(w, _max_w) * 100
-            ax.text(bar.get_width() + _max_w * 0.01,
-                    bar.get_y() + bar.get_height() / 2,
-                    f'{pct:.0f}% max; n={int(cnt)}', va='center',
-                    fontsize=7, color='#555555')
+            ax.text(
+                bar.get_width() + _max_w * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{pct:.0f}% max; n={int(cnt)}",
+                va="center",
+                fontsize=7,
+                color="#555555",
+            )
 
-        ax.set_ylabel(_name, fontsize=9, fontweight='bold', rotation=0,
-                      ha='right', va='center', labelpad=65)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+        ax.set_ylabel(_name, fontsize=9, fontweight="bold", rotation=0, ha="right", va="center", labelpad=65)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
         if _i < _n_levels - 1:
-            ax.tick_params(axis='x', labelbottom=False)
+            ax.tick_params(axis="x", labelbottom=False)
             ax.set_xticklabels([])
 
     axes_list = [fig.axes[i] for i in range(len(fig.axes))]
     if axes_list:
         axes_list[-1].set_xlabel(
-            'Cumulative token weight (% labels are relative to the model maximum)',
+            "Cumulative token weight (% labels are relative to the model maximum)",
             fontsize=9,
         )
 
     # COG/BUSCO panel (right side, spanning middle rows)
     if _has_markers:
         ax_m = fig.add_subplot(gs[2:5, 1])
-        _categories = ['COG', 'BUSCO']
+        _categories = ["COG", "BUSCO"]
         _hit_counts = [_n_cog, _n_busco]
         _unique_counts = [_cog_unique, _busco_unique]
-        _bar_colors = ['#009988', '#EE7733']
+        _bar_colors = ["#009988", "#EE7733"]
 
-        bars_m = ax_m.bar(_categories, _hit_counts, color=_bar_colors,
-                          edgecolor='white', linewidth=0.8, width=0.55)
+        bars_m = ax_m.bar(_categories, _hit_counts, color=_bar_colors, edgecolor="white", linewidth=0.8, width=0.55)
         for bar, total, unique in zip(bars_m, _hit_counts, _unique_counts):
-            ax_m.text(bar.get_x() + bar.get_width() / 2,
-                      bar.get_height() + max(_hit_counts) * 0.03,
-                      f'{total:,}\n({unique})', ha='center', va='bottom',
-                      fontsize=8, fontweight='bold')
-        ax_m.set_ylabel('HMM hits')
-        ax_m.set_title('Marker types', fontsize=9, fontweight='bold')
+            ax_m.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(_hit_counts) * 0.03,
+                f"{total:,}\n({unique})",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                fontweight="bold",
+            )
+        ax_m.set_ylabel("HMM hits")
+        ax_m.set_title("Marker types", fontsize=9, fontweight="bold")
         ax_m.set_ylim(0, max(_hit_counts) * 1.3)
-        ax_m.spines['top'].set_visible(False)
-        ax_m.spines['right'].set_visible(False)
+        ax_m.spines["top"].set_visible(False)
+        ax_m.spines["right"].set_visible(False)
 
-    fig.suptitle(f'{GENOME_ID} Host Signature: Taxonomy Token Weights',
-                 fontsize=13, fontweight='bold')
-    plt.savefig(BASE / 'host_signature_model.png', dpi=300, bbox_inches='tight')
+    fig.suptitle(f"{GENOME_ID} Host Signature: Taxonomy Token Weights", fontsize=13, fontweight="bold")
+    plt.savefig(BASE / "host_signature_model.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 # %% [markdown]
@@ -710,49 +736,55 @@ if _host_model and _level_tokens:
 
 # %%
 # ---- EVE summary stats ----
-status_counts = Counter(p['status'] for p in profiles.values())
-tier_counts = Counter(p.get('confidence_tier', 'UNKNOWN') for p in profiles.values())
-total_bp = sum(p['length'] for p in profiles.values())
+status_counts = Counter(p["status"] for p in profiles.values())
+tier_counts = Counter(p.get("confidence_tier", "UNKNOWN") for p in profiles.values())
+total_bp = sum(p["length"] for p in profiles.values())
 
-print(f'Total canonical EVE predictions: {len(profiles)}')
-print(f'Total EVE coverage:   {total_bp:,} bp ({total_bp/1e6:.2f} Mb)')
+print(f"Total canonical EVE predictions: {len(profiles)}")
+print(f"Total EVE coverage:   {total_bp:,} bp ({total_bp / 1e6:.2f} Mb)")
 print()
-print('Canonical tiers:')
-for tier in ['HIGH', 'MEDIUM', 'LOW']:
+print("Canonical tiers:")
+for tier in ["HIGH", "MEDIUM", "LOW"]:
     n = tier_counts.get(tier, 0)
     label = tier
-    print(f'  {label:<12s} {n:>3d}')
+    print(f"  {label:<12s} {n:>3d}")
 print()
-print('Taxonomy classification:')
+print("Taxonomy classification:")
 all_families = Counter(canon_family(p) for p in profiles.values())
 for fam, n in all_families.most_common():
-    print(f'  {fam:<14s} {n:>3d}')
+    print(f"  {fam:<14s} {n:>3d}")
 
 # Published taxonomy class colors (reused in later cells). Legacy VP, PLV and
 # MIXED labels need no entries: canon_family folds them onto PPV and
 # VIRAL_UNKNOWN before any lookup.
 FAMILY_COLORS = {
-    'PPV':           COLORS['PPV'],     # orange -- Preplasmiviricota (PLV + virophages)
-    'NCLDV':         COLORS['NCLDV'],   # teal
-    'MIRUS':         COLORS['MIRUS'],   # dark magenta
-    'CRESS':         COLORS['CRESS'],   # yellow
-    'PHAGE':         '#CC3311',         # red
-    'VIRAL_UNKNOWN': '#4477AA',         # blue -- viral, class unresolved
-    'UNKNOWN':       COLORS['UNKNOWN'], # gray -- no viral class evidence
+    "PPV": COLORS["PPV"],  # orange -- Preplasmiviricota (PLV + virophages)
+    "NCLDV": COLORS["NCLDV"],  # teal
+    "MIRUS": COLORS["MIRUS"],  # dark magenta
+    "CRESS": COLORS["CRESS"],  # yellow
+    "PHAGE": "#CC3311",  # red
+    "VIRAL_UNKNOWN": "#4477AA",  # blue -- viral, class unresolved
+    "UNKNOWN": COLORS["UNKNOWN"],  # gray -- no viral class evidence
 }
 family_order = [
-    'PPV', 'NCLDV', 'MIRUS', 'CRESS', 'PHAGE', 'VIRAL_UNKNOWN', 'UNKNOWN',
+    "PPV",
+    "NCLDV",
+    "MIRUS",
+    "CRESS",
+    "PHAGE",
+    "VIRAL_UNKNOWN",
+    "UNKNOWN",
 ]
-tier_order = ['HIGH', 'MEDIUM', 'LOW']
+tier_order = ["HIGH", "MEDIUM", "LOW"]
 
 tier_family_counts = {t: Counter() for t in tier_order}
 for p in profiles.values():
-    tier = p.get('confidence_tier', 'UNKNOWN')
+    tier = p.get("confidence_tier", "UNKNOWN")
     if tier not in tier_order:
         continue
     family = canon_family(p)
     if family not in FAMILY_COLORS:
-        family = 'UNKNOWN'
+        family = "UNKNOWN"
     tier_family_counts[tier][family] += 1
 
 # ---- Two-panel figure: classification + size distribution ----
@@ -767,23 +799,21 @@ for family in family_order:
     vals = [tier_family_counts[t].get(family, 0) for t in tier_order]
     if sum(vals) == 0:
         continue
-    ax1.bar(x, vals, width, bottom=bottoms, label=family,
-            color=FAMILY_COLORS[family], edgecolor='white', linewidth=0.8)
+    ax1.bar(x, vals, width, bottom=bottoms, label=family, color=FAMILY_COLORS[family], edgecolor="white", linewidth=0.8)
     bottoms += np.array(vals, dtype=float)
 
 for i, tier in enumerate(tier_order):
     total = sum(tier_family_counts[tier].values())
-    ax1.text(i, bottoms[i] + 0.8, str(total), ha='center', va='bottom',
-             fontsize=11, fontweight='bold')
+    ax1.text(i, bottoms[i] + 0.8, str(total), ha="center", va="bottom", fontsize=11, fontweight="bold")
 
 ax1.set_xticks(x)
 ax1.set_xticklabels(tier_order)
-ax1.set_ylabel('Number of EVEs')
+ax1.set_ylabel("Number of EVEs")
 ax1.set_ylim(0, max(1.0, max(bottoms) * 1.18))
-ax1.set_title('(A) Classification by Tier', fontweight='bold')
+ax1.set_title("(A) Classification by Tier", fontweight="bold")
 # Legend in the upper-left: the tallest (LOW) bar and its count label sit on
 # the right, so 'upper left' avoids overlapping the data.
-ax1.legend(fontsize=7, loc='upper left', framealpha=0.9)
+ax1.legend(fontsize=7, loc="upper left", framealpha=0.9)
 finalize_axes(ax1)
 
 # Panel B: boxplot + jittered points -- EVE size by family
@@ -791,8 +821,8 @@ eve_sizes_by_family = {}
 for p in profiles.values():
     family = canon_family(p)
     if family not in FAMILY_COLORS:
-        family = 'UNKNOWN'
-    eve_sizes_by_family.setdefault(family, []).append(p['length'] / 1000)  # kb
+        family = "UNKNOWN"
+    eve_sizes_by_family.setdefault(family, []).append(p["length"] / 1000)  # kb
 
 # Only show families that have data, in family_order
 families_present = [f for f in family_order if f in eve_sizes_by_family]
@@ -800,13 +830,18 @@ box_data = [eve_sizes_by_family[f] for f in families_present]
 box_colors = [FAMILY_COLORS[f] for f in families_present]
 
 if box_data:
-    bp = ax2.boxplot(box_data, positions=range(len(families_present)),
-                     widths=0.5, patch_artist=True, showfliers=False,
-                     medianprops=dict(color='black', linewidth=1.5),
-                     whiskerprops=dict(color='#555555'),
-                     capprops=dict(color='#555555'))
+    bp = ax2.boxplot(
+        box_data,
+        positions=range(len(families_present)),
+        widths=0.5,
+        patch_artist=True,
+        showfliers=False,
+        medianprops=dict(color="black", linewidth=1.5),
+        whiskerprops=dict(color="#555555"),
+        capprops=dict(color="#555555"),
+    )
 
-    for patch, color in zip(bp['boxes'], box_colors):
+    for patch, color in zip(bp["boxes"], box_colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.4)
         patch.set_edgecolor(color)
@@ -815,48 +850,56 @@ if box_data:
     rng = np.random.default_rng(42)
     for i, (family, sizes) in enumerate(zip(families_present, box_data)):
         jitter = rng.uniform(-0.15, 0.15, size=len(sizes))
-        ax2.scatter(np.full(len(sizes), i) + jitter, sizes,
-                    color=FAMILY_COLORS[family], s=18, alpha=0.7,
-                    edgecolors='white', linewidths=0.3, zorder=5)
+        ax2.scatter(
+            np.full(len(sizes), i) + jitter,
+            sizes,
+            color=FAMILY_COLORS[family],
+            s=18,
+            alpha=0.7,
+            edgecolors="white",
+            linewidths=0.3,
+            zorder=5,
+        )
 
     ax2.set_xticks(range(len(families_present)))
     # Rotated: VIRAL_UNKNOWN is long enough to collide with its neighbours flat.
-    ax2.set_xticklabels(families_present, rotation=30, ha='right', fontsize=8)
+    ax2.set_xticklabels(families_present, rotation=30, ha="right", fontsize=8)
 else:
-    ax2.text(0.5, 0.5, 'No canonical EVEs', ha='center', va='center',
-             transform=ax2.transAxes)
+    ax2.text(0.5, 0.5, "No canonical EVEs", ha="center", va="center", transform=ax2.transAxes)
     ax2.set_xticks([])
-ax2.set_ylabel('EVE length (kb)')
-ax2.set_title('(B) Size Distribution by Class', fontweight='bold')
+ax2.set_ylabel("EVE length (kb)")
+ax2.set_title("(B) Size Distribution by Class", fontweight="bold")
 finalize_axes(ax2)
 
-fig.suptitle(f'{GENOME_ID} EVE Overview (n={len(profiles)})', fontsize=13, fontweight='bold')
+fig.suptitle(f"{GENOME_ID} EVE Overview (n={len(profiles)})", fontsize=13, fontweight="bold")
 plt.tight_layout()
-plt.savefig(BASE / 'eve_confidence_tiers.png', dpi=300)
+plt.savefig(BASE / "eve_confidence_tiers.png", dpi=300)
 plt.show()
 
 from IPython.display import FileLink
-FileLink(str(BASE / 'eve_confidence_tiers.png'))
+
+FileLink(str(BASE / "eve_confidence_tiers.png"))
 
 # %% [markdown]
 # ## ANI Clustering of EVEs
 #
 # Groups canonical EVEs by sequence similarity so repeated insertions of one element are visible as a group. Phase 3 compares every accepted EVE against every other with skani and joins two EVEs when they reach 95% average nucleotide identity over at least 50% of either sequence; each connected component is one cluster. This notebook reads those clusters from `evidence_profiles.json` instead of recomputing them, so the labels here, the taxonomy classes inherited from MCP-bearing relatives, and the network below all rest on one clustering. Clusters are named by descending size over the EVEs shown at the selected tiers, and an EVE with no clustered relative is a singleton. The gene map and marker heatmap use these labels.
 
+
 # %%
-def short_eve_label(eve_id):
+def short_eve_label(eve_id: str) -> str:
     """Shorten one EVE ID for a plot label by dropping the shared genome prefix."""
-    label = str(eve_id).replace(EVE_PREFIX + '|', '')
-    parts = label.split('_', 1)
-    if len(parts) == 2 and parts[0] == 'contig':
-        num_rest = parts[1].split('_', 1)
+    label = str(eve_id).replace(EVE_PREFIX + "|", "")
+    parts = label.split("_", 1)
+    if len(parts) == 2 and parts[0] == "contig":
+        num_rest = parts[1].split("_", 1)
         if len(num_rest) == 2:
-            return f'c{num_rest[0]}:{num_rest[1]}'
+            return f"c{num_rest[0]}:{num_rest[1]}"
     return label[:25]
 
 
 if not profiles:
-    print('No EVEs to cluster.')
+    print("No EVEs to cluster.")
     eve_cluster_map = {}
     multi_clusters = []
 else:
@@ -867,63 +910,54 @@ else:
     # EVEs actually shown before any cluster is named.
     _members_by_cluster = defaultdict(list)
     for eid, profile in profiles.items():
-        cluster_id = int(profile.get('cluster_id', -1))
+        cluster_id = int(profile.get("cluster_id", -1))
         if cluster_id >= 0:
             _members_by_cluster[cluster_id].append(eid)
 
     # Descending size, then lowest member ID: the labels are a function of the
     # published clusters alone, so rerunning the report reproduces them.
     multi_clusters = sorted(
-        (
-            (min(members), sorted(members))
-            for members in _members_by_cluster.values()
-            if len(members) > 1
-        ),
+        ((min(members), sorted(members)) for members in _members_by_cluster.values() if len(members) > 1),
         key=lambda item: (-len(item[1]), item[0]),
     )
 
-    eve_cluster_map = {eid: 'singleton' for eid in profiles}
+    eve_cluster_map = {eid: "singleton" for eid in profiles}
     for idx, (rep, members) in enumerate(multi_clusters, start=1):
         for m in members:
-            eve_cluster_map[m] = f'Cluster_{idx}'
+            eve_cluster_map[m] = f"Cluster_{idx}"
 
     # Summary
-    n_clustered = sum(1 for v in eve_cluster_map.values() if v != 'singleton')
-    n_singletons = sum(1 for v in eve_cluster_map.values() if v == 'singleton')
-    print(f'Clusters: {len(multi_clusters)} multi-member, {n_singletons} singletons')
-    print(f'Clustered EVEs: {n_clustered}/{len(eve_cluster_map)}')
+    n_clustered = sum(1 for v in eve_cluster_map.values() if v != "singleton")
+    n_singletons = sum(1 for v in eve_cluster_map.values() if v == "singleton")
+    print(f"Clusters: {len(multi_clusters)} multi-member, {n_singletons} singletons")
+    print(f"Clustered EVEs: {n_clustered}/{len(eve_cluster_map)}")
 
-    print(f'\n{"Cluster":<14} {"Size":>5}  {"Tiers":<20} {"Members"}')
-    print('-' * 80)
+    print(f"\n{'Cluster':<14} {'Size':>5}  {'Tiers':<20} {'Members'}")
+    print("-" * 80)
     for idx, (rep, members) in enumerate(multi_clusters, start=1):
-        tier_str = ', '.join(sorted(
-            {profiles[m].get('confidence_tier', '') for m in members}
-        ))
-        member_short = ', '.join(short_eve_label(m) for m in members)
-        print(f'Cluster_{idx:<5} {len(members):>5}  {tier_str:<20} {member_short}')
+        tier_str = ", ".join(sorted({profiles[m].get("confidence_tier", "") for m in members}))
+        member_short = ", ".join(short_eve_label(m) for m in members)
+        print(f"Cluster_{idx:<5} {len(members):>5}  {tier_str:<20} {member_short}")
 
-    print(f'\nCluster map stored in eve_cluster_map ({len(eve_cluster_map)} entries)')
+    print(f"\nCluster map stored in eve_cluster_map ({len(eve_cluster_map)} entries)")
 
     # Which EVEs took their class from an MCP-bearing cluster member. Without
     # this the override is invisible in the report: the inherited class looks
     # like every other call.
-    propagated = sorted(
-        (eid, p) for eid, p in profiles.items()
-        if p.get('taxonomy_class_propagated_from')
-    )
+    propagated = sorted((eid, p) for eid, p in profiles.items() if p.get("taxonomy_class_propagated_from"))
     if propagated:
-        print(f'\nClass inherited from an MCP-bearing cluster member: {len(propagated)}')
-        print(f'{"EVE":<30} {"was":<15} {"now":<15} {"from"}')
-        print('-' * 80)
+        print(f"\nClass inherited from an MCP-bearing cluster member: {len(propagated)}")
+        print(f"{'EVE':<30} {'was':<15} {'now':<15} {'from'}")
+        print("-" * 80)
         for eid, p in propagated:
             print(
-                f'{short_eve_label(eid):<30} '
-                f'{p.get("taxonomy_class_before_ani", ""):<15} '
-                f'{canon_family(p):<15} '
-                f'{short_eve_label(p["taxonomy_class_propagated_from"])}'
+                f"{short_eve_label(eid):<30} "
+                f"{p.get('taxonomy_class_before_ani', ''):<15} "
+                f"{canon_family(p):<15} "
+                f"{short_eve_label(p['taxonomy_class_propagated_from'])}"
             )
     else:
-        print('\nNo EVE inherited its class from an MCP-bearing cluster member.')
+        print("\nNo EVE inherited its class from an MCP-bearing cluster member.")
 
     # Pie chart: cluster size distribution
     labels = []
@@ -931,28 +965,34 @@ else:
     pie_colors = []
     cmap = plt.cm.Set2
     for idx, (rep, members) in enumerate(multi_clusters, start=1):
-        labels.append(f'Cluster {idx} (n={len(members)})')
+        labels.append(f"Cluster {idx} (n={len(members)})")
         sizes.append(len(members))
         pie_colors.append(cmap(idx / max(len(multi_clusters) + 1, 2)))
     if n_singletons > 0:
-        labels.append(f'Singletons (n={n_singletons})')
+        labels.append(f"Singletons (n={n_singletons})")
         sizes.append(n_singletons)
-        pie_colors.append('#BBBBBB')
+        pie_colors.append("#BBBBBB")
 
     fig, ax = plt.subplots(figsize=(3, 3))
     wedges, texts, autotexts = ax.pie(
-        sizes, labels=labels, autopct='%1.0f%%',
-        colors=pie_colors, startangle=90,
-        pctdistance=0.82, textprops={'fontsize': 9})
+        sizes,
+        labels=labels,
+        autopct="%1.0f%%",
+        colors=pie_colors,
+        startangle=90,
+        pctdistance=0.82,
+        textprops={"fontsize": 9},
+    )
     for t in autotexts:
         t.set_fontsize(8)
-    ax.set_title(f'ANI Cluster Composition (n={len(eve_cluster_map)} EVEs)')
+    ax.set_title(f"ANI Cluster Composition (n={len(eve_cluster_map)} EVEs)")
     plt.tight_layout()
-    plt.savefig(BASE / 'eve_cluster_composition.png', dpi=300)
+    plt.savefig(BASE / "eve_cluster_composition.png", dpi=300)
     plt.show()
 
     from IPython.display import FileLink
-    FileLink(str(BASE / 'eve_cluster_composition.png'))
+
+    FileLink(str(BASE / "eve_cluster_composition.png"))
 
 # %% [markdown]
 # ## ANI Network of EVEs
@@ -970,13 +1010,13 @@ else:
 # %%
 import graphviz
 
-_edges_path = SYNTHESIS / 'eve_ani_edges.tsv'
+_edges_path = SYNTHESIS / "eve_ani_edges.tsv"
 network_edges = []
 if _edges_path.exists():
-    with open(_edges_path) as f:
+    with _edges_path.open(encoding="utf-8") as f:
         next(f)  # header
         for line in f:
-            cols = line.rstrip('\n').split('\t')
+            cols = line.rstrip("\n").split("\t")
             if len(cols) < 5:
                 continue
             eve_a, eve_b = cols[0], cols[1]
@@ -987,11 +1027,11 @@ if _edges_path.exists():
                 network_edges.append((eve_a, eve_b, ani))
 
 if not _edges_path.exists():
-    print(f'No ANI edge table at {_edges_path}; skipping the ANI network')
+    print(f"No ANI edge table at {_edges_path}; skipping the ANI network")
 elif not network_edges:
     print(
-        f'No reported EVE pair reaches {ANI_THRESHOLD:.0f}% ANI over '
-        f'{MIN_ALIGNED_FRACTION:.0f}% aligned fraction; skipping the ANI network'
+        f"No reported EVE pair reaches {ANI_THRESHOLD:.0f}% ANI over "
+        f"{MIN_ALIGNED_FRACTION:.0f}% aligned fraction; skipping the ANI network"
     )
 else:
     # A node with an edge is by definition in a component of two or more, so no
@@ -1002,69 +1042,67 @@ else:
 
     # Title and legend go in the graph label as an HTML-like table: sfdp lays
     # out no clusters, so legend nodes would scatter through the network.
-    _legend_cells = ''.join(
-        f'<TD BGCOLOR="{FAMILY_COLORS.get(cls, "#BBBBBB")}99">{cls}</TD>'
-        for cls in classes_present
-    ) + '<TD BORDER="3" COLOR="black" BGCOLOR="white">class set by MCP</TD>'
+    _legend_cells = (
+        "".join(f'<TD BGCOLOR="{FAMILY_COLORS.get(cls, "#BBBBBB")}99">{cls}</TD>' for cls in classes_present)
+        + '<TD BORDER="3" COLOR="black" BGCOLOR="white">class set by MCP</TD>'
+    )
     _caption = (
-        f'{GENOME_ID} EVE ANI network: {len(network_eves)} EVEs, '
-        f'{len(network_edges)} pairs at &gt;={ANI_THRESHOLD:.0f}% ANI and '
-        f'&gt;={MIN_ALIGNED_FRACTION:.0f}% aligned fraction, '
-        f'{n_omitted} unconnected EVE(s) omitted'
+        f"{GENOME_ID} EVE ANI network: {len(network_eves)} EVEs, "
+        f"{len(network_edges)} pairs at &gt;={ANI_THRESHOLD:.0f}% ANI and "
+        f"&gt;={MIN_ALIGNED_FRACTION:.0f}% aligned fraction, "
+        f"{n_omitted} unconnected EVE(s) omitted"
     )
 
     graph = graphviz.Graph(
-        name='eve_ani_network',
-        engine='sfdp',
+        name="eve_ani_network",
+        engine="sfdp",
         graph_attr={
-            'overlap': 'scale',
-            'splines': 'line',
-            'size': '40,40',
-            'dpi': '96',
-            'bgcolor': 'white',
-            'fontname': 'Helvetica',
-            'fontsize': '12',
-            'labelloc': 't',
-            'label': (
+            "overlap": "scale",
+            "splines": "line",
+            "size": "40,40",
+            "dpi": "96",
+            "bgcolor": "white",
+            "fontname": "Helvetica",
+            "fontsize": "12",
+            "labelloc": "t",
+            "label": (
                 '<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="4">'
                 f'<TR><TD COLSPAN="{len(classes_present) + 1}">'
-                f'<B>{_caption}</B></TD></TR>'
-                f'<TR>{_legend_cells}</TR>'
-                '</TABLE>>'
+                f"<B>{_caption}</B></TD></TR>"
+                f"<TR>{_legend_cells}</TR>"
+                "</TABLE>>"
             ),
         },
         node_attr={
-            'shape': 'ellipse',
-            'style': 'filled',
-            'fontname': 'Helvetica',
-            'fontsize': '9',
+            "shape": "ellipse",
+            "style": "filled",
+            "fontname": "Helvetica",
+            "fontsize": "9",
         },
-        edge_attr={'color': '#888888', 'penwidth': '1.2'},
+        edge_attr={"color": "#888888", "penwidth": "1.2"},
     )
 
     for eid in network_eves:
         # The border marks EVEs that can hand their class to a cluster-mate,
         # which is the MCP-marker vote, not the broader has_mcp flag.
-        has_mcp = bool(profiles[eid].get('taxonomy_class_from_mcp'))
+        has_mcp = bool(profiles[eid].get("taxonomy_class_from_mcp"))
         graph.node(
             eid,
             label=short_eve_label(eid),
             # 60% alpha keeps the black label readable on every class color.
-            fillcolor=FAMILY_COLORS.get(canon_family(profiles[eid]), '#BBBBBB') + '99',
-            color='#000000' if has_mcp else '#CCCCCC',
-            penwidth='3.0' if has_mcp else '0.8',
+            fillcolor=FAMILY_COLORS.get(canon_family(profiles[eid]), "#BBBBBB") + "99",
+            color="#000000" if has_mcp else "#CCCCCC",
+            penwidth="3.0" if has_mcp else "0.8",
         )
     for eve_a, eve_b, ani in network_edges:
         graph.edge(eve_a, eve_b)
 
-    (BASE / 'eve_ani_network.png').write_bytes(graph.pipe(format='png'))
-    print(
-        f'ANI network: {len(network_eves)} EVEs, {len(network_edges)} edges, '
-        f'{n_omitted} unconnected EVE(s) omitted'
-    )
+    (BASE / "eve_ani_network.png").write_bytes(graph.pipe(format="png"))
+    print(f"ANI network: {len(network_eves)} EVEs, {len(network_edges)} edges, {n_omitted} unconnected EVE(s) omitted")
 
     from IPython.display import Image
-    Image(filename=str(BASE / 'eve_ani_network.png'))
+
+    Image(filename=str(BASE / "eve_ani_network.png"))
 
 # %% [markdown]
 # ## EVE Gene Map with Flanking Context
@@ -1083,15 +1121,15 @@ else:
 
 # %%
 if not profiles:
-    print('No EVEs to map.')
+    print("No EVEs to map.")
     eve_genes_extended = {}
 else:
     # ---- Build extended gene map data ----
-    
+
     NEAREST_FLANK_GENES = 3
 
     def _clean_text(value):
-        return '' if value is None or pd.isna(value) else str(value)
+        return "" if value is None or pd.isna(value) else str(value)
 
     def classify_gene(origin, target, taxonomy_record):
         """Map one gene's evidence to its report display category."""
@@ -1101,125 +1139,110 @@ else:
         viral_category = _canonical_viral_category(origin, target)
         if viral_category:
             return viral_category
-        if origin == 'EUK':
-            return 'HOST' if is_host_gene(target) else 'EUK'
-        if origin == 'HOST_SPECIFIC':
-            return 'HOST'
-        if origin == 'BAC':
-            return 'BAC'
-        if origin == 'ARC':
-            return 'ARC'
-        return 'UNKNOWN'
+        if origin == "EUK":
+            return "HOST" if is_host_gene(target) else "EUK"
+        if origin == "HOST_SPECIFIC":
+            return "HOST"
+        if origin == "BAC":
+            return "BAC"
+        if origin == "ARC":
+            return "ARC"
+        return "UNKNOWN"
 
     def _make_gene_record(gene, region):
-        porf_id = gene['porf_id']
+        porf_id = gene["porf_id"]
         taxonomy_record = BOUNDARY_TAXONOMY.get(porf_id, {})
-        origin = _clean_text(taxonomy_record.get('top1_prefix')).rstrip('_')
-        origin = origin if origin else 'UNKNOWN'
-        target = _clean_text(taxonomy_record.get('top1_target'))
+        origin = _clean_text(taxonomy_record.get("top1_prefix")).rstrip("_")
+        origin = origin if origin else "UNKNOWN"
+        target = _clean_text(taxonomy_record.get("top1_target"))
         mcp_info = mcp_classification_map.get(porf_id, {})
         is_mcp = porf_id in mcp_porf_ids
         return {
-            'start': gene['start'],
-            'end': gene['end'],
-            'strand': gene['strand'],
-            'category': classify_gene(
+            "start": gene["start"],
+            "end": gene["end"],
+            "strand": gene["strand"],
+            "category": classify_gene(
                 origin,
                 target,
                 taxonomy_record,
             ),
-            'best_hit_origin': origin,
-            'best_hit_target': target,
-            'is_mcp': is_mcp,
-            'is_rt': porf_id in rt_gene_ids,
-            'porf_id': porf_id,
-            'host_lineage_match': origin == 'EUK' and is_host_gene(target),
-            'fold_type': mcp_info.get('type', ''),
-            'fold_confidence': mcp_info.get('confidence', 0),
-            'mcp_support': mcp_info.get('mcp_support', ''),
-            'validation_status': mcp_info.get('validation_status', ''),
-            'region': region,
+            "best_hit_origin": origin,
+            "best_hit_target": target,
+            "is_mcp": is_mcp,
+            "is_rt": porf_id in rt_gene_ids,
+            "porf_id": porf_id,
+            "host_lineage_match": origin == "EUK" and is_host_gene(target),
+            "fold_type": mcp_info.get("type", ""),
+            "fold_confidence": mcp_info.get("confidence", 0),
+            "mcp_support": mcp_info.get("mcp_support", ""),
+            "validation_status": mcp_info.get("validation_status", ""),
+            "region": region,
         }
 
     eve_genes_extended = {}
     for eve_id, profile in profiles.items():
-        eve_start = int(profile.get('start', 0))
-        eve_end = int(profile.get('end', 0))
-        scaffold = str(profile.get('scaffold', ''))
+        eve_start = int(profile.get("start", 0))
+        eve_end = int(profile.get("end", 0))
+        scaffold = str(profile.get("scaffold", ""))
         scaffold_genes = proteome_genes_by_scaffold.get(scaffold, [])
 
-        core_genes_for_eve = [
-            gene for gene in scaffold_genes
-            if gene['start'] < eve_end and gene['end'] > eve_start
-        ]
-        left_candidates = [
-            gene for gene in scaffold_genes
-            if gene['end'] <= eve_start
-        ]
-        right_candidates = [
-            gene for gene in scaffold_genes
-            if gene['start'] >= eve_end
-        ]
+        core_genes_for_eve = [gene for gene in scaffold_genes if gene["start"] < eve_end and gene["end"] > eve_start]
+        left_candidates = [gene for gene in scaffold_genes if gene["end"] <= eve_start]
+        right_candidates = [gene for gene in scaffold_genes if gene["start"] >= eve_end]
         nearest_left_ids = {
-            gene['porf_id']
+            gene["porf_id"]
             for gene in sorted(
                 left_candidates,
-                key=lambda gene: (eve_start - gene['end'], -gene['end']),
+                key=lambda gene: (eve_start - gene["end"], -gene["end"]),
             )[:NEAREST_FLANK_GENES]
         }
         nearest_right_ids = {
-            gene['porf_id']
+            gene["porf_id"]
             for gene in sorted(
                 right_candidates,
-                key=lambda gene: (gene['start'] - eve_end, gene['start']),
+                key=lambda gene: (gene["start"] - eve_end, gene["start"]),
             )[:NEAREST_FLANK_GENES]
         }
         left_genes = [
-            gene for gene in left_candidates
-            if gene['end'] >= eve_start - FLANK_SIZE
-            or gene['porf_id'] in nearest_left_ids
+            gene
+            for gene in left_candidates
+            if gene["end"] >= eve_start - FLANK_SIZE or gene["porf_id"] in nearest_left_ids
         ]
         right_genes = [
-            gene for gene in right_candidates
-            if gene['start'] <= eve_end + FLANK_SIZE
-            or gene['porf_id'] in nearest_right_ids
+            gene
+            for gene in right_candidates
+            if gene["start"] <= eve_end + FLANK_SIZE or gene["porf_id"] in nearest_right_ids
         ]
 
         ext_start = max(0, eve_start - FLANK_SIZE)
         if left_genes:
-            ext_start = min(ext_start, min(gene['start'] for gene in left_genes))
+            ext_start = min(ext_start, min(gene["start"] for gene in left_genes))
         ext_end = eve_end + FLANK_SIZE
         if right_genes:
-            ext_end = max(ext_end, max(gene['end'] for gene in right_genes))
+            ext_end = max(ext_end, max(gene["end"] for gene in right_genes))
 
         eve_genes_extended[eve_id] = {
-            'eve_start': eve_start,
-            'eve_end': eve_end,
-            'scaffold': scaffold,
-            'ext_start': ext_start,
-            'ext_end': ext_end,
-            'length': ext_end - ext_start,
-            'eve_length': eve_end - eve_start,
-            'status': profile.get('status', ''),
-            'confidence': profile.get('final_confidence', 0),
-            'confidence_tier': profile.get('confidence_tier', ''),
-            'taxonomy_class': canon_family(profile),
-            'left_flank_genes': [
-                _make_gene_record(gene, 'left_flank') for gene in left_genes
-            ],
-            'eve_genes': [
-                _make_gene_record(gene, 'eve') for gene in core_genes_for_eve
-            ],
-            'right_flank_genes': [
-                _make_gene_record(gene, 'right_flank') for gene in right_genes
-            ],
+            "eve_start": eve_start,
+            "eve_end": eve_end,
+            "scaffold": scaffold,
+            "ext_start": ext_start,
+            "ext_end": ext_end,
+            "length": ext_end - ext_start,
+            "eve_length": eve_end - eve_start,
+            "status": profile.get("status", ""),
+            "confidence": profile.get("final_confidence", 0),
+            "confidence_tier": profile.get("confidence_tier", ""),
+            "taxonomy_class": canon_family(profile),
+            "left_flank_genes": [_make_gene_record(gene, "left_flank") for gene in left_genes],
+            "eve_genes": [_make_gene_record(gene, "eve") for gene in core_genes_for_eve],
+            "right_flank_genes": [_make_gene_record(gene, "right_flank") for gene in right_genes],
         }
-    
-    total_eve = sum(len(e['eve_genes']) for e in eve_genes_extended.values())
-    total_left = sum(len(e['left_flank_genes']) for e in eve_genes_extended.values())
-    total_right = sum(len(e['right_flank_genes']) for e in eve_genes_extended.values())
-    print(f'Gene mapping: {total_eve} core, {total_left} left flank, {total_right} right flank')
-    
+
+    total_eve = sum(len(e["eve_genes"]) for e in eve_genes_extended.values())
+    total_left = sum(len(e["left_flank_genes"]) for e in eve_genes_extended.values())
+    total_right = sum(len(e["right_flank_genes"]) for e in eve_genes_extended.values())
+    print(f"Gene mapping: {total_eve} core, {total_left} left flank, {total_right} right flank")
+
     # ---- Layout constants for gene map ----
     BAR_HEIGHT = 0.5
     LABEL_FONT = 8
@@ -1227,91 +1250,102 @@ else:
     LEGEND_FONT = 9
     TITLE_FONT = 13
     XLABEL_FONT = 10
-    FLANK_COLOR = '#F0F0F0'
-    FLANK_EDGE = '#AAAAAA'
-    CORE_EDGE = '#333333'
+    FLANK_COLOR = "#F0F0F0"
+    FLANK_EDGE = "#AAAAAA"
+    CORE_EDGE = "#333333"
     LABEL_X_FRAC = 0.22
     CONF_X_PAD_FRAC = 0.01
     SCALE_BAR_BP = 5000
     EVE_SPACING = 0.32
-    
-    MARKER_DJR = dict(marker='*', markersize=12, color='white',
-                      markeredgecolor='#000000', markeredgewidth=1.2, zorder=10)
-    MARKER_SJR = dict(marker='*', markersize=12, color='white',
-                      markeredgecolor='#0077BB', markeredgewidth=1.2, zorder=10)
-    MARKER_HK97 = dict(marker='*', markersize=12, color='white',
-                       markeredgecolor='#CC3311', markeredgewidth=1.2, zorder=10)
-    MARKER_RT  = dict(marker='^', markersize=8, color='white',
-                      markeredgecolor='#222222', markeredgewidth=1.0, zorder=9)
+
+    MARKER_DJR = dict(
+        marker="*", markersize=12, color="white", markeredgecolor="#000000", markeredgewidth=1.2, zorder=10
+    )
+    MARKER_SJR = dict(
+        marker="*", markersize=12, color="white", markeredgecolor="#0077BB", markeredgewidth=1.2, zorder=10
+    )
+    MARKER_HK97 = dict(
+        marker="*", markersize=12, color="white", markeredgecolor="#CC3311", markeredgewidth=1.2, zorder=10
+    )
+    MARKER_RT = dict(marker="^", markersize=8, color="white", markeredgecolor="#222222", markeredgewidth=1.0, zorder=9)
     # Supported MCP: yellow circle under any independent fold-class star.
-    MARKER_MCP = dict(marker='o', markersize=14, color='#FFD400',
-                      markeredgecolor='#000000', markeredgewidth=1.2, zorder=9)
-    
-    TIER_COLORS = {'HIGH': '#333333', 'MEDIUM': '#777777', 'LOW': '#BBBBBB'}
-    TIER_ORDER = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
+    MARKER_MCP = dict(
+        marker="o", markersize=14, color="#FFD400", markeredgecolor="#000000", markeredgewidth=1.2, zorder=9
+    )
+
+    TIER_COLORS = {"HIGH": "#333333", "MEDIUM": "#777777", "LOW": "#BBBBBB"}
+    TIER_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
 # %%
 if not eve_genes_extended:
-    print('No EVEs to map.')
+    print("No EVEs to map.")
 else:
     # ---- Gene Map: all canonical EVEs with colored flanking genes ----
     # Shows every canonical EVE in a single figure with tier-colored labels
-    
+
     ALL_SHOW_TIERS = SHOW_TIERS
-    
+
     def sort_key_all(item):
         _, info = item
-        tier_rank = TIER_ORDER.get(info['confidence_tier'], 3)
-        return (tier_rank, -info['confidence'], -info['eve_length'])
-    
+        tier_rank = TIER_ORDER.get(info["confidence_tier"], 3)
+        return (tier_rank, -info["confidence"], -info["eve_length"])
+
     all_sorted_eves = sorted(
-        [(eid, info) for eid, info in eve_genes_extended.items()
-         if info['confidence_tier'] in ALL_SHOW_TIERS],
+        [(eid, info) for eid, info in eve_genes_extended.items() if info["confidence_tier"] in ALL_SHOW_TIERS],
         key=sort_key_all,
     )
-    
-    print(f'Showing {len(all_sorted_eves)} EVEs (tiers: {", ".join(ALL_SHOW_TIERS)})')
-    
+
+    print(f"Showing {len(all_sorted_eves)} EVEs (tiers: {', '.join(ALL_SHOW_TIERS)})")
+
     n_all = len(all_sorted_eves)
     fig_h = max(22, n_all * EVE_SPACING)
     fig, ax = plt.subplots(figsize=(18, fig_h))
-    
-    max_len = max(e[1]['length'] for e in all_sorted_eves)
-    
+
+    max_len = max(e[1]["length"] for e in all_sorted_eves)
+
     for i, (eve_id, eve_info) in enumerate(all_sorted_eves):
         y = n_all - 1 - i
-        total_length = eve_info['length']
-        eve_start_rel = eve_info['eve_start'] - eve_info['ext_start']
-        eve_end_rel = eve_info['eve_end'] - eve_info['ext_start']
-        confidence = eve_info['confidence']
-        tier = eve_info['confidence_tier']
+        total_length = eve_info["length"]
+        eve_start_rel = eve_info["eve_start"] - eve_info["ext_start"]
+        eve_end_rel = eve_info["eve_end"] - eve_info["ext_start"]
+        confidence = eve_info["confidence"]
+        tier = eve_info["confidence_tier"]
         # Background: gray flanks, white EVE core
-        ax.barh(y, eve_start_rel, left=0, height=BAR_HEIGHT,
-                color=FLANK_COLOR, edgecolor=FLANK_EDGE, linewidth=0.5)
-        ax.barh(y, eve_end_rel - eve_start_rel, left=eve_start_rel, height=BAR_HEIGHT,
-                color='white', edgecolor=CORE_EDGE, linewidth=1.0)
-        ax.barh(y, total_length - eve_end_rel, left=eve_end_rel, height=BAR_HEIGHT,
-                color=FLANK_COLOR, edgecolor=FLANK_EDGE, linewidth=0.5)
-    
+        ax.barh(y, eve_start_rel, left=0, height=BAR_HEIGHT, color=FLANK_COLOR, edgecolor=FLANK_EDGE, linewidth=0.5)
+        ax.barh(
+            y,
+            eve_end_rel - eve_start_rel,
+            left=eve_start_rel,
+            height=BAR_HEIGHT,
+            color="white",
+            edgecolor=CORE_EDGE,
+            linewidth=1.0,
+        )
+        ax.barh(
+            y,
+            total_length - eve_end_rel,
+            left=eve_end_rel,
+            height=BAR_HEIGHT,
+            color=FLANK_COLOR,
+            edgecolor=FLANK_EDGE,
+            linewidth=0.5,
+        )
+
         # Draw genes
         djr_pos, sjr_pos, hk97_pos, rt_pos, mcp_pos = [], [], [], [], []
-        all_genes = (
-            eve_info['left_flank_genes']
-            + eve_info['eve_genes']
-            + eve_info['right_flank_genes']
-        )
+        all_genes = eve_info["left_flank_genes"] + eve_info["eve_genes"] + eve_info["right_flank_genes"]
         for gene in all_genes:
-            gs = max(0, gene['start'] - eve_info['ext_start'])
-            ge = min(total_length, gene['end'] - eve_info['ext_start'])
+            gs = max(0, gene["start"] - eve_info["ext_start"])
+            ge = min(total_length, gene["end"] - eve_info["ext_start"])
             if ge <= gs:
                 continue
             gw = ge - gs
-            color = COLORS.get(gene['category'], COLORS['UNKNOWN'])
-            alpha = 0.95 if gene['region'] == 'eve' else 0.70
+            color = COLORS.get(gene["category"], COLORS["UNKNOWN"])
+            alpha = 0.95 if gene["region"] == "eve" else 0.70
 
             half_height = BAR_HEIGHT * 0.4
             head_width = min(gw * 0.45, 300)
-            if gene['strand'] == '+':
+            if gene["strand"] == "+":
                 points = [
                     (gs, y - half_height),
                     (ge - head_width, y - half_height),
@@ -1319,7 +1353,7 @@ else:
                     (ge - head_width, y + half_height),
                     (gs, y + half_height),
                 ]
-            elif gene['strand'] == '-':
+            elif gene["strand"] == "-":
                 points = [
                     (gs, y),
                     (gs + head_width, y - half_height),
@@ -1337,23 +1371,26 @@ else:
             gene_arrow = mpatches.Polygon(
                 points,
                 closed=True,
-                facecolor=color, edgecolor='none', alpha=alpha, zorder=5,
+                facecolor=color,
+                edgecolor="none",
+                alpha=alpha,
+                zorder=5,
             )
             ax.add_patch(gene_arrow)
-    
+
             midx = gs + gw / 2
-            if gene.get('is_mcp'):
+            if gene.get("is_mcp"):
                 mcp_pos.append(midx)
-            fold_type = gene.get('fold_type', '')
-            if fold_type == 'DJR':
+            fold_type = gene.get("fold_type", "")
+            if fold_type == "DJR":
                 djr_pos.append(midx)
-            elif fold_type == 'SJR':
+            elif fold_type == "SJR":
                 sjr_pos.append(midx)
-            elif fold_type == 'HK97':
+            elif fold_type == "HK97":
                 hk97_pos.append(midx)
-            if gene.get('is_rt'):
+            if gene.get("is_rt"):
                 rt_pos.append(midx)
-    
+
         for mx in mcp_pos:
             ax.plot(mx, y, **MARKER_MCP)
         for mx in djr_pos:
@@ -1364,153 +1401,188 @@ else:
             ax.plot(mx, y, **MARKER_HK97)
         for mx in rt_pos:
             ax.plot(mx, y, **MARKER_RT)
-    
+
         # EVE label (left side) -- color by tier
-        parts = eve_id.replace('EVE_', '').rsplit('_', 1)
+        parts = eve_id.replace("EVE_", "").rsplit("_", 1)
         if len(parts) == 2:
-            scaffold_short = parts[0].split('|')[1] if '|' in parts[0] else parts[0]
-            label = f'{scaffold_short} ({parts[1]})'
+            scaffold_short = parts[0].split("|")[1] if "|" in parts[0] else parts[0]
+            label = f"{scaffold_short} ({parts[1]})"
         else:
-            label = eve_id.replace('EVE_', '')[:30]
-    
-        tier_color = TIER_COLORS.get(tier, '#666666')
-        ax.text(-max_len * 0.01, y, label, ha='right', va='center',
-                fontsize=LABEL_FONT, color=tier_color,
-                fontweight='bold' if tier == 'HIGH' else 'normal')
-    
+            label = eve_id.replace("EVE_", "")[:30]
+
+        tier_color = TIER_COLORS.get(tier, "#666666")
+        ax.text(
+            -max_len * 0.01,
+            y,
+            label,
+            ha="right",
+            va="center",
+            fontsize=LABEL_FONT,
+            color=tier_color,
+            fontweight="bold" if tier == "HIGH" else "normal",
+        )
+
         # Confidence score (right side)
-        ax.text(total_length + max_len * CONF_X_PAD_FRAC, y, f'{confidence:.2f}',
-                ha='left', va='center', fontsize=CONF_FONT, color='#555555')
-    
+        ax.text(
+            total_length + max_len * CONF_X_PAD_FRAC,
+            y,
+            f"{confidence:.2f}",
+            ha="left",
+            va="center",
+            fontsize=CONF_FONT,
+            color="#555555",
+        )
+
     # ---- Tier separator lines + margin labels ----
     tier_spans_all = {}
     running = 0
-    for t in ['HIGH', 'MEDIUM', 'LOW']:
-        count = sum(1 for _, e in all_sorted_eves if e['confidence_tier'] == t)
+    for t in ["HIGH", "MEDIUM", "LOW"]:
+        count = sum(1 for _, e in all_sorted_eves if e["confidence_tier"] == t)
         if count > 0:
             tier_spans_all[t] = (running, running + count)
             running += count
-    
+
     for tier_name, (idx_start, idx_end) in tier_spans_all.items():
         if idx_end > idx_start:
             mid_y = n_all - 1 - (idx_start + idx_end) / 2 + 0.5
             n_tier = idx_end - idx_start
-            ax.text(-max_len * LABEL_X_FRAC * 0.92, mid_y,
-                    f'{tier_name}\n(n={n_tier})',
-                    ha='center', va='center', fontsize=9, fontweight='bold',
-                    color=TIER_COLORS.get(tier_name, '#666666'),
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                              edgecolor='#CCCCCC', alpha=0.9))
-    
+            ax.text(
+                -max_len * LABEL_X_FRAC * 0.92,
+                mid_y,
+                f"{tier_name}\n(n={n_tier})",
+                ha="center",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                color=TIER_COLORS.get(tier_name, "#666666"),
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#CCCCCC", alpha=0.9),
+            )
+
     # ---- Axes formatting ----
-    tier_str_all = ' / '.join(f'{sum(1 for _, e in all_sorted_eves if e["confidence_tier"]==t)} {t}'
-                               for t in ['HIGH', 'MEDIUM', 'LOW']
-                               if any(e['confidence_tier'] == t for _, e in all_sorted_eves))
-    
+    tier_str_all = " / ".join(
+        f"{sum(1 for _, e in all_sorted_eves if e['confidence_tier'] == t)} {t}"
+        for t in ["HIGH", "MEDIUM", "LOW"]
+        if any(e["confidence_tier"] == t for _, e in all_sorted_eves)
+    )
+
     ax.set_xlim(-max_len * LABEL_X_FRAC, max_len * 1.08)
     ax.set_ylim(-1.5, n_all - 0.2)
     ax.set_xlabel(
-        f'Position (bp) | Gray: {FLANK_SIZE / 1000:g} kb minimum + '
-        f'{NEAREST_FLANK_GENES} nearest genes per flank | White: EVE core',
+        f"Position (bp) | Gray: {FLANK_SIZE / 1000:g} kb minimum + "
+        f"{NEAREST_FLANK_GENES} nearest genes per flank | White: EVE core",
         fontsize=XLABEL_FONT,
     )
     ax.set_title(
-        f'{GENOME_ID} EVE Gene Map: All Confident EVEs  ({tier_str_all})',
-        fontsize=TITLE_FONT, fontweight='bold',
+        f"{GENOME_ID} EVE Gene Map: All Confident EVEs  ({tier_str_all})",
+        fontsize=TITLE_FONT,
+        fontweight="bold",
     )
     ax.set_yticks([])
-    ax.spines['left'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['top'].set_visible(False)
-    
+    ax.spines["left"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+
     # Scale bar
     sb_x = max_len * 0.82
-    ax.plot([sb_x, sb_x + SCALE_BAR_BP], [-1.1, -1.1], 'k-', linewidth=2)
-    ax.text(sb_x + SCALE_BAR_BP / 2, -1.3, '5 kb', ha='center', fontsize=9)
-    
+    ax.plot([sb_x, sb_x + SCALE_BAR_BP], [-1.1, -1.1], "k-", linewidth=2)
+    ax.text(sb_x + SCALE_BAR_BP / 2, -1.3, "5 kb", ha="center", fontsize=9)
+
     # Legend
     legend_elements = [
-        mpatches.Patch(facecolor=COLORS['PPV'], label='PPV / Preplasmiviricota'),
-        mpatches.Patch(facecolor=COLORS['MIRUS'], label='Mirusviricota'),
-        mpatches.Patch(facecolor=COLORS['NCLDV'], label='NCLDV'),
-        mpatches.Patch(facecolor=COLORS['GVMAG'], label='Giant-virus MAG'),
-        mpatches.Patch(facecolor=COLORS['PHAGE'], label='Phage'),
+        mpatches.Patch(facecolor=COLORS["PPV"], label="PPV / Preplasmiviricota"),
+        mpatches.Patch(facecolor=COLORS["MIRUS"], label="Mirusviricota"),
+        mpatches.Patch(facecolor=COLORS["NCLDV"], label="NCLDV"),
+        mpatches.Patch(facecolor=COLORS["GVMAG"], label="Giant-virus MAG"),
+        mpatches.Patch(facecolor=COLORS["PHAGE"], label="Phage"),
         mpatches.Patch(
-            facecolor=COLORS['HOST'],
-            label=f'Host lineage ({HOST_GENUS.title()})' if HOST_GENUS else 'Host lineage',
+            facecolor=COLORS["HOST"],
+            label=f"Host lineage ({HOST_GENUS.title()})" if HOST_GENUS else "Host lineage",
         ),
-        mpatches.Patch(facecolor=COLORS['EUK'], label='Other Eukaryote'),
-        mpatches.Patch(facecolor=COLORS['BAC'], label='Bacteria'),
-        mpatches.Patch(facecolor=COLORS['ARC'], label='Archaea'),
-        mpatches.Patch(facecolor=COLORS['UNKNOWN'], label='Unknown'),
+        mpatches.Patch(facecolor=COLORS["EUK"], label="Other Eukaryote"),
+        mpatches.Patch(facecolor=COLORS["BAC"], label="Bacteria"),
+        mpatches.Patch(facecolor=COLORS["ARC"], label="Archaea"),
+        mpatches.Patch(facecolor=COLORS["UNKNOWN"], label="Unknown"),
     ]
     if mcp_porf_ids:
         legend_elements.append(
-            Line2D([0], [0], **{k: v for k, v in MARKER_MCP.items()
-                    if k != 'zorder'}, label='Supported MCP'),
+            Line2D([0], [0], **{k: v for k, v in MARKER_MCP.items() if k != "zorder"}, label="Supported MCP"),
         )
-    fold_types = {record.get('type') for record in mcp_classification_map.values()}
-    if 'DJR' in fold_types:
+    fold_types = {record.get("type") for record in mcp_classification_map.values()}
+    if "DJR" in fold_types:
         legend_elements.append(
-            Line2D([0], [0], **{k: v for k, v in MARKER_DJR.items()
-                    if k != 'zorder'}, label='DJR fold classification'),
+            Line2D([0], [0], **{k: v for k, v in MARKER_DJR.items() if k != "zorder"}, label="DJR fold classification"),
         )
-    if 'SJR' in fold_types:
+    if "SJR" in fold_types:
         legend_elements.append(
-            Line2D([0], [0], **{k: v for k, v in MARKER_SJR.items()
-                    if k != 'zorder'}, label='SJR fold classification'),
+            Line2D([0], [0], **{k: v for k, v in MARKER_SJR.items() if k != "zorder"}, label="SJR fold classification"),
         )
-    if 'HK97' in fold_types:
+    if "HK97" in fold_types:
         legend_elements.append(
-            Line2D([0], [0], **{k: v for k, v in MARKER_HK97.items()
-                    if k != 'zorder'}, label='HK97 fold classification'),
+            Line2D(
+                [0], [0], **{k: v for k, v in MARKER_HK97.items() if k != "zorder"}, label="HK97 fold classification"
+            ),
         )
     if rt_gene_ids:
         legend_elements.append(
-            Line2D([0], [0], **{k: v for k, v in MARKER_RT.items()
-                    if k != 'zorder'}, label='RT gene (PF00078)'),
+            Line2D([0], [0], **{k: v for k, v in MARKER_RT.items() if k != "zorder"}, label="RT gene (PF00078)"),
         )
-    legend_elements.extend([
-        mpatches.Patch(facecolor=FLANK_COLOR, edgecolor=FLANK_EDGE, label='Flanking region'),
-        mpatches.Patch(facecolor='white', edgecolor=CORE_EDGE, label='EVE core'),
-    ])
-    
+    legend_elements.extend(
+        [
+            mpatches.Patch(facecolor=FLANK_COLOR, edgecolor=FLANK_EDGE, label="Flanking region"),
+            mpatches.Patch(facecolor="white", edgecolor=CORE_EDGE, label="EVE core"),
+        ]
+    )
+
     # Tier indicator in legend
-    legend_elements.extend([
-        Line2D([0], [0], color='none', label=''),  # spacer
-        Line2D([0], [0], marker='s', color='none', markerfacecolor=TIER_COLORS['HIGH'],
-               markersize=8, label='HIGH confidence'),
-        Line2D([0], [0], marker='s', color='none', markerfacecolor=TIER_COLORS['MEDIUM'],
-               markersize=8, label='MEDIUM confidence'),
-    ])
-    
-    ax.legend(handles=legend_elements, loc='upper right', framealpha=0.95,
-              fontsize=LEGEND_FONT, ncol=2)
-    
+    legend_elements.extend(
+        [
+            Line2D([0], [0], color="none", label=""),  # spacer
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="none",
+                markerfacecolor=TIER_COLORS["HIGH"],
+                markersize=8,
+                label="HIGH confidence",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="none",
+                markerfacecolor=TIER_COLORS["MEDIUM"],
+                markersize=8,
+                label="MEDIUM confidence",
+            ),
+        ]
+    )
+
+    ax.legend(handles=legend_elements, loc="upper right", framealpha=0.95, fontsize=LEGEND_FONT, ncol=2)
+
     plt.tight_layout()
-    plt.savefig(BASE / 'eve_gene_map_with_flanks.png', dpi=300, bbox_inches='tight',
-                facecolor='white')
+    plt.savefig(BASE / "eve_gene_map_with_flanks.png", dpi=300, bbox_inches="tight", facecolor="white")
     plt.show()
-    
-    
+
     # Flanking region gene counts (used by gene-distribution cell)
     all_shown_ids = {eid for eid, _ in all_sorted_eves}
     flank_cats_left = Counter()
     flank_cats_right = Counter()
     eve_cats = Counter()
-    
+
     for eve_id, info in eve_genes_extended.items():
         if eve_id not in all_shown_ids:
             continue
-        for g in info['left_flank_genes']:
-            flank_cats_left[g['category']] += 1
-        for g in info['right_flank_genes']:
-            flank_cats_right[g['category']] += 1
-        for g in info['eve_genes']:
-            eve_cats[g['category']] += 1
-    
+        for g in info["left_flank_genes"]:
+            flank_cats_left[g["category"]] += 1
+        for g in info["right_flank_genes"]:
+            flank_cats_right[g["category"]] += 1
+        for g in info["eve_genes"]:
+            eve_cats[g["category"]] += 1
+
     from IPython.display import FileLink
-    FileLink(str(BASE / 'eve_gene_map_with_flanks.png'))
+
+    FileLink(str(BASE / "eve_gene_map_with_flanks.png"))
 
 # %% [markdown]
 # ## Detailed Gene Contexts
@@ -1519,31 +1591,24 @@ else:
 
 # %%
 if not eve_genes_extended:
-    print('No EVEs available for detailed gene contexts.')
+    print("No EVEs available for detailed gene contexts.")
 else:
     DETAIL_MAX_EVES = 6
     detail_tier = next(
         (
             tier
-            for tier in ['HIGH', 'MEDIUM', 'LOW']
-            if any(
-                info['confidence_tier'] == tier
-                for info in eve_genes_extended.values()
-            )
+            for tier in ["HIGH", "MEDIUM", "LOW"]
+            if any(info["confidence_tier"] == tier for info in eve_genes_extended.values())
         ),
         None,
     )
     detail_eves = sorted(
-        [
-            (eve_id, info)
-            for eve_id, info in eve_genes_extended.items()
-            if info['confidence_tier'] == detail_tier
-        ],
-        key=lambda item: (item[1]['eve_length'], -item[1]['confidence']),
+        [(eve_id, info) for eve_id, info in eve_genes_extended.items() if info["confidence_tier"] == detail_tier],
+        key=lambda item: (item[1]["eve_length"], -item[1]["confidence"]),
     )[:DETAIL_MAX_EVES]
 
     if not detail_eves:
-        print('No confident EVEs available for detailed gene contexts.')
+        print("No confident EVEs available for detailed gene contexts.")
     else:
         n_detail = len(detail_eves)
         fig, axes = plt.subplots(
@@ -1558,15 +1623,11 @@ else:
         detail_has_supported_mcp = False
 
         for ax, (eve_id, eve_info) in zip(axes, detail_eves):
-            eve_start = eve_info['eve_start']
-            eve_length_kb = eve_info['eve_length'] / 1000
-            all_genes = (
-                eve_info['left_flank_genes']
-                + eve_info['eve_genes']
-                + eve_info['right_flank_genes']
-            )
-            xmin = (eve_info['ext_start'] - eve_start) / 1000
-            xmax = (eve_info['ext_end'] - eve_start) / 1000
+            eve_start = eve_info["eve_start"]
+            eve_length_kb = eve_info["eve_length"] / 1000
+            all_genes = eve_info["left_flank_genes"] + eve_info["eve_genes"] + eve_info["right_flank_genes"]
+            xmin = (eve_info["ext_start"] - eve_start) / 1000
+            xmax = (eve_info["ext_end"] - eve_start) / 1000
             padding = max((xmax - xmin) * 0.025, 0.25)
             head_kb = max((xmax - xmin) * 0.012, 0.06)
 
@@ -1581,7 +1642,7 @@ else:
                 [(0, eve_length_kb)],
                 (0.72, 0.08),
                 facecolors=_REPORT_PREDICTION_COLOR,
-                edgecolors='none',
+                edgecolors="none",
                 alpha=0.90,
                 zorder=2,
             )
@@ -1590,22 +1651,22 @@ else:
                     boundary,
                     color=_REPORT_PREDICTION_COLOR,
                     linewidth=0.8,
-                    linestyle='--',
+                    linestyle="--",
                     alpha=0.75,
                     zorder=1,
                 )
 
             for gene in all_genes:
-                start = (gene['start'] - eve_start) / 1000
-                end = (gene['end'] - eve_start) / 1000
+                start = (gene["start"] - eve_start) / 1000
+                end = (gene["end"] - eve_start) / 1000
                 width = end - start
                 if width <= 0:
                     continue
-                strand = gene.get('strand', '.')
-                direction = width if strand == '+' else -width
-                x = start if strand == '+' else end
-                edge = '#555555' if gene['region'] != 'eve' else 'white'
-                detail_categories.add(gene['category'])
+                strand = gene.get("strand", ".")
+                direction = width if strand == "+" else -width
+                x = start if strand == "+" else end
+                edge = "#555555" if gene["region"] != "eve" else "white"
+                detail_categories.add(gene["category"])
                 ax.add_patch(
                     mpatches.FancyArrow(
                         x,
@@ -1616,82 +1677,91 @@ else:
                         head_width=0.30,
                         head_length=min(width * 0.45, head_kb),
                         length_includes_head=True,
-                        facecolor=COLORS.get(gene['category'], COLORS['UNKNOWN']),
+                        facecolor=COLORS.get(gene["category"], COLORS["UNKNOWN"]),
                         edgecolor=edge,
                         linewidth=0.45,
-                        alpha=0.82 if gene['region'] != 'eve' else 0.96,
+                        alpha=0.82 if gene["region"] != "eve" else 0.96,
                         zorder=4,
                     )
                 )
                 marker_x = (start + end) / 2
-                if gene.get('is_mcp'):
+                if gene.get("is_mcp"):
                     ax.plot(marker_x, 0.64, **MARKER_MCP)
                     detail_has_supported_mcp = True
-                fold_type = gene.get('fold_type', '')
+                fold_type = gene.get("fold_type", "")
                 fold_marker = {
-                    'DJR': MARKER_DJR,
-                    'SJR': MARKER_SJR,
-                    'HK97': MARKER_HK97,
+                    "DJR": MARKER_DJR,
+                    "SJR": MARKER_SJR,
+                    "HK97": MARKER_HK97,
                 }.get(fold_type)
                 if fold_marker:
                     detail_fold_types.add(fold_type)
                     marker = fold_marker
                     ax.plot(marker_x, 0.64, **marker)
-                if gene.get('is_rt'):
+                if gene.get("is_rt"):
                     ax.plot(marker_x, 0.64, **MARKER_RT)
 
-            short_id = eve_id.replace('EVE_', '')
+            short_id = eve_id.replace("EVE_", "")
             if len(short_id) > 64:
-                short_id = f'{short_id[:30]}…{short_id[-30:]}'
+                short_id = f"{short_id[:30]}…{short_id[-30:]}"
             ax.text(
                 0,
                 1.03,
                 short_id,
                 transform=ax.transAxes,
-                ha='left',
-                va='bottom',
+                ha="left",
+                va="bottom",
                 fontsize=8,
-                fontweight='bold',
+                fontweight="bold",
             )
             ax.text(
                 1,
                 1.03,
-                f'{eve_info["taxonomy_class"]} | {eve_info["eve_length"] / 1000:.1f} kb '
-                f'| score {eve_info["confidence"]:.2f}',
+                f"{eve_info['taxonomy_class']} | {eve_info['eve_length'] / 1000:.1f} kb "
+                f"| score {eve_info['confidence']:.2f}",
                 transform=ax.transAxes,
-                ha='right',
-                va='bottom',
+                ha="right",
+                va="bottom",
                 fontsize=7.5,
             )
             ax.set_xlim(xmin - padding, xmax + padding)
             ax.set_ylim(0, 1)
             ax.set_yticks([])
-            ax.tick_params(axis='x', labelsize=7)
+            ax.tick_params(axis="x", labelsize=7)
             finalize_axes(ax, despine_left=True)
 
-        axes[-1].set_xlabel('Position relative to predicted EVE start (kb)')
+        axes[-1].set_xlabel("Position relative to predicted EVE start (kb)")
         fig.suptitle(
-            f'{GENOME_ID}: Detailed {detail_tier}-confidence EVE Gene Contexts',
+            f"{GENOME_ID}: Detailed {detail_tier}-confidence EVE Gene Contexts",
             fontsize=13,
-            fontweight='bold',
+            fontweight="bold",
         )
 
         detail_order = [
-            'PPV', 'MIRUS', 'NCLDV', 'GVMAG', 'CRESS', 'PHAGE',
-            'HOST', 'EUK', 'BAC', 'ARC', 'UNKNOWN',
+            "PPV",
+            "MIRUS",
+            "NCLDV",
+            "GVMAG",
+            "CRESS",
+            "PHAGE",
+            "HOST",
+            "EUK",
+            "BAC",
+            "ARC",
+            "UNKNOWN",
         ]
         detail_labels = {
-            'PPV': 'PPV / Preplasmiviricota',
-            'MIRUS': 'Mirusviricota',
-            'NCLDV': 'NCLDV',
-            'GVMAG': 'Giant-virus MAG',
-            'CRESS': 'CRESS',
-            'PHAGE': 'Phage',
-            'HOST': f'Host lineage ({HOST_GENUS.title()})' if HOST_GENUS else 'Host lineage',
-            'EUK': 'Other eukaryote',
-            'BAC': 'Bacteria',
-            'ARC': 'Archaea',
-            'UNKNOWN': 'Unknown',
+            "PPV": "PPV / Preplasmiviricota",
+            "MIRUS": "Mirusviricota",
+            "NCLDV": "NCLDV",
+            "GVMAG": "Giant-virus MAG",
+            "CRESS": "CRESS",
+            "PHAGE": "Phage",
+            "HOST": f"Host lineage ({HOST_GENUS.title()})" if HOST_GENUS else "Host lineage",
+            "EUK": "Other eukaryote",
+            "BAC": "Bacteria",
+            "ARC": "Archaea",
+            "UNKNOWN": "Unknown",
         }
         detail_handles = [
             mpatches.Patch(
@@ -1703,9 +1773,9 @@ else:
         ]
         detail_handles.append(
             mpatches.Patch(
-                facecolor='white',
-                edgecolor='#555555',
-                label='Gray outline: flanking gene',
+                facecolor="white",
+                edgecolor="#555555",
+                label="Gray outline: flanking gene",
             )
         )
         if detail_has_supported_mcp:
@@ -1713,27 +1783,27 @@ else:
                 Line2D(
                     [0],
                     [0],
-                    **{k: v for k, v in MARKER_MCP.items() if k != 'zorder'},
-                    label='Supported MCP',
+                    **{k: v for k, v in MARKER_MCP.items() if k != "zorder"},
+                    label="Supported MCP",
                 )
             )
         for fold_type, marker in (
-            ('DJR', MARKER_DJR),
-            ('SJR', MARKER_SJR),
-            ('HK97', MARKER_HK97),
+            ("DJR", MARKER_DJR),
+            ("SJR", MARKER_SJR),
+            ("HK97", MARKER_HK97),
         ):
             if fold_type in detail_fold_types:
                 detail_handles.append(
                     Line2D(
                         [0],
                         [0],
-                        **{k: v for k, v in marker.items() if k != 'zorder'},
-                        label=f'{fold_type} fold classification',
+                        **{k: v for k, v in marker.items() if k != "zorder"},
+                        label=f"{fold_type} fold classification",
                     )
                 )
         fig.legend(
             handles=detail_handles,
-            loc='lower center',
+            loc="lower center",
             bbox_to_anchor=(0.5, 0.01),
             ncol=4,
             frameon=False,
@@ -1741,15 +1811,16 @@ else:
         )
         plt.tight_layout(rect=[0, 0.12, 1, 0.96])
         plt.savefig(
-            BASE / 'eve_gene_context_high.png',
+            BASE / "eve_gene_context_high.png",
             dpi=300,
-            bbox_inches='tight',
-            facecolor='white',
+            bbox_inches="tight",
+            facecolor="white",
         )
         plt.show()
 
         from IPython.display import FileLink
-        FileLink(str(BASE / 'eve_gene_context_high.png'))
+
+        FileLink(str(BASE / "eve_gene_context_high.png"))
 
 # %% [markdown]
 # ## Gene Category Distribution: Core vs Flanking
@@ -1758,44 +1829,41 @@ else:
 
 # %%
 if not eve_genes_extended:
-    print('No data for gene distribution.')
+    print("No data for gene distribution.")
 else:
     # ---- Stacked bar: core vs flank gene composition ----
-    categories_all = [
-        'PPV', 'NCLDV', 'MIRUS', 'GVMAG', 'CRESS', 'PHAGE',
-        'HOST', 'EUK', 'BAC', 'ARC', 'UNKNOWN'
-    ]
-    regions = ['Left Flank', 'EVE Core', 'Right Flank']
+    categories_all = ["PPV", "NCLDV", "MIRUS", "GVMAG", "CRESS", "PHAGE", "HOST", "EUK", "BAC", "ARC", "UNKNOWN"]
+    regions = ["Left Flank", "EVE Core", "Right Flank"]
     region_counters = [flank_cats_left, eve_cats, flank_cats_right]
     region_totals = [sum(rc.values()) for rc in region_counters]
-    
+
     fig, ax = plt.subplots(figsize=(5.5, 3.5))
     x = np.arange(len(regions))
     width = 0.55
-    
+
     bottoms = np.zeros(len(regions))
     for cat in categories_all:
         vals = np.array([rc.get(cat, 0) for rc in region_counters], dtype=float)
         totals = np.array(region_totals, dtype=float)
         totals[totals == 0] = 1
         fracs = vals / totals
-        ax.bar(x, fracs, width, bottom=bottoms, label=cat,
-               color=COLORS[cat], edgecolor='white', linewidth=0.8)
+        ax.bar(x, fracs, width, bottom=bottoms, label=cat, color=COLORS[cat], edgecolor="white", linewidth=0.8)
         bottoms += fracs
-    
+
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{r}\n(n={t})' for r, t in zip(regions, region_totals)])
-    ax.set_ylabel('Fraction of genes')
+    ax.set_xticklabels([f"{r}\n(n={t})" for r, t in zip(regions, region_totals)])
+    ax.set_ylabel("Fraction of genes")
     ax.set_ylim(0, 1.0)
-    ax.set_title('Gene Taxonomy Composition by Region', fontsize=13, fontweight='bold')
-    ax.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0)
+    ax.set_title("Gene Taxonomy Composition by Region", fontsize=13, fontweight="bold")
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
     finalize_axes(ax)
     plt.tight_layout()
-    plt.savefig(BASE / 'eve_gene_category_distribution.png', dpi=300, bbox_inches='tight')
+    plt.savefig(BASE / "eve_gene_category_distribution.png", dpi=300, bbox_inches="tight")
     plt.show()
-    
+
     from IPython.display import FileLink
-    FileLink(str(BASE / 'eve_gene_category_distribution.png'))
+
+    FileLink(str(BASE / "eve_gene_category_distribution.png"))
 
 
 # %% [markdown]
@@ -1805,251 +1873,247 @@ else:
 
 # %%
 if not profiles:
-    print('No EVEs for marker heatmap.')
+    print("No EVEs for marker heatmap.")
 else:
     # ---- Marker Gene Copy Number Heatmap ----
-    from scipy.cluster.hierarchy import linkage, leaves_list
-    from scipy.spatial.distance import pdist
     import matplotlib.colors as mcolors
     from matplotlib.lines import Line2D as _Line2D
-    
+    from scipy.cluster.hierarchy import leaves_list, linkage
+    from scipy.spatial.distance import pdist
+
     # 1. Build copy-number matrix from hallmark_genes
     all_marker_names = set()
     marker_copy = {}
     for eve_id in profiles:
-        counts = Counter(profiles[eve_id].get('hallmark_genes', []))
+        counts = Counter(profiles[eve_id].get("hallmark_genes", []))
         marker_copy[eve_id] = counts
         all_marker_names.update(counts.keys())
-    
+
     marker_names = sorted(all_marker_names)
     marker_df = pd.DataFrame(0, index=list(profiles.keys()), columns=marker_names, dtype=int)
     for eve_id, counts in marker_copy.items():
         for m, c in counts.items():
             marker_df.loc[eve_id, m] = c
-    
-    print(f'Marker matrix: {marker_df.shape[0]} EVEs x {marker_df.shape[1]} markers')
+
+    print(f"Marker matrix: {marker_df.shape[0]} EVEs x {marker_df.shape[1]} markers")
     max_initial_copy = int(marker_df.values.max()) if marker_df.size else 0
-    print(f'Copy number range: 0\u2013{max_initial_copy}')
-    
+    print(f"Copy number range: 0\u2013{max_initial_copy}")
+
     # Drop all-zero columns
     marker_df = marker_df.loc[:, marker_df.sum(axis=0) > 0]
     if marker_df.shape[1] == 0:
-        marker_df['no_marker_hits'] = 0
-    
+        marker_df["no_marker_hits"] = 0
+
     # 2. Hierarchical clustering on ROWS (Jaccard on presence/absence)
     binary = (marker_df > 0).astype(int)
     if binary.shape[0] > 2:
-        row_dist = pdist(binary.values, metric='jaccard')
-        row_link = linkage(row_dist, method='average')
+        row_dist = pdist(binary.values, metric="jaccard")
+        row_link = linkage(row_dist, method="average")
         row_leaves = leaves_list(row_link)
         marker_df = marker_df.iloc[row_leaves]
-    
+
     # 3. Hierarchical clustering on COLUMNS (Jaccard on presence/absence)
     binary = (marker_df > 0).astype(int)
     if binary.shape[1] > 2:
-        col_dist = pdist(binary.T.values, metric='jaccard')
-        col_link = linkage(col_dist, method='average')
+        col_dist = pdist(binary.T.values, metric="jaccard")
+        col_link = linkage(col_dist, method="average")
         col_leaves = leaves_list(col_link)
         marker_df = marker_df.iloc[:, col_leaves]
-    
+
     # 4. Discrete colormap
     max_cn = int(marker_df.values.max())
     _cn_palette = [
-        '#FFFFFF',   # 0 - white
-        '#FFFFB2',   # 1 - pale yellow
-        '#FECC5C',   # 2 - gold
-        '#FD8D3C',   # 3 - orange
-        '#E31A1C',   # 4 - red
-        '#800026',   # 5 - dark maroon
+        "#FFFFFF",  # 0 - white
+        "#FFFFB2",  # 1 - pale yellow
+        "#FECC5C",  # 2 - gold
+        "#FD8D3C",  # 3 - orange
+        "#E31A1C",  # 4 - red
+        "#800026",  # 5 - dark maroon
     ]
     cn_colors = [_cn_palette[min(i, len(_cn_palette) - 1)] for i in range(max_cn + 1)]
     cmap = mcolors.ListedColormap(cn_colors)
     bounds = np.arange(-0.5, max_cn + 1.5, 1)
     norm = mcolors.BoundaryNorm(bounds, cmap.N)
-    
+
     # 5. Cluster palette (cool/blue tones -- distinct from FAMILY_COLORS which are warm)
-    unique_clusters = sorted(set(eve_cluster_map.values()) - {'singleton'})
-    _cluster_colors = ['#4477AA', '#66CCEE', '#AA3377', '#CCBB44', '#228833']
-    cluster_cpal = {cl: _cluster_colors[i % len(_cluster_colors)]
-                    for i, cl in enumerate(unique_clusters)}
-    cluster_cpal['singleton'] = '#E8E8E8'
-    
+    unique_clusters = sorted(set(eve_cluster_map.values()) - {"singleton"})
+    _cluster_colors = ["#4477AA", "#66CCEE", "#AA3377", "#CCBB44", "#228833"]
+    cluster_cpal = {cl: _cluster_colors[i % len(_cluster_colors)] for i, cl in enumerate(unique_clusters)}
+    cluster_cpal["singleton"] = "#E8E8E8"
+
     # 6. Figure layout
     n_rows, n_cols = marker_df.shape
     row_h = 0.20
     fig_h = n_rows * row_h
     fig, axes = plt.subplots(
-        1, 3, figsize=(9, fig_h),
-        gridspec_kw={'width_ratios': [0.5, 0.5, 10], 'wspace': 0.02},
+        1,
+        3,
+        figsize=(9, fig_h),
+        gridspec_kw={"width_ratios": [0.5, 0.5, 10], "wspace": 0.02},
     )
     ax_cl, ax_fam, ax_heat = axes
-    
+
     # Heatmap
-    im = ax_heat.imshow(marker_df.values, aspect='auto', cmap=cmap, norm=norm,
-                        interpolation='nearest')
-    
+    im = ax_heat.imshow(marker_df.values, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+
     # Gridlines (light gray so they show on white cells)
     for r in range(n_rows + 1):
-        ax_heat.axhline(r - 0.5, color='#DDDDDD', linewidth=0.3)
+        ax_heat.axhline(r - 0.5, color="#DDDDDD", linewidth=0.3)
     for c in range(n_cols + 1):
-        ax_heat.axvline(c - 0.5, color='#DDDDDD', linewidth=0.3)
-    
+        ax_heat.axvline(c - 0.5, color="#DDDDDD", linewidth=0.3)
+
     # Annotate cells with copy number >= 2
     for r in range(n_rows):
         for c in range(n_cols):
             val = marker_df.values[r, c]
             if val >= 2:
-                txt_color = 'white' if val >= 4 else '#333333'
-                ax_heat.text(c, r, str(val), ha='center', va='center',
-                            fontsize=6, fontweight='bold', color=txt_color)
-    
+                txt_color = "white" if val >= 4 else "#333333"
+                ax_heat.text(c, r, str(val), ha="center", va="center", fontsize=6, fontweight="bold", color=txt_color)
+
     # Column labels on top
     ax_heat.xaxis.tick_top()
     ax_heat.set_xticks(range(n_cols))
-    ax_heat.set_xticklabels(marker_df.columns, rotation=45, ha='left', fontsize=8)
+    ax_heat.set_xticklabels(marker_df.columns, rotation=45, ha="left", fontsize=8)
     ax_heat.set_yticks([])
-    ax_heat.tick_params(axis='x', top=False, bottom=False)
-    
+    ax_heat.tick_params(axis="x", top=False, bottom=False)
+
     # Short row labels, the same form the cluster print block and ANI network use
     short_labels = [short_eve_label(eid) for eid in marker_df.index]
 
     # ANI Cluster annotation strip
     for i, eid in enumerate(marker_df.index):
-        cl = eve_cluster_map.get(eid, 'singleton')
-        ax_cl.add_patch(plt.Rectangle((0, i - 0.5), 1, 1,
-                        facecolor=cluster_cpal.get(cl, '#E8E8E8'), edgecolor='none'))
+        cl = eve_cluster_map.get(eid, "singleton")
+        ax_cl.add_patch(plt.Rectangle((0, i - 0.5), 1, 1, facecolor=cluster_cpal.get(cl, "#E8E8E8"), edgecolor="none"))
     ax_cl.set_xlim(0, 1)
     ax_cl.set_ylim(-0.5, n_rows - 0.5)
     ax_cl.set_yticks(range(n_rows))
     ax_cl.set_yticklabels(short_labels, fontsize=6)
     ax_cl.set_xticks([0.5])
-    ax_cl.set_xticklabels(['ANI Cluster'], rotation=90, fontsize=7, ha='center')
+    ax_cl.set_xticklabels(["ANI Cluster"], rotation=90, fontsize=7, ha="center")
     ax_cl.xaxis.tick_top()
-    ax_cl.tick_params(axis='x', top=False)
+    ax_cl.tick_params(axis="x", top=False)
     ax_cl.invert_yaxis()
-    
+
     # Category annotation strip
     for i, eid in enumerate(marker_df.index):
         fam = canon_family(profiles[eid])
-        ax_fam.add_patch(plt.Rectangle((0, i - 0.5), 1, 1,
-                        facecolor=FAMILY_COLORS.get(fam, '#BBBBBB'), edgecolor='none'))
+        ax_fam.add_patch(
+            plt.Rectangle((0, i - 0.5), 1, 1, facecolor=FAMILY_COLORS.get(fam, "#BBBBBB"), edgecolor="none")
+        )
     ax_fam.set_xlim(0, 1)
     ax_fam.set_ylim(-0.5, n_rows - 0.5)
     ax_fam.set_yticks([])
     ax_fam.set_xticks([0.5])
-    ax_fam.set_xticklabels(['Category'], rotation=90, fontsize=7, ha='center')
+    ax_fam.set_xticklabels(["Category"], rotation=90, fontsize=7, ha="center")
     ax_fam.xaxis.tick_top()
-    ax_fam.tick_params(axis='x', top=False)
+    ax_fam.tick_params(axis="x", top=False)
     ax_fam.invert_yaxis()
-    
+
     # Discrete colorbar
     cbar = fig.colorbar(im, ax=ax_heat, shrink=0.15, aspect=6, pad=0.015)
     cbar.set_ticks(range(max_cn + 1))
     cbar.set_ticklabels([str(i) for i in range(max_cn + 1)])
-    cbar.set_label('Copy number', fontsize=9)
+    cbar.set_label("Copy number", fontsize=9)
     cbar.outline.set_visible(False)
-    
+
     # Remove spines
     for a in axes:
         for sp in a.spines.values():
             sp.set_visible(False)
-    
+
     # Title (tight to the top of the plot)
     ax_heat.set_title(
-        f'Marker Gene Copy Number per EVE (n={n_rows})',
-        fontsize=13, fontweight='bold', pad=40,
+        f"Marker Gene Copy Number per EVE (n={n_rows})",
+        fontsize=13,
+        fontweight="bold",
+        pad=40,
     )
-    
+
     # Legend (tight below the plot)
     fam_present = sorted(set(canon_family(profiles[e]) for e in marker_df.index))
     legend_handles = []
     for fam in fam_present:
-        legend_handles.append(mpatches.Patch(
-            facecolor=FAMILY_COLORS.get(fam, '#BBBBBB'), label=fam))
-    legend_handles.append(_Line2D([0], [0], color='none', label=''))  # spacer
+        legend_handles.append(mpatches.Patch(facecolor=FAMILY_COLORS.get(fam, "#BBBBBB"), label=fam))
+    legend_handles.append(_Line2D([0], [0], color="none", label=""))  # spacer
     for cl in unique_clusters:
-        short = cl.replace('Cluster_', 'C')
+        short = cl.replace("Cluster_", "C")
         n_members = sum(1 for v in eve_cluster_map.values() if v == cl)
-        legend_handles.append(mpatches.Patch(
-            facecolor=cluster_cpal[cl], label=f'{short} (n={n_members})'))
-    legend_handles.append(mpatches.Patch(
-        facecolor='#E8E8E8', edgecolor='#CCCCCC', label='Singleton'))
-    
+        legend_handles.append(mpatches.Patch(facecolor=cluster_cpal[cl], label=f"{short} (n={n_members})"))
+    legend_handles.append(mpatches.Patch(facecolor="#E8E8E8", edgecolor="#CCCCCC", label="Singleton"))
+
     fig.legend(
-        handles=legend_handles, loc='lower center', ncol=len(legend_handles),
-        fontsize=7, frameon=False, bbox_to_anchor=(0.55, -0.005),
+        handles=legend_handles,
+        loc="lower center",
+        ncol=len(legend_handles),
+        fontsize=7,
+        frameon=False,
+        bbox_to_anchor=(0.55, -0.005),
     )
-    
+
     plt.subplots_adjust(top=0.97, bottom=0.03)
-    plt.savefig(BASE / 'eve_marker_heatmap.png', dpi=300, bbox_inches='tight',
-                pad_inches=0.15)
+    plt.savefig(BASE / "eve_marker_heatmap.png", dpi=300, bbox_inches="tight", pad_inches=0.15)
     plt.show()
-    
+
     from IPython.display import FileLink
-    FileLink(str(BASE / 'eve_marker_heatmap.png'))
-    
+
+    FileLink(str(BASE / "eve_marker_heatmap.png"))
+
 
 # %%
 if not profiles:
-    print('No EVEs for marker summary.')
+    print("No EVEs for marker summary.")
 else:
     # ---- Marker composition per canonical EVE ----
     marker_counts = Counter()
     family_counts = Counter()
     ipr_keyword_counts = Counter()
-    
+
     for eve_id, profile in profiles.items():
-        for marker in profile.get('hallmark_genes', []):
+        for marker in profile.get("hallmark_genes", []):
             marker_counts[marker] += 1
-        for fam in profile.get('marker_family_hits', []):
+        for fam in profile.get("marker_family_hits", []):
             family_counts[fam] += 1
-        for kw in profile.get('interproscan_keyword_hits', []):
-            short = kw[:60] + '...' if len(kw) > 60 else kw
+        for kw in profile.get("interproscan_keyword_hits", []):
+            short = kw[:60] + "..." if len(kw) > 60 else kw
             ipr_keyword_counts[short] += 1
-    
-    print('Top 15 hallmark markers:')
+
+    print("Top 15 hallmark markers:")
     for marker, n in marker_counts.most_common(15):
-        print(f'  {marker:<30s} {n:>3d} EVEs')
-    
-    print(f'\nMarker family distribution:')
+        print(f"  {marker:<30s} {n:>3d} EVEs")
+
+    print("\nMarker family distribution:")
     for fam, n in family_counts.most_common():
-        print(f'  {fam:<15s} {n:>3d} EVEs')
-    
+        print(f"  {fam:<15s} {n:>3d} EVEs")
+
     # MCP support and fold-classification summary
     if mcp_classification_map:
-        print(f'\nMCP candidate classifier records: {len(mcp_classification_map)}')
-        support_counts = Counter(
-            record.get('mcp_support') or 'candidate'
-            for record in mcp_classification_map.values()
-        )
-        print('  MCP support:')
+        print(f"\nMCP candidate classifier records: {len(mcp_classification_map)}")
+        support_counts = Counter(record.get("mcp_support") or "candidate" for record in mcp_classification_map.values())
+        print("  MCP support:")
         for support, n in support_counts.most_common():
-            print(f'    {support}: {n}')
-        fold_counts = Counter(
-            record.get('type') or 'UNKNOWN'
-            for record in mcp_classification_map.values()
-        )
-        print('  Fold classification:')
+            print(f"    {support}: {n}")
+        fold_counts = Counter(record.get("type") or "UNKNOWN" for record in mcp_classification_map.values())
+        print("  Fold classification:")
         for fold_type, n in fold_counts.most_common():
-            print(f'    {fold_type}: {n}')
+            print(f"    {fold_type}: {n}")
     else:
-        print('\nNo MCP candidate classifier records in this run.')
-    
+        print("\nNo MCP candidate classifier records in this run.")
+
     # Functional group color mapping for InterProScan keywords
     def keyword_color(kw):
         kw_lower = kw.lower()
-        if any(w in kw_lower for w in ['capsid', 'jelly', 'coat']):
-            return '#CC3311'    # red -- capsid / structural
-        if any(w in kw_lower for w in ['polymerase', 'replicase', 'transcriptas']):
-            return '#0077BB'    # blue -- replication
-        if any(w in kw_lower for w in ['protease', 'peptidase', 'cleavage']):
-            return '#EE7733'    # orange -- protease
-        if any(w in kw_lower for w in ['helicase', 'atpase', 'topoisomerase']):
-            return '#009988'    # teal -- helicase / NTPase
-        if any(w in kw_lower for w in ['kinase', 'phospho', 'ligase', 'transferase']):
-            return '#AA3377'    # wine -- enzyme
-        return '#888888'        # gray -- other
-    
+        if any(w in kw_lower for w in ["capsid", "jelly", "coat"]):
+            return "#CC3311"  # red -- capsid / structural
+        if any(w in kw_lower for w in ["polymerase", "replicase", "transcriptas"]):
+            return "#0077BB"  # blue -- replication
+        if any(w in kw_lower for w in ["protease", "peptidase", "cleavage"]):
+            return "#EE7733"  # orange -- protease
+        if any(w in kw_lower for w in ["helicase", "atpase", "topoisomerase"]):
+            return "#009988"  # teal -- helicase / NTPase
+        if any(w in kw_lower for w in ["kinase", "phospho", "ligase", "transferase"]):
+            return "#AA3377"  # wine -- enzyme
+        return "#888888"  # gray -- other
+
     n_total = len(profiles)
     top_kw = ipr_keyword_counts.most_common(15)
     if top_kw:
@@ -2057,39 +2121,45 @@ else:
         labels, vals = zip(*top_kw)
         y_pos = np.arange(len(labels))
         bar_colors = [keyword_color(l) for l in labels]
-    
-        bars = ax.barh(y_pos, vals, color=bar_colors, edgecolor='white', linewidth=0.5)
+
+        bars = ax.barh(y_pos, vals, color=bar_colors, edgecolor="white", linewidth=0.5)
         ax.set_yticks(y_pos)
         ax.set_yticklabels(labels, fontsize=8)
         ax.invert_yaxis()
-    
+
         # Percentage annotations
         for bar, val in zip(bars, vals):
             pct = safe_ratio(val, n_total) * 100
-            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                    f'{val} ({pct:.0f}%)', va='center', fontsize=8, color='#444444')
-    
-        ax.set_xlabel(f'Number of EVEs with keyword hit (n={n_total} total)')
-        ax.set_title('Top InterProScan Keyword Hits Across EVEs')
+            ax.text(
+                bar.get_width() + 0.5,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val} ({pct:.0f}%)",
+                va="center",
+                fontsize=8,
+                color="#444444",
+            )
+
+        ax.set_xlabel(f"Number of EVEs with keyword hit (n={n_total} total)")
+        ax.set_title("Top InterProScan Keyword Hits Across EVEs")
         finalize_axes(ax)
-    
+
         # Functional group legend
         func_legend = [
-            mpatches.Patch(facecolor='#CC3311', label='Capsid / structural'),
-            mpatches.Patch(facecolor='#0077BB', label='Replication'),
-            mpatches.Patch(facecolor='#EE7733', label='Protease'),
-            mpatches.Patch(facecolor='#009988', label='Helicase / NTPase'),
-            mpatches.Patch(facecolor='#AA3377', label='Enzyme'),
-            mpatches.Patch(facecolor='#888888', label='Other'),
+            mpatches.Patch(facecolor="#CC3311", label="Capsid / structural"),
+            mpatches.Patch(facecolor="#0077BB", label="Replication"),
+            mpatches.Patch(facecolor="#EE7733", label="Protease"),
+            mpatches.Patch(facecolor="#009988", label="Helicase / NTPase"),
+            mpatches.Patch(facecolor="#AA3377", label="Enzyme"),
+            mpatches.Patch(facecolor="#888888", label="Other"),
         ]
-        ax.legend(handles=func_legend, loc='lower right', fontsize=8, title='Functional group',
-                  title_fontsize=9)
-    
+        ax.legend(handles=func_legend, loc="lower right", fontsize=8, title="Functional group", title_fontsize=9)
+
         plt.tight_layout()
-        plt.savefig(BASE / 'eve_interproscan_keywords.png', dpi=300)
+        plt.savefig(BASE / "eve_interproscan_keywords.png", dpi=300)
         plt.show()
     else:
-        print('No InterProScan keyword hits found.')
-    
+        print("No InterProScan keyword hits found.")
+
     from IPython.display import FileLink
-    FileLink(str(BASE / 'eve_interproscan_keywords.png'))
+
+    FileLink(str(BASE / "eve_interproscan_keywords.png"))

@@ -2,21 +2,15 @@ from __future__ import annotations
 
 import json
 import runpy
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from virosync.output_contract import coordinate_contract_metadata
 
-
-CHECKER_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "ci"
-    / "check_coordinate_outputs.py"
-)
+CHECKER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "check_coordinate_outputs.py"
 CHECKER = runpy.run_path(str(CHECKER_PATH))
 check_coordinate_output_roots = CHECKER["check_coordinate_output_roots"]
 main = CHECKER["main"]
@@ -55,9 +49,7 @@ def test_checker_accepts_current_nested_completion_and_summary_metadata(
             result_dir / "phase3_synthesis" / "virosync_summary.json",
             {"statistics": {}, **contract},
         )
-        predictions = (
-            result_dir / "phase3_synthesis" / "virosync_predictions.bed"
-        )
+        predictions = result_dir / "phase3_synthesis" / "virosync_predictions.bed"
         predictions.write_text("")
 
     assert check_coordinate_output_roots([tmp_path]) == []
@@ -154,9 +146,7 @@ def test_checker_rejects_corrupt_or_absent_metadata(tmp_path: Path) -> None:
 
     errors = check_coordinate_output_roots([empty_root, corrupt_root])
 
-    assert any(
-        "no completion or summary metadata" in error for error in errors
-    )
+    assert any("no completion or summary metadata" in error for error in errors)
     assert any("invalid JSON" in error for error in errors)
 
 
@@ -188,10 +178,7 @@ def test_checker_rejects_old_output_subtree_beside_current_result(
 
     errors = check_coordinate_output_roots([tmp_path])
 
-    assert any(
-        str(old_output) in error and "completion metadata" in error
-        for error in errors
-    )
+    assert any(str(old_output) in error and "completion metadata" in error for error in errors)
 
 
 def test_checker_requires_summary_for_normal_coordinate_outputs(

@@ -38,16 +38,16 @@ class _IterableIds:
 def test_boundary_query_ids_are_indexed_for_proteome_scans(tmp_path) -> None:
     proteome = tmp_path / "proteome.faa"
     extracted = tmp_path / "query.faa"
-    proteome.write_text(
-        ">keep # 1 # 9 # 1 # ID=1_1\nMKK\n"
-        ">drop # 10 # 18 # 1 # ID=1_2\nMNN\n"
-    )
+    proteome.write_text(">keep # 1 # 9 # 1 # ID=1_1\nMKK\n>drop # 10 # 18 # 1 # ID=1_2\nMNN\n")
 
-    assert extract_sequences(
-        proteome,
-        _IterableIds(["keep"]),
-        extracted,
-    ) == 1
+    assert (
+        extract_sequences(
+            proteome,
+            _IterableIds(["keep"]),
+            extracted,
+        )
+        == 1
+    )
     assert extracted.read_text() == ">keep\nMKK\n"
 
     taxonomy = classify_all_porfs(
@@ -68,10 +68,7 @@ def test_flanks_follow_refined_boundary_after_seed_contraction() -> None:
         pORF("new-downstream", "ctg", 400, 490),
         pORF("old-downstream", "ctg", 500, 590),
     ]
-    taxonomy = {
-        porf.id: _taxonomy(porf.id, porf.start, porf.end)
-        for porf in porfs
-    }
+    taxonomy = {porf.id: _taxonomy(porf.id, porf.start, porf.end) for porf in porfs}
     original_seed_mapping = SeedGeneMapping(
         seed_id="seed",
         scaffold="ctg",
@@ -138,11 +135,7 @@ def test_flanks_are_empty_without_final_boundary_or_seed_mapping() -> None:
 
 
 def test_resolve_org_id_normalizes_legacy_vardna_namespace() -> None:
-    lookup = {
-        "PHAGE__GCA-000906975-1": (
-            "PHAGE|Varidnaviria|Bamfordvirae|Preplasmiviricota"
-        )
-    }
+    lookup = {"PHAGE__GCA-000906975-1": ("PHAGE|Varidnaviria|Bamfordvirae|Preplasmiviricota")}
 
     resolved = resolve_org_id(
         "PHAGE__VARDNA__GCA-000906975-1_23|protein",

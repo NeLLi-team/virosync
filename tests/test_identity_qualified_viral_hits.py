@@ -115,10 +115,7 @@ def test_taxonomy_expansion_viral_positive_uses_pident_threshold() -> None:
 
 def test_parse_diamond_top10_preserves_percent_identity(tmp_path: Path) -> None:
     diamond_tsv = tmp_path / "hits.tsv"
-    diamond_tsv.write_text(
-        "gene1\tEUK__host|p1\t1e-50\t200\t91.5\t98\n"
-        "gene1\tCRESS__rep|p2\t1e-20\t120\t35.2\t80\n"
-    )
+    diamond_tsv.write_text("gene1\tEUK__host|p1\t1e-50\t200\t91.5\t98\ngene1\tCRESS__rep|p2\t1e-20\t120\t35.2\t80\n")
 
     hits = parse_diamond_top10(diamond_tsv)
 

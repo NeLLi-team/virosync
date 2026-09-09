@@ -1,5 +1,4 @@
-"""
-Evidence Correlation Graph for EVE Verification.
+"""Evidence Correlation Graph for EVE Verification.
 
 Builds a graph representation of co-occurring evidence types
 within predicted EVE regions and calculates a Coherence Score
@@ -13,7 +12,6 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -21,6 +19,7 @@ from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
 try:
     import networkx as nx
+
     HAS_NETWORKX = True
 except ImportError:
     HAS_NETWORKX = False
@@ -89,8 +88,7 @@ class WindowEvidence:
 
 @dataclass
 class EvidenceProfile:
-    """
-    Complete evidence profile for an EVE candidate.
+    """Complete evidence profile for an EVE candidate.
 
     Contains window-by-window evidence and aggregate metrics.
     """
@@ -124,20 +122,14 @@ class EvidenceProfile:
         for window in self.windows:
             for etype in window.evidence_types:
                 counts[etype] = counts.get(etype, 0) + 1
-        self.evidence_counts = dict(
-            sorted(counts.items(), key=lambda item: item[0].value)
-        )
+        self.evidence_counts = dict(sorted(counts.items(), key=lambda item: item[0].value))
 
         # Calculate coverage (fraction of windows with each evidence)
         n_windows = len(self.windows)
-        self.evidence_coverage = {
-            etype: count / n_windows for etype, count in self.evidence_counts.items()
-        }
+        self.evidence_coverage = {etype: count / n_windows for etype, count in self.evidence_counts.items()}
 
         # Hallmark diversity
-        hallmark_types = [
-            e for e in self.evidence_counts.keys() if e.value.startswith("hallmark_")
-        ]
+        hallmark_types = [e for e in self.evidence_counts.keys() if e.value.startswith("hallmark_")]
         self.hallmark_diversity = len(hallmark_types)
 
         # Virus-specific markers
@@ -147,19 +139,14 @@ class EvidenceProfile:
             EvidenceType.HALLMARK_D5,
             EvidenceType.HALLMARK_VLTF3,
         }
-        self.has_virus_specific_marker = bool(
-            set(self.evidence_counts.keys()) & virus_specific
-        )
+        self.has_virus_specific_marker = bool(set(self.evidence_counts.keys()) & virus_specific)
 
         # Multi-evidence windows
-        self.multi_evidence_windows = sum(
-            1 for w in self.windows if w.evidence_count >= 2
-        )
+        self.multi_evidence_windows = sum(1 for w in self.windows if w.evidence_count >= 2)
 
 
 class EvidenceCorrelationGraph:
-    """
-    Graph representation of evidence co-occurrence patterns.
+    """Graph representation of evidence co-occurrence patterns.
 
     Nodes represent evidence types, edges represent co-occurrence
     within the same or adjacent windows. Edge weights encode
@@ -179,8 +166,7 @@ class EvidenceCorrelationGraph:
         profile: EvidenceProfile,
         adjacency_distance: int = 1,
     ) -> None:
-        """
-        Build graph from evidence profile.
+        """Build graph from evidence profile.
 
         Args:
             profile: EvidenceProfile with window-level evidence
@@ -213,11 +199,7 @@ class EvidenceCorrelationGraph:
 
         for i, window in enumerate(profile.windows):
             # Evidence in this window
-            window_evidence = [
-                evidence_list.index(e)
-                for e in window.evidence_types
-                if e in evidence_list
-            ]
+            window_evidence = [evidence_list.index(e) for e in window.evidence_types if e in evidence_list]
 
             # Co-occurrence within window
             for e1 in window_evidence:
@@ -228,9 +210,7 @@ class EvidenceCorrelationGraph:
             for d in range(1, adjacency_distance + 1):
                 if i + d < n_windows:
                     adj_evidence = [
-                        evidence_list.index(e)
-                        for e in profile.windows[i + d].evidence_types
-                        if e in evidence_list
+                        evidence_list.index(e) for e in profile.windows[i + d].evidence_types if e in evidence_list
                     ]
                     for e1 in window_evidence:
                         for e2 in adj_evidence:
@@ -253,8 +233,7 @@ class EvidenceCorrelationGraph:
                     )
 
     def compute_coherence_score(self) -> float:
-        """
-        Compute Coherence Score measuring evidence consistency.
+        """Compute Coherence Score measuring evidence consistency.
 
         The score considers:
         1. Evidence diversity (more types = higher)
@@ -345,10 +324,7 @@ class EvidenceCorrelationGraph:
         if self.graph.number_of_edges() == 0:
             return []
 
-        edges = [
-            (u, v, d.get("normalized_weight", 0))
-            for u, v, d in self.graph.edges(data=True)
-        ]
+        edges = [(u, v, d.get("normalized_weight", 0)) for u, v, d in self.graph.edges(data=True)]
         # Total key: weight ties are broken by node names so the truncation
         # below always keeps the same pairs.
         edges.sort(key=lambda x: (-x[2], x[0], x[1]))
@@ -357,8 +333,7 @@ class EvidenceCorrelationGraph:
 
 @dataclass
 class CoherenceAnalysis:
-    """
-    Complete coherence analysis for an EVE candidate.
+    """Complete coherence analysis for an EVE candidate.
 
     Combines evidence profile with graph-based coherence scoring.
     """
@@ -417,12 +392,8 @@ class CoherenceAnalysis:
                 "hallmark_diversity": self.profile.hallmark_diversity,
                 "has_virus_specific_marker": self.profile.has_virus_specific_marker,
                 "multi_evidence_windows": self.profile.multi_evidence_windows,
-                "evidence_counts": {
-                    k.value: v for k, v in self.profile.evidence_counts.items()
-                },
-                "evidence_coverage": {
-                    k.value: v for k, v in self.profile.evidence_coverage.items()
-                },
+                "evidence_counts": {k.value: v for k, v in self.profile.evidence_counts.items()},
+                "evidence_coverage": {k.value: v for k, v in self.profile.evidence_coverage.items()},
             },
             "graph_summary": self.graph.get_evidence_summary() if self.graph else {},
             "windows": [
@@ -430,9 +401,7 @@ class CoherenceAnalysis:
                     "start": w.start,
                     "end": w.end,
                     "evidence_types": sorted(e.value for e in w.evidence_types),
-                    "evidence_scores": {
-                        k.value: v for k, v in w.evidence_scores.items()
-                    },
+                    "evidence_scores": {k.value: v for k, v in w.evidence_scores.items()},
                 }
                 for w in self.profile.windows
             ],
@@ -446,14 +415,13 @@ def build_evidence_profile(
     end: int,
     window_features: list,
     crf_states: list[int],
-    crf_posteriors: Optional[np.ndarray],
-    hallmark_hits: Optional[list] = None,
-    novelty_scores: Optional[dict] = None,
-    structural_results: Optional[list] = None,
+    crf_posteriors: np.ndarray | None,
+    hallmark_hits: list | None = None,
+    novelty_scores: dict | None = None,
+    structural_results: list | None = None,
     window_size: int = 250,
 ) -> EvidenceProfile:
-    """
-    Build evidence profile from pipeline outputs.
+    """Build evidence profile from pipeline outputs.
 
     Args:
         eve_id: EVE identifier
@@ -578,13 +546,12 @@ def analyze_eve_coherence(
     end: int,
     window_features: list,
     crf_states: list[int],
-    crf_posteriors: Optional[np.ndarray] = None,
-    hallmark_hits: Optional[list] = None,
-    novelty_scores: Optional[dict] = None,
-    structural_results: Optional[list] = None,
+    crf_posteriors: np.ndarray | None = None,
+    hallmark_hits: list | None = None,
+    novelty_scores: dict | None = None,
+    structural_results: list | None = None,
 ) -> CoherenceAnalysis:
-    """
-    Perform complete coherence analysis for an EVE candidate.
+    """Perform complete coherence analysis for an EVE candidate.
 
     Args:
         eve_id: EVE identifier
@@ -624,10 +591,7 @@ def analyze_eve_coherence(
     )
     analysis.compute_coherence()
 
-    logger.debug(
-        f"EVE {eve_id}: coherence={analysis.coherence_score:.3f}, "
-        f"level={analysis.confidence_level}"
-    )
+    logger.debug(f"EVE {eve_id}: coherence={analysis.coherence_score:.3f}, level={analysis.confidence_level}")
 
     return analysis
 
@@ -637,8 +601,7 @@ def write_evidence_graph_json(
     output_path: "Path",
     genome_id: str = "",
 ) -> None:
-    """
-    Write evidence graph analyses to JSON file.
+    """Write evidence graph analyses to JSON file.
 
     Args:
         analyses: List of CoherenceAnalysis objects from Phase 3
@@ -659,10 +622,7 @@ def write_evidence_graph_json(
         "eves": [analysis.to_dict() for analysis in analyses],
         "summary": {
             "total_coherence_scores": [a.coherence_score for a in analyses],
-            "mean_coherence": (
-                sum(a.coherence_score for a in analyses) / len(analyses)
-                if analyses else 0.0
-            ),
+            "mean_coherence": (sum(a.coherence_score for a in analyses) / len(analyses) if analyses else 0.0),
             "confidence_levels": {
                 "high": sum(1 for a in analyses if a.confidence_level == "high"),
                 "medium": sum(1 for a in analyses if a.confidence_level == "medium"),

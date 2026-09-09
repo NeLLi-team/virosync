@@ -11,6 +11,19 @@ from types import SimpleNamespace
 import pytest
 from Bio.Seq import Seq
 
+from virosync.features.compositional import (
+    BackgroundModel,
+    calculate_gc_deviation,
+    calculate_kfd,
+)
+from virosync.orchestration._flows.single_genome.phase2 import (
+    _recalculate_boundary_composition,
+    _seeds_to_refined_boundaries,
+)
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _build_scaffold_start_index,
+    _query_boundary_coordinate_records,
+)
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
@@ -24,20 +37,6 @@ from virosync.pipeline.phase2.boundary_refiner import (
     extend_seeds_by_genes,
     merge_adjacent_viral_boundaries,
 )
-from virosync.orchestration._flows.single_genome.phase3 import (
-    _build_scaffold_start_index,
-    _query_boundary_coordinate_records,
-)
-from virosync.orchestration._flows.single_genome.phase2 import (
-    _recalculate_boundary_composition,
-    _seeds_to_refined_boundaries,
-)
-from virosync.features.compositional import (
-    BackgroundModel,
-    calculate_gc_deviation,
-    calculate_kfd,
-)
-
 
 CODING_DNA = "ATG" + ("GCT" * 143)
 EXPECTED_PROTEIN = "M" + ("A" * 143)
@@ -70,16 +69,12 @@ def test_phase3_boundary_indexes_match_ordered_half_open_scans() -> None:
         SimpleNamespace(scaffold="S1", start=18, end=23, name="marker_second"),
     ]
     boundary = SimpleNamespace(scaffold="S1", start=20, end=30)
-    taxonomy_map = {
-        record.name: record for record in taxonomy_records
-    }
+    taxonomy_map = {record.name: record for record in taxonomy_records}
     expected_taxonomy = filter_taxonomy_to_boundary(taxonomy_map, boundary)
     expected_markers = [
         marker
         for marker in markers
-        if marker.scaffold == boundary.scaffold
-        and marker.start < boundary.end
-        and marker.end > boundary.start
+        if marker.scaffold == boundary.scaffold and marker.start < boundary.end and marker.end > boundary.start
     ]
 
     observed_taxonomy, observed_markers = _query_boundary_coordinate_records(
@@ -201,11 +196,7 @@ def test_structurally_malformed_prodigal_header_is_rejected(
 
 
 def _is_parser_call(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "parse_prodigal_header"
-    )
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "parse_prodigal_header"
 
 
 def _contains_parser_call(node: ast.AST) -> bool:
@@ -216,40 +207,22 @@ def _coordinate_names_from_parser(function: ast.AST) -> set[str]:
     parsed_names: set[str] = set()
     coordinate_names: set[str] = set()
     for node in ast.walk(function):
-        if not isinstance(node, ast.Assign) or not _contains_parser_call(
-            node.value
-        ):
+        if not isinstance(node, ast.Assign) or not _contains_parser_call(node.value):
             continue
         for target in node.targets:
             if isinstance(target, ast.Name):
                 parsed_names.add(target.id)
-            elif (
-                isinstance(target, (ast.Tuple, ast.List))
-                and len(target.elts) >= 3
-            ):
-                coordinate_names.update(
-                    item.id
-                    for item in target.elts[1:3]
-                    if isinstance(item, ast.Name)
-                )
+            elif isinstance(target, (ast.Tuple, ast.List)) and len(target.elts) >= 3:
+                coordinate_names.update(item.id for item in target.elts[1:3] if isinstance(item, ast.Name))
 
     for node in ast.walk(function):
-        if not isinstance(node, ast.Assign) or not isinstance(
-            node.value, ast.Name
-        ):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Name):
             continue
         if node.value.id not in parsed_names:
             continue
         for target in node.targets:
-            if (
-                isinstance(target, (ast.Tuple, ast.List))
-                and len(target.elts) >= 3
-            ):
-                coordinate_names.update(
-                    item.id
-                    for item in target.elts[1:3]
-                    if isinstance(item, ast.Name)
-                )
+            if isinstance(target, (ast.Tuple, ast.List)) and len(target.elts) >= 3:
+                coordinate_names.update(item.id for item in target.elts[1:3] if isinstance(item, ast.Name))
     return coordinate_names
 
 
@@ -290,9 +263,7 @@ def _direct_consumer_inventory() -> tuple[
         inventory[relative] = count
         lines: list[int] = []
         for function in ast.walk(tree):
-            if not isinstance(
-                function, (ast.FunctionDef, ast.AsyncFunctionDef)
-            ):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if not any(_is_parser_call(node) for node in ast.walk(function)):
                 continue
@@ -404,9 +375,7 @@ def test_one_base_internal_bed_gff_fasta_round_trip() -> None:
     bed_interval = (int(bed[1]), int(bed[2]))
     gff_native = (int(gff[3]), int(gff[4]))
     gff_internal = (gff_native[0] - 1, gff_native[1])
-    attrs = dict(
-        pair.split("=", 1) for pair in gff[8].split(";") if "=" in pair
-    )
+    attrs = dict(pair.split("=", 1) for pair in gff[8].split(";") if "=" in pair)
     extracted = genome[start:end]
 
     # This is ViroSync's normalized output contract. Phase 0 genes.gff remains
@@ -616,17 +585,22 @@ def test_taxonomy_query_covers_fixed_flank_envelope_and_excludes_controls() -> N
     ]
     query = collect_query_proteins(
         [seed],
-        {"s": [pORF(id=name, scaffold="s", start=start, end=end, strand="+")
-               for name, start, end in spans]},
+        {"s": [pORF(id=name, scaffold="s", start=start, end=end, strand="+") for name, start, end in spans]},
         BoundaryDiamondConfig(
-            flank_genes=1, control_sample_size=100,
-            control_min_distance=0, control_region_genes=1,
+            flank_genes=1,
+            control_sample_size=100,
+            control_min_distance=0,
+            control_region_genes=1,
         ),
     )
 
     assert query.eve_porf_ids["seed"] == ["outer_seed", "seed_gene"]
     assert set(query.boundary_porf_ids["seed"]) == {
-        "left_overlap", "upstream", "interior_hole", "downstream", "right_overlap",
+        "left_overlap",
+        "upstream",
+        "interior_hole",
+        "downstream",
+        "right_overlap",
     }
     assert len(query.boundary_porf_ids["seed"]) == 5
     assert set(query.control_porf_ids) == {"left_touch", "right_touch", "outside"}
@@ -702,11 +676,7 @@ def test_merge_requires_taxonomy_for_all_100_gene_interval_queries() -> None:
     )
 
     assert len(observed) == 2
-    assert sum(
-        1
-        for porf in proteome
-        if 1000 <= porf.start < 8000 and porf.id not in taxonomy_map
-    ) == 30
+    assert sum(1 for porf in proteome if 1000 <= porf.start < 8000 and porf.id not in taxonomy_map) == 30
 
 
 def test_fully_searched_100_gene_interval_still_merges() -> None:
@@ -739,9 +709,7 @@ def test_fully_searched_100_gene_interval_still_merges() -> None:
         proteome_index={"scaffold": proteome},
     )
 
-    assert [(boundary.start, boundary.end) for boundary in observed] == [
-        (1000, 8000)
-    ]
+    assert [(boundary.start, boundary.end) for boundary in observed] == [(1000, 8000)]
 
 
 def test_final_merged_interval_composition_matches_direct_calculation(
@@ -776,12 +744,8 @@ def test_final_merged_interval_composition_matches_direct_calculation(
 
     background = BackgroundModel.from_sequence(sequence, k=4)
     final_sequence = sequence[50:500]
-    assert merged[0].gc_deviation == pytest.approx(
-        calculate_gc_deviation(final_sequence, background.gc_content)
-    )
-    assert merged[0].max_kfd == pytest.approx(
-        calculate_kfd(final_sequence, background.kmer_freqs, k=4)
-    )
+    assert merged[0].gc_deviation == pytest.approx(calculate_gc_deviation(final_sequence, background.gc_content))
+    assert merged[0].max_kfd == pytest.approx(calculate_kfd(final_sequence, background.kmer_freqs, k=4))
     assert merged[0].gc_deviation != 0.9
 
 

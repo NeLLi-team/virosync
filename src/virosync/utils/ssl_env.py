@@ -1,12 +1,10 @@
-"""
-Helpers for SSL-related environment variables.
-"""
+"""Helpers for SSL-related environment variables."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import Mapping, MutableMapping
 
 SSL_ENV_KEYS = ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
 

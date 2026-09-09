@@ -13,8 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-
-
 def release_gpu_memory() -> None:
     """Release GPU memory held by cached models and tensors.
 
@@ -24,6 +22,7 @@ def release_gpu_memory() -> None:
     """
     try:
         from virosync.pipeline.phase3.tmvec_predictor import release_tmvec_predictor
+
         release_tmvec_predictor()
     except Exception as exc:
         logger.debug("TMVec predictor release skipped: %s", exc)
@@ -32,13 +31,13 @@ def release_gpu_memory() -> None:
 
     try:
         import torch
+
         if torch.cuda.is_available():
             before = torch.cuda.memory_allocated()
             torch.cuda.empty_cache()
             after = torch.cuda.memory_allocated()
-            freed_mib = (before - after) / (1024 ** 2)
+            freed_mib = (before - after) / (1024**2)
             if freed_mib > 1:
                 logger.info("Released %.0f MiB GPU memory", freed_mib)
     except ImportError:
         pass
-

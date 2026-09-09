@@ -12,7 +12,7 @@ import yaml
 
 from virosync.ablation import ABLATION_CONTRACT_SHA256, AblationID
 from virosync.config import ApplicationConfig, ConfigError, PipelineConfig
-from virosync.config.pipeline_config import FIELD_SPECS, _RETIRED_PIPELINE_KEYS
+from virosync.config.pipeline_config import _RETIRED_PIPELINE_KEYS, FIELD_SPECS
 from virosync.orchestration._flows.single_genome import (
     orchestrator as orchestrator_module,
 )
@@ -20,7 +20,6 @@ from virosync.orchestration._flows.single_genome.orchestrator import (
     _single_genome_flow_impl,
     single_genome_flow,
 )
-
 
 _RETIRED_FLAT_KEYS = {
     "tier1_model_path",
@@ -51,16 +50,13 @@ def test_pipeline_default_round_trip_covers_every_flow_field() -> None:
     assert kwargs["device"] == "cpu"
     assert kwargs["marker_validation_top_k"] == 10
     assert kwargs["frameshift_screening_enabled"] is False
-    enabled = PipelineConfig.from_dict(
-        {"phase1": {"frameshift_screening_enabled": True}}
-    )
+    enabled = PipelineConfig.from_dict({"phase1": {"frameshift_screening_enabled": True}})
     assert enabled.phase1.frameshift_screening_enabled is True
     assert "max_concurrent_genomes" not in kwargs
     assert "use_structural_homology" not in kwargs
 
 
-def test_every_emitted_pipeline_key_has_exactly_one_runner_parameter() -> None:
-    emitted = {spec.flat for spec in FIELD_SPECS if spec.emit}
+def test_internal_runner_receives_one_resolved_pipeline_config() -> None:
     runner_parameters = set(inspect.signature(_single_genome_flow_impl).parameters) - {
         "genome_path",
         "output_dir",
@@ -68,7 +64,7 @@ def test_every_emitted_pipeline_key_has_exactly_one_runner_parameter() -> None:
         "progress_callback",
     }
 
-    assert emitted == runner_parameters
+    assert runner_parameters == {"config"}
 
 
 def test_progress_callback_is_forwarded_once_with_config(
@@ -106,9 +102,7 @@ def test_progress_callback_is_forwarded_once_with_config(
 def test_every_pipeline_dataclass_field_has_exactly_one_field_spec() -> None:
     config = PipelineConfig()
     declared = {
-        (section.name, item.name)
-        for section in fields(config)
-        for item in fields(getattr(config, section.name))
+        (section.name, item.name) for section in fields(config) for item in fields(getattr(config, section.name))
     }
     mapped = Counter((spec.section, spec.field) for spec in FIELD_SPECS)
 
@@ -119,9 +113,7 @@ def test_every_pipeline_dataclass_field_has_exactly_one_field_spec() -> None:
 def test_retired_noop_controls_are_absent_from_every_public_schema_surface() -> None:
     config = PipelineConfig()
     declared = {
-        f"{section.name}.{item.name}"
-        for section in fields(config)
-        for item in fields(getattr(config, section.name))
+        f"{section.name}.{item.name}" for section in fields(config) for item in fields(getattr(config, section.name))
     }
     mapped = {spec.flat for spec in FIELD_SPECS}
     impl_parameters = set(inspect.signature(_single_genome_flow_impl).parameters)
@@ -170,17 +162,12 @@ def test_ablation_configuration_is_closed_and_digest_bound() -> None:
 
     assert config.ablation.id is AblationID.A6
     assert config.to_flow_kwargs()["ablation_id"] == "A6"
-    assert (
-        config.to_flow_kwargs()["ablation_contract_sha256"]
-        == ABLATION_CONTRACT_SHA256
-    )
+    assert config.to_flow_kwargs()["ablation_contract_sha256"] == ABLATION_CONTRACT_SHA256
 
     with pytest.raises(ConfigError, match="ablation.id.*must be one of"):
         PipelineConfig.from_dict({"ablation": {"id": "A7"}})
     with pytest.raises(ConfigError, match="contract_sha256.*does not match"):
-        PipelineConfig.from_dict(
-            {"ablation": {"contract_sha256": "0" * 64}}
-        )
+        PipelineConfig.from_dict({"ablation": {"contract_sha256": "0" * 64}})
     with pytest.raises(ConfigError, match="A4 cannot use.*taxonomy_ml_enabled"):
         PipelineConfig.from_dict(
             {
@@ -303,9 +290,7 @@ def test_optional_resource_identity_requires_url_and_sha256(
     values: dict[str, str],
     message: str,
 ) -> None:
-    orchestration = {
-        f"{prefix}_resources_{name}": value for name, value in values.items()
-    }
+    orchestration = {f"{prefix}_resources_{name}": value for name, value in values.items()}
     with pytest.raises(ConfigError, match=message):
         ApplicationConfig.from_dict({"orchestration": orchestration})
 
@@ -352,9 +337,7 @@ def test_application_normalizes_documented_aliases_once() -> None:
 
 
 def test_unversioned_legacy_mapping_defaults_to_v1() -> None:
-    config = ApplicationConfig.from_dict(
-        {"orchestration": {"threads_per_worker": 5, "workers": 2}}
-    )
+    config = ApplicationConfig.from_dict({"orchestration": {"threads_per_worker": 5, "workers": 2}})
 
     assert config.schema_version == 1
     assert config.pipeline.compute.threads == 5
@@ -438,9 +421,7 @@ def test_paths_are_config_relative_and_effective_payload_keeps_nulls(
     config = ApplicationConfig.from_yaml(path)
     payload = config.effective_payload()
 
-    assert config.pipeline.databases.hmm_database == (
-        config_dir / "data" / "markers.hmm"
-    )
+    assert config.pipeline.databases.hmm_database == (config_dir / "data" / "markers.hmm")
     assert payload["databases"]["hmm_allowlist"] is None
     assert payload["optional_features"] == {}
     digest = payload.pop("effective_config_sha256")

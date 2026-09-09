@@ -11,8 +11,41 @@ package re-exports the historical module-level names so the import path
 ``virosync.orchestration._flows.single_genome`` stays stable for callers/tests.
 """
 
+from .loaders import (
+    _build_merged_seeds_from_regions as _build_merged_seeds_from_regions,
+)
+from .loaders import (
+    _count_fasta_records as _count_fasta_records,
+)
+from .loaders import (
+    _load_interproscan_summary as _load_interproscan_summary,
+)
+from .loaders import (
+    _load_tmvec_cache as _load_tmvec_cache,
+)
+from .loaders import (
+    _safe_int as _safe_int,
+)
+from .loaders import (
+    _serialize_tmvec_cache as _serialize_tmvec_cache,
+)
+from .manifest import (
+    _compute_config_fingerprint as _compute_config_fingerprint,
+)
+from .manifest import (
+    _json_safe as _json_safe,
+)
+from .manifest import (
+    _summarize_predictions_tsv,
+    _write_completion_manifest,
+)
+from .manifest import (
+    _write_empty_run_log as _write_empty_run_log,
+)
 from .orchestrator import (
-    _pin_cuda_device,
+    _pin_cuda_device as _pin_cuda_device,
+)
+from .orchestrator import (
     _run_phase0_subflow,
     _single_genome_flow_impl,
     run_single_genome_task,
@@ -21,29 +54,22 @@ from .orchestrator import (
 from .phase1 import _run_phase1_subflow
 from .phase2 import _run_phase2_subflow
 from .phase3 import _run_phase3_subflow
-from .loaders import (
-    _build_merged_seeds_from_regions,
-    _count_fasta_records,
-    _load_interproscan_summary,
-    _load_tmvec_cache,
-    _safe_int,
-    _serialize_tmvec_cache,
-)
-from .manifest import (
-    _compute_config_fingerprint,
-    _json_safe,
-    _summarize_predictions_tsv,
-    _write_completion_manifest,
-    _write_empty_run_log,
-)
-from .reports import _generate_required_reports
+from .reports import _generate_required_reports as _generate_required_reports
 from .resume import (
     _completed_run_artifacts,
-    _first_valid_tsv,
     _require_phase2b_gene_taxonomy_db,
-    _valid_completion_manifest,
-    _valid_resume_run_log,
-    _valid_tsv_header,
+)
+from .resume import (
+    _first_valid_tsv as _first_valid_tsv,
+)
+from .resume import (
+    _valid_completion_manifest as _valid_completion_manifest,
+)
+from .resume import (
+    _valid_resume_run_log as _valid_resume_run_log,
+)
+from .resume import (
+    _valid_tsv_header as _valid_tsv_header,
 )
 
 __all__ = [

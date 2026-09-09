@@ -27,9 +27,7 @@ def test_clear_stale_ssl_env_vars_removes_missing_paths(tmp_path: Path) -> None:
     assert env["CURL_CA_BUNDLE"] == str(existing_cert)
 
 
-def test_download_uses_certifi_bundle_and_sanitized_env(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_download_uses_certifi_bundle_and_sanitized_env(tmp_path: Path, monkeypatch) -> None:
     archive_path = tmp_path / "archive.tar.gz"
     ca_bundle = tmp_path / "cacert.pem"
     ca_bundle.write_text("ca")

@@ -1,5 +1,4 @@
-"""
-Host signature modeling for EUK-like marker hits.
+"""Host signature modeling for EUK-like marker hits.
 
 Builds a weighted token model from unvalidated marker hits whose top-10
 Diamond prefixes are purely cellular. Used for host-like scoring and
@@ -8,10 +7,10 @@ boundary trimming.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from math import log
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
 
 from virosync.pipeline.taxonomy_utils import (
     TaxonomyFingerprint,
@@ -21,8 +20,7 @@ from virosync.pipeline.taxonomy_utils import (
     resolve_org_id,
 )
 
-
-_TAXONOMY_LOOKUP: Optional["TaxonomyLabelLookup"] = None
+_TAXONOMY_LOOKUP: TaxonomyLabelLookup | None = None
 
 # Process-level cache so the large taxonomy-label TSV (≈168k rows) is parsed
 # once per (path, size, mtime) instead of on every phase/task that needs it.
@@ -40,7 +38,7 @@ class TaxonomyLabelLookup(dict):
     """Lookup table for taxonomy labels keyed by target prefix."""
 
     @classmethod
-    def load(cls, path) -> "TaxonomyLabelLookup":
+    def load(cls, path) -> TaxonomyLabelLookup:
         path = Path(path)
         cache_key = None
         try:
@@ -68,13 +66,13 @@ class TaxonomyLabelLookup(dict):
         return data
 
 
-def set_taxonomy_lookup(lookup: Optional[TaxonomyLabelLookup]) -> None:
+def set_taxonomy_lookup(lookup: TaxonomyLabelLookup | None) -> None:
     """Set global taxonomy lookup used by downstream helpers."""
     global _TAXONOMY_LOOKUP
     _TAXONOMY_LOOKUP = lookup
 
 
-def get_taxonomy_lookup() -> Optional[TaxonomyLabelLookup]:
+def get_taxonomy_lookup() -> TaxonomyLabelLookup | None:
     """Return the taxonomy lookup set for this process, if any."""
     return _TAXONOMY_LOOKUP
 
@@ -105,7 +103,7 @@ class HostSignatureModel:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: Optional[dict]) -> "HostSignatureModel":
+    def from_dict(cls, payload: dict | None) -> HostSignatureModel:
         if not payload:
             return cls()
         return cls(
@@ -170,10 +168,7 @@ def _parse_top10_hits(hit) -> list[tuple[str, float, float, float]]:
         pidents.append(0.0)
     while len(evalues) < max_len:
         evalues.append(1.0)
-    return [
-        (targets[i], bits[i], pidents[i], evalues[i])
-        for i in range(min(max_len, len(targets)))
-    ]
+    return [(targets[i], bits[i], pidents[i], evalues[i]) for i in range(min(max_len, len(targets)))]
 
 
 def _parse_top10_prefixes(hit) -> list[str]:
@@ -186,7 +181,7 @@ def _parse_top10_prefixes(hit) -> list[str]:
 
 def _tokens_for_target(
     target: str,
-    taxonomy_lookup: Optional[dict],
+    taxonomy_lookup: dict | None,
     min_token_length: int,
 ) -> list[str]:
     if not target or not taxonomy_lookup:
@@ -202,7 +197,8 @@ def _tokens_for_target(
             return [prefix.lower()]
     return []
 
-def _target_has_prefix(target: str, prefixes: Optional[set[str]]) -> bool:
+
+def _target_has_prefix(target: str, prefixes: set[str] | None) -> bool:
     if not prefixes:
         return True
     if not target:
@@ -213,7 +209,7 @@ def _target_has_prefix(target: str, prefixes: Optional[set[str]]) -> bool:
 
 def _filter_hits_by_prefix(
     top10_hits: list[tuple[str, float, float, float]],
-    prefixes: Optional[set[str]],
+    prefixes: set[str] | None,
 ) -> list[tuple[str, float, float, float]]:
     if not prefixes:
         return top10_hits
@@ -235,19 +231,16 @@ def _append_weights(
     del token_bits[token][max_bits_per_token:]
 
 
-
-
 def build_host_signature_model(
     marker_hits: Iterable[Mapping],
-    validated_prefixes: Optional[set[str]] = None,
-    supporting_prefixes: Optional[set[str]] = None,
+    validated_prefixes: set[str] | None = None,
+    supporting_prefixes: set[str] | None = None,
     min_token_length: int = 3,
-    host_prefixes: Optional[set[str]] = None,
+    host_prefixes: set[str] | None = None,
     max_bits_per_token: int = 10,
     weight_mode: str = "rank",
 ) -> HostSignatureModel:
-    """
-    Build a weighted host-signature model from marker hits.
+    """Build a weighted host-signature model from marker hits.
 
     Uses BUSCO/COG marker hits with NO NCLDV/MIRUS/VP/PLV/CRESS/PHAGE in top-10 prefixes.
     Token weights are weighted sums of taxonomy substrings (split at |).
@@ -255,7 +248,13 @@ def build_host_signature_model(
     validated = validated_prefixes or {
         # PPV__ is the unified Preplasmiviricota prefix and carries 95,947 of the
         # v1.0.6 labels; PLV__/VP__ are kept for pre-migration bundles.
-        "NCLDV__", "MIRUS__", "PPV__", "PLV__", "VP__", "CRESS__", "PHAGE__",
+        "NCLDV__",
+        "MIRUS__",
+        "PPV__",
+        "PLV__",
+        "VP__",
+        "CRESS__",
+        "PHAGE__",
     }
     supporting = supporting_prefixes or set()
     host_prefixes = host_prefixes or {"EUK__"}
@@ -359,8 +358,7 @@ def score_host_signature(
     fingerprint: TaxonomyFingerprint,
     model: HostSignatureModel,
 ) -> float:
-    """
-    Score a gene fingerprint against the host signature distribution.
+    """Score a gene fingerprint against the host signature distribution.
 
     Domain-level tokens (euk, bac, etc.) are excluded from both sides
     before comparison because they are too generic to separate host from viral.
@@ -372,12 +370,10 @@ def score_host_signature(
     return _weighted_jaccard(gene_weights, host_weights)
 
 
-
-
 def _fingerprint_from_record(
     record,
     model: HostSignatureModel,
-) -> Optional[TaxonomyFingerprint]:
+) -> TaxonomyFingerprint | None:
     if not record or not model:
         return None
     fp = _get_record_attr(record, "taxonomy_fingerprint", None)
@@ -408,17 +404,13 @@ def score_host_signature_record(record, model: HostSignatureModel) -> float:
     return score_host_signature(fingerprint, model)
 
 
-
-
 def host_signature_density_evalue_weighted(
     gene_records: Iterable[Mapping],
     model: HostSignatureModel,
     score_threshold: float = 0.5,
-    host_prefixes: Optional[list[str]] = None,
+    host_prefixes: list[str] | None = None,
 ) -> tuple[int, float, float]:
-    """
-    Compute host-like counts, mean score, and evalue-weighted mean score.
-    """
+    """Compute host-like counts, mean score, and evalue-weighted mean score."""
     scores = []
     weighted_scores = []
     total_weight = 0.0
@@ -462,16 +454,11 @@ def host_signature_density_evalue_weighted(
     return host_like, mean_score, weighted_mean
 
 
-
-
-
-
 def summarize_host_signature_model(
-    model: Optional[HostSignatureModel],
+    model: HostSignatureModel | None,
     top_k: int = 20,
 ) -> list[tuple[str, float, int]]:
-    """
-    Return top-k host signature tokens with weights and counts.
+    """Return top-k host signature tokens with weights and counts.
 
     Args:
         model: HostSignatureModel instance
@@ -489,20 +476,15 @@ def summarize_host_signature_model(
         reverse=True,
     )[:top_k]
 
-    return [
-        (token, float(weight), int(model.token_counts.get(token, 0)))
-        for token, weight in sorted_items
-    ]
+    return [(token, float(weight), int(model.token_counts.get(token, 0))) for token, weight in sorted_items]
 
 
 def summarize_host_signature_bits(
-    model: Optional[HostSignatureModel],
+    model: HostSignatureModel | None,
     top_k: int = 20,
     max_bits: int = 10,
 ) -> list[tuple[str, float, int, list[float]]]:
-    """
-    Return top-k tokens with weights, counts, and top weight samples.
-    """
+    """Return top-k tokens with weights, counts, and top weight samples."""
     if not model or not model.token_weights:
         return []
 

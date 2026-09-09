@@ -34,10 +34,7 @@ def test_infer_likely_group_picks_best_hit() -> None:
     ]
     assert infer_likely_group(hits, idx) == "PgVV"
     # a higher-scoring non-group marker does not suppress the best group-bearing hit
-    assert (
-        infer_likely_group([("VP_ATPase_1", 300.0), ("plv_mcp_caps_PgVV_Aquinto", 120.0)], idx)
-        == "PgVV"
-    )
+    assert infer_likely_group([("VP_ATPase_1", 300.0), ("plv_mcp_caps_PgVV_Aquinto", 120.0)], idx) == "PgVV"
     # no capscan group-defining marker -> empty
     assert infer_likely_group([("PLV_MCP_3", 200.0), ("VP_ATPase_1", 100.0)], idx) == ""
     assert infer_likely_group([], idx) == ""

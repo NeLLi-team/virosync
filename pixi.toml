@@ -3,7 +3,7 @@
 
 [workspace]
 name = "virosync"
-version = "1.0.0"
+version = "1.0.1"
 description = "Framework for discovering and characterizing ancient viral elements (EVEs) in eukaryotic genomes"
 authors = ["ViroSync Development Team"]
 channels = ["conda-forge", "bioconda"]
@@ -108,7 +108,7 @@ check-structural-runtime = "PYTHONPATH=src python scripts/check_structural_runti
 setup-bath = "bash scripts/install_bath.sh"
 
 # === Development ===
-lint = "ruff check src tests scripts"
+lint = "ruff check src tests scripts && ruff format --check src tests scripts src/virosync/report/eve_analysis.py"
 check-production-ready = "python scripts/ci/check_production_ready.py"
 
 [feature.dev.dependencies]

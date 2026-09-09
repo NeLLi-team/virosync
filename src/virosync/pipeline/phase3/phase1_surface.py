@@ -6,12 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from virosync.ablation import AblationID, InterventionCounts
-from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.output_contract import (
     canonical_family,
     normalize_effective_eve_class,
 )
+from virosync.pipeline.phase1.hhg_seeding import Anchor
+from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
@@ -31,13 +31,11 @@ class Phase1SeedSurface:
     @property
     def detailed_results(self) -> tuple[VerificationResult, ...]:
         """Return every exported seed for the all-candidate output surface."""
-
         return self.results
 
     @property
     def canonical_results(self) -> tuple[VerificationResult, ...]:
         """Return every exported seed as an explicitly preselected prediction."""
-
         return self.results
 
 
@@ -45,15 +43,11 @@ def _base_gene_id(anchor: Anchor) -> str:
     porf_id = anchor.porf_id.split("|aa", 1)[0]
     if porf_id:
         return porf_id
-    return (
-        f"{anchor.scaffold}:{anchor.start}-{anchor.end}:"
-        f"{anchor.strand}:{anchor.hallmark_gene}"
-    )
+    return f"{anchor.scaffold}:{anchor.start}-{anchor.end}:{anchor.strand}:{anchor.hallmark_gene}"
 
 
 def _eligible_anchors(seed: MergedSeed) -> tuple[tuple[str, Anchor], ...]:
     """Return one deterministic best marker hit per seed-overlapping protein."""
-
     grouped: dict[str, list[Anchor]] = {}
     for anchor in (*seed.anchors, *seed.hhg_anchors):
         if not anchor.hallmark_gene:
@@ -85,19 +79,11 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
     eligible_anchors = _eligible_anchors(seed)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
     marker_summary = summarize_marker_hits(hallmark_genes)
-    mcp_gene_ids = [
-        gene_id
-        for gene_id, anchor in eligible_anchors
-        if is_mcp_gene(anchor.hallmark_gene)
-    ]
+    mcp_gene_ids = [gene_id for gene_id, anchor in eligible_anchors if is_mcp_gene(anchor.hallmark_gene)]
     region_classification = canonical_family(seed.predicted_family)
     # Phase 1 has no CRESS marker family. Identity-qualified gene taxonomy may
     # assign CRESS later during evidence synthesis.
-    likely_family = (
-        region_classification
-        if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"}
-        else "UNKNOWN"
-    )
+    likely_family = region_classification if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"} else "UNKNOWN"
 
     return VerificationResult(
         eve_id=f"EVE_{seed.scaffold}_{seed.start}-{seed.end}",
@@ -146,7 +132,6 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
 
 def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
     """Adapt Tier-1-vetted Phase-1 seeds without running Phase 2 or Phase 3."""
-
     results = tuple(_seed_to_result(seed) for seed in seeds)
     exported = len(results)
     return Phase1SeedSurface(

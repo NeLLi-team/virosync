@@ -37,9 +37,7 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
 ) -> None:
     output_dir = tmp_path / "phase3_synthesis"
     output_dir.mkdir()
-    _write_validated_marker_hits(
-        tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
-    )
+    _write_validated_marker_hits(tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv")
 
     generator = OutputGenerator(output_dir=output_dir, extended_output=True)
     result = VerificationResult(
@@ -179,9 +177,7 @@ def test_detailed_tsv_invariants_allow_counted_names_to_exceed_unique_protein_co
 ) -> None:
     output_dir = tmp_path / "phase3_synthesis"
     output_dir.mkdir()
-    _write_validated_marker_hits(
-        tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
-    )
+    _write_validated_marker_hits(tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv")
 
     generator = OutputGenerator(output_dir=output_dir, extended_output=True)
     result = VerificationResult(

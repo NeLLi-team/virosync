@@ -1,5 +1,4 @@
-"""
-Centralized Threshold Configuration for ViroSync.
+"""Centralized Threshold Configuration for ViroSync.
 
 This module provides a single source of truth for all pipeline thresholds,
 so users can tune thresholds without editing source files.
@@ -15,9 +14,8 @@ Usage:
         ...
 """
 
-from dataclasses import dataclass, field
-from typing import Optional
 import logging
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +30,11 @@ class StructuralThresholds:
 
     # pLDDT (predicted Local Distance Difference Test) thresholds
     # Higher = more confident structure prediction
-    plddt_high_confidence: float = 70.0      # Accept structure as confident
+    plddt_high_confidence: float = 70.0  # Accept structure as confident
     plddt_very_high_confidence: float = 85.0  # Very high confidence
 
     # TM-score thresholds (0-1, higher = more similar structures)
-    tm_score_significant: float = 0.5        # Significant structural match
+    tm_score_significant: float = 0.5  # Significant structural match
     tm_score_highly_significant: float = 0.7  # Highly significant (likely homolog)
 
     # E-value thresholds for FoldSeek hits
@@ -72,14 +70,16 @@ class DatabaseConfig:
     """
 
     # Prefixes that indicate viral sequences
-    viral_prefixes: list[str] = field(default_factory=lambda: [
-        "NCLDV__",
-        "MIRUS__",
-        "GVMAG__",
-        "PHAGE__",
-        "CRESS__",
-        "VIRUS__",
-    ])
+    viral_prefixes: list[str] = field(
+        default_factory=lambda: [
+            "NCLDV__",
+            "MIRUS__",
+            "GVMAG__",
+            "PHAGE__",
+            "CRESS__",
+            "VIRUS__",
+        ]
+    )
 
 
 @dataclass
@@ -100,7 +100,7 @@ class ViroSyncConfig:
 
 
 # Global singleton instance
-_global_config: Optional[ViroSyncConfig] = None
+_global_config: ViroSyncConfig | None = None
 
 
 def get_config() -> ViroSyncConfig:

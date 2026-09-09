@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Classify MCP candidates as DJR, SJR, HK97, or UNKNOWN, and record MCP support.
+"""Classify MCP candidates as DJR, SJR, HK97, or UNKNOWN, and record MCP support.
 
 Fold classification and MCP support are separate. InterProScan, TMVec, and
 Foldseek can assign a fold. Validated Mirus_MCP and explicit HK97 capsid
@@ -42,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from Bio import SeqIO
+
 from virosync.config import get_config
 from virosync.utils.path_safety import safe_filename_component
 
@@ -81,12 +81,12 @@ JELLY_ROLL_KEYWORDS = {
 # FoldSeek PDB structures that indicate DJR/SJR
 DJR_PDB_PATTERNS = [
     r"6g4[345]",  # Mavirus MCP structures
-    r"5ti[qp]",   # PBCV-1 Vp54
-    r"1m4x",      # PBCV-1 capsid
+    r"5ti[qp]",  # PBCV-1 Vp54
+    r"1m4x",  # PBCV-1 capsid
 ]
 SJR_PDB_PATTERNS = [
-    r"4cwu",      # Adenovirus hexon
-    r"1p30",      # Adenovirus hexon
+    r"4cwu",  # Adenovirus hexon
+    r"1p30",  # Adenovirus hexon
 ]
 HK97_PDB_PATTERNS = [
     r"(?<![a-z0-9])1ohg(?![a-z0-9])",  # HK97 major capsid protein
@@ -101,7 +101,7 @@ class ClassificationSignals:
     """Collection of signals for classification."""
 
     jelly_roll_domains: int = 0  # Count of detected jelly roll domains
-    hmm_domain_count: int = 0    # Count of non-overlapping HMM domain hits
+    hmm_domain_count: int = 0  # Count of non-overlapping HMM domain hits
     tmvec_djr_score: float = 0.0
     tmvec_sjr_score: float = 0.0
     tmvec_djr_hit: str = ""
@@ -133,9 +133,7 @@ class JellyRollClassification:
 def is_hk97_marker(marker_name: str) -> bool:
     """Return True for known Mirus MCP or explicit HK97 capsid marker names."""
     normalized = re.sub(r"[^a-z0-9]+", "_", marker_name.lower()).strip("_")
-    return normalized == "mirus_mcp" or bool(
-        re.fullmatch(r"hk97_(?:major_)?capsid(?:_protein)?", normalized)
-    )
+    return normalized == "mirus_mcp" or bool(re.fullmatch(r"hk97_(?:major_)?capsid(?:_protein)?", normalized))
 
 
 def is_mcp_marker(marker_name: str) -> bool:
@@ -180,8 +178,7 @@ def classify_with_signals(
     marker: str,
     marker_inference_supported: bool,
 ) -> tuple[str, float, str]:
-    """
-    Classify a capsid fold from independent evidence and marker support.
+    """Classify a capsid fold from independent evidence and marker support.
 
     Args:
         signals: Classification signals from all evidence sources
@@ -276,9 +273,7 @@ def estimate_full_protein_length(porf_id: str, domain_sequence_length: int) -> i
     return domain_sequence_length
 
 
-def load_marker_hits(
-    marker_hits_path: Path, mcp_only: bool = True
-) -> dict[str, tuple[str, str]]:
+def load_marker_hits(marker_hits_path: Path, mcp_only: bool = True) -> dict[str, tuple[str, str]]:
     """Load marker hits from validated_marker_hits.tsv."""
     hits: dict[str, tuple[str, str]] = {}
 
@@ -300,11 +295,8 @@ def load_marker_hits(
     return hits
 
 
-def count_hmm_domains_per_protein(
-    marker_hits: dict[str, tuple[str, str]]
-) -> dict[str, int]:
-    """
-    Count non-overlapping HMM domain hits per base protein.
+def count_hmm_domains_per_protein(marker_hits: dict[str, tuple[str, str]]) -> dict[str, int]:
+    """Count non-overlapping HMM domain hits per base protein.
 
     Multiple HMM hits to the same protein with non-overlapping coordinates
     suggest multiple jelly roll domains (DJR evidence).
@@ -347,8 +339,7 @@ def count_hmm_domains_per_protein(
 def load_interproscan_domains(
     interproscan_path: Path | None,
 ) -> dict[str, int]:
-    """
-    Load InterProScan results and count jelly roll domains per protein.
+    """Load InterProScan results and count jelly roll domains per protein.
 
     Returns:
         Dictionary mapping protein IDs to jelly roll domain counts.
@@ -412,8 +403,7 @@ def load_tmvec_results(
     djr_references: set[str] | None = None,
     sjr_references: set[str] | None = None,
 ) -> dict[str, tuple[float, str, float, str]]:
-    """
-    Load TMVec results and extract scores for DJR/SJR reference comparison.
+    """Load TMVec results and extract scores for DJR/SJR reference comparison.
 
     Returns:
         Dictionary mapping protein IDs to (djr_score, djr_hit, sjr_score, sjr_hit).
@@ -472,8 +462,7 @@ def load_tmvec_results(
 def load_foldseek_results(
     foldseek_path: Path | None,
 ) -> dict[str, tuple[bool, bool, bool, str, bool]]:
-    """
-    Load Foldseek results and check for known capsid structures.
+    """Load Foldseek results and check for known capsid structures.
 
     Returns:
         Query IDs mapped to DJR, SJR, HK97, target, and quality support.
@@ -531,9 +520,7 @@ def load_foldseek_results(
     return results
 
 
-def load_sequences(
-    sequences_path: Path, porf_ids: set[str] | None = None
-) -> dict[str, str]:
+def load_sequences(sequences_path: Path, porf_ids: set[str] | None = None) -> dict[str, str]:
     """Load protein sequences from FASTA file."""
     requested_ids = None
     if porf_ids is not None:
@@ -556,9 +543,7 @@ def classify_proteins(
     tmvec_results: dict[str, tuple[float, str, float, str]] | None = None,
     foldseek_results: dict[str, tuple[bool, bool, bool, str, bool]] | None = None,
 ) -> list[JellyRollClassification]:
-    """
-    Classify all MCP proteins using multi-signal approach.
-    """
+    """Classify all MCP proteins using multi-signal approach."""
     classifications: list[JellyRollClassification] = []
     processed_ids: set[str] = set()
 
@@ -588,15 +573,9 @@ def classify_proteins(
     hk97_validated_base_ids: set[str] = set()
     for hit_id, (hit_marker, hit_status) in marker_hits.items():
         hit_base_id = extract_base_porf_id(hit_id)
-        if (
-            hit_status.lower() in {"validated", "validated_novel"}
-            and is_mcp_marker(hit_marker)
-        ):
+        if hit_status.lower() in {"validated", "validated_novel"} and is_mcp_marker(hit_marker):
             validated_mcp_base_ids.add(hit_base_id)
-        if (
-            hit_status.lower() in {"validated", "validated_novel"}
-            and is_hk97_marker(hit_marker)
-        ):
+        if hit_status.lower() in {"validated", "validated_novel"} and is_hk97_marker(hit_marker):
             hk97_validated_base_ids.add(hit_base_id)
         prior_status = validation_by_base.get(hit_base_id, "")
         if not prior_status or (
@@ -619,11 +598,7 @@ def classify_proteins(
             logger.debug(f"Sequence not found for {porf_id}")
             continue
 
-        protein_length = (
-            len(sequence)
-            if used_base_sequence
-            else estimate_full_protein_length(porf_id, len(sequence))
-        )
+        protein_length = len(sequence) if used_base_sequence else estimate_full_protein_length(porf_id, len(sequence))
 
         # Build classification signals
         signals = ClassificationSignals(length=protein_length)
@@ -631,10 +606,7 @@ def classify_proteins(
         # Signal 1: InterProScan domains
         for lookup_id in [porf_id, base_id]:
             if lookup_id in interproscan_domains:
-                signals.jelly_roll_domains = max(
-                    signals.jelly_roll_domains,
-                    interproscan_domains[lookup_id]
-                )
+                signals.jelly_roll_domains = max(signals.jelly_roll_domains, interproscan_domains[lookup_id])
                 signals.evidence_sources.append("interproscan")
                 break
 
@@ -701,9 +673,7 @@ def classify_proteins(
     return classifications
 
 
-def write_results(
-    classifications: list[JellyRollClassification], output_path: Path
-) -> None:
+def write_results(classifications: list[JellyRollClassification], output_path: Path) -> None:
     """Write classification results to TSV file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -795,9 +765,7 @@ Example:
         action="store_true",
         help="Include full sequences in output (creates larger file)",
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose logging"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
 
@@ -847,9 +815,7 @@ Example:
         djr_hits = sum(1 for r in foldseek_results.values() if r[0])
         sjr_hits = sum(1 for r in foldseek_results.values() if r[1])
         hk97_hits = sum(1 for r in foldseek_results.values() if r[2])
-        logger.info(
-            f"Found {djr_hits} DJR, {sjr_hits} SJR, and {hk97_hits} HK97 structural hits"
-        )
+        logger.info(f"Found {djr_hits} DJR, {sjr_hits} SJR, and {hk97_hits} HK97 structural hits")
 
     # Load sequences
     logger.info(f"Loading sequences from {args.sequences}")
@@ -896,7 +862,7 @@ Example:
 
         lengths = [c.length for c in classifications]
         logger.info(f"  Length range: {min(lengths)}-{max(lengths)} aa")
-        logger.info(f"  Mean length: {sum(lengths)/len(lengths):.1f} aa")
+        logger.info(f"  Mean length: {sum(lengths) / len(lengths):.1f} aa")
 
     # Write results
     write_results(classifications, args.output)

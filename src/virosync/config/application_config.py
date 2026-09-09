@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 from yaml.nodes import MappingNode
@@ -35,13 +35,9 @@ def _construct_unique_mapping(loader, node, deep=False):
         try:
             duplicate = key in seen
         except TypeError as exc:
-            raise ConfigError(
-                f"YAML mapping key on line {key_node.start_mark.line + 1} is not scalar"
-            ) from exc
+            raise ConfigError(f"YAML mapping key on line {key_node.start_mark.line + 1} is not scalar") from exc
         if duplicate:
-            raise ConfigError(
-                f"Duplicate YAML key {key!r} on line {key_node.start_mark.line + 1}"
-            )
+            raise ConfigError(f"Duplicate YAML key {key!r} on line {key_node.start_mark.line + 1}")
         seen.add(key)
     return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
 
@@ -56,19 +52,19 @@ _UniqueKeyLoader.add_constructor(
 class OrchestrationConfig:
     """Process-level settings that do not belong to a single genome flow."""
 
-    database_root: Optional[Path] = None
-    core_resources_url: Optional[str] = None
-    core_resources_version: Optional[str] = None
-    core_resources_sha256: Optional[str] = None
-    core_resources_manifest_sha256: Optional[str] = None
-    tmvec_resources_url: Optional[str] = None
-    tmvec_resources_sha256: Optional[str] = None
-    interproscan_resources_url: Optional[str] = None
-    interproscan_resources_sha256: Optional[str] = None
+    database_root: Path | None = None
+    core_resources_url: str | None = None
+    core_resources_version: str | None = None
+    core_resources_sha256: str | None = None
+    core_resources_manifest_sha256: str | None = None
+    tmvec_resources_url: str | None = None
+    tmvec_resources_sha256: str | None = None
+    interproscan_resources_url: str | None = None
+    interproscan_resources_sha256: str | None = None
     max_concurrent_genomes: int = 4
     retries: int = 1
     retry_delay_seconds: int = 60
-    gpu_id: Optional[int] = None
+    gpu_id: int | None = None
 
     def validate_semantics(self) -> list[str]:
         errors = []
@@ -77,30 +73,21 @@ class OrchestrationConfig:
             self.core_resources_sha256,
             self.core_resources_manifest_sha256,
         )
-        if any(value is not None for value in identity) and not all(
-            value is not None for value in identity
-        ):
+        if any(value is not None for value in identity) and not all(value is not None for value in identity):
             errors.append(
-                "orchestration core resource version, archive SHA-256, and manifest "
-                "SHA-256 must be configured together"
+                "orchestration core resource version, archive SHA-256, and manifest SHA-256 must be configured together"
             )
-        if self.core_resources_url is not None and not all(
-            value is not None for value in identity
-        ):
+        if self.core_resources_url is not None and not all(value is not None for value in identity):
             errors.append(
                 "orchestration.core_resources_url requires core_resources_version, "
                 "core_resources_sha256, and core_resources_manifest_sha256"
             )
         if self.core_resources_url is None and any(value is not None for value in identity):
-            errors.append(
-                "orchestration core resource identity requires core_resources_url"
-            )
+            errors.append("orchestration core resource identity requires core_resources_url")
         if self.core_resources_version is not None and not re.fullmatch(
             r"v[0-9]+\.[0-9]+\.[0-9]+", self.core_resources_version
         ):
-            errors.append(
-                "orchestration.core_resources_version must have the form vMAJOR.MINOR.PATCH"
-            )
+            errors.append("orchestration.core_resources_version must have the form vMAJOR.MINOR.PATCH")
         for name, value in (
             ("core_resources_sha256", self.core_resources_sha256),
             (
@@ -109,47 +96,25 @@ class OrchestrationConfig:
             ),
         ):
             if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
-                errors.append(
-                    f"orchestration.{name} must be a lowercase 64-character SHA-256"
-                )
+                errors.append(f"orchestration.{name} must be a lowercase 64-character SHA-256")
         if self.tmvec_resources_url is not None and self.tmvec_resources_sha256 is None:
-            errors.append(
-                "orchestration.tmvec_resources_url requires tmvec_resources_sha256"
-            )
+            errors.append("orchestration.tmvec_resources_url requires tmvec_resources_sha256")
         if self.tmvec_resources_url is None and self.tmvec_resources_sha256 is not None:
-            errors.append(
-                "orchestration.tmvec_resources_sha256 requires tmvec_resources_url"
-            )
-        if self.tmvec_resources_sha256 is not None and re.fullmatch(
-            r"[0-9a-f]{64}", self.tmvec_resources_sha256
-        ) is None:
-            errors.append(
-                "orchestration.tmvec_resources_sha256 must be a lowercase "
-                "64-character SHA-256"
-            )
+            errors.append("orchestration.tmvec_resources_sha256 requires tmvec_resources_url")
         if (
-            self.interproscan_resources_url is not None
-            and self.interproscan_resources_sha256 is None
+            self.tmvec_resources_sha256 is not None
+            and re.fullmatch(r"[0-9a-f]{64}", self.tmvec_resources_sha256) is None
         ):
-            errors.append(
-                "orchestration.interproscan_resources_url requires "
-                "interproscan_resources_sha256"
-            )
+            errors.append("orchestration.tmvec_resources_sha256 must be a lowercase 64-character SHA-256")
+        if self.interproscan_resources_url is not None and self.interproscan_resources_sha256 is None:
+            errors.append("orchestration.interproscan_resources_url requires interproscan_resources_sha256")
+        if self.interproscan_resources_url is None and self.interproscan_resources_sha256 is not None:
+            errors.append("orchestration.interproscan_resources_sha256 requires interproscan_resources_url")
         if (
-            self.interproscan_resources_url is None
-            and self.interproscan_resources_sha256 is not None
+            self.interproscan_resources_sha256 is not None
+            and re.fullmatch(r"[0-9a-f]{64}", self.interproscan_resources_sha256) is None
         ):
-            errors.append(
-                "orchestration.interproscan_resources_sha256 requires "
-                "interproscan_resources_url"
-            )
-        if self.interproscan_resources_sha256 is not None and re.fullmatch(
-            r"[0-9a-f]{64}", self.interproscan_resources_sha256
-        ) is None:
-            errors.append(
-                "orchestration.interproscan_resources_sha256 must be a lowercase "
-                "64-character SHA-256"
-            )
+            errors.append("orchestration.interproscan_resources_sha256 must be a lowercase 64-character SHA-256")
         if self.max_concurrent_genomes < 1:
             errors.append("orchestration.max_concurrent_genomes must be >= 1")
         if self.retries < 0:
@@ -168,7 +133,7 @@ class FeatureResolution:
     requested: bool
     required: bool
     enabled: bool
-    reason_code: Optional[str] = None
+    reason_code: str | None = None
     details: tuple[str, ...] = ()
 
 
@@ -254,15 +219,11 @@ def _assign_alias(target: dict, dotted: str, value: Any, source: str) -> None:
             existing = {}
             current[part] = existing
         if not isinstance(existing, dict):
-            raise ConfigError(
-                f"Configuration alias '{source}' conflicts with section '{part}'"
-            )
+            raise ConfigError(f"Configuration alias '{source}' conflicts with section '{part}'")
         current = existing
     leaf = parts[-1]
     if leaf in current:
-        raise ConfigError(
-            f"Configuration alias '{source}' conflicts with canonical key '{dotted}'"
-        )
+        raise ConfigError(f"Configuration alias '{source}' conflicts with canonical key '{dotted}'")
     current[leaf] = copy.deepcopy(value)
 
 
@@ -319,18 +280,12 @@ def _normalize_nested_aliases(normalized: dict) -> None:
             "top_k": "phase2.diamond_top_k",
             "chunk_size": "phase2.diamond_chunk_size",
             "random_seed": "phase2.diamond_random_seed",
-            "superset_prototype_enabled": (
-                "phase2.diamond_superset_prototype_enabled"
-            ),
+            "superset_prototype_enabled": ("phase2.diamond_superset_prototype_enabled"),
         }
         removed = {
-            "threads": (
-                "phase2.boundary_diamond.threads was removed; use "
-                "compute.gene_taxonomy_threads"
-            ),
+            "threads": ("phase2.boundary_diamond.threads was removed; use compute.gene_taxonomy_threads"),
             "host_prefix": (
-                "phase2.boundary_diamond.host_prefix was removed; the primary "
-                "prefix is derived from host.label"
+                "phase2.boundary_diamond.host_prefix was removed; the primary prefix is derived from host.label"
             ),
         }
         for key in diamond:
@@ -407,9 +362,7 @@ def _normalize_application_dict(data: dict) -> dict:
     normalized["orchestration"] = {}
     for key, value in raw_orchestration.items():
         if not isinstance(key, str):
-            raise ConfigError(
-                f"Configuration keys must be strings, got orchestration.{key!r}"
-            )
+            raise ConfigError(f"Configuration keys must be strings, got orchestration.{key!r}")
         if key in _ORCHESTRATION_FIELDS:
             _assign_alias(
                 normalized,
@@ -447,9 +400,7 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value):
-        return {
-            item.name: _serialize(getattr(value, item.name)) for item in fields(value)
-        }
+        return {item.name: _serialize(getattr(value, item.name)) for item in fields(value)}
     if isinstance(value, dict):
         return {str(key): _serialize(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -466,19 +417,15 @@ class ApplicationConfig:
     pipeline: PipelineConfig
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "ApplicationConfig":
+    def from_yaml(cls, path: Path) -> ApplicationConfig:
         path = Path(path)
         try:
             with path.open(encoding="utf-8") as handle:
                 raw = yaml.load(handle, Loader=_UniqueKeyLoader)
         except OSError as exc:
-            raise ConfigError(
-                f"Cannot read configuration file '{path}': {exc}"
-            ) from exc
+            raise ConfigError(f"Cannot read configuration file '{path}': {exc}") from exc
         except yaml.YAMLError as exc:
-            raise ConfigError(
-                f"Invalid YAML in configuration file '{path}': {exc}"
-            ) from exc
+            raise ConfigError(f"Invalid YAML in configuration file '{path}': {exc}") from exc
         if raw is None:
             raise ConfigError(f"Configuration file '{path}' is empty")
         return cls.from_dict(raw, base_dir=path.parent.resolve())
@@ -488,8 +435,8 @@ class ApplicationConfig:
         cls,
         data: dict,
         *,
-        base_dir: Optional[Path] = None,
-    ) -> "ApplicationConfig":
+        base_dir: Path | None = None,
+    ) -> ApplicationConfig:
         normalized = _normalize_application_dict(data)
         # Pre-v1 files had no version marker. Treat only that absence as v1 so
         # documented legacy aliases remain migratable; explicit versions stay strict.
@@ -497,9 +444,7 @@ class ApplicationConfig:
         if type(schema_version) is not int:
             raise ConfigError("Configuration key 'schema_version' must be an integer")
         if schema_version != 1:
-            raise ConfigError(
-                f"Unsupported schema_version {schema_version!r}; expected 1"
-            )
+            raise ConfigError(f"Unsupported schema_version {schema_version!r}; expected 1")
 
         config_dir = Path(base_dir) if base_dir is not None else None
         orchestration = _decode_dataclass(
@@ -510,10 +455,7 @@ class ApplicationConfig:
         )
         orchestration_errors = orchestration.validate_semantics()
         if orchestration_errors:
-            raise ConfigError(
-                "Invalid orchestration configuration: "
-                + "; ".join(orchestration_errors)
-            )
+            raise ConfigError("Invalid orchestration configuration: " + "; ".join(orchestration_errors))
         pipeline = PipelineConfig.from_dict(
             {section: normalized.get(section, {}) for section in _PIPELINE_SECTIONS},
             base_dir=config_dir,
@@ -535,7 +477,7 @@ class ApplicationConfig:
 
     def effective_payload(
         self,
-        optional_features: Optional[dict[str, FeatureResolution]] = None,
+        optional_features: dict[str, FeatureResolution] | None = None,
     ) -> dict[str, Any]:
         """Return deterministic runtime configuration for provenance output."""
         payload = self.to_dict()
