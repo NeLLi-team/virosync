@@ -4,14 +4,16 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## Resource bundle v1.1.0 - 2026-09-15
 
-- Add 27 structure-derived capsid candidate HMMs and matched annotations,
-  bringing the marker library to 1,080 profiles. The additions comprise
-  20 penton, two minor capsid, two coat, one capsid-domain, one general
-  capsid, and one putative MCP profile, trained on 4,605 proteins.
-- Exclude six source candidates with protease or tail-related evidence.
-  Retain original model identifiers, source captions, and curation evidence.
+- Add all 33 structure-derived candidate HMMs and matched annotations,
+  bringing the marker library to 1,086 profiles. Their source clusters contain
+  5,305 proteins. The set comprises 20 penton, four putative adenain-like
+  protease, two minor capsid, two coat, one putative tail tube, one unresolved
+  protease-like, one capsid-domain, one general capsid, and one putative MCP
+  profile.
+- Retain original model identifiers, source captions, curated functions, and
+  curation evidence. Source captions do not override the curated function.
 - Recognize `EVE_CAPSID_NOVEL_0029` as a putative MCP with no assigned
-  marker family. Keep the other added profiles outside the MCP role.
+  marker family. Keep the other 32 added profiles outside the MCP role.
 - Correct the MCP flag for six existing VP penton profiles. Capsid-category
   annotations alone do not confer MCP status or its scoring bonus.
 - Retain the 937 Pfam profiles and the existing protein-reference and

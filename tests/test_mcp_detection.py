@@ -9,9 +9,12 @@ everything else is a negative, including names that contain the trigram
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from virosync.pipeline.phase3.evidence_synthesizer import (
+    load_marker_annotation_index,
     mcp_vote_classes,
     summarize_marker_hits,
 )
@@ -170,6 +173,51 @@ def test_structure_derived_mcp_has_no_marker_family_vote() -> None:
     )
 
     assert summary["has_mcp"] is True
+    assert summary["families"] == []
+    assert summary["dominant_family"] == "UNKNOWN"
+
+
+def test_non_mcp_structure_candidates_keep_annotated_functions(
+    tmp_path: Path,
+) -> None:
+    annotations = tmp_path / "annotations.tsv"
+    annotations.write_text(
+        "model_name\tsource\tdescription\tmajority_annotation\n"
+        "EVE_CAPSID_NOVEL_0001\tEVE_structure_20260811\t"
+        "Putative adenain-like protease\t\n"
+        "EVE_CAPSID_NOVEL_0006\tEVE_structure_20260811\t"
+        "Putative adenain-like protease\t\n"
+        "EVE_CAPSID_NOVEL_0015\tEVE_structure_20260811\t"
+        "Putative adenain-like protease\t\n"
+        "EVE_CAPSID_NOVEL_0018\tEVE_structure_20260811\t"
+        "Putative tail tube protein\t\n"
+        "EVE_CAPSID_NOVEL_0020\tEVE_structure_20260811\t"
+        "Putative adenain-like protease\t\n"
+        "EVE_CAPSID_NOVEL_0026\tEVE_structure_20260811\t"
+        "Unresolved protease-like protein\t\n"
+        "VP_Penton_1\tVP_PLV_update_Dec25\tUnannotated\t\n",
+        encoding="utf-8",
+    )
+    annotation_index = load_marker_annotation_index(annotations)
+    expected_categories = {
+        "eve_capsid_novel_0001": {"protease"},
+        "eve_capsid_novel_0006": {"protease"},
+        "eve_capsid_novel_0015": {"protease"},
+        "eve_capsid_novel_0018": {"tail_tube"},
+        "eve_capsid_novel_0020": {"protease"},
+        "eve_capsid_novel_0026": {"protease"},
+    }
+
+    assert {model: annotation_index[model]["categories"] for model in expected_categories} == expected_categories
+    assert annotation_index["vp_penton_1"]["categories"] == {"penton"}
+
+    summary = summarize_marker_hits(
+        list(expected_categories),
+        annotation_index,
+    )
+    assert summary["categories"] == ["protease", "tail_tube"]
+    assert summary["complement_score"] == 0.25
+    assert summary["has_mcp"] is False
     assert summary["families"] == []
     assert summary["dominant_family"] == "UNKNOWN"
 

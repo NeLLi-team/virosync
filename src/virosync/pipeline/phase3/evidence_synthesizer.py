@@ -65,6 +65,7 @@ MARKER_CATEGORY_KEYWORDS = {
     "packaging_atpase": ["packaging atpase", "a32", "packaging", "atpase"],
     "penton": ["penton"],
     "triplex": ["triplex"],
+    "tail_tube": ["tail tube"],
     "protease": ["protease", "peptidase"],
     "polymerase": ["polymerase", "polb", "dna polymerase"],
     "helicase": ["helicase", "primase", "d5"],
@@ -198,7 +199,10 @@ def load_marker_annotation_index(annotation_path: Path | None) -> dict[str, dict
             source = row.get("source") or ""
             description = row.get("description") or ""
             majority_annotation = row.get("majority_annotation") or ""
-            text = " ".join([model_name, description, majority_annotation])
+            text_fields = [description, majority_annotation]
+            if source != "EVE_structure_20260811":
+                text_fields.insert(0, model_name)
+            text = " ".join(text_fields)
             categories = _categorize_text(text)
             family = _infer_family_from_model(model_name, source, description)
             # capscan MCP markers carry their Bellas group in the description

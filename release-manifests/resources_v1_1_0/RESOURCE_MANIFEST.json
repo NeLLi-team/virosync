@@ -10,14 +10,14 @@
     {
       "path": "DATABASE_README.txt",
       "role": "bundle_documentation",
-      "sha256": "8f42fe16eb5cc4a9e243b5863fea772dc296a974edeffdace6a17f4d0afdabb6",
+      "sha256": "e61250232b8f2144a4863a1031b589bde6f528ccdc5a8c10ee5a3aa76c8b5682",
       "size": 968
     },
     {
       "path": "models/combined.hmm",
       "role": "hmm_models",
-      "sha256": "139fb1f1f33c290dceae1b6c67b425848b9b0c366b0feb9b4f84a92fbcfdc242",
-      "size": 159690319
+      "sha256": "0cf27f58afcdc26f9d8236caa05e5dd343186584daa64ab20650341c8fbe74ab",
+      "size": 160051263
     },
     {
       "path": "models/pfam_virosync_screening.hmm",
@@ -28,8 +28,8 @@
     {
       "path": "models/model_annotations_with_interpro.tsv",
       "role": "model_annotations",
-      "sha256": "e7f2b6b157a863bce51e9ad5bc22872da1ceee25f3b255a7fa775881cacdf30f",
-      "size": 245588
+      "sha256": "2649e70172ca415256bcd7f80343a4aedab48ca70dd7c01090ace822b3ed35d7",
+      "size": 246584
     },
     {
       "path": "models/og_marker_name_map.tsv",
@@ -60,10 +60,10 @@
   "schema_version": 2,
   "semantic_counts": {
     "hmm_index_files": 4,
-    "hmm_models": 1080,
+    "hmm_models": 1086,
     "marker_diamond_sequences": 3864300,
     "marker_proteins": 3864300,
-    "model_annotations": 1080,
+    "model_annotations": 1086,
     "og_marker_mappings": 808,
     "pfam_models": 937,
     "proteome_diamond_sequences": 46765751,

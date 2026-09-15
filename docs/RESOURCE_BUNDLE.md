@@ -6,12 +6,16 @@ marker and broad reference-proteome DIAMOND databases, taxonomy labels, and
 marker annotations used for EVE detection, boundary refinement, and
 classification.
 
-The bundle contains 1,080 marker profiles, including 27
-[structure-derived capsid candidates](reference/capsid-models.md), and 937
-Pfam screening profiles.
+The bundle contains 1,086 marker profiles, including 33
+[structure-derived candidates](reference/capsid-models.md), and 937 Pfam
+screening profiles. The structure-derived set comes from a capsid search and
+includes non-capsid candidates with adenain-like protease, tail-tube, or
+unresolved protease-like evidence. Only `EVE_CAPSID_NOVEL_0029` has a putative
+MCP role.
 
-Update your ViroSync checkout before installing v1.1.0. Older code does not
-distinguish the new MCP from the other capsid markers.
+Update your ViroSync checkout before installing v1.1.0. The resource update
+includes code changes for MCP roles and functional categories; the older
+1.0.1 release lacks them.
 
 Setup downloads about 6 GB and installs about 13 GB. The archive and installed
 data can use about 19 GB at the same time. Allow extra space for the Pixi

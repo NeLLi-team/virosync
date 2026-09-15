@@ -18,8 +18,8 @@ from virosync.orchestration.cli import (
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.resource_manifest import ResourceValidationResult
 
-MANIFEST_SHA256 = "a3d91b9a1478f74ca4dcc59be3273715c0045cd919e092c0887e807a23d8e669"
-ARCHIVE_SHA256 = "8d55e4278d6693d41d8a8759bb26bea55e74f0ea0e987f4dcb912477c89a7541"
+MANIFEST_SHA256 = "0eb6323d4dd46b531c692168b0d94b71214bd6bf9de1cad7d1596a25aab62f8b"
+ARCHIVE_SHA256 = "1a30d894e47c4a81c0fbd334519e80ffe306729fb6ae61c3ad8964763ee744ce"
 _REAL_RESOLVE_CONFIG_PATHS = ViroSyncDatabaseManager.resolve_config_paths.__func__
 
 
@@ -615,8 +615,8 @@ def test_fresh_setup_prompts_before_starting_progress(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Download size: 5.88 GB (5,877,652,181 bytes)" in result.output
-    assert "Resource payload: 13.14 GB (13,140,436,969 bytes)" in result.output
+    assert "Download size: 5.88 GB (5,877,686,777 bytes)" in result.output
+    assert "Resource payload: 13.14 GB (13,140,798,909 bytes)" in result.output
     assert result.output.index("Download and install to") < result.output.index("Progress:")
 
 
