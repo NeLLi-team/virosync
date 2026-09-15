@@ -4,8 +4,8 @@ orchestration:
   database_root: null
   core_resources_url: https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz
   core_resources_version: v1.1.0
-  core_resources_sha256: 1a30d894e47c4a81c0fbd334519e80ffe306729fb6ae61c3ad8964763ee744ce
-  core_resources_manifest_sha256: 0eb6323d4dd46b531c692168b0d94b71214bd6bf9de1cad7d1596a25aab62f8b
+  core_resources_sha256: 9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969
+  core_resources_manifest_sha256: f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9
   tmvec_resources_url: https://dl.newlineages.com/virosync/virosync_tmvec2_resources_v1.0.0.tar.gz
   tmvec_resources_sha256: 2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6
   interproscan_resources_url: null

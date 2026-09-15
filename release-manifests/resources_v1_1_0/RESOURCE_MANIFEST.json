@@ -10,7 +10,7 @@
     {
       "path": "DATABASE_README.txt",
       "role": "bundle_documentation",
-      "sha256": "e61250232b8f2144a4863a1031b589bde6f528ccdc5a8c10ee5a3aa76c8b5682",
+      "sha256": "7509c18180b74423db1ece5a54322f5a4518a050499b2142f922f8f20f44ccae",
       "size": 968
     },
     {
@@ -40,8 +40,8 @@
     {
       "path": "marker/marker.dmnd",
       "role": "marker_diamond_database",
-      "sha256": "f9fa4c590ce5f334933aabc69e084dacf863a903555208a73300575a42930e23",
-      "size": 1611178743
+      "sha256": "1c6bbe4748a31c497878f6968d38f69bc840acd9474e6e9e7bf840f99cf2b63c",
+      "size": 1612170861
     },
     {
       "path": "genomes/combined_proteome.dmnd",
@@ -61,8 +61,8 @@
   "semantic_counts": {
     "hmm_index_files": 4,
     "hmm_models": 1086,
-    "marker_diamond_sequences": 3864300,
-    "marker_proteins": 3864300,
+    "marker_diamond_sequences": 3867592,
+    "marker_proteins": 3867592,
     "model_annotations": 1086,
     "og_marker_mappings": 808,
     "pfam_models": 937,

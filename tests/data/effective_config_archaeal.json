@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "08ea87f471346617dfc995899ba4019f6c1c979fd182a7d8ff87a82ab622bacb",
+  "effective_config_sha256": "4c433888e4de6440f4461c40abcc6ea97cafb4b1c333e441c9846c5e5f705069",
   "execution": {
     "masking": {
       "backend": "off",
@@ -113,8 +113,8 @@
     }
   },
   "orchestration": {
-    "core_resources_manifest_sha256": "0eb6323d4dd46b531c692168b0d94b71214bd6bf9de1cad7d1596a25aab62f8b",
-    "core_resources_sha256": "1a30d894e47c4a81c0fbd334519e80ffe306729fb6ae61c3ad8964763ee744ce",
+    "core_resources_manifest_sha256": "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9",
+    "core_resources_sha256": "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969",
     "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz",
     "core_resources_version": "v1.1.0",
     "database_root": null,

@@ -28,8 +28,8 @@ SOFTWARE_VERSION = "1.0.1"
 DATABASE_VERSION = "v1.1.0"
 RESOURCE_ARCHIVE = "resources_v1_1_0_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
-RESOURCE_ARCHIVE_SHA256 = "1a30d894e47c4a81c0fbd334519e80ffe306729fb6ae61c3ad8964763ee744ce"
-RESOURCE_MANIFEST_SHA256 = "0eb6323d4dd46b531c692168b0d94b71214bd6bf9de1cad7d1596a25aab62f8b"
+RESOURCE_ARCHIVE_SHA256 = "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969"
+RESOURCE_MANIFEST_SHA256 = "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9"
 RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_1_0/RESOURCE_MANIFEST.json")
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
@@ -254,8 +254,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("marker_proteins") == 3864300,
-            "tracked release manifest marker count must be 3864300",
+            manifest.semantic_counts.get("marker_proteins") == 3867592,
+            "tracked release manifest marker count must be 3867592",
             failures,
         )
         require(

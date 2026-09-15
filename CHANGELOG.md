@@ -16,8 +16,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   marker family. Keep the other 32 added profiles outside the MCP role.
 - Correct the MCP flag for six existing VP penton profiles. Capsid-category
   annotations alone do not confer MCP status or its scoring bonus.
-- Retain the 937 Pfam profiles and the existing protein-reference and
-  taxonomy databases. The ViroSync software version remains 1.0.1.
+- Pre-extract full reference-protein hits for all 33 models, preserve their
+  source identifiers and taxonomy links, and rebuild the marker DIAMOND
+  database from the expanded FASTA.
+- Retain the 937 Pfam profiles, broad reference-proteome database, and
+  taxonomy labels. The ViroSync software version remains 1.0.1.
 
 ## [1.0.1] - 2026-09-08
 

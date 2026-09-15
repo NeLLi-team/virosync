@@ -80,6 +80,41 @@ Pfam annotations use the gathering thresholds from the shipped 937-profile
 screening library. An empty signature records no qualifying hit among the
 training members; it is not evidence that a protein lacks domains.
 
+## Pre-extracted marker references
+
+Pre-extraction yields 3,522 distinct reference proteins. Of these, 230 overlap
+the existing marker set and 3,292 extend it, giving 3,867,592 marker proteins.
+The additions comprise 2,997 EUK, 265 PPV, 12 NCLDV, 11 MIRUS, and seven
+PHAGE references. These are source groups, not model-specificity assignments.
+
+All 33 profiles search the broad reference proteome at a full-sequence
+E-value cutoff of `1e-5`. Each profile searches all 46,765,750 filtered
+proteins, so its E-values use the full database size. One protein exceeds
+100,000 amino acids and is excluded, matching the pipeline's length limit.
+No additional bit-score cutoff is applied during pre-extraction.
+
+Qualifying hits contribute the full reference protein to `marker/marker.faa`.
+Eleven source headers are normalized to existing genome keys for taxonomy
+lookup; the extraction record preserves their original identifiers. Other
+headers remain unchanged. A match does not change the reference's source
+group or establish its function.
+
+Existing marker proteins are preserved. Legacy organism-name suffixes are
+resolved through the same taxonomy lookup used at runtime, and an existing
+organism/protein pair is reused only when its sequence matches. Identical
+proteins from distinct reference organisms remain separate.
+
+One reference, `PHAGE__IMGVR_UViG_8103388301_000001_163`, has no detailed
+lineage entry. It retains its source `PHAGE` label through the existing
+runtime prefix fallback. Its detailed lineage remains unknown.
+
+`marker/marker.dmnd` is rebuilt from the resulting FASTA. The runtime archive
+contains that database; the source companion contains the matching FASTA.
+The release
+[extraction record](https://github.com/NeLLi-team/virosync/blob/main/release-manifests/resources_v1_1_0/marker_preextraction.json)
+records the input checksums, thresholds, per-model counts, header mappings,
+and sequence-preservation checks.
+
 ## Interpretation limits
 
 Profile hits must pass the standard ViroSync marker-validation and region
