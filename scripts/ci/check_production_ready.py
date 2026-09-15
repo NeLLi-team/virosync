@@ -25,12 +25,12 @@ from virosync.utils.resource_manifest import (
 )
 
 SOFTWARE_VERSION = "1.0.1"
-DATABASE_VERSION = "v1.0.7"
-RESOURCE_ARCHIVE = "resources_v1_0_7_runtime.tar.gz"
+DATABASE_VERSION = "v1.1.0"
+RESOURCE_ARCHIVE = "resources_v1_1_0_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
-RESOURCE_ARCHIVE_SHA256 = "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
-RESOURCE_MANIFEST_SHA256 = "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
-RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_0_7/RESOURCE_MANIFEST.json")
+RESOURCE_ARCHIVE_SHA256 = "8d55e4278d6693d41d8a8759bb26bea55e74f0ea0e987f4dcb912477c89a7541"
+RESOURCE_MANIFEST_SHA256 = "a3d91b9a1478f74ca4dcc59be3273715c0045cd919e092c0887e807a23d8e669"
+RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_1_0/RESOURCE_MANIFEST.json")
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
     DATABASE_VERSION,
@@ -249,8 +249,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("hmm_models") == 1053,
-            "tracked release manifest HMM count must be 1053",
+            manifest.semantic_counts.get("hmm_models") == 1080,
+            "tracked release manifest HMM count must be 1080",
             failures,
         )
         require(

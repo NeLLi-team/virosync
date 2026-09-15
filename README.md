@@ -35,7 +35,7 @@ cat results/example/batch_summary.tsv
 ```
 
 The `test-1` row must report `status=success`, `predictions=6`, and
-`accepted=1` with resource bundle v1.0.7.
+`accepted=1` with resource bundle v1.1.0.
 
 ## Run your own genomes
 
@@ -61,6 +61,6 @@ genome. Each genome directory contains:
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.0.1 uses resource bundle v1.0.7.
+ViroSync 1.0.1 uses resource bundle v1.1.0.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

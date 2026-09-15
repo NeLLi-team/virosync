@@ -86,7 +86,7 @@ _REPORT_MCP_HMM_PREFIXES = (
     "plv_mcp",
     "vp_mcp",
 )
-_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"mcp"})
+_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
 _REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
 _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
 _REPORT_PREDICTION_COLOR = "#E3B341"

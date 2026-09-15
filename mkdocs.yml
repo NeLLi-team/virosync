@@ -34,6 +34,7 @@ nav:
   - Reference:
       - Command line: reference/cli.md
       - Databases: RESOURCE_BUNDLE.md
+      - Structure-derived capsids: reference/capsid-models.md
   - Performance: performance.md
 
 exclude_docs: |

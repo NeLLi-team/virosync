@@ -1,10 +1,17 @@
 # ViroSync resource bundle
 
-The current core resource version is `v1.0.7`, supplied as
-`resources_v1_0_7_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
+The current core resource version is `v1.1.0`, supplied as
+`resources_v1_1_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
 marker and broad reference-proteome DIAMOND databases, taxonomy labels, and
 marker annotations used for EVE detection, boundary refinement, and
 classification.
+
+The bundle contains 1,080 marker profiles, including 27
+[structure-derived capsid candidates](reference/capsid-models.md), and 937
+Pfam screening profiles.
+
+Update your ViroSync checkout before installing v1.1.0. Older code does not
+distinguish the new MCP from the other capsid markers.
 
 Setup downloads about 6 GB and installs about 13 GB. The archive and installed
 data can use about 19 GB at the same time. Allow extra space for the Pixi

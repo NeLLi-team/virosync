@@ -18,8 +18,8 @@ from virosync.orchestration.cli import (
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.resource_manifest import ResourceValidationResult
 
-MANIFEST_SHA256 = "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"
-ARCHIVE_SHA256 = "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"
+MANIFEST_SHA256 = "a3d91b9a1478f74ca4dcc59be3273715c0045cd919e092c0887e807a23d8e669"
+ARCHIVE_SHA256 = "8d55e4278d6693d41d8a8759bb26bea55e74f0ea0e987f4dcb912477c89a7541"
 _REAL_RESOLVE_CONFIG_PATHS = ViroSyncDatabaseManager.resolve_config_paths.__func__
 
 
@@ -46,7 +46,7 @@ def test_run_resource_resolution_honors_environment_database_root(
         {
             "database_root": None,
             "core_resources_url": "fixture.tar.gz",
-            "core_resources_version": "v1.0.7",
+            "core_resources_version": "v1.1.0",
             "core_resources_sha256": ARCHIVE_SHA256,
             "core_resources_manifest_sha256": MANIFEST_SHA256,
             "hmm_database": None,
@@ -70,7 +70,7 @@ def test_resource_verify_cli_is_fast_by_default(
     def fake_verify(cls, database_path, **kwargs):
         calls.append({"database_path": Path(database_path), **kwargs})
         return ResourceValidationResult(
-            version="v1.0.7",
+            version="v1.1.0",
             manifest_sha256=MANIFEST_SHA256,
             semantic_counts={},
             files_verified=9,
@@ -98,7 +98,7 @@ def test_resource_verify_cli_is_fast_by_default(
     assert calls == [
         {
             "database_path": tmp_path / "virosync",
-            "expected_version": "v1.0.7",
+            "expected_version": "v1.1.0",
             "manifest_sha256": MANIFEST_SHA256,
             "full": False,
         }
@@ -116,7 +116,7 @@ def test_resource_verify_cli_full_flag_reaches_verifier(
     def fake_verify(cls, database_path, **kwargs):
         full_values.append(kwargs["full"])
         return ResourceValidationResult(
-            version="v1.0.7",
+            version="v1.1.0",
             manifest_sha256=MANIFEST_SHA256,
             semantic_counts={},
             files_verified=9,
@@ -615,8 +615,8 @@ def test_fresh_setup_prompts_before_starting_progress(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Download size: 5.88 GB (5,877,324,818 bytes)" in result.output
-    assert "Resource payload: 13.14 GB (13,137,477,318 bytes)" in result.output
+    assert "Download size: 5.88 GB (5,877,652,181 bytes)" in result.output
+    assert "Resource payload: 13.14 GB (13,140,436,969 bytes)" in result.output
     assert result.output.index("Download and install to") < result.output.index("Progress:")
 
 
@@ -676,7 +676,7 @@ def test_setup_writes_null_when_runtime_bundle_has_no_marker_source(
             "--core-resource",
             str(tmp_path / "runtime.tar.gz"),
             "--core-version",
-            "v1.0.7",
+            "v1.1.0",
             "--core-resource-sha256",
             ARCHIVE_SHA256,
             "--core-manifest-sha256",

@@ -394,6 +394,8 @@ def test_notebook_mcp_helper_matches_canonical_detector() -> None:
         "plv_MCP_1",
         "vp_MCP_3",
         "mcp_mirus",
+        "EVE_CAPSID_NOVEL_0029",
+        "EVE_CAPSID_NOVEL_0028",
         "dmcp",
         "mcp_lookalike",
         "ncmcp_pseudoprotein",

@@ -114,7 +114,6 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
         ("weak_mirus", "Mirus_MCP", "unvalidated", 92, "UNKNOWN", "candidate", False),
         ("valid_mirus", "Mirus_MCP", "validated_novel", 92, "HK97", "sequence_supported", True),
         ("explicit_hk97", "HK97_capsid", "validated", 92, "HK97", "sequence_supported", True),
-        ("mirus_substring", "NotMirus_MCP", "validated", 92, "UNKNOWN", "sequence_supported", True),
         ("valid_generic", "MCP", "validated", 92, "UNKNOWN", "sequence_supported", True),
         ("long_candidate", "MCP", "unvalidated", 500, "DJR", "candidate", False),
         ("valid_djr", "PLV_MCP", "validated", 500, "DJR", "sequence_supported", True),
@@ -177,6 +176,30 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
     weak_summary = _build_jelly_roll_summary_for_boundary([("weak_mirus", "A")], loaded)
     synthesizer._apply_jelly_roll_summary(preexisting, weak_summary)
     assert preexisting.has_mcp is True
+
+
+def test_curated_structure_mcp_reaches_jelly_roll_selection(tmp_path: Path) -> None:
+    marker_hits_path, sequences_path = _write_inputs(
+        tmp_path,
+        [
+            ("curated_mcp", "EVE_CAPSID_NOVEL_0029", "validated_novel"),
+            ("other_capsid", "EVE_CAPSID_NOVEL_0028", "validated_novel"),
+            ("substring_mcp", "NotMirus_MCP", "validated_novel"),
+        ],
+        [
+            ("curated_mcp", "M" * 100),
+            ("other_capsid", "C" * 100),
+            ("substring_mcp", "S" * 100),
+        ],
+    )
+    output_path = tmp_path / "curated.tsv"
+
+    classify_jelly_roll_task(marker_hits_path, sequences_path, output_path)
+
+    rows = _read_rows(output_path)
+    assert len(rows) == 1
+    assert rows[0]["marker"] == "EVE_CAPSID_NOVEL_0029"
+    assert rows[0]["mcp_support"] == "sequence_supported"
 
 
 def test_multi_domain_uses_supported_status_without_changing_output_id(tmp_path: Path) -> None:

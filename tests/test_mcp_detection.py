@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import pytest
 
+from virosync.pipeline.phase3.evidence_synthesizer import (
+    mcp_vote_classes,
+    summarize_marker_hits,
+)
 from virosync.pipeline.phase3.mcp_detection import (
     MCP_HMM_EXACT,
     MCP_HMM_PREFIXES,
@@ -36,6 +40,9 @@ POSITIVES = [
     "gvogm0003",
     "GVOGm0003",
     "GVOGM0003",
+    # Curated structure-derived MCP model (exact, taxonomically neutral)
+    "eve_capsid_novel_0029",
+    "EVE_CAPSID_NOVEL_0029",
     # Bare symbolic MCP token
     "mcp",
     "MCP",
@@ -66,6 +73,7 @@ NEGATIVES = [
     # Substring matches on "mcp" that are NOT canonical
     "dmcp",
     "mcp_lookalike",
+    "NotMirus_MCP",
     "NCLDV_hypothetical",
     "ncmcp_pseudoprotein",
     "somcptest",
@@ -76,6 +84,8 @@ NEGATIVES = [
     "vp_atpase_1",
     "vp_penton_3",
     "vp_pro_1",
+    "EVE_CAPSID_NOVEL_0028",
+    "EVE_CAPSID_NOVEL_0030",
     "OG1590",
     "OG2068",
     "Mirus_Terminase_merged",
@@ -109,8 +119,8 @@ def test_canonical_constants_contents() -> None:
     assert "vs000309" in NCLDV_MCP_MODELS
     assert "gamadvirusmcp" in NCLDV_MCP_MODELS
     assert "gvogm0003" in NCLDV_MCP_MODELS
-    # MCP_HMM_EXACT adds the bare "mcp" token on top of the NCLDV set
-    assert MCP_HMM_EXACT == NCLDV_MCP_MODELS | frozenset({"mcp"})
+    assert "eve_capsid_novel_0029" not in NCLDV_MCP_MODELS
+    assert MCP_HMM_EXACT == NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
     # Family prefixes registered
     assert "plv_mcp" in MCP_HMM_PREFIXES
     assert "vp_mcp" in MCP_HMM_PREFIXES
@@ -118,3 +128,64 @@ def test_canonical_constants_contents() -> None:
     assert "mcp_mirus" in MCP_HMM_PREFIXES
     assert "mcp_poli" in MCP_HMM_PREFIXES
     assert "gamadvirusmcp" in MCP_HMM_PREFIXES
+
+
+@pytest.mark.parametrize(
+    "annotation_index",
+    [
+        None,
+        {
+            "eve_capsid_novel_0019": {
+                "categories": {"capsid"},
+                "family": "UNKNOWN",
+            },
+            "vp_penton_1": {
+                "categories": {"capsid", "penton"},
+                "family": "PPV",
+            },
+        },
+    ],
+)
+def test_minor_capsid_and_penton_do_not_promote_mcp(
+    annotation_index: dict[str, dict[str, object]] | None,
+) -> None:
+    summary = summarize_marker_hits(
+        ["EVE_CAPSID_NOVEL_0019", "VP_Penton_1"],
+        annotation_index,
+    )
+
+    assert summary["has_mcp"] is False
+    assert "capsid" in summary["categories"]
+
+
+def test_structure_derived_mcp_has_no_marker_family_vote() -> None:
+    summary = summarize_marker_hits(
+        ["EVE_CAPSID_NOVEL_0029"],
+        {
+            "eve_capsid_novel_0029": {
+                "categories": {"capsid"},
+                "family": "UNKNOWN",
+            }
+        },
+    )
+
+    assert summary["has_mcp"] is True
+    assert summary["families"] == []
+    assert summary["dominant_family"] == "UNKNOWN"
+
+
+def test_structure_derived_mcp_votes_only_with_sequence_taxonomy() -> None:
+    hit = {
+        "hallmark_gene": "EVE_CAPSID_NOVEL_0029",
+        "porf_id": "protein_1",
+        "top10_prefixes": "",
+        "top10_pidents": "",
+        "top10_targets": "",
+        "validation_status": "validated_novel",
+    }
+
+    assert mcp_vote_classes([hit]) == set()
+
+    hit["top10_prefixes"] = "PPV"
+    hit["top10_pidents"] = "80"
+    assert mcp_vote_classes([hit]) == {"PPV"}

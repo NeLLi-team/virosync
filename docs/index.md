@@ -12,7 +12,7 @@ eukaryotic genomes. The core workflow runs on CPUs and does not need a GPU.
 
 ## Documentation scope
 
-ViroSync 1.0.1 uses resource bundle v1.0.7.
+ViroSync 1.0.1 uses resource bundle v1.1.0.
 The `v1.0.0` tag uses resource bundle v1.0.6.
 
 ViroSync has a non-commercial license. Read the

@@ -32,7 +32,6 @@ from virosync.pipeline.host_signatures import (
     host_signature_density_evalue_weighted,
 )
 from virosync.pipeline.phase1.viral_markers import (
-    CRESS_MARKER_MODELS,
     base_marker_gene_id,
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
@@ -228,14 +227,13 @@ def summarize_marker_hits(
 
     for gene in hallmark_genes:
         gene_key = gene.lower()
+        has_mcp = has_mcp or is_mcp_gene(gene_key)
         annotation = annotation_index.get(gene_key)
         if annotation:
             categories.update(annotation.get("categories", set()))
             family = annotation.get("family", "UNKNOWN")
             if family != "UNKNOWN":
                 families[family] += 1
-            if "capsid" in annotation.get("categories", set()) and gene.upper() not in CRESS_MARKER_MODELS:
-                has_mcp = True
             continue
 
         # Fallback: infer from gene name only
@@ -248,8 +246,6 @@ def summarize_marker_hits(
             families["MIRUS"] += 1
         elif gene_key.startswith(("gvogm", "gamadvirus")) or gene_key in {"og1352", "og484"}:
             families["NCLDV"] += 1
-        if is_mcp_gene(gene_key) or "capsid" in gene_key:
-            has_mcp = True
 
     group_hits = 0
     for group, group_categories in MARKER_CATEGORY_GROUPS.items():
