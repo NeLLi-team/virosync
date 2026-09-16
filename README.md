@@ -4,7 +4,7 @@
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
-eukaryotic genomes. It detects viral markers, refines boundaries, and writes
+eukaryotic genomes. It detects viral markers, refines boundaries, and provides
 accepted regions with their evidence.
 
 ## Workflow
