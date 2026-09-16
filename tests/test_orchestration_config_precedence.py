@@ -978,7 +978,7 @@ def test_rebuild_requires_and_validates_marker_build_inputs(tmp_path: Path) -> N
         _validate_runtime_config(missing_sources)
 
 
-def test_enabled_frameshift_screening_requires_bath_tools_before_run(
+def test_enabled_frameshift_screening_needs_no_external_aligner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -998,14 +998,11 @@ def test_enabled_frameshift_screening_requires_bath_tools_before_run(
     monkeypatch.setattr(
         orchestration_cli.shutil,
         "which",
-        lambda name: "/mock/bin/bathconvert" if name == "bathconvert" else None,
+        lambda name: None,
     )
+    monkeypatch.setattr(orchestration_cli, "graphviz_runtime_error", lambda: None)
 
-    with pytest.raises(
-        click.ClickException,
-        match="requires commands on PATH: bathsearch",
-    ):
-        _validate_runtime_config(config)
+    _validate_runtime_config(config)
 
 
 @pytest.mark.parametrize(

@@ -429,8 +429,6 @@ def _enabled_executable_identities(
         names.add("foldseek")
     if bool(flat_config.get("enable_phylogenetic")):
         names.add("gvclass")
-    if bool(flat_config.get("frameshift_screening_enabled")):
-        names.update({"bathconvert", "bathsearch"})
     identities = [identity for name in sorted(names) if (identity := _executable_resource_identity(name)) is not None]
     if bool(flat_config.get("run_gvclass")) and flat_config.get("gvclass_path"):
         gvclass = Path(flat_config["gvclass_path"]) / "gvclass"
@@ -567,7 +565,9 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "refined_state.json":
         return PHASE2_STATE_SCHEMA
     if relative == "phase1/frameshift_screening/frameshift_hits.tsv":
-        return "frameshift-hits-v1"
+        return "frameshift-hits-v2"
+    if relative == "phase1/frameshift_screening/frameshift_events.tsv":
+        return "frameshift-events-v1"
     if relative == "phase1/frameshift_screening/confirmed_frameshift_proteins.faa":
         return "frameshift-rescued-proteins-v1"
     if relative == "phase1/frameshift_screening/confirmed_frameshift_markers.tsv":
@@ -632,6 +632,7 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
             "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
             "phase1/frameshift_screening/frameshift_hits.tsv",
+            "phase1/frameshift_screening/frameshift_events.tsv",
             "phase1/pfam_arbitration.tsv",
             "phase1/resume_state.json",
         ),

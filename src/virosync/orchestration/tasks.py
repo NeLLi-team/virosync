@@ -179,7 +179,7 @@ def frameshift_screening_task(
     output_dir: Path,
     threads: int = 8,
 ) -> list:
-    """Run the optional BATH rescue screen against the masked assembly."""
+    """Run native codon-aware marker rescue against the masked assembly."""
     from virosync.pipeline.phase1.frameshift_screening import (
         run_frameshift_screening,
     )

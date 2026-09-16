@@ -33,6 +33,7 @@ nav:
       - Frameshift screening: FRAMESHIFT_SCREENING.md
   - Reference:
       - Command line: reference/cli.md
+      - Frameshift method: reference/frameshift-method.md
       - Databases: RESOURCE_BUNDLE.md
   - Performance: performance.md
 

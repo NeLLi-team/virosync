@@ -526,14 +526,6 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     graphviz_error = graphviz_runtime_error()
     if graphviz_error is not None:
         errors.append(graphviz_error)
-    if config.phase1.frameshift_screening_enabled:
-        missing_bath_tools = [name for name in ("bathconvert", "bathsearch") if shutil.which(name) is None]
-        if missing_bath_tools:
-            errors.append(
-                "phase1.frameshift_screening_enabled requires commands on PATH: "
-                + ", ".join(missing_bath_tools)
-                + " (see docs/FRAMESHIFT_SCREENING.md)"
-            )
     if config.phase3.run_gvclass:
         if config.phase3.gvclass_path is None:
             errors.append("phase3.run_gvclass requires phase3.gvclass_path")
@@ -1328,7 +1320,7 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     "--frameshift-screening/--no-frameshift-screening",
     "frameshift_screening_enabled",
     default=None,
-    help="Enable/disable frameshift-sensitive marker rescue (requires BATH)",
+    help="Enable/disable native codon-aware marker rescue",
 )
 @click.option(
     "--device",

@@ -262,6 +262,8 @@ def _run_phase1_subflow(
         confirmed_frameshift_tsv = confirmed_frameshift_faa.with_name("confirmed_frameshift_markers.tsv")
         if frameshift_screening_enabled and not confirmed_frameshift_tsv.is_file():
             raise ValueError("authenticated Phase 1 is missing the confirmed frameshift marker table")
+        if frameshift_screening_enabled and not confirmed_frameshift_faa.with_name("frameshift_events.tsv").is_file():
+            raise ValueError("authenticated Phase 1 is missing the frameshift event table")
         logger.info("Phase 1 resume: loading exact cached Phase-1 state")
         phase1_state = load_phase1_state(phase1_state_path)
         validated_markers = phase1_state.validated_markers
