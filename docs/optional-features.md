@@ -1,90 +1,64 @@
 # Optional analyses
 
-The core workflow runs on CPUs. These optional analyses need separate tools or
-data.
+The core workflow runs on CPUs. Enable an optional analysis with its run
+option after installing the required tools and data.
 
-## Frameshift screening
+| Analysis | Run option | Required tools and data |
+| --- | --- | --- |
+| Frameshift screening | `--frameshift-screening` | BATH and the shipped VS marker profiles. See the [worked example](FRAMESHIFT_SCREENING.md). |
+| TMVec2 | `--tmvec` | The `structural` Pixi environment and the TMVec2 BFVD resource bundle. Runs on CPU or GPU. |
+| Boltz and Foldseek | `--boltz` | The isolated Boltz runtime, Foldseek, a viral-structure database, and an online MSA service. |
+| InterProScan | `--interproscan` | An InterProScan installation with an executable `interproscan.sh`. |
 
-This screen can recover viral marker domains that protein prediction misses.
-It requires BATH and the `--frameshift-screening` flag. See the
-[frameshift screening guide](FRAMESHIFT_SCREENING.md) for setup, an example,
-and limits.
+TMVec2, Boltz/Foldseek, and InterProScan add evidence to existing candidate
+regions. They do not discover regions on their own.
 
-## TMVec2
+## TMVec2 requirements
 
-TMVec2 adds BFVD protein-embedding evidence. It can use a CPU; a GPU is
-optional.
+Install the `structural` environment with `pixi install --locked -e structural`.
+The resource installer accepts `--tmvec` to download the configured BFVD bundle;
+see [resource setup options](reference/cli.md#install-resources).
 
-```bash
-pixi install --locked -e structural
-pixi run virosync orchestrate setup \
-  --config config/orchestration.yaml \
-  --no-write-config \
-  --tmvec
-pixi run -e structural check-structural-runtime --require-tmvec
-pixi run -e structural virosync \
-  -i genome.fna -o results/tmvec \
-  --config config/orchestration.yaml \
-  --device cpu --tmvec
-```
+Run ViroSync in the `structural` environment. Select `--device cpu` for CPU
+inference, or `--device cuda --tmvec-gpu` to require a GPU. An enabled TMVec2
+analysis stops if its runtime or resources fail validation.
 
-For a GPU, replace `--device cpu` with `--device cuda --tmvec-gpu`. An enabled
-TMVec2 run stops if its runtime or resources fail validation.
-To check CUDA with `check-structural-runtime`, first set `compute.device: cuda`
-in the config.
+The runtime check uses `compute.device` from the config. Set it to `cuda` to
+check CUDA support before a GPU run.
 
-## Boltz and Foldseek
+## Boltz and Foldseek requirements
 
-Install the isolated Boltz runtime:
+Boltz has a separate Pixi manifest at `tools/boltz_runtime/pixi.toml`. Install
+it with `pixi install --locked --manifest-path tools/boltz_runtime/pixi.toml`.
+In the run config, set `phase3.viral_structure_db` to the Foldseek database
+prefix and `phase3.boltz_use_msa_server` to `true`.
 
-```bash
-pixi install --locked --manifest-path tools/boltz_runtime/pixi.toml
-```
+MSA-server mode sends query protein sequences to an online service. If the
+runtime or database is missing, ViroSync warns and skips this analysis.
 
-Set the Foldseek database prefix and MSA-server mode in the config:
+An inferred MCP fold does not confirm the protein's 3D structure. Boltz and
+Foldseek provide computational query-structure evidence, not experimental
+confirmation.
 
-```yaml
-phase3:
-  viral_structure_db: /data/viral_structures/db
-  boltz_use_msa_server: true
-```
+## InterProScan requirements
 
-This sends query protein sequences to an online MSA service.
+Set `phase3.interproscan_dir` to the directory containing an executable
+`interproscan.sh`. If the runtime is missing, ViroSync warns and skips this
+analysis.
 
-Check and run the analysis:
+## Runtime checks
 
-```bash
-pixi run check-structural-runtime --require-boltz
-pixi run virosync \
-  -i genome.fna -o results/boltz \
-  --config config/orchestration.yaml \
-  --boltz
-```
+The `check-structural-runtime` Pixi task checks configured tools and data. It
+does not install tools or download models and databases. A failed required
+check returns a nonzero exit status.
 
-An MCP fold inferred without a query structure is not a confirmed 3D
-structure. Use the Boltz and Foldseek results when query-structure evidence is
-required. If the runtime or database is missing, ViroSync warns and skips this
-layer.
+| Option | Check |
+| --- | --- |
+| `--require-tmvec` | Run a protein query against BFVD in the `structural` environment. |
+| `--require-boltz` | Check the Boltz runtime, Foldseek, MSA-server setting, and database prefix. |
+| `--require-interproscan` | Check that the configured `interproscan.sh` exists and is executable. |
+| `--require-all-optional` | Apply all three checks in the `structural` environment. |
 
-## InterProScan
-
-Set `phase3.interproscan_dir` to an InterProScan directory that contains an
-executable `interproscan.sh`. Then check and run the layer:
-
-```bash
-pixi run check-structural-runtime --require-interproscan
-pixi run virosync \
-  -i genome.fna -o results/interproscan \
-  --config config/orchestration.yaml \
-  --interproscan
-```
-
-If the runtime is missing, ViroSync warns and skips this layer.
-
-## Check all optional layers
-
-```bash
-pixi run -e structural check-structural-runtime --require-all-optional
-```
-
-This command checks configured tools and data. It does not install them.
+Without a required option, the task checks only analyses enabled in the
+config. See the [command-line reference](reference/cli.md#check-optional-tools)
+for the config option and command syntax.

@@ -1,15 +1,16 @@
 # Outputs and interpretation
 
-Use the accepted-prediction table for counts and later analyses. Use the
-detailed table to check why ViroSync accepted or rejected a candidate.
+Use `phase3_synthesis/virosync_predictions.tsv` for accepted EVE counts and
+downstream analyses. Use `virosync_predictions_detailed.tsv` to check why a
+candidate was accepted or rejected.
 
-## Output specification
+## Output files
 
 For a batch run, ViroSync writes `batch_summary.tsv` and `batch_report.md` in
 the selected output directory. It also creates one subdirectory for each input
 genome. The genome ID is the input FASTA name without its extension.
 
-The main per-genome files are:
+For genomes that reach Phase 3:
 
 | File | Contents |
 | --- | --- |
@@ -22,14 +23,18 @@ The main per-genome files are:
 | `phase3_synthesis/eve_ani_edges.tsv` | ANI comparisons used for clustering. Can include candidates removed from the final accepted set. |
 | `phase3_synthesis/gene_taxonomy/` | Per-candidate gene taxonomy tables. Written when at least one EVE is accepted. |
 
+If no candidates reach Phase 3, the run writes empty prediction TSV, BED, GFF3,
+and detailed tables plus `virosync_summary.json` directly in the genome
+directory. These runs do not create `phase3_synthesis/`.
+
 In `batch_summary.tsv`, `predictions` counts all candidates and `accepted`
 counts rows in the accepted-prediction table. Each accepted region has one
 class, so the class columns sum to `accepted`.
 
 ### Coordinates
 
-The TSV and BED files use 0-based, half-open coordinates: `[start, end)`.
-Therefore, `length = end - start`. GFF3 uses 1-based, inclusive coordinates.
+The TSV and BED files use 0-based, half-open coordinates: `[start, end)`, with
+`length = end - start`. GFF3 uses 1-based, inclusive coordinates.
 The GFF3 interval `start + 1` through `end` describes the same bases as its TSV
 and BED row.
 
@@ -48,11 +53,10 @@ and BED row.
 | `ani_cluster_id`, `ani_cluster_size`, `ani_max_percent` | Detailed | Within-genome ANI cluster assignment. A dot marks no clustered relative where applicable. |
 | `taxonomy_class_before_ani`, `taxonomy_class_propagated_from` | Detailed | Class before ANI-based transfer and the donor EVE, when transfer occurred. |
 
-`canonical_selection_outcome` records direct retention, gate rejection, loss
-of a frameshift-rescued marker, overlap selection or suppression, or lack of
-viral evidence. Both `kept` and `overlap_selected` can identify accepted
-candidates. Use the accepted-prediction table to determine which candidates
-ViroSync accepted.
+`canonical_selection_outcome` records retention, gate rejection, loss of a
+frameshift-rescued marker, overlap selection or suppression, or lack of viral
+evidence. Both `kept` and `overlap_selected` can identify accepted candidates;
+the accepted-prediction table contains the final set.
 
 ### Class meanings
 
@@ -92,7 +96,9 @@ inference, not structural or experimental confirmation. The `confidence`
 column in the MCP table describes fold evidence; it is distinct from
 `final_confidence` for an EVE.
 
-## Workflow summary
+## Workflow
+
+![ViroSync workflow](virosync_workflow.png)
 
 ViroSync predicts genes, finds viral marker proteins, and validates marker
 matches against viral references. It builds candidate regions around supported
@@ -103,8 +109,7 @@ regions. Within each genome, ANI clustering can transfer a class from
 MCP-bearing members that meet the transfer rules and agree on the class.
 
 Optional InterProScan, TMVec2, and Boltz/Foldseek analyses annotate and score
-existing candidates. They do not create regions without marker-seeded
-candidates.
+regions seeded by markers. They cannot create candidates on their own.
 
 ## Confidence and limitations
 
@@ -124,6 +129,6 @@ experimental validation.
 ANI class transfer can cross a chain of pairwise links, and shared host sequence
 can contribute to an alignment. Mixed insertions and capsid exchange can also
 conflict with a region-level class. Inspect the detailed table, gene-taxonomy
-tables, and ANI edges for important calls. A missing ANI edge does not show
+tables, and ANI edges for calls you plan to report. A missing ANI edge does not show
 that two short regions are unrelated. Short sequences may not support a
 comparison.

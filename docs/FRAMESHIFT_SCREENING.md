@@ -1,51 +1,35 @@
-# Run frameshift-sensitive VS marker screening
+# Screen for frameshifted markers
 
-Frameshift screening searches the masked assembly with the shipped
-`VS######` marker profiles. It can recover domains with a frameshift or
-in-frame stop codon that protein prediction can miss. ViroSync validates each
-domain against the viral marker database before it can seed a candidate
-region. The normal boundary and acceptance filters still apply.
+Frameshift screening can recover viral marker domains with a frameshift or
+in-frame stop codon that protein prediction misses. It requires BATH and is
+off by default.
 
-## Install BATH
+## Run the example
 
-Install a C compiler and `make` on the host before running `setup-bath`.
+After [installing ViroSync](getting-started.md), build BATH and run the
+three-contig *Trichomonas vaginalis* G3 example. A C compiler and `make` must
+be available on the host.
 
 ```bash
 pixi run setup-bath
+pixi run example-frameshift
+cat results/example-frameshift/batch_summary.tsv
 ```
 
-## Configure the screen
+The contigs come from
+[GCA_000002825.3](https://www.ncbi.nlm.nih.gov/datasets/genome/GCA_000002825.3/).
+With resource bundle v1.0.7, the `trichomonas-g3` row reports
+`status=success`, `predictions=5`, and `accepted=2`. This example checks marker
+rescue; it does not measure sensitivity.
 
-The screen is off by default. Enable it for one run:
+## Screen your assembly
 
-```bash
-pixi run virosync \
-  -i assembly.fna \
-  -o results/frameshift \
-  --config config/orchestration.yaml \
-  --frameshift-screening
-```
-
-To enable it in a config file, set:
+Add `--frameshift-screening` to a ViroSync run, or enable it in the config:
 
 ```yaml
 phase1:
   frameshift_screening_enabled: true
 ```
-
-## Run the shipped example
-
-The example uses three *Trichomonas vaginalis* G3 contigs from
-[GCA_000002825.3](https://www.ncbi.nlm.nih.gov/datasets/genome/GCA_000002825.3/).
-
-```bash
-pixi run example-frameshift
-cat results/example-frameshift/batch_summary.tsv
-```
-
-With resource bundle v1.0.7, the row must report `status=success`,
-`predictions=5`, and `accepted=2`. This example checks the rescue path. It is
-not a sensitivity benchmark.
 
 ## Read the output
 
@@ -64,7 +48,10 @@ outputs. An accepted per-EVE FAA can also contain a confirmed rescued domain.
 
 ## Interpret the result
 
-A confirmed rescued domain supports a degraded viral marker locus. It is not a
-repaired full-length protein or coding sequence. The BATH cutoff is fixed and
-has not been calibrated for each family. The screen uses only the shipped VS
-profiles.
+The screen searches the masked assembly with the shipped `VS######` profiles.
+ViroSync validates each domain against the viral marker database before it can
+seed a candidate region. The normal boundary and acceptance filters apply.
+
+A confirmed domain supports a degraded viral marker locus. It does not
+reconstruct a full-length protein or coding sequence. The BATH cutoff is fixed
+and has not been calibrated for each family.

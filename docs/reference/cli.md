@@ -1,14 +1,16 @@
 # Command-line reference
 
-Run ViroSync through Pixi from the repository root:
+From the repository root, list commands or inspect their options:
 
 ```bash
-pixi run virosync [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
+pixi run virosync --help
+pixi run virosync run --help
+pixi run virosync orchestrate setup --help
 ```
 
 `pixi run virosync -i INPUT -o OUTPUT` is a shortcut for
 `pixi run virosync run -i INPUT -o OUTPUT`. CLI values override YAML values only
-when you supply them. Use `-h` or `--help` on any command.
+when supplied. Every command accepts `-h` and `--help`.
 
 <!-- cli-reference:virosync -->
 ## Global options
@@ -49,7 +51,7 @@ Relative paths in a list file start at the current working directory.
 | `-i PATH`, `--input PATH` | Required input. Accepts an uncompressed `.fna`, `.fasta`, or `.fa` file, a directory, or a list file. The path must exist. |
 | `-o PATH`, `--output PATH` | Required output root. ViroSync creates one subdirectory per genome. |
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
-| `--clean-run` | Start again without reusing completed output. Otherwise, resume when the input, settings and saved outputs still match. |
+| `--clean-run` | Delete each selected genome's output directory and rerun it. Otherwise, resume when the input, settings and saved outputs still match. |
 | `-w N`, `--workers N` | Run up to N genomes at once. Minimum: 1. The shipped config sets 6. |
 | `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. |
 | `--max-concurrent-genomes N` | Set the same genome limit as `--workers`. Minimum: 1. Both values must agree if you supply both. |
@@ -104,16 +106,32 @@ All path overrides in this table must exist.
 | `--use-taxonomy-ml`, `--no-taxonomy-ml` | Enable or disable Phase 2 taxonomy-boundary machine learning. |
 | `--taxonomy-ml-model MODEL` | Select `logreg`, `gbdt`, or `xgboost` for taxonomy-boundary refinement. |
 
+### Concurrency
+
+The shipped config runs up to six genomes at once, with eight tool threads
+per genome and `compute.max_threads: 48`. `--workers` controls concurrent
+genomes; `--threads-per-worker` controls tool threads within each genome.
+ViroSync reduces threads per genome when the requested combination exceeds
+the configured thread budget, with a minimum of one thread per genome.
+
+### Resume and restart
+
+Repeat a command with the same output directory to resume. By default,
+ViroSync reuses completed phases when the input, settings, resources, and
+saved outputs still match. The config controls this with `execution.resume`.
+Add `--clean-run` to delete each selected genome's output directory and start
+again. This also removes any files you added to those directories.
+
 <!-- cli-reference:virosync-orchestrate -->
 ## Orchestration commands
 
-The orchestration group contains setup, resource verification, system
-information, and the `run` command.
+`virosync orchestrate` groups setup, resource verification, system information,
+and the `run` command.
 
 <!-- cli-reference:virosync-orchestrate-setup -->
 ## Install resources
 
-Install databases and optional analysis resources.
+`virosync orchestrate setup` installs databases and optional analysis resources.
 
 | Option | Behavior |
 | --- | --- |
@@ -139,12 +157,12 @@ Install databases and optional analysis resources.
 <!-- cli-reference:virosync-orchestrate-resources -->
 ## Resource commands
 
-The resource group contains the `verify` command.
+`virosync orchestrate resources` contains the `verify` command.
 
 <!-- cli-reference:virosync-orchestrate-resources-verify -->
 ## Verify core resources
 
-Check the installed databases.
+`virosync orchestrate resources verify` checks the installed databases.
 
 | Option | Behavior |
 | --- | --- |

@@ -1,31 +1,35 @@
 # ViroSync resource bundle
 
-The current core resource version is `v1.0.7`, supplied as
-`resources_v1_0_7_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
-marker and broad reference-proteome DIAMOND databases, taxonomy labels, and
-marker annotations used for EVE detection, boundary refinement, and
-classification.
-
-Setup downloads about 6 GB and installs about 13 GB. The archive and installed
-data can use about 19 GB at the same time. Allow extra space for the Pixi
-environment, results, filesystem overhead, optional resources, and retained
-older versions.
-
-Install the core resources:
+Install the core databases from the repository root:
 
 ```bash
 pixi run setup-virosync-resources
 ```
 
-To use another location, set the database root before setup and keep it set for
-later runs:
+The released `v1.0.7` bundle, `resources_v1_0_7_runtime.tar.gz`, downloads
+about 6 GB and installs about 13 GB. Setup can use about 19 GB while both are
+on disk. Allow extra space for the Pixi environment, results, filesystem
+overhead, optional resources, and retained older versions.
+
+The bundle contains marker HMMs, Pfam profiles, marker and broad
+reference-proteome DIAMOND databases, taxonomy labels, and marker annotations
+for EVE detection, boundary refinement, and classification.
+
+## Choose a database directory
+
+Replace `/data/virosync-db` with your database directory and keep
+`VIROSYNC_DB_ROOT` set for later runs:
 
 ```bash
 export VIROSYNC_DB_ROOT=/data/virosync-db
 pixi run setup-virosync-resources
 ```
 
-Verify the complete installed bundle:
+Do not run setup while ViroSync is using the databases.
+
+## Verify the installation
+
+Verify the files after setup, a storage error, or copying the database directory:
 
 ```bash
 pixi run virosync orchestrate resources verify \
@@ -33,7 +37,4 @@ pixi run virosync orchestrate resources verify \
   --full
 ```
 
-`--full` hashes each resource file and checks the DIAMOND databases. Run it
-after setup, after a storage error, or after copying the resource tree.
-
-Do not run setup while ViroSync is using the databases.
+`--full` hashes each resource file and checks the DIAMOND databases.

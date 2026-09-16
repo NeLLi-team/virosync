@@ -2,8 +2,8 @@
 
 The 5 September 2026 test used ViroSync 1.0.0 with the
 [pipeline fixes in 091cfc1](https://github.com/NeLLi-team/virosync/commit/091cfc1),
-v1.0.7 databases, and no optional analyses. ViroSync ran up to two inputs at
-once. Select a figure to open the full-size image.
+v1.0.7 databases, and no optional analyses. ViroSync processed up to two inputs
+at once. Select a figure to open the full-size image.
 
 ## Synthetic boundary recovery
 
@@ -20,8 +20,8 @@ and outside-truth sequence. Panel c partitions calls at a 500 bp one-to-one
 threshold. Missed-locus labels use recovery after the union of call fragments,
 which can recover a locus without a credited one-to-one call. The test excludes
 30 survey-derived loci whose source elements ViroSync found before this
-comparison. Region detection has no true negative,
-so the plot does not report specificity or accuracy.*
+comparison. Region detection has no true negative, so the plot does not report
+specificity or accuracy.*
 
 ## Runtime and peak memory
 
@@ -41,9 +41,9 @@ different load and concurrency.*
 
 ## Real-genome output
 
-ViroSync accepted 523 regions across the five real genomes. These inputs have
-no complete region-level truth set. The figure describes output burden and
-gene content, not detection accuracy.
+ViroSync accepted 523 regions across the five real genomes. The figure shows
+output burden and gene content. These inputs have no complete region-level
+truth set for measuring detection accuracy.
 
 [![Real-genome candidate burden and gene composition](assets/performance/benchmark_fig3_real_burden_composition.png)](assets/performance/benchmark_fig3_real_burden_composition.png)
 
