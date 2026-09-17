@@ -33,9 +33,13 @@ nav:
       - Frameshift screening: FRAMESHIFT_SCREENING.md
   - Reference:
       - Command line: reference/cli.md
+      - Frameshift method: reference/frameshift-method.md
       - Databases: RESOURCE_BUNDLE.md
       - Structure-derived capsids: reference/capsid-models.md
   - Performance: performance.md
+
+extra_css:
+  - stylesheets/extra.css
 
 exclude_docs: |
   DEL/

@@ -208,7 +208,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
             (phase1_ablation, "virosync.ablation_events/v1"),
-            (frameshift_hits, "frameshift-hits-v1"),
+            (frameshift_hits, "frameshift-hits-v2"),
             (phase1_state, PHASE1_STATE_SCHEMA),
         )
     )

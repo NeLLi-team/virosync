@@ -1,14 +1,14 @@
 # Optional analyses
 
-The core workflow runs on CPUs. These optional analyses need separate tools or
-data.
+The core workflow runs on CPUs. Frameshift screening uses the standard
+environment; the other optional analyses need separate tools or data.
 
 ## Frameshift screening
 
 This screen can recover viral marker domains that protein prediction misses.
-It requires BATH and the `--frameshift-screening` flag. See the
-[frameshift screening guide](FRAMESHIFT_SCREENING.md) for setup, an example,
-and limits.
+Enable it with `--frameshift-screening`. See the
+[frameshift screening guide](FRAMESHIFT_SCREENING.md) for an example and
+the method's limits.
 
 ## TMVec2
 
