@@ -335,6 +335,7 @@ def _run_phase2_subflow(
     config_fingerprint: str | None = None,
     resume_authorized: bool = False,
     threads: int | None = None,
+    raw_genome_path: Path | None = None,
 ) -> Phase2Result | Phase2Terminal:
     """Phase 2: Boundary refinement (gene extension, Diamond taxonomy, host trimming).
 
@@ -348,6 +349,7 @@ def _run_phase2_subflow(
 
     Args:
         masked_path: Path to masked genome FASTA
+        raw_genome_path: Optional unmasked genome FASTA used for repeat evidence.
         proteome_path: Path to protein FASTA
         merged_seeds: List of MergedSeed objects from Phase 1
         validated_markers: List of validated marker hits from Phase 1
@@ -994,6 +996,31 @@ def _run_phase2_subflow(
                 pre_merge_count,
                 len(refined_boundaries),
             )
+
+    # Terminal repeats are read from the raw genome because Phase 0 hard-masks
+    # repeats. Run this after every heuristic coordinate change and merge, but
+    # before marker-floor metadata and coordinate-derived composition evidence.
+    if refined_boundaries and raw_genome_path is not None and boundary_diamond_query is not None:
+        from virosync.pipeline.phase2.terminal_repeats import (
+            refine_boundaries_with_terminal_repeats,
+        )
+
+        refined_boundaries = refine_boundaries_with_terminal_repeats(
+            refined_boundaries,
+            raw_genome_path=raw_genome_path,
+            validated_markers=validated_markers,
+            boundary_diamond_query=boundary_diamond_query,
+            boundary_taxonomy_map=boundary_taxonomy_map,
+            proteome_index=proteome_index,
+            extension_bp=config.phase1.extension_kb * 1000,
+        )
+        n_tir_overrides = sum(boundary.tir_boundary_override for boundary in refined_boundaries)
+        n_tir_present = sum(boundary.tir_present for boundary in refined_boundaries)
+        logger.info(
+            "Terminal inverted repeats: %d candidate-bearing boundaries, %d authoritative overrides",
+            n_tir_present,
+            n_tir_overrides,
+        )
 
     # === Validated-marker floor metadata (Phase-3 re-admit input) ===
     # Phase-2 host trimming can collapse a marker-dense NCLDV/MIRUS boundary below

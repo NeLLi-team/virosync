@@ -18,11 +18,11 @@ from pathlib import Path
 import numpy as np
 
 from virosync.features.compositional import WindowFeatures
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.boundary_refiner import TIR_STATUSES, RefinedBoundary
 from virosync.utils.atomic_write import atomic_write
 
 PHASE2_STATE_FILENAME = "refined_state.json"
-PHASE2_STATE_SCHEMA_VERSION = 2
+PHASE2_STATE_SCHEMA_VERSION = 3
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
 PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 
@@ -35,6 +35,8 @@ _BOUNDARY_STRING_FIELDS = (
     "seed_id",
     "host_trim_reason",
     "host_trim_common_euk_taxonomy",
+    "tir_status",
+    "tsd_sequence",
     "seed_confidence",
     "predicted_family",
 )
@@ -43,6 +45,8 @@ _BOUNDARY_INTEGER_FIELDS = (
     "end",
     "original_start",
     "original_end",
+    "tir_alignment_length",
+    "tir_candidate_count",
     "region_classification_ncldv_markers",
     "region_classification_vp_plv_markers",
     "region_classification_mirus_markers",
@@ -58,6 +62,14 @@ _BOUNDARY_OPTIONAL_INTEGER_FIELDS = (
     "flank_3_end",
     "marker_floor_start",
     "marker_floor_end",
+    "pre_tir_start",
+    "pre_tir_end",
+    "tir_left_start",
+    "tir_left_end",
+    "tir_right_start",
+    "tir_right_end",
+    "tir_scan_start",
+    "tir_scan_end",
 )
 _BOUNDARY_FLOAT_FIELDS = (
     "seed_hhg_score",
@@ -69,10 +81,16 @@ _BOUNDARY_FLOAT_FIELDS = (
     "gc_deviation",
     "cub_deviation",
     "mean_novelty",
+    "tir_identity",
 )
 _BOUNDARY_STRING_LIST_FIELDS = ("seed_sources", "hallmark_genes")
 _BOUNDARY_INTEGER_LIST_FIELDS = ("state_sequence",)
-_BOUNDARY_BOOLEAN_FIELDS = ("seed_has_mcp",)
+_BOUNDARY_BOOLEAN_FIELDS = (
+    "seed_has_mcp",
+    "tir_present",
+    "tir_boundary_override",
+    "tir_alignment_capped",
+)
 _BOUNDARY_SPECIAL_FIELDS = ("state_posteriors", "window_features")
 _BOUNDARY_FIELDS = (
     *_BOUNDARY_STRING_FIELDS,
@@ -166,6 +184,84 @@ def _require_integer_list(value: object, context: str) -> list[int]:
     if not isinstance(value, list):
         raise Phase2StateError(f"{context} must be a list")
     return [_require_integer(item, f"{context}[{index}]") for index, item in enumerate(value)]
+
+
+def _validate_tir_contract(boundary: dict[str, object], context: str) -> None:
+    """Validate terminal-repeat fields as one closed coordinate contract."""
+    status = boundary["tir_status"]
+    if status not in TIR_STATUSES:
+        raise Phase2StateError(f"{context}.tir_status must be one of {sorted(TIR_STATUSES)}")
+
+    identity = boundary["tir_identity"]
+    if not 0.0 <= identity <= 1.0:
+        raise Phase2StateError(f"{context}.tir_identity must be between 0 and 1")
+    candidate_count = boundary["tir_candidate_count"]
+    if candidate_count < 0:
+        raise Phase2StateError(f"{context}.tir_candidate_count must be non-negative")
+    alignment_length = boundary["tir_alignment_length"]
+    if alignment_length < 0:
+        raise Phase2StateError(f"{context}.tir_alignment_length must be non-negative")
+
+    for start_name, end_name in (
+        ("pre_tir_start", "pre_tir_end"),
+        ("tir_scan_start", "tir_scan_end"),
+    ):
+        start = boundary[start_name]
+        end = boundary[end_name]
+        if (start is None) != (end is None):
+            raise Phase2StateError(f"{context}.{start_name} and {end_name} must both be set or null")
+        if start is not None and (start < 0 or start >= end):
+            raise Phase2StateError(f"{context}.{start_name}/{end_name} is not a valid half-open interval")
+
+    arm_names = (
+        "tir_left_start",
+        "tir_left_end",
+        "tir_right_start",
+        "tir_right_end",
+    )
+    arms = tuple(boundary[name] for name in arm_names)
+    has_arms = all(value is not None for value in arms)
+    if any(value is not None for value in arms) and not has_arms:
+        raise Phase2StateError(f"{context} terminal-repeat arm coordinates must all be set or null")
+    if has_arms:
+        left_start, left_end, right_start, right_end = arms
+        if not 0 <= left_start < left_end <= right_start < right_end:
+            raise Phase2StateError(f"{context} terminal-repeat arm coordinates are invalid")
+        arm_length = left_end - left_start
+        if arm_length != right_end - right_start:
+            raise Phase2StateError(f"{context} terminal-repeat arms must have equal reported lengths")
+        if alignment_length < arm_length:
+            raise Phase2StateError(f"{context}.tir_alignment_length cannot be shorter than the reported arms")
+
+    present = boundary["tir_present"]
+    if present != (candidate_count > 0):
+        raise Phase2StateError(f"{context}.tir_present must agree with tir_candidate_count")
+    if present != has_arms:
+        raise Phase2StateError(f"{context}.tir_present must agree with terminal-repeat arm coordinates")
+    if not present and identity != 0.0:
+        raise Phase2StateError(f"{context}.tir_identity must be zero when no candidate is present")
+    if not present and alignment_length != 0:
+        raise Phase2StateError(f"{context}.tir_alignment_length must be zero when no candidate is present")
+    capped = boundary["tir_alignment_capped"]
+    if capped and not present:
+        raise Phase2StateError(f"{context}.tir_alignment_capped requires a terminal-repeat candidate")
+    if present and capped != (alignment_length > arms[1] - arms[0]):
+        raise Phase2StateError(f"{context}.tir_alignment_capped must agree with the full alignment length")
+
+    override = boundary["tir_boundary_override"]
+    if override:
+        if status != "detected" or candidate_count != 1:
+            raise Phase2StateError(f"{context}.tir_boundary_override requires one detected candidate")
+        if boundary["start"] != boundary["tir_left_start"] or boundary["end"] != boundary["tir_right_end"]:
+            raise Phase2StateError(f"{context} overridden bounds must match the terminal repeats")
+    if status == "detected" and not override:
+        raise Phase2StateError(f"{context}.tir_status detected requires tir_boundary_override")
+    if status == "ambiguous" and (not present or override):
+        raise Phase2StateError(f"{context}.tir_status ambiguous requires non-authoritative candidate evidence")
+    if status == "shared_pair" and (not present or candidate_count != 1 or override):
+        raise Phase2StateError(f"{context}.tir_status shared_pair requires one non-authoritative candidate")
+    if status in {"no_marker_anchor", "not_assessed", "not_detected"} and present:
+        raise Phase2StateError(f"{context}.tir_status {status} cannot carry a candidate")
 
 
 def _validate_model_fields() -> None:
@@ -286,6 +382,7 @@ def _boundary_to_document(boundary: object, index: int) -> dict[str, object]:
         _window_to_document(window, f"{context}.window_features[{window_index}]")
         for window_index, window in enumerate(boundary.window_features)
     ]
+    _validate_tir_contract(document, context)
     return document
 
 
@@ -318,6 +415,7 @@ def _boundary_from_document(value: object, index: int) -> RefinedBoundary:
         _window_from_document(window, f"{context}.window_features[{window_index}]")
         for window_index, window in enumerate(raw_windows)
     ]
+    _validate_tir_contract(kwargs, context)
     return RefinedBoundary(**kwargs)
 
 

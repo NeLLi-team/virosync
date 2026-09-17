@@ -1,7 +1,7 @@
 # ViroSync
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
-eukaryotic genomes. The core workflow runs on CPUs and does not need a GPU.
+eukaryotic genomes.
 
 - [Get started](getting-started.md) covers installation and first runs.
 - [Outputs](METHODS.md) defines the output files.

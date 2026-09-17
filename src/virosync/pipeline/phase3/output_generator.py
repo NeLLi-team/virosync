@@ -29,6 +29,7 @@ from virosync.output_contract import (
     DETAILED_PREDICTION_COLUMNS,
     DETAILED_PREDICTION_EXTENDED_COLUMNS,
     DETAILED_TAXONOMY_PARTITION,
+    INTEGRATION_EVIDENCE_COLUMNS,
     canonical_family,
     coordinate_contract_metadata,
     normalize_effective_eve_class,
@@ -176,6 +177,40 @@ class _GeneTaxonomyOutputRecord:
 def _tsv_flag(value: object) -> str:
     """Serialize a truth value as the TSV contract's integer flag."""
     return "1" if value else "0"
+
+
+def _integration_evidence_row(result: VerificationResult) -> dict[str, str]:
+    """Format the same integration evidence for accepted and detailed tables."""
+    recombinases = sorted(
+        {str(hit["protein_id"]) for hit in result.integration_gene_hits if "recombinase" in str(hit["mechanism"])}
+    )
+    row = {
+        "tir_present": _tsv_flag(result.tir_present),
+        "tir_status": result.tir_status,
+        "tir_candidate_count": str(result.tir_candidate_count),
+        "tir_identity": f"{result.tir_identity:.4f}" if result.tir_present else ".",
+        "tir_alignment_capped": _tsv_flag(result.tir_alignment_capped),
+        "tir_alignment_length": str(result.tir_alignment_length) if result.tir_present else ".",
+        "tir_boundary_override": _tsv_flag(result.tir_boundary_override),
+        "tsd_sequence": result.tsd_sequence or ".",
+        "recombinase_genes": "|".join(recombinases) or ".",
+        "integration_gene_evidence": (
+            json.dumps(result.integration_gene_hits, separators=(",", ":")) if result.integration_gene_hits else "."
+        ),
+    }
+    for name in (
+        "tir_scan_start",
+        "tir_scan_end",
+        "tir_left_start",
+        "tir_left_end",
+        "tir_right_start",
+        "tir_right_end",
+        "pre_tir_start",
+        "pre_tir_end",
+    ):
+        value = getattr(result, name)
+        row[name] = str(value) if value is not None else "."
+    return row
 
 
 def _per_eve_coordinate(record: Mapping[str, object], alias: str, canonical: str) -> object:
@@ -1526,6 +1561,8 @@ class OutputGenerator:
             str(result.candidate_reduction_bp or 0),
             result.candidate_reduction_reason or ".",
         ]
+        integration = _integration_evidence_row(result)
+        row.extend(integration[column] for column in INTEGRATION_EVIDENCE_COLUMNS)
         if not self.extended_output:
             row.extend([f"{result.interproscan_score:.4f}", _published_eve_class(result)])
             return row
@@ -1627,6 +1664,7 @@ class OutputGenerator:
             "candidate_reduction_bp",
             "candidate_reduction_reason",
         ]
+        columns.extend(INTEGRATION_EVIDENCE_COLUMNS)
         if self.extended_output:
             columns.extend(
                 [
@@ -1778,6 +1816,7 @@ class OutputGenerator:
             "candidate_reduction_reason": result.candidate_reduction_reason or ".",
             "seed_sources": "|".join(sorted(result.seed_sources)) if result.seed_sources else ".",
             "canonical_selection_outcome": result.canonical_selection_outcome or ".",
+            **_integration_evidence_row(result),
             "hallmark_total": str(hallmark_total if hallmark_total else result.hallmark_count),
             "hallmark_unique": str(hallmark_unique if hallmark_unique else result.hallmark_diversity),
             "mcp_gene_ids": "|".join(result.mcp_gene_ids) if result.mcp_gene_ids else ".",

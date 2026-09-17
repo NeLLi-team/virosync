@@ -46,6 +46,22 @@ def _boundary() -> RefinedBoundary:
         original_end=1010,
         candidate_start=80,
         candidate_end=1020,
+        pre_tir_start=120,
+        pre_tir_end=1000,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=101,
+        tir_left_end=141,
+        tir_right_start=959,
+        tir_right_end=999,
+        tir_identity=0.95,
+        tir_boundary_override=True,
+        tir_alignment_capped=False,
+        tir_alignment_length=40,
+        tir_candidate_count=1,
+        tir_scan_start=50,
+        tir_scan_end=1050,
+        tsd_sequence="GAGGCT",
         seed_sources=["hhg", "novelty"],
         seed_confidence="high",
         seed_hhg_score=0.9123456789012345,
@@ -209,7 +225,7 @@ def test_phase2_resume_state_rejects_schema_drift_and_duplicate_mapping_keys() -
     document = phase2_resume_state_to_document(_state())
 
     unknown_schema = copy.deepcopy(document)
-    unknown_schema["schema_version"] = 2
+    unknown_schema["schema_version"] = PHASE2_RESUME_STATE_SCHEMA_VERSION + 1
     with pytest.raises(
         Phase2ResumeStateError,
         match="unsupported.*schema_version",
