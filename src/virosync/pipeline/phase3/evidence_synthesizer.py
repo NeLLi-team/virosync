@@ -985,6 +985,25 @@ class VerificationResult:
     candidate_start: int | None = None
     candidate_end: int | None = None
 
+    # Integration evidence is descriptive and does not add a confidence bonus.
+    tir_present: bool = False
+    tir_status: str = "not_assessed"
+    tir_candidate_count: int = 0
+    tir_scan_start: int | None = None
+    tir_scan_end: int | None = None
+    tir_left_start: int | None = None
+    tir_left_end: int | None = None
+    tir_right_start: int | None = None
+    tir_right_end: int | None = None
+    tir_identity: float = 0.0
+    tir_alignment_capped: bool = False
+    tir_alignment_length: int = 0
+    tir_boundary_override: bool = False
+    pre_tir_start: int | None = None
+    pre_tir_end: int | None = None
+    tsd_sequence: str = ""
+    integration_gene_hits: list[dict[str, object]] = field(default_factory=list)
+
     # Contig-edge detection (partial EVE flag - no penalty, just informational)
     partial_eve: bool = False  # True if EVE is at contig boundary
     partial_eve_at_start: bool = False  # EVE starts near contig start
@@ -1186,6 +1205,23 @@ class VerificationResult:
             "confidence_tier": self.confidence_tier,
             "candidate_start": self.candidate_start,
             "candidate_end": self.candidate_end,
+            "tir_present": self.tir_present,
+            "tir_status": self.tir_status,
+            "tir_candidate_count": self.tir_candidate_count,
+            "tir_scan_start": self.tir_scan_start,
+            "tir_scan_end": self.tir_scan_end,
+            "tir_left_start": self.tir_left_start,
+            "tir_left_end": self.tir_left_end,
+            "tir_right_start": self.tir_right_start,
+            "tir_right_end": self.tir_right_end,
+            "tir_identity": self.tir_identity,
+            "tir_alignment_capped": self.tir_alignment_capped,
+            "tir_alignment_length": self.tir_alignment_length,
+            "tir_boundary_override": self.tir_boundary_override,
+            "pre_tir_start": self.pre_tir_start,
+            "pre_tir_end": self.pre_tir_end,
+            "tsd_sequence": self.tsd_sequence,
+            "integration_gene_hits": self.integration_gene_hits,
             "candidate_length": self.candidate_length,
             "candidate_reduction_bp": self.candidate_reduction_bp,
             "candidate_reduction_reason": self.candidate_reduction_reason,
@@ -2216,6 +2252,22 @@ class EvidenceSynthesizer:
             kfd=getattr(refined_boundary, "max_kfd", 0.0),
             gc_deviation=getattr(refined_boundary, "gc_deviation", 0.0),
             cub_deviation=getattr(refined_boundary, "cub_deviation", 0.0),
+            tir_present=getattr(refined_boundary, "tir_present", False),
+            tir_status=getattr(refined_boundary, "tir_status", "not_assessed"),
+            tir_candidate_count=getattr(refined_boundary, "tir_candidate_count", 0),
+            tir_scan_start=getattr(refined_boundary, "tir_scan_start", None),
+            tir_scan_end=getattr(refined_boundary, "tir_scan_end", None),
+            tir_left_start=getattr(refined_boundary, "tir_left_start", None),
+            tir_left_end=getattr(refined_boundary, "tir_left_end", None),
+            tir_right_start=getattr(refined_boundary, "tir_right_start", None),
+            tir_right_end=getattr(refined_boundary, "tir_right_end", None),
+            tir_identity=getattr(refined_boundary, "tir_identity", 0.0),
+            tir_alignment_capped=getattr(refined_boundary, "tir_alignment_capped", False),
+            tir_alignment_length=getattr(refined_boundary, "tir_alignment_length", 0),
+            tir_boundary_override=getattr(refined_boundary, "tir_boundary_override", False),
+            pre_tir_start=getattr(refined_boundary, "pre_tir_start", None),
+            pre_tir_end=getattr(refined_boundary, "pre_tir_end", None),
+            tsd_sequence=getattr(refined_boundary, "tsd_sequence", ""),
         )
         candidate_start = getattr(refined_boundary, "candidate_start", None)
         candidate_end = getattr(refined_boundary, "candidate_end", None)

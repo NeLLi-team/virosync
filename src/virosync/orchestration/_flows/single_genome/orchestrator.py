@@ -327,7 +327,14 @@ def _enabled_resource_identities(flat_config: dict) -> list:
     gated = dict(_FINGERPRINT_RESOURCE_GATED)
     marker_source_fields = {"faa_dir", "marker_faa_db", "marker_faa_dir"}
     prebuilt_marker_selected = bool(flat_config.get("marker_db"))
-    identities = []
+    integration_root = Path(__file__).resolve().parents[3] / "data"
+    identities = [
+        build_resource_set_identity(
+            "integration-profiles",
+            "1",
+            {name: integration_root / name for name in ("integration_profiles.hmm", "integration_profiles.json")},
+        )
+    ]
     seen: set[tuple[str, str, str, str]] = set()
     for field in sorted(_FINGERPRINT_RESOURCE_FIELDS):
         if prebuilt_marker_selected and field in marker_source_fields:
@@ -1657,6 +1664,7 @@ def _single_genome_flow_impl(
     ):
         phase2_result = _run_phase2_subflow(
             masked_path=masked_path,
+            raw_genome_path=genome_path,
             proteome_path=proteome_path,
             merged_seeds=merged_seeds,
             validated_markers=validated_markers,

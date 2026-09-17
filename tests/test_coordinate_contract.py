@@ -48,6 +48,7 @@ EXPECTED_DIRECT_CONSUMERS = {
     "pipeline/phase2/boundary_diamond.py": 1,
     "pipeline/phase3/gene_taxonomy.py": 3,
     "pipeline/phase3/interproscan.py": 1,
+    "pipeline/phase3/integration_genes.py": 1,
     "pipeline/phase3/output_generator.py": 1,
 }
 
@@ -395,7 +396,7 @@ def test_coordinate_convention_is_versioned_in_output_contract() -> None:
     contract = importlib.import_module("virosync.output_contract")
 
     assert contract.COORDINATE_SCHEMA_VERSION == 2
-    assert contract.OUTPUT_SCHEMA_VERSION == 6
+    assert contract.OUTPUT_SCHEMA_VERSION == 7
     assert "0-based" in contract.COORDINATE_CONVENTION.lower()
     assert "half-open" in contract.COORDINATE_CONVENTION.lower()
 

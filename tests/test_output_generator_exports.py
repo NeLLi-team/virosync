@@ -14,6 +14,7 @@ from virosync.output_contract import (
     COORDINATE_SCHEMA_VERSION,
     DETAILED_PREDICTION_COLUMNS,
     DETAILED_PREDICTION_EXTENDED_COLUMNS,
+    INTEGRATION_EVIDENCE_COLUMNS,
     OUTPUT_SCHEMA_VERSION,
 )
 from virosync.pipeline.phase2.boundary_refiner import (
@@ -81,6 +82,7 @@ CANONICAL_BASE_FIELDS = (
     "candidate_length",
     "candidate_reduction_bp",
     "candidate_reduction_reason",
+    *INTEGRATION_EVIDENCE_COLUMNS,
 )
 CANONICAL_EXTENDED_FIELDS = (
     "interproscan_category_hits",
@@ -986,3 +988,57 @@ def test_merged_seed_sources_are_ordered_like_the_detailed_tsv_field() -> None:
 
     assert len(merged) == 1
     assert merged[0].seed_sources == ["compositional", "hhg", "marker", "novelty"]
+
+
+@pytest.mark.parametrize("extended_output", [False, True])
+def test_integration_evidence_preserves_boundaries_and_gene_provenance(tmp_path: Path, extended_output: bool) -> None:
+    """Both public tables and JSON retain repeat and enzyme evidence."""
+    result = VerificationResult(
+        eve_id="EVE_contig_1_0-140",
+        scaffold="contig_1",
+        start=0,
+        end=140,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=0,
+        tir_left_end=30,
+        tir_right_start=110,
+        tir_right_end=140,
+        tir_identity=0.9666666667,
+        tir_alignment_capped=False,
+        tir_alignment_length=30,
+        tir_boundary_override=True,
+        pre_tir_start=20,
+        pre_tir_end=120,
+        integration_gene_hits=[
+            {
+                "protein_id": "contig_1_1",
+                "mechanism": "tyrosine_recombinase",
+                "location": "interior",
+                "source": "pfam_hmm",
+            },
+            {
+                "protein_id": "contig_1_1",
+                "mechanism": "tyrosine_recombinase",
+                "location": "interior",
+                "source": "marker_annotation",
+            },
+            {"protein_id": "contig_1_2", "mechanism": "dde_integrase", "location": "downstream", "source": "pfam_hmm"},
+        ],
+    )
+    generator = OutputGenerator(output_dir=tmp_path, extended_output=extended_output)
+    for writer in (generator.write_predictions_tsv, generator.write_predictions_detailed_tsv):
+        output_path = writer([result])
+        with output_path.open() as handle:
+            row = next(csv.DictReader(handle, delimiter="\t"))
+        assert (row["start"], row["end"], row["length"]) == ("0", "140", "140")
+        assert (row["tir_present"], row["tir_boundary_override"]) == ("1", "1")
+        assert row["tir_alignment_capped"] == "0"
+        assert row["tir_alignment_length"] == "30"
+        assert row["tir_left_start"] == "0"
+        assert (row["pre_tir_start"], row["pre_tir_end"]) == ("20", "120")
+        assert row["recombinase_genes"] == "contig_1_1"
+        assert json.loads(row["integration_gene_evidence"]) == result.integration_gene_hits
+    profiles = json.loads(generator.write_evidence_profiles([result]).read_text())
+    assert profiles[result.eve_id]["tir_left_start"] == 0
+    assert profiles[result.eve_id]["integration_gene_hits"] == result.integration_gene_hits
