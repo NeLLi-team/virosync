@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "retrieved_utc": "2026-09-17",
+  "license": "CC0-1.0",
+  "license_url": "https://interpro-documentation.readthedocs.io/en/latest/license.html",
+  "description": "Catalytic integration-associated domains; hits do not establish integration activity.",
+  "sha256": "fe30f6c8b7a1718cd55f559b089fab6bb8cba1231a8086208573addce633aba3",
+  "profiles": [
+    {
+      "accession": "PF00589.28",
+      "name": "Phage_integrase",
+      "role": "tyrosine_recombinase",
+      "description": "Phage integrase family",
+      "gathering_threshold": "27.1 27.1;",
+      "sha256": "adcafa50cd945cd6ad8a9dd3fa5e8d03fdb374763b4521cce7f93c2ff94f78a0",
+      "source_url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00589/?annotation=hmm"
+    },
+    {
+      "accession": "PF00239.27",
+      "name": "Resolvase",
+      "role": "serine_recombinase",
+      "description": "Resolvase, N terminal domain",
+      "gathering_threshold": "23.3 23.3;",
+      "sha256": "c11101d6bfb9e7b27ee61d3dc290fc7ea3266c7132366eee7b99fa6b8cd7169a",
+      "source_url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00239/?annotation=hmm"
+    },
+    {
+      "accession": "PF00665.33",
+      "name": "rve",
+      "role": "dde_integrase",
+      "description": "Integrase core domain",
+      "gathering_threshold": "32.6 32.6;",
+      "sha256": "7a5241f7271e9c206c93b5859dfe10c40761009d42ae0bb7278cca09f61f5712",
+      "source_url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00665/?annotation=hmm"
+    },
+    {
+      "accession": "PF13333.13",
+      "name": "rve_2",
+      "role": "dde_integrase",
+      "description": "Integrase core domain",
+      "gathering_threshold": "22 22;",
+      "sha256": "89a80211279978c2bca37f950b093a9494a4f5f9dfcbf020bbb971165b213193",
+      "source_url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF13333/?annotation=hmm"
+    },
+    {
+      "accession": "PF13683.13",
+      "name": "rve_3",
+      "role": "dde_integrase",
+      "description": "Integrase core domain",
+      "gathering_threshold": "26.5 26.5;",
+      "sha256": "a19907018ee7faf42d6372c7d0521d45e5ef023d3cce0795a0aa0f35432402f4",
+      "source_url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF13683/?annotation=hmm"
+    }
+  ]
+}

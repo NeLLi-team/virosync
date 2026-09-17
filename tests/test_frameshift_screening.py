@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from virosync.config import MaskingConfig
 from virosync.orchestration._flows.single_genome import orchestrator
 from virosync.pipeline.phase1 import frameshift_screening
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
+from virosync.pipeline.phase1.native_frameshift import align_frameshift_profile
 
 _PROTEIN = "ACDEFGHIKLMNPQRSTVWY" * 4
 _CODONS = {
@@ -75,15 +77,22 @@ def _write_fasta(path: Path, records: dict[str, str]) -> Path:
 def _run_screen(
     tmp_path: Path,
     records: dict[str, str],
+    *,
+    protein: str = _PROTEIN,
+    threads: int = 2,
+    output_name: str = "output",
 ) -> tuple[list[frameshift_screening.FrameshiftHit], Path]:
-    hmm_path = _write_hmms(tmp_path / "profiles.hmm", _build_hmm("VS000001"))
+    hmm_path = _write_hmms(
+        tmp_path / "profiles.hmm",
+        _build_hmm("VS000001", protein),
+    )
     fasta_path = _write_fasta(tmp_path / "genomes.fna", records)
-    output_dir = tmp_path / "output"
+    output_dir = tmp_path / output_name
     hits = frameshift_screening.run_frameshift_screening(
         fasta_path,
         hmm_path,
         output_dir,
-        threads=2,
+        threads=threads,
     )
     return hits, output_dir
 
@@ -149,6 +158,138 @@ def test_native_screen_recovers_supported_events_and_rejects_controls(
     assert len(candidate_records) == 5
     assert all("annotation=frameshift_rescued_domain" in record.description for record in candidate_records)
     assert all(frameshift_screening.is_rescued_protein_id(record.id) for record in candidate_records)
+
+
+def test_native_screen_realigns_away_unsupported_edge_events_on_both_strands(
+    tmp_path: Path,
+) -> None:
+    protein = _PROTEIN[:38]
+    coding_dna = _coding_dna(protein)
+    two_insertions = coding_dna[:45] + "A" + coding_dna[45:99] + "A" + coding_dna[99:]
+    stopped = coding_dna[:45] + "TAA" + coding_dna[48:]
+    stop_and_edge_insertion = stopped[:102] + "A" + stopped[102:]
+    records = {
+        "stop_minus": str(Seq(stop_and_edge_insertion).reverse_complement()),
+        "stop_plus": stop_and_edge_insertion,
+        "two_minus": str(Seq(two_insertions).reverse_complement()),
+        "two_plus": two_insertions,
+    }
+    hits, output_dir = _run_screen(
+        tmp_path,
+        records,
+        protein=protein,
+        threads=1,
+    )
+    hmm = frameshift_screening._load_vs_profiles(tmp_path / "profiles.hmm")[0]
+
+    assert Counter((hit.target_name, hit.shifts, hit.stops) for hit in hits) == {
+        ("stop_minus", 0, 1): 1,
+        ("stop_plus", 0, 1): 1,
+        ("two_minus", 1, 0): 1,
+        ("two_plus", 1, 0): 1,
+    }
+    assert {hit.target_name: (hit.ali_start, hit.ali_end, hit.strand) for hit in hits} == {
+        "stop_minus": (16, 115, "-"),
+        "stop_plus": (0, 99, "+"),
+        "two_minus": (19, 116, "-"),
+        "two_plus": (0, 97, "+"),
+    }
+    candidate_sequences = {
+        record.id: str(record.seq) for record in SeqIO.parse(output_dir / "frameshift_candidates.faa", "fasta")
+    }
+    with (output_dir / "frameshift_events.tsv").open(
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+        event_rows = {row["target_name"]: row for row in csv.DictReader(handle, delimiter="\t")}
+
+    for hit in hits:
+        selected_dna = records[hit.target_name][hit.ali_start : hit.ali_end]
+        if hit.strand == "-":
+            selected_dna = str(Seq(selected_dna).reverse_complement())
+        alignment = align_frameshift_profile(hmm, selected_dna)
+
+        assert alignment is not None
+        assert (alignment.nt_start, alignment.nt_end) == (0, len(selected_dna))
+        assert alignment.sequence == candidate_sequences[frameshift_screening.rescued_protein_id(hit)]
+        assert alignment.score == pytest.approx(hit.native_score)
+        assert alignment.baseline_score == pytest.approx(hit.no_frameshift_score)
+        assert len(alignment.events) == 1
+        event = alignment.events[0]
+        event_row = event_rows[hit.target_name]
+        if hit.strand == "+":
+            event_span = (
+                hit.ali_start + event.nt_start,
+                hit.ali_start + event.nt_end,
+            )
+        else:
+            event_span = (
+                hit.ali_end - event.nt_end,
+                hit.ali_end - event.nt_start,
+            )
+        assert event_span == (
+            int(event_row["genomic_start"]),
+            int(event_row["genomic_end"]),
+        )
+        assert (
+            event.kind,
+            event.model_position,
+            event.protein_position,
+        ) == (
+            event_row["event_kind"],
+            int(event_row["model_position"]),
+            int(event_row["protein_position"]),
+        )
+    assert all(
+        hit.shifts == 0 or hit.native_score - hit.no_frameshift_score >= frameshift_screening.MIN_FRAMESHIFT_GAIN_BITS
+        for hit in hits
+    )
+
+
+def test_native_screen_spawn_parallelism_is_byte_identical_from_worker_thread(
+    tmp_path: Path,
+) -> None:
+    coding_dna = _coding_dna()
+    insertion = coding_dna[:120] + "A" + coding_dna[120:]
+    records = {
+        "one_plus": insertion,
+        "one_minus": str(Seq(insertion).reverse_complement()),
+        "two_plus": "N" * 90 + insertion,
+        "two_minus": str(Seq("N" * 90 + insertion).reverse_complement()),
+    }
+
+    serial_hits, serial_dir = _run_screen(
+        tmp_path,
+        records,
+        threads=1,
+        output_name="serial",
+    )
+    parallel_hits, parallel_dir = _run_screen(
+        tmp_path,
+        records,
+        threads=2,
+        output_name="parallel",
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        threaded_hits, threaded_dir = executor.submit(
+            _run_screen,
+            tmp_path,
+            records,
+            threads=2,
+            output_name="threaded",
+        ).result()
+
+    assert len(serial_hits) == 4
+    assert parallel_hits == serial_hits
+    assert threaded_hits == serial_hits
+    artifact_names = (
+        "frameshift_hits.tsv",
+        "frameshift_events.tsv",
+        "frameshift_candidates.faa",
+    )
+    serial_artifacts = tuple((serial_dir / name).read_bytes() for name in artifact_names)
+    assert tuple((parallel_dir / name).read_bytes() for name in artifact_names) == serial_artifacts
+    assert tuple((threaded_dir / name).read_bytes() for name in artifact_names) == serial_artifacts
 
 
 def test_native_screen_writes_header_only_empty_artifacts(tmp_path: Path) -> None:

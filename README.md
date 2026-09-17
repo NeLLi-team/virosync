@@ -58,6 +58,10 @@ genome. Each genome directory contains:
 - `phase3_synthesis/virosync_predictions.gff3`: accepted EVE coordinates and annotations.
 - `virosync_predictions_detailed.tsv`: all candidates and their evidence.
 
+Frameshift-sensitive marker detection is off by default. Add
+`--frameshift-screening` to enable it. See the
+[frameshift screening guide](docs/FRAMESHIFT_SCREENING.md) for usage and limits.
+
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 

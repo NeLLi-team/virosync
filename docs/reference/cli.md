@@ -86,7 +86,7 @@ All path overrides in this table must exist.
 | `--phase1-min-markers-initial N` | Set the minimum marker count for an initial cluster. Minimum and default: 1. |
 | `--phase1-extension-kb N` | Extend from the outer markers by this many kilobases. Minimum: 0. Default: 5. |
 | `--phase1-merge-distance N` | Merge overlapping regions within this base-pair gap. Minimum: 0. Default: 1000. |
-| `--frameshift-screening`, `--no-frameshift-screening` | Enable or disable native codon-aware marker rescue. Uses the standard Pixi environment. |
+| `--frameshift-screening`, `--no-frameshift-screening` | Enable or disable native codon-aware marker rescue. Off by default; uses the standard Pixi environment. |
 
 ### Compute and optional evidence
 

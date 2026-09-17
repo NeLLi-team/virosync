@@ -9,7 +9,7 @@ overlap to propose candidate windows on both DNA strands. Short chunks limit
 the effect of long, stop-rich translations on HMMER's fast filters. A seed
 needs only a local profile match; its alignment window extends by the full
 profile length on each side.
-A local codon-aware alignment then compares each window with its marker
+A local codon-aware Viterbi alignment compares each window with its marker
 profile. Match states consume three nucleotides for an ordinary codon or
 one, two, four, or five nucleotides for a codon affected by a frameshift.
 Profile insertion and deletion states accommodate ordinary amino-acid gaps.
@@ -31,6 +31,13 @@ and viral-reference validation before they can seed a region.
 | Protein HMM support | Sequence and independent domain E-values at most 1e-5; domain covers at least 50 percent of the profile. |
 | Event support | At least eight observed amino acids on each side within the supported domain. Unknown residues do not count. |
 | Viral-reference confirmation | The existing viral validation rules, including at least 25 percent amino-acid identity and 50 percent query coverage. |
+
+The reported peptide, events, coordinates and native scores describe the same
+alignment. The span is cropped to the supported peptide domain and to remove
+terminal events that lack the required flanks. The remaining DNA is realigned
+and checked again until the span is stable. A candidate is discarded if no
+supported event or domain remains. Every frameshift on the final path is
+reported and requires the six-bit gain, including when the path contains a stop.
 
 Native `pid` values are blank because the profile alignment does not compute
 pairwise identity. DIAMOND identity is recorded with the separate validation
@@ -56,18 +63,10 @@ with the standard genetic code; alternative-code genomes need separate
 assessment. Introns, assembly errors, and programmed translation changes can
 also produce disrupted alignments.
 
-Native alignment windows are processed serially. The thread setting controls
-the seed search and later validation tools. Runtime depends on the number
-and size of seeded windows. The detector keeps the assembly and its translated
-chunks in memory; bounded alignment windows do not imply bounded whole-genome
-memory use.
-
-## Relationship to BATH
-
-[BATH](https://academic.oup.com/bioinformaticsadvances/article/4/1/vbae088/7693713)
-uses codon-aware profile searches with frameshift-aware Forward algorithms
-and statistical calibration. ViroSync uses a seeded local Viterbi detector
-and retains separate viral-reference confirmation. It does not reproduce
-BATH's statistical model. Comparable sensitivity or improved accuracy must
-be demonstrated on labeled data; removing the installation dependency alone
-does not establish either claim.
+Independent native alignment windows run in separate processes, up to the
+requested thread count per genome. One worker or one window uses the serial
+path. The same thread budget controls the seed search and later validation
+tools. Results are collected in input order before deduplication and sorting.
+Runtime depends on the number and size of seeded windows. The detector keeps
+the assembly and its translated chunks in memory. Workers receive the bounded
+window sequences.

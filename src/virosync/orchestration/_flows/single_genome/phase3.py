@@ -4,7 +4,7 @@ import json
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from virosync.ablation import AblationID, InterventionCounts
@@ -17,6 +17,7 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
 )
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
@@ -32,6 +33,7 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
     recluster_survivors,
     unsupported_eve_ids,
 )
+from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 from virosync.pipeline.phase3.output_generator import (
     _is_atpase_marker,
     evaluate_v2_quality_gate,
@@ -894,6 +896,8 @@ def _run_phase3_subflow(
         boundary = boundary_by_region.get((r.scaffold, r.start, r.end))
         if boundary is None:
             continue
+        if getattr(boundary, "tir_boundary_override", False):
+            continue
         floor_start = getattr(boundary, "marker_floor_start", None)
         floor_end = getattr(boundary, "marker_floor_end", None)
         if floor_start is None or floor_end is None:
@@ -1060,6 +1064,13 @@ def _run_phase3_subflow(
         not decision.kept for decision in acceptance_selection.normal_gate_decisions
     )
     accepted = len(accepted_results)
+    _annotate_integration_genes(
+        verification_results,
+        proteome_path=proteome_path,
+        validated_markers=validated_markers,
+        output_dir=output_dir,
+        config=config,
+    )
     phase3_elapsed = time.time() - phase3_start
 
     # Compute confidence tier distributions for all candidates and the
@@ -1146,3 +1157,60 @@ def _run_phase3_subflow(
         ablation_counts=ablation_counts,
         elapsed=phase3_elapsed,
     )
+
+
+def _annotate_integration_genes(
+    results: list[VerificationResult],
+    *,
+    proteome_path: Path,
+    validated_markers: list[ValidatedMarkerHit],
+    output_dir: Path,
+    config: PipelineConfig,
+) -> None:
+    """Attach integration annotations without modifying coordinates or confidence."""
+    from virosync.pipeline.phase3.integration_genes import (
+        IntegrationRegion,
+        collect_annotated_integration_genes,
+        scan_integration_genes,
+    )
+
+    if not results:
+        return
+    flank_bp = config.phase1.extension_kb * 1000
+    regions = [
+        IntegrationRegion(
+            region_id=result.eve_id,
+            scaffold=result.scaffold,
+            scan_start=max(
+                0,
+                min(result.start, result.candidate_start if result.candidate_start is not None else result.start)
+                - flank_bp,
+            ),
+            scan_end=max(result.end, result.candidate_end if result.candidate_end is not None else result.end)
+            + flank_bp,
+            interior_start=result.start,
+            interior_end=result.end,
+        )
+        for result in results
+    ]
+    hits = scan_integration_genes(proteome_path, regions, threads=config.compute.effective_threads())
+    model_annotations = (
+        Path(config.databases.hmm_database).parent / "model_annotations_with_interpro.tsv"
+        if config.databases.hmm_database
+        else None
+    )
+    interproscan_path = output_dir / "phase3" / "interproscan" / "interproscan_batch.tsv"
+    hits.extend(
+        collect_annotated_integration_genes(
+            proteome_path,
+            validated_markers,
+            regions,
+            model_annotations_path=model_annotations,
+            interproscan_path=interproscan_path if config.phase3.interproscan_enabled else None,
+        )
+    )
+    by_region: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for hit in hits:
+        by_region[hit.region_id].append(asdict(hit))
+    for result in results:
+        result.integration_gene_hits = by_region[result.eve_id]

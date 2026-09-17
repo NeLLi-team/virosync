@@ -22,7 +22,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   `phase1/pfam_arbitration.tsv`. Schema-v1 resources remain supported without
   arbitration and emit a warning when ambiguous proteins are present.
 - Opt-in Phase 1 frameshift-sensitive screening of the masked nucleotide
-  assembly with BATH and the 808 shipped VS marker HMMs. ViroSync validates
+  assembly with the 808 shipped VS marker HMMs. ViroSync validates
   event-bearing aligned domains against the Tier-1 protein database. Confirmed,
   coverage-filtered loci can seed regions and appear in an accepted EVE FAA
   without entering the ordinary proteome. Enable the screen with

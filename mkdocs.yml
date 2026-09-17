@@ -37,6 +37,9 @@ nav:
       - Databases: RESOURCE_BUNDLE.md
   - Performance: performance.md
 
+extra_css:
+  - stylesheets/extra.css
+
 exclude_docs: |
   DEL/
   handoffs/

@@ -70,11 +70,11 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "--compare-snapshot" in workflow
     assert "--require-resume" in workflow
     assert workflow.count("--expect-predictions 6") == 2
-    assert workflow.count("--expect-predictions 3") == 1
+    assert workflow.count("--expect-predictions 4") == 1
     assert workflow.count("--expect-accepted 1") == 2
     assert workflow.count("--expect-accepted 2") == 1
     assert workflow.count("--expect-canonical-eve-id") == 2
-    assert workflow.count("--expect-detailed-eve-id") == 3
+    assert workflow.count("--expect-detailed-eve-id") == 4
     assert "EVE_DS113495.1_18305-37386" not in workflow
     assert "EVE_DS113200.1_129184-151689" in workflow
     assert "EVE_DS113495.1_58468-89417" in workflow

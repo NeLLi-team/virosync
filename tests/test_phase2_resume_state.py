@@ -33,6 +33,22 @@ def _complete_boundary() -> RefinedBoundary:
         candidate_end=1020,
         host_trim_reason="host-taxonomy",
         host_trim_common_euk_taxonomy="Eukaryota;Viridiplantae",
+        pre_tir_start=110,
+        pre_tir_end=1000,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=101,
+        tir_left_end=141,
+        tir_right_start=959,
+        tir_right_end=999,
+        tir_identity=0.95,
+        tir_boundary_override=True,
+        tir_alignment_capped=False,
+        tir_alignment_length=40,
+        tir_candidate_count=1,
+        tir_scan_start=50,
+        tir_scan_end=1050,
+        tsd_sequence="GAGGCT",
         seed_sources=["hhg", "novelty", "compositional"],
         seed_confidence="high",
         seed_hhg_score=0.91,
@@ -143,6 +159,76 @@ def test_phase2_state_round_trip_preserves_none_and_empty_posterior_shape() -> N
     _assert_boundaries_equal(with_empty_posteriors, loaded[1])
 
 
+def test_phase2_state_round_trip_preserves_tir_split_children() -> None:
+    tir_child = RefinedBoundary(
+        scaffold="contig",
+        start=100,
+        end=420,
+        seed_id="seed-1",
+        original_start=100,
+        original_end=420,
+        pre_tir_start=0,
+        pre_tir_end=1200,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=100,
+        tir_left_end=160,
+        tir_right_start=360,
+        tir_right_end=420,
+        tir_identity=1.0,
+        tir_boundary_override=True,
+        tir_alignment_length=60,
+        tir_candidate_count=1,
+        tir_scan_start=0,
+        tir_scan_end=1200,
+    )
+    residual_child = RefinedBoundary(
+        scaffold="contig",
+        start=840,
+        end=1200,
+        seed_id="seed-1",
+        original_start=840,
+        original_end=1200,
+        pre_tir_start=0,
+        pre_tir_end=1200,
+        tir_status="not_detected",
+        tir_scan_start=0,
+        tir_scan_end=1200,
+    )
+
+    loaded = phase2_state_from_document(phase2_state_to_document([tir_child, residual_child]))
+
+    _assert_boundaries_equal(tir_child, loaded[0])
+    _assert_boundaries_equal(residual_child, loaded[1])
+
+
+def test_phase2_state_accepts_single_candidate_partition_veto() -> None:
+    boundary = RefinedBoundary(
+        scaffold="contig",
+        start=0,
+        end=1200,
+        original_start=0,
+        original_end=1200,
+        pre_tir_start=0,
+        pre_tir_end=1200,
+        tir_present=True,
+        tir_status="ambiguous",
+        tir_left_start=100,
+        tir_left_end=160,
+        tir_right_start=360,
+        tir_right_end=420,
+        tir_identity=1.0,
+        tir_alignment_length=60,
+        tir_candidate_count=1,
+        tir_scan_start=0,
+        tir_scan_end=1200,
+    )
+
+    loaded = phase2_state_from_document(phase2_state_to_document([boundary]))
+
+    _assert_boundaries_equal(boundary, loaded[0])
+
+
 def test_phase2_state_rejects_unknown_schema_and_field_drift() -> None:
     document = phase2_state_to_document([_complete_boundary()])
 
@@ -174,6 +260,14 @@ def test_phase2_state_rejects_unknown_schema_and_field_drift() -> None:
         (
             lambda boundary: boundary.__setitem__("confidence", float("nan")),
             "confidence must be finite",
+        ),
+        (
+            lambda boundary: boundary.__setitem__("tir_status", "maybe"),
+            "tir_status must be one of",
+        ),
+        (
+            lambda boundary: boundary.__setitem__("tir_identity", 1.01),
+            "tir_identity must be between 0 and 1",
         ),
         (
             lambda boundary: boundary.__setitem__("seed_sources", "hhg"),

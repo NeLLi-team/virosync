@@ -1,7 +1,7 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 6
+OUTPUT_SCHEMA_VERSION = 7
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
 # The PUBLISHED class partition. Every surface that reports an EVE's class to a
@@ -55,6 +55,27 @@ DETAILED_TAXONOMY_PARTITION = (
     "PHAGE",
 )
 
+INTEGRATION_EVIDENCE_COLUMNS = (
+    "tir_present",
+    "tir_status",
+    "tir_candidate_count",
+    "tir_scan_start",
+    "tir_scan_end",
+    "tir_left_start",
+    "tir_left_end",
+    "tir_right_start",
+    "tir_right_end",
+    "tir_identity",
+    "tir_alignment_capped",
+    "tir_alignment_length",
+    "tir_boundary_override",
+    "pre_tir_start",
+    "pre_tir_end",
+    "tsd_sequence",
+    "recombinase_genes",
+    "integration_gene_evidence",
+)
+
 DETAILED_PREDICTION_COLUMNS = (
     # Identity and final calls
     "eve_id",
@@ -76,6 +97,7 @@ DETAILED_PREDICTION_COLUMNS = (
     "candidate_reduction_reason",
     "seed_sources",
     "canonical_selection_outcome",
+    *INTEGRATION_EVIDENCE_COLUMNS,
     # Marker evidence
     "hallmark_total",
     "hallmark_unique",

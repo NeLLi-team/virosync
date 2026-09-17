@@ -7,6 +7,7 @@ domain against the viral marker database before it can seed a candidate
 region. The normal boundary and acceptance filters still apply.
 
 The screen runs inside ViroSync with the standard Pixi environment.
+Native alignment uses up to `--threads-per-worker` processes per genome.
 
 ## Configure the screen
 
@@ -27,6 +28,9 @@ phase1:
   frameshift_screening_enabled: true
 ```
 
+Use `--no-frameshift-screening` to disable the screen even when the config
+enables it.
+
 ## Run the shipped example
 
 The example uses three *Trichomonas vaginalis* G3 contigs from
@@ -38,7 +42,7 @@ cat results/example-frameshift/batch_summary.tsv
 ```
 
 With resource bundle v1.0.7, the row must report `status=success`,
-`predictions=3`, and `accepted=2`. This example checks the rescue path. It is
+`predictions=4`, and `accepted=2`. This example checks the rescue path. It is
 not a sensitivity benchmark.
 
 ## Read the output

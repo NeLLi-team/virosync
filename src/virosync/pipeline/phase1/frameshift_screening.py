@@ -7,7 +7,9 @@ import hashlib
 import logging
 import re
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, fields, replace
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Protocol, TypeVar
 
@@ -148,6 +150,16 @@ class _Candidate:
     hit: FrameshiftHit
     sequence: str
     events: tuple[FrameshiftEventRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowInput:
+    """Self-contained input for screening one bounded candidate window."""
+
+    window: _CandidateWindow
+    contig_length: int
+    oriented_dna: str
+    hmm: pyhmmer.plan7.HMM
 
 
 class _Marker(Protocol):
@@ -377,7 +389,7 @@ def run_frameshift_screening(
     translated_chunks = _translate_chunks(contigs)
     seeds = _search_seeds(hmms, translated_chunks, threads)
     windows = _merge_seed_windows(seeds, contigs, hmms)
-    candidates = _screen_windows(windows, contigs, hmms)
+    candidates = _screen_windows(windows, contigs, hmms, threads)
 
     hits = [candidate.hit for candidate in candidates]
     sequences = {rescued_protein_id(candidate.hit): candidate.sequence for candidate in candidates}
@@ -643,25 +655,36 @@ def _screen_windows(
     windows: Iterable[_CandidateWindow],
     contigs: Mapping[str, str],
     hmms: Iterable[pyhmmer.plan7.HMM],
+    threads: int,
 ) -> list[_Candidate]:
     """Run native alignment, peptide validation, event cropping, and deduplication."""
     hmms_by_name = {_decode(hmm.name): hmm for hmm in hmms}
-    candidates: list[_Candidate] = []
+    inputs: list[_WindowInput] = []
     for window in windows:
-        hmm = hmms_by_name[window.query_name]
         genomic_dna = contigs[window.target_name][window.start : window.end]
         oriented_dna = genomic_dna if window.strand == "+" else _reverse_complement(genomic_dna)
-        seed_spans = tuple(_orient_seed_span(window, span) for span in window.seed_spans)
-        for alignment in _enumerate_alignments(hmm, oriented_dna, seed_spans):
-            candidate = _validate_candidate(
-                window,
-                len(contigs[window.target_name]),
-                hmm,
-                oriented_dna,
-                alignment,
+        inputs.append(
+            _WindowInput(
+                window=window,
+                contig_length=len(contigs[window.target_name]),
+                oriented_dna=oriented_dna,
+                hmm=hmms_by_name[window.query_name],
             )
-            if candidate is not None:
-                candidates.append(candidate)
+        )
+
+    worker_count = min(threads, len(inputs))
+    if worker_count <= 1:
+        candidate_groups = [_screen_window(window_input) for window_input in inputs]
+    else:
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            mp_context=get_context("spawn"),
+        ) as executor:
+            candidate_groups = list(executor.map(_screen_window, inputs))
+
+    candidates: list[_Candidate] = []
+    for group in candidate_groups:
+        candidates.extend(group)
 
     best_by_locus: dict[tuple[str, str, str, int, int], _Candidate] = {}
     for candidate in candidates:
@@ -686,6 +709,28 @@ def _screen_windows(
             candidate.hit.strand,
         ),
     )
+
+
+def _screen_window(window_input: _WindowInput) -> list[_Candidate]:
+    """Screen one bounded oriented DNA window."""
+    window = window_input.window
+    seed_spans = tuple(_orient_seed_span(window, span) for span in window.seed_spans)
+    candidates: list[_Candidate] = []
+    for alignment in _enumerate_alignments(
+        window_input.hmm,
+        window_input.oriented_dna,
+        seed_spans,
+    ):
+        candidate = _validate_candidate(
+            window,
+            window_input.contig_length,
+            window_input.hmm,
+            window_input.oriented_dna,
+            alignment,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
 
 
 def _orient_seed_span(
@@ -758,50 +803,19 @@ def _validate_candidate(
     oriented_dna: str,
     alignment: CodonAlignment,
 ) -> _Candidate | None:
-    """Revalidate, crop, and retain only supported internal events."""
-    if len(alignment.sequence) != len(alignment.codon_spans):
-        raise ValueError(f"Native alignment sequence/span mismatch for {_decode(hmm.name)}")
-    domain = _best_peptide_domain(hmm, alignment.sequence)
-    if domain is None:
+    """Revalidate and crop until every output describes one stable path."""
+    validated = _stabilize_alignment(hmm, oriented_dna, alignment)
+    if validated is None:
         return None
-
-    selected_spans = alignment.codon_spans[domain.target_start : domain.target_end]
-    if not selected_spans:
-        return None
-    crop_start = selected_spans[0][0]
-    crop_end = selected_spans[-1][1]
-    retained_events = tuple(
-        event
-        for event in alignment.events
-        if _event_is_internal(
-            event,
-            domain,
-            alignment.sequence,
-            crop_start,
-            crop_end,
-        )
-    )
-    if not retained_events:
-        return None
-    scores = _cropped_native_scores(
-        hmm,
-        oriented_dna,
-        alignment,
-        crop_start,
-        crop_end,
-        retained_events,
-    )
-    if scores is None:
-        return None
-    native_score, baseline_score = scores
-    has_frameshift = any(event.kind != "stop" for event in retained_events)
-    if has_frameshift and native_score - baseline_score < MIN_FRAMESHIFT_GAIN_BITS:
+    alignment, domain = validated
+    has_frameshift = any(event.kind != "stop" for event in alignment.events)
+    if has_frameshift and alignment.score - alignment.baseline_score < MIN_FRAMESHIFT_GAIN_BITS:
         return None
 
     genomic_start, genomic_end = _oriented_to_genomic(
         window,
-        crop_start,
-        crop_end,
+        alignment.nt_start,
+        alignment.nt_end,
     )
     query_name = _decode(hmm.name)
     hit = FrameshiftHit(
@@ -828,11 +842,11 @@ def _validate_candidate(
         score=domain.sequence_score,
         bias=domain.bias,
         pid=None,
-        shifts=sum(event.kind != "stop" for event in retained_events),
-        stops=sum(event.kind == "stop" for event in retained_events),
+        shifts=sum(event.kind != "stop" for event in alignment.events),
+        stops=sum(event.kind == "stop" for event in alignment.events),
         description="native codon alignment with conditional peptide HMM support",
-        native_score=native_score,
-        no_frameshift_score=baseline_score,
+        native_score=alignment.score,
+        no_frameshift_score=alignment.baseline_score,
     )
     candidate_id = rescued_protein_id(hit)
     events = tuple(
@@ -843,42 +857,74 @@ def _validate_candidate(
             event,
             domain.target_start,
         )
-        for event in retained_events
+        for event in alignment.events
     )
     sequence = alignment.sequence[domain.target_start : domain.target_end]
     return _Candidate(hit=hit, sequence=sequence, events=events)
 
 
-def _cropped_native_scores(
+def _stabilize_alignment(
     hmm: pyhmmer.plan7.HMM,
     dna: str,
     alignment: CodonAlignment,
-    crop_start: int,
-    crop_end: int,
-    retained_events: tuple[FrameshiftEvent, ...],
-) -> tuple[float, float] | None:
-    """Return native and ordinary-codon scores for the reported peptide span."""
-    if (crop_start, crop_end) == (alignment.nt_start, alignment.nt_end):
-        return alignment.score, alignment.baseline_score
-    rescored = align_frameshift_profile(hmm, dna[crop_start:crop_end])
-    if rescored is None:
+) -> tuple[CodonAlignment, _PeptideDomain] | None:
+    """Return a supported alignment whose selected span cannot shrink further."""
+    while True:
+        if len(alignment.sequence) != len(alignment.codon_spans):
+            raise ValueError(f"Native alignment sequence/span mismatch for {_decode(hmm.name)}")
+        domain = _best_peptide_domain(hmm, alignment.sequence)
+        if domain is None:
+            return None
+        crop = _supported_event_crop(alignment, domain)
+        if crop is None:
+            return None
+        if crop == (alignment.nt_start, alignment.nt_end):
+            return alignment, domain
+
+        crop_start, crop_end = crop
+        rescored = align_frameshift_profile(hmm, dna[crop_start:crop_end])
+        if rescored is None:
+            return None
+        alignment = _offset_alignment(rescored, crop_start)
+
+
+def _supported_event_crop(
+    alignment: CodonAlignment,
+    domain: _PeptideDomain,
+) -> tuple[int, int] | None:
+    """Crop the peptide domain past unsupported events at either boundary."""
+    selected_spans = alignment.codon_spans[domain.target_start : domain.target_end]
+    if not selected_spans:
         return None
-    scored_start = crop_start + rescored.nt_start
-    scored_end = crop_start + rescored.nt_end
-    if any(event.nt_start < scored_start or event.nt_end > scored_end for event in retained_events):
-        return None
-    rescored_events = {
-        (
-            crop_start + event.nt_start,
-            crop_start + event.nt_end,
-            event.kind,
-            event.size,
+    crop_start = selected_spans[0][0]
+    crop_end = selected_spans[-1][1]
+    domain_events = tuple(
+        event for event in alignment.events if crop_start <= event.nt_start and event.nt_end <= crop_end
+    )
+    supported_events = tuple(
+        event
+        for event in domain_events
+        if _event_is_internal(
+            event,
+            domain,
+            alignment.sequence,
+            crop_start,
+            crop_end,
         )
-        for event in rescored.events
-    }
-    if any((event.nt_start, event.nt_end, event.kind, event.size) not in rescored_events for event in retained_events):
+    )
+    if not supported_events:
         return None
-    return rescored.score, rescored.baseline_score
+
+    first_supported = supported_events[0].protein_position
+    last_supported = supported_events[-1].protein_position
+    for event in domain_events:
+        if event in supported_events:
+            continue
+        if event.protein_position < first_supported:
+            crop_start = max(crop_start, event.nt_end)
+        elif event.protein_position > last_supported:
+            crop_end = min(crop_end, event.nt_start)
+    return crop_start, crop_end
 
 
 def _best_peptide_domain(

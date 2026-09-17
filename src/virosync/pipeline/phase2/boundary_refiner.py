@@ -35,6 +35,18 @@ from virosync.pipeline.taxonomy_utils import calculate_fingerprint_overlap, comp
 
 logger = logging.getLogger(__name__)
 
+TIR_STATUSES = frozenset(
+    {
+        "ambiguous",
+        "detected",
+        "no_marker_anchor",
+        "not_assessed",
+        "not_detected",
+        "shared_pair",
+        "taxonomy_incomplete",
+    }
+)
+
 
 def extend_seeds_by_genes(
     seeds: list[MergedSeed],
@@ -207,6 +219,26 @@ class RefinedBoundary:
     candidate_end: int | None = None
     host_trim_reason: str = ""
     host_trim_common_euk_taxonomy: str = ""
+
+    # Terminal inverted-repeat evidence. Coordinates are 0-based, half-open.
+    # ``pre_tir_*`` preserves the heuristic boundary that the accepted repeat
+    # pair replaced, while ``tir_scan_*`` records the searched interval.
+    pre_tir_start: int | None = None
+    pre_tir_end: int | None = None
+    tir_present: bool = False
+    tir_status: str = "not_assessed"
+    tir_left_start: int | None = None
+    tir_left_end: int | None = None
+    tir_right_start: int | None = None
+    tir_right_end: int | None = None
+    tir_identity: float = 0.0
+    tir_boundary_override: bool = False
+    tir_alignment_capped: bool = False
+    tir_alignment_length: int = 0
+    tir_candidate_count: int = 0
+    tir_scan_start: int | None = None
+    tir_scan_end: int | None = None
+    tsd_sequence: str = ""
 
     # Validated-marker floor (Phase-3 re-admit METADATA -- never applied to
     # start/end). When this boundary's own seed span carried >=2 validated viral

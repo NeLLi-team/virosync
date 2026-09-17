@@ -1320,7 +1320,7 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     "--frameshift-screening/--no-frameshift-screening",
     "frameshift_screening_enabled",
     default=None,
-    help="Enable/disable native codon-aware marker rescue",
+    help="Enable/disable native codon-aware marker rescue (off by default)",
 )
 @click.option(
     "--device",
