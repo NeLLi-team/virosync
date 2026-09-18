@@ -34,6 +34,8 @@ from virosync.pipeline.phase2.boundary_diamond import (
 )
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
+    assign_boundary_candidate_ids,
+    boundary_candidate_id,
     extend_seeds_by_genes,
     merge_adjacent_viral_boundaries,
 )
@@ -444,6 +446,77 @@ def test_gene_extension_does_not_merge_mixed_rescue_and_ordinary_seeds() -> None
 
     assert [(seed.start, seed.end) for seed in observed] == [(0, 30), (0, 30)]
     assert ["frameshift_rescue" in seed.sources for seed in observed] == [False, True]
+
+
+def test_candidate_id_preserves_singleton_public_id() -> None:
+    boundary = RefinedBoundary(
+        scaffold="scaffold",
+        start=10,
+        end=30,
+        seed_id="ordinary",
+    )
+
+    assigned = assign_boundary_candidate_ids([boundary])
+
+    assert assigned[0].candidate_id == "EVE_scaffold_10-30"
+    assert boundary_candidate_id(assigned[0]) == "EVE_scaffold_10-30"
+
+
+def test_candidate_id_preserves_refined_boundary_positional_signature() -> None:
+    boundary = RefinedBoundary(
+        "scaffold",
+        10,
+        30,
+        "seed-from-existing-caller",
+        5,
+        35,
+        candidate_id="EVE_scaffold_10-30",
+    )
+
+    assert boundary.seed_id == "seed-from-existing-caller"
+    assert boundary.original_start == 5
+    assert boundary.original_end == 35
+    assert boundary.candidate_id == "EVE_scaffold_10-30"
+
+
+def test_candidate_ids_disambiguate_same_coordinates_independent_of_order() -> None:
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=10,
+            end=30,
+            seed_id="ordinary",
+            seed_sources=["hhg", "marker_validation"],
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=10,
+            end=30,
+            seed_id="rescue",
+            seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+        ),
+    ]
+
+    forward = assign_boundary_candidate_ids(boundaries)
+    reverse = assign_boundary_candidate_ids(list(reversed(boundaries)))
+
+    forward_by_seed = {boundary.seed_id: boundary.candidate_id for boundary in forward}
+    reverse_by_seed = {boundary.seed_id: boundary.candidate_id for boundary in reverse}
+    assert forward_by_seed == reverse_by_seed
+    assert len(set(forward_by_seed.values())) == 2
+    assert all(candidate_id.startswith("EVE_scaffold_10-30-c") for candidate_id in forward_by_seed.values())
+
+
+def test_candidate_ids_reject_indistinguishable_same_seed_duplicates() -> None:
+    duplicate = RefinedBoundary(
+        scaffold="scaffold",
+        start=10,
+        end=30,
+        seed_id="same-seed",
+    )
+
+    with pytest.raises(ValueError, match="same coordinates and seed_id"):
+        assign_boundary_candidate_ids([duplicate, duplicate])
 
 
 def test_touching_refined_boundaries_are_not_unconditional_overlaps() -> None:

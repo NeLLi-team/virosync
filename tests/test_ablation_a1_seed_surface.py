@@ -154,6 +154,39 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
     assert result_a.mcp_gene_ids == result_b.mcp_gene_ids == ["gene-b"]
 
 
+def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> None:
+    ordinary = MergedSeed(
+        scaffold="ctg",
+        start=5,
+        end=100,
+        seed_id="ordinary-seed",
+        sources=["hhg"],
+        anchors=[_anchor("ordinary-gene", "GVOGm0004", 50.0)],
+    )
+    rescue = MergedSeed(
+        scaffold="ctg",
+        start=5,
+        end=100,
+        seed_id="rescue-seed",
+        sources=["frameshift_rescue"],
+        anchors=[_anchor("rescue-gene", "plv_mcp_1", 80.0)],
+    )
+
+    forward = build_phase1_seed_surface([ordinary, rescue]).results
+    reverse = build_phase1_seed_surface([rescue, ordinary]).results
+    forward_by_source = {tuple(result.seed_sources): result for result in forward}
+    reverse_by_source = {tuple(result.seed_sources): result for result in reverse}
+
+    assert set(forward_by_source) == {("hhg",), ("frameshift_rescue",)}
+    assert {source: (result.eve_id, result.hallmark_genes) for source, result in forward_by_source.items()} == {
+        source: (result.eve_id, result.hallmark_genes) for source, result in reverse_by_source.items()
+    }
+    assert len({result.eve_id for result in forward}) == 2
+    assert all(result.eve_id.startswith("EVE_ctg_5-100-c") for result in forward)
+    assert forward_by_source[("hhg",)].hallmark_genes == ["GVOGm0004"]
+    assert forward_by_source[("frameshift_rescue",)].hallmark_genes == ["plv_mcp_1"]
+
+
 def test_a1_empty_surface_has_zero_intervention_counts() -> None:
     surface = build_phase1_seed_surface([])
 

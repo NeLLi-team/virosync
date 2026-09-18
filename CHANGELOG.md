@@ -2,6 +2,16 @@
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Preserve separate evidence and output identifiers for candidates with identical
+  coordinates, including ordinary and frameshift-rescue candidates and the A1
+  diagnostic mode. Candidates at unique coordinates keep their existing IDs.
+- Recompute older Phase 2 checkpoint formats that lack candidate identifiers.
+  Existing positional `RefinedBoundary` constructor arguments remain compatible.
+
 ## [1.0.1] - 2026-09-08
 
 ### Added

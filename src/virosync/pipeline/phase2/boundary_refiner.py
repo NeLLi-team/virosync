@@ -9,9 +9,11 @@ taxonomy trimming. The CRF refiner remains for compatibility with older
 experiments and artifacts.
 """
 
+import hashlib
 import logging
 from bisect import bisect_left, bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -210,6 +212,7 @@ class RefinedBoundary:
     scaffold: str
     start: int
     end: int
+    candidate_id: str = field(default="", kw_only=True)
 
     # Original seed info
     seed_id: str = ""  # Stable ID from MergedSeed for boundary-to-seed mapping
@@ -297,13 +300,13 @@ class RefinedBoundary:
     def to_bed_line(self) -> str:
         """Format as BED line."""
         score = int(min(1000, self.confidence * 1000))
-        return f"{self.scaffold}\t{self.start}\t{self.end}\tEVE_{self.scaffold}_{self.start}\t{score}\t."
+        return f"{self.scaffold}\t{self.start}\t{self.end}\t{boundary_candidate_id(self)}\t{score}\t."
 
     def to_gff_line(self) -> str:
         """Format as GFF3 line with attributes."""
         score = int(min(1000, self.confidence * 1000))
         attrs = [
-            f"ID=EVE_{self.scaffold}_{self.start}",
+            f"ID={boundary_candidate_id(self)}",
             f"confidence={self.confidence:.3f}",
             f"posterior={self.posterior_probability:.3f}",
         ]
@@ -316,6 +319,53 @@ class RefinedBoundary:
             attrs.append(f"hallmarks={','.join(self.hallmark_genes)}")
 
         return f"{self.scaffold}\tViroSync\tEVE\t{self.start + 1}\t{self.end}\t{score}\t.\t.\t{';'.join(attrs)}"
+
+
+def boundary_candidate_id(boundary: RefinedBoundary) -> str:
+    """Return the public candidate ID, including the transient singleton default."""
+    candidate_id = getattr(boundary, "candidate_id", "")
+    if candidate_id:
+        return candidate_id
+    return f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
+
+
+def assign_boundary_candidate_ids(
+    boundaries: Sequence[RefinedBoundary],
+    *,
+    reserved_candidate_ids: Iterable[str] = (),
+) -> list[RefinedBoundary]:
+    """Assign deterministic IDs without renaming already assigned candidates."""
+    boundary_list = list(boundaries)
+    existing_ids = [boundary.candidate_id for boundary in boundary_list]
+    if any(existing_ids):
+        if not all(existing_ids):
+            raise ValueError("candidate IDs must be either all assigned or all empty")
+        duplicates = sorted(candidate_id for candidate_id, count in Counter(existing_ids).items() if count > 1)
+        if duplicates:
+            raise ValueError(f"duplicate assigned candidate IDs: {duplicates}")
+        reserved_conflicts = sorted(set(existing_ids) & set(reserved_candidate_ids))
+        if reserved_conflicts:
+            raise ValueError(f"assigned candidate IDs are reserved: {reserved_conflicts}")
+        return boundary_list
+
+    reserved_ids = set(reserved_candidate_ids)
+    base_ids = [boundary_candidate_id(boundary) for boundary in boundary_list]
+    base_counts = Counter(base_ids)
+    used_ids = set(reserved_ids)
+    assigned: list[RefinedBoundary] = []
+    for boundary, base_id in zip(boundary_list, base_ids, strict=True):
+        candidate_id = base_id
+        if base_counts[base_id] > 1 or base_id in reserved_ids:
+            digest = hashlib.sha256(boundary.seed_id.encode("utf-8")).hexdigest()[:16]
+            candidate_id = f"{base_id}-c{digest}"
+        if candidate_id in used_ids:
+            raise ValueError(
+                "cannot assign distinct candidate IDs to boundaries with the same "
+                f"coordinates and seed_id: {base_id!r}, {boundary.seed_id!r}"
+            )
+        used_ids.add(candidate_id)
+        assigned.append(replace(boundary, candidate_id=candidate_id))
+    return assigned
 
 
 def constrain_to_seed_bounds(

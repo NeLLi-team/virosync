@@ -18,6 +18,7 @@ from virosync.pipeline.phase0.masking import (
 from virosync.pipeline.phase0.masking import (
     quick_mask as _quick_mask,
 )
+from virosync.pipeline.phase2.boundary_refiner import boundary_candidate_id
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 # Public module attribute for callers and tests. It is not an automatic
@@ -27,7 +28,7 @@ quick_mask = _quick_mask
 
 def _boundary_run_id(boundary) -> str:
     """Return the raw boundary identifier used in maps and logs."""
-    return f"{boundary.scaffold}_{boundary.start}_{boundary.end}"
+    return boundary_candidate_id(boundary)
 
 
 def _preflight_boundary_work_dirs(
@@ -36,15 +37,14 @@ def _preflight_boundary_work_dirs(
 ) -> dict[str, Path]:
     """Map boundaries to contained work dirs before any verification worker starts."""
     boundary_ids = [_boundary_run_id(boundary) for boundary in boundaries]
-    raw_components = [f"eve_{boundary_id}" for boundary_id in boundary_ids]
     filename_components = safe_filename_components(
-        raw_components,
+        boundary_ids,
         label="boundary work ID",
     )
     work_dir = Path(work_dir)
     work_dirs: dict[str, Path] = {}
-    for boundary_id, raw_component in zip(boundary_ids, raw_components, strict=True):
-        candidate = work_dir / filename_components[raw_component]
+    for boundary_id in boundary_ids:
+        candidate = work_dir / filename_components[boundary_id]
         require_strict_child(work_dir, candidate)
         work_dirs[boundary_id] = candidate
     return work_dirs
@@ -738,7 +738,7 @@ def verify_eve_task(
         phase="phase3",
         output_dir=output_dir,
         threads=1,
-        task_id=f"{Path(genome_path).stem}_{boundary.scaffold}_{boundary.start}_{boundary.end}",
+        task_id=f"{Path(genome_path).stem}_{_boundary_run_id(boundary)}",
     ):
         synthesizer = EvidenceSynthesizer(
             config=config,

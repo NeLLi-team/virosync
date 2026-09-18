@@ -361,6 +361,64 @@ def test_write_eve_sequences_uses_coordinate_overlap(tmp_path: Path) -> None:
     assert [record.id for record in second_records] == ["contig_1_2"]
 
 
+def test_same_coordinate_candidate_ids_remain_unique_across_exports(
+    tmp_path: Path,
+) -> None:
+    genome_fasta = tmp_path / "genome.fna"
+    proteome_fasta = tmp_path / "proteome.faa"
+    _write_genome_fasta(genome_fasta)
+    _write_proteome_fasta(proteome_fasta)
+    generator = OutputGenerator(
+        output_dir=tmp_path,
+        genome_fasta=genome_fasta,
+        proteome_fasta=proteome_fasta,
+    )
+    candidate_ids = [
+        "EVE_contig_1_0-50-cordinary",
+        "EVE_contig_1_0-50-crescue",
+    ]
+    results = [
+        _build_result(
+            eve_id=candidate_id,
+            scaffold="contig_1",
+            start=0,
+            end=50,
+            confidence_tier="HIGH",
+            status=VerificationStatus.HIGH_CONFIDENCE,
+        )
+        for candidate_id in candidate_ids
+    ]
+
+    canonical_tsv = generator.write_predictions_tsv(results)
+    detailed_tsv = generator.write_predictions_detailed_tsv(results)
+    bed_path = generator.write_predictions_bed(results)
+    gff_path = generator.write_predictions_gff(results)
+    sequence_dir = generator.write_eve_sequences(results, tmp_path / "sequences")
+
+    with canonical_tsv.open(newline="") as handle:
+        canonical_ids = [row["eve_id"] for row in csv.DictReader(handle, delimiter="\t")]
+    with detailed_tsv.open(newline="") as handle:
+        detailed_ids = [row["eve_id"] for row in csv.DictReader(handle, delimiter="\t")]
+    bed_ids = [line.split("\t")[3] for line in bed_path.read_text().splitlines()]
+    gff_ids = [
+        line.split("ID=", 1)[1].split(";", 1)[0]
+        for line in gff_path.read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    sequence_ids = [path.stem for path in (sequence_dir / "nucleotide").glob("*.fna")]
+
+    assert set(canonical_ids) == set(candidate_ids)
+    assert len(canonical_ids) == 2
+    assert set(detailed_ids) == set(candidate_ids)
+    assert len(detailed_ids) == 2
+    assert set(bed_ids) == set(candidate_ids)
+    assert len(bed_ids) == 2
+    assert set(gff_ids) == set(candidate_ids)
+    assert len(gff_ids) == 2
+    assert set(sequence_ids) == set(candidate_ids)
+    assert len(sequence_ids) == 2
+
+
 @pytest.mark.parametrize("writer_name", ["write_gvclass_export", "write_eve_sequences"])
 def test_per_eve_exports_encode_paths_but_preserve_raw_manifest_ids(
     tmp_path: Path,

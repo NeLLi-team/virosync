@@ -37,7 +37,10 @@ from virosync.pipeline.phase1.viral_markers import (
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
 )
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
+    boundary_candidate_id,
+)
 from virosync.pipeline.phase3.gene_taxonomy import viral_hit_categories
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
@@ -2231,9 +2234,8 @@ class EvidenceSynthesizer:
         refined_boundary: RefinedBoundary,
     ) -> VerificationResult:
         """Initialize VerificationResult with boundary and seed metadata."""
-        eve_id = f"EVE_{refined_boundary.scaffold}_{refined_boundary.start}-{refined_boundary.end}"
         result = VerificationResult(
-            eve_id=eve_id,
+            eve_id=boundary_candidate_id(refined_boundary),
             scaffold=refined_boundary.scaffold,
             start=refined_boundary.start,
             end=refined_boundary.end,

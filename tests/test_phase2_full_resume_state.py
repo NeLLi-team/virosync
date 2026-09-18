@@ -23,6 +23,7 @@ from virosync.orchestration._flows.single_genome.phase2_resume_state import (
 )
 from virosync.orchestration._flows.single_genome.phase_state import (
     PHASE2_STATE_FILENAME,
+    load_phase2_state,
     phase2_state_to_document,
     write_phase2_state,
 )
@@ -32,7 +33,10 @@ from virosync.pipeline.phase2.boundary_diamond import (
     GenomeDiamondQuery,
     SeedGeneMapping,
 )
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
+    assign_boundary_candidate_ids,
+)
 from virosync.pipeline.taxonomy_utils import TaxonomyFingerprint
 
 
@@ -41,6 +45,7 @@ def _boundary() -> RefinedBoundary:
         scaffold="scaffold/alpha",
         start=101,
         end=999,
+        candidate_id="EVE_scaffold/alpha_101-999",
         seed_id="seed-b",
         original_start=90,
         original_end=1010,
@@ -206,6 +211,45 @@ def test_phase2_resume_state_round_trip_preserves_exact_phase3_inputs(
     payload = json.loads(state_path.read_text())
     assert payload["artifact_type"] == PHASE2_RESUME_STATE_ARTIFACT_TYPE
     assert payload["schema_version"] == PHASE2_RESUME_STATE_SCHEMA_VERSION
+
+
+def test_phase2_checkpoints_and_bed_share_disambiguated_candidate_ids(
+    tmp_path: Path,
+) -> None:
+    boundaries = assign_boundary_candidate_ids(
+        [
+            RefinedBoundary(
+                scaffold="scaffold",
+                start=10,
+                end=30,
+                seed_id="ordinary",
+            ),
+            RefinedBoundary(
+                scaffold="scaffold",
+                start=10,
+                end=30,
+                seed_id="rescue",
+                seed_sources=["frameshift_rescue"],
+            ),
+        ]
+    )
+
+    bed_path = phase2._write_phase2_checkpoints(
+        output_dir=tmp_path,
+        refined_boundaries=boundaries,
+        boundary_taxonomy_map={},
+        boundary_control_stats=None,
+        boundary_diamond_query=None,
+    )
+
+    bed_ids = [line.split("\t")[3] for line in bed_path.read_text().splitlines()]
+    report_ids = [boundary.candidate_id for boundary in load_phase2_state(tmp_path / "phase2" / PHASE2_STATE_FILENAME)]
+    resume_ids = [
+        boundary.candidate_id
+        for boundary in load_phase2_resume_state(tmp_path / "phase2" / PHASE2_RESUME_STATE_FILENAME).refined_boundaries
+    ]
+    assert bed_ids == report_ids == resume_ids
+    assert len(set(bed_ids)) == 2
 
 
 def test_phase2_resume_state_round_trip_preserves_optional_none_values() -> None:

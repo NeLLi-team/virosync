@@ -25,6 +25,10 @@ from virosync.pipeline.phase2.boundary_diamond import (
     get_flanking_taxonomy,
     missing_boundary_taxonomy_ids,
 )
+from virosync.pipeline.phase2.boundary_refiner import (
+    assign_boundary_candidate_ids,
+    boundary_candidate_id,
+)
 from virosync.pipeline.phase3.acceptance_selection import (
     select_phase3_acceptance,
 )
@@ -38,6 +42,7 @@ from virosync.pipeline.phase3.output_generator import (
     _is_atpase_marker,
     evaluate_v2_quality_gate,
 )
+from virosync.utils.path_safety import safe_filename_components
 
 from .loaders import (
     _load_interproscan_summary,
@@ -498,11 +503,11 @@ def _summarize_boundary_taxonomy(
         "vp_plv_interior": n_vp_plv_interior,
         "vp_plv_flanking": n_vp_plv_flanking,
     }
-    boundary_id = f"{boundary.scaffold}_{boundary.start}_{boundary.end}"
+    candidate_id = boundary_candidate_id(boundary)
     logger.info(
         "%s: Reused Phase 2b taxonomy - %d interior + %d flanking genes, "
         "%d viral (%.1f%%), %d NCLDV/MIRUS (interior: %d viral, flanking: %d viral)",
-        boundary_id,
+        candidate_id,
         len(filtered_taxonomy),
         n_flanking,
         n_viral_total,
@@ -600,10 +605,10 @@ def _build_boundary_evidence(
             },
         )
 
-    eve_id = f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
-    interproscan = interproscan_map.get(eve_id) if interproscan_map else None
+    candidate_id = boundary_candidate_id(boundary)
+    interproscan = interproscan_map.get(candidate_id) if interproscan_map else None
     return _BoundaryEvidence(
-        boundary_id=f"{boundary.scaffold}_{boundary.start}_{boundary.end}",
+        boundary_id=candidate_id,
         hallmarks=_build_boundary_hallmarks(boundary_markers, config),
         gene_taxonomy=gene_taxonomy,
         interproscan=interproscan,
@@ -729,6 +734,10 @@ def _run_phase3_subflow(
     logger.info("-" * 60)
     logger.info(f"Phase 3: Verifying {len(refined_boundaries)} candidates")
     logger.info("  Steps: gene taxonomy -> evidence synthesis -> structural (if enabled)")
+    safe_filename_components(
+        [boundary_candidate_id(boundary) for boundary in refined_boundaries],
+        label="candidate ID",
+    )
 
     # Load validated markers on resume if needed
     if (not validated_markers) and resume and resume_authorized and validated_hits_tsv.exists():
@@ -759,7 +768,7 @@ def _run_phase3_subflow(
     # Prepare regions payload for gene taxonomy batch task
     regions_payload = [
         {
-            "eve_id": f"EVE_{b.scaffold}_{b.start}-{b.end}",
+            "eve_id": boundary_candidate_id(b),
             "scaffold": b.scaffold,
             "start": b.start,
             "end": b.end,
@@ -888,12 +897,12 @@ def _run_phase3_subflow(
     # Regions accepted so far, seeded from the first pass and extended as
     # alternatives qualify, so no two re-admits can overlap each other.
     readmit_accepted = list(acceptance_selection.canonical_results)
-    boundary_by_region = {(b.scaffold, b.start, b.end): b for b in refined_boundaries}
+    boundary_by_candidate_id = {boundary_candidate_id(boundary): boundary for boundary in refined_boundaries}
     readmit_boundaries = []
     for r in verification_results:
         if not _is_marker_floor_recovery_candidate(r):
             continue
-        boundary = boundary_by_region.get((r.scaffold, r.start, r.end))
+        boundary = boundary_by_candidate_id.get(r.eve_id)
         if boundary is None:
             continue
         if getattr(boundary, "tir_boundary_override", False):
@@ -910,8 +919,14 @@ def _run_phase3_subflow(
                 boundary,
                 start=min(boundary.start, floor_start),
                 end=max(boundary.end, floor_end),
+                candidate_id="",
             )
         )
+
+    readmit_boundaries = assign_boundary_candidate_ids(
+        readmit_boundaries,
+        reserved_candidate_ids=boundary_by_candidate_id,
+    )
 
     n_readmitted = 0
     if readmit_boundaries:
