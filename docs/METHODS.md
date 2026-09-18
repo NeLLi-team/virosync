@@ -172,9 +172,10 @@ The search uses exact 7 bp seeds and ungapped matches of at least 50 bp at 90%
 identity or better. It scores matches at +2 and mismatches at −4 and uses the
 full local alignment to select matching outer bases. It reports at most 500 bp
 from each outer end; these reported segments must also meet the identity
-threshold. It rejects non-ACGT arms, arms with more than 80% of one
-base, base entropy below 1.2 bits, and simple repeats with at least 80% periodic
-identity for periods of 1–12 bp. The 50 bp minimum is an empirical search
+threshold. It rejects a reported left arm containing non-ACGT bases, more than
+80% of one base, base entropy below 1.2 bits, or at least 80% periodic identity
+for periods of 1–12 bp. The right arm is checked against the identity threshold
+without a separate complexity filter. The 50 bp minimum is an empirical search
 cutoff, not a biological limit. Shorter, diverged or indel-rich TIRs can be
 missed. The reported matched segment can cover only part of a longer repeat;
 `tir_alignment_capped=1` identifies shortened segments. The full ungapped
