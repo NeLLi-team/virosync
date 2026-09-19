@@ -1,9 +1,10 @@
 # Performance
 
-The September 17 benchmark used ViroSync development revision
-`82d67d85e503c49c012bad4a3686c0316d0d2333` (version 1.0.1), with
-v1.1.0 resources and no optional analyses. ViroSync ran up to two inputs at
-once. Select a figure to open the full-size image.
+The September 19 benchmark used ViroSync 1.0.1 with GenomeTools seed indexing,
+shared repeat comparisons and development resources v1.1.0. Its source SHA-256 was
+`a19fe5516183507df1c5d16cf794670baef0dfa769fd78bf7f135ee53a2ec3e3`.
+ViroSync ran with one worker and 16 threads per input, at most two inputs at
+once, and no optional analyses. Select a figure to open the full-size image.
 
 ## Synthetic boundary recovery
 
@@ -25,19 +26,18 @@ so the plot does not report specificity or accuracy.*
 
 ## Runtime and peak memory
 
-Mean wall time across 30 SynEVEs-2 inputs was 144.8 seconds for ViroSync and
+Mean wall time across 30 SynEVEs-2 inputs was 100.5 seconds for ViroSync and
 12.3 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
-were 9,364.0 and 1,705.5 seconds. Campaign concurrency differed, so these values
+were 600.0 and 1,705.5 seconds. Campaign concurrency differed, so these values
 do not give a general speed ranking.
 
 [![Runtime and peak resident memory](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)
 
 *Per-input wall time and peak resident memory for 30 SynEVEs-2 inputs and five
 real-genome inputs. All tools used 16 threads or cores on the same 64-core
-host, but campaign concurrency differed. The first 15 ViroSync synthetic inputs
-were retimed without the overlapping example-validation job; other ViroSync
-timings come from the original campaign. Wall time includes contention and
-database caching. Peak RSS is shown in decimal GB for the largest single
+host, but campaign concurrency differed. All ViroSync timings come from the
+September 19 campaign. Wall time includes contention and database caching.
+Peak RSS is shown in decimal GB for the largest single
 process, not the process tree. EEfinder is absent because its campaign used
 different load and concurrency.*
 

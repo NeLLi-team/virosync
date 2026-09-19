@@ -424,7 +424,7 @@ def _enabled_executable_identities(
     flat_config: dict,
     masking: MaskingConfig,
 ) -> list:
-    names = {"diamond", "prodigal-gv", "skani"}
+    names = {"diamond", "gt", "prodigal-gv", "skani"}
     if masking.backend in {MaskingBackend.TRF, MaskingBackend.TRF_REPEATMASKER}:
         names.add("trf")
     if masking.backend in {
