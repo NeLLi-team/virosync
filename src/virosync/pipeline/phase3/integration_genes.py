@@ -24,12 +24,15 @@ __all__ = [
     "INTEGRATION_PROFILE_PATH",
     "IntegrationGeneHit",
     "IntegrationRegion",
+    "IntegrationScanResult",
+    "IntegrationUnsearchedProtein",
     "collect_annotated_integration_genes",
     "scan_integration_genes",
 ]
 
 INTEGRATION_PROFILE_PATH = Path(__file__).parents[2] / "data" / "integration_profiles.hmm"
 INTEGRATION_PROFILE_MANIFEST_PATH = Path(__file__).parents[2] / "data" / "integration_profiles.json"
+MAX_INTEGRATION_PROTEIN_LENGTH = 100_000
 
 IntegrationLocation = Literal["interior", "upstream", "downstream", "boundary_overlap"]
 
@@ -85,6 +88,34 @@ class IntegrationGeneHit:
 
 
 @dataclass(frozen=True, slots=True)
+class IntegrationUnsearchedProtein:
+    """One original protein excluded from HMM screening in an EVE context.
+
+    Genomic coordinates are 0-based half-open. This is missing assessment,
+    not evidence that the protein lacks an integration domain.
+    """
+
+    region_id: str
+    protein_id: str
+    length_aa: int
+    scaffold: str
+    start: int
+    end: int
+    strand: str
+    location: IntegrationLocation
+    reason: Literal["sequence_length_limit"] = "sequence_length_limit"
+    limit_aa: int = MAX_INTEGRATION_PROTEIN_LENGTH
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationScanResult:
+    """Separate positive HMM evidence from proteins the engine cannot assess."""
+
+    hits: list[IntegrationGeneHit]
+    unsearched: list[IntegrationUnsearchedProtein]
+
+
+@dataclass(frozen=True, slots=True)
 class _GeneContext:
     """Candidate gene coordinates in one search region."""
 
@@ -112,19 +143,39 @@ def scan_integration_genes(
     *,
     threads: int,
     hmm_path: Path = INTEGRATION_PROFILE_PATH,
-) -> list[IntegrationGeneHit]:
+) -> IntegrationScanResult:
     """Search candidate and flanking proteins with curated profile GA cutoffs.
 
-    Every selected protein is searched in one PyHMMER batch. A hit must pass
-    both the profile's sequence and best-domain gathering thresholds. Empty
-    regions or regions without predicted proteins return an empty list.
+    Selected proteins of at most 100,000 residues are searched in one batch.
+    Longer proteins are recorded per EVE context without modifying sequences.
+    A hit must pass both sequence and best-domain gathering thresholds.
+    Empty selections have neither hits nor unsearched records.
     """
     if not regions:
-        return []
+        return IntegrationScanResult([], [])
 
     contexts_by_protein, sequences = _load_candidate_genes(proteome_path, regions)
-    if not sequences:
-        return []
+    supported_sequences: list[pyhmmer.easel.DigitalSequence] = []
+    unsearched: list[IntegrationUnsearchedProtein] = []
+    for sequence in sequences:
+        if len(sequence) <= MAX_INTEGRATION_PROTEIN_LENGTH:
+            supported_sequences.append(sequence)
+            continue
+        for context in contexts_by_protein[_decode(sequence.name)]:
+            unsearched.append(
+                IntegrationUnsearchedProtein(
+                    region_id=context.region.region_id,
+                    protein_id=context.protein_id,
+                    length_aa=len(sequence),
+                    scaffold=context.scaffold,
+                    start=context.start,
+                    end=context.end,
+                    strand=context.strand,
+                    location=_gene_location(context.start, context.end, context.region),
+                )
+            )
+    if not supported_sequences:
+        return IntegrationScanResult([], unsearched)
 
     with HMMFile(hmm_path) as handle:
         profiles = list(handle)
@@ -132,15 +183,19 @@ def scan_integration_genes(
     _validate_profiles(profiles, metadata_by_name)
 
     hits: list[IntegrationGeneHit] = []
+    # Count original targets, not EVE contexts. Excluded comparisons are not
+    # performed; this conservative normalization retains their multiplicity.
+    search_space = {"Z": len(contexts_by_protein)} if unsearched else {}
     searches = pyhmmer.hmmsearch(
         profiles,
-        sequences,
+        supported_sequences,
         cpus=threads,
         parallel="targets",
         E=float("inf"),
         domE=float("inf"),
         incE=float("inf"),
         incdomE=float("inf"),
+        **search_space,
     )
     for profile, top_hits in zip(profiles, searches, strict=True):
         profile_name = _decode(profile.name)
@@ -168,7 +223,7 @@ def scan_integration_genes(
                         annotation=metadata.description,
                     )
                 )
-    return _sorted_unique_hits(hits)
+    return IntegrationScanResult(_sorted_unique_hits(hits), unsearched)
 
 
 def collect_annotated_integration_genes(

@@ -55,6 +55,8 @@ and BED row.
 | `tsd_sequence` | Both | Candidate target-site duplication immediately outside the repeat-defined interval, when found. |
 | `recombinase_genes` | Both | Distinct protein identifiers with recombinase annotations, including nearby genes and repair recombinases. Inspect the evidence field for their locations and functions. |
 | `integration_gene_evidence` | Both | JSON records with protein identifiers, genomic coordinates, location, enzyme family, annotation source, profile accession and scores. Includes DDE integrases and recombinases. A dot means no qualifying gene annotation. |
+| `integration_hmm_status` | Both | `complete` means every selected predicted protein was searched, including an empty selection. `incomplete_sequence_length` means one or more selected proteins exceeded the HMM engine limit. `not_assessed` means the screen has not completed. |
+| `integration_hmm_unsearched` | Both | JSON list of proteins excluded from the integration HMM search, with original identifiers, lengths, genomic coordinates, strand, EVE context, exclusion reason and limit. An empty list is `[]`; check the status to distinguish a completed screen from one not assessed. |
 
 `canonical_selection_outcome` records direct retention, gate rejection, loss
 of a frameshift-rescued marker, overlap selection or suppression, or lack of
@@ -129,6 +131,10 @@ also lower its score. Scaffold order can change the background used for
 composition scoring. Structural matches are computational support, not
 experimental validation.
 
+The Phase 1 hallmark HMM search skips predicted proteins longer than 100,000
+amino acids. A completed run therefore does not establish that all predicted
+proteins were screened for viral hallmarks.
+
 ANI class transfer can cross a chain of pairwise links, and shared host sequence
 can contribute to an alignment. Mixed insertions and capsid exchange can also
 conflict with a region-level class. Inspect the detailed table, gene-taxonomy
@@ -195,6 +201,23 @@ Both sequence and domain scores must pass the profile's curated gathering
 threshold. It runs without InterProScan and covers the final EVE, its original
 candidate span, and the configured flanking extension. Each annotation records
 whether its gene is interior, upstream, downstream, or crosses a boundary.
+
+The integration HMM screen searches selected proteins up to 100,000 amino
+acids long. Longer proteins keep their sequences and identifiers and appear
+in `integration_hmm_unsearched` for each affected EVE. Their HMM assessment
+is missing. A dot in `integration_gene_evidence` does not establish absence
+of an integration gene when `integration_hmm_status` is incomplete.
+Independent marker and InterProScan annotations remain available for these
+proteins. Screening status does not change EVE acceptance or confidence.
+
+For a batch containing both supported and oversized proteins, the sequence
+E-value search-space parameter `Z` counts all distinct selected proteins,
+including those not searched. Excluded proteins contribute to this count
+but have no HMM comparison.
+The profile gathering thresholds still use sequence and domain scores.
+`complete` describes coverage of this screen's selected predicted proteins;
+it does not certify gene prediction completeness or biological absence of
+an integration mechanism.
 
 | Pfam profile | Reported function |
 | --- | --- |

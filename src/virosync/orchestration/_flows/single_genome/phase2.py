@@ -484,15 +484,21 @@ def _run_phase2_subflow(
 
             host_trim_dir = output_dir / "phase2" / "host_trim"
             host_trim_dir.mkdir(parents=True, exist_ok=True)
-            regions_payload = [
-                {
-                    "eve_id": f"EVE_{s.scaffold}_{s.start}-{s.end}",
-                    "scaffold": s.scaffold,
-                    "start": s.start,
-                    "end": s.end,
-                }
-                for s in merged_seeds
-            ]
+            regions_payload = []
+            seen_coordinates: set[tuple[str, int, int]] = set()
+            for seed in merged_seeds:
+                coordinates = (seed.scaffold, seed.start, seed.end)
+                if coordinates in seen_coordinates:
+                    continue
+                seen_coordinates.add(coordinates)
+                regions_payload.append(
+                    {
+                        "eve_id": f"EVE_{seed.scaffold}_{seed.start}-{seed.end}",
+                        "scaffold": seed.scaffold,
+                        "start": seed.start,
+                        "end": seed.end,
+                    }
+                )
             host_trim_threads = gene_taxonomy_threads or threads
             logger.info(
                 "Phase 2a: Running gene taxonomy for host-trim (%d regions)",

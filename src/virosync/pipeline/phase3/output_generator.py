@@ -197,6 +197,8 @@ def _integration_evidence_row(result: VerificationResult) -> dict[str, str]:
         "integration_gene_evidence": (
             json.dumps(result.integration_gene_hits, separators=(",", ":")) if result.integration_gene_hits else "."
         ),
+        "integration_hmm_status": result.integration_hmm_status,
+        "integration_hmm_unsearched": json.dumps(result.integration_hmm_unsearched, separators=(",", ":")),
     }
     for name in (
         "tir_scan_start",

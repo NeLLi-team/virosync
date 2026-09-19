@@ -136,13 +136,6 @@ def _format_prodigal_header(
     return f">{gene_id} # {start + 1} # {end} # {strand_token} # {';'.join(attributes)}\n"
 
 
-def _contains_internal_tile(fasta_path: str) -> bool:
-    """Return whether a FASTA contains a ViroSync tile record."""
-    prefix = f">{_TILE_ID_PREFIX}"
-    with open(fasta_path) as handle:
-        return any(line.startswith(prefix) for line in handle if line.startswith(">"))
-
-
 def _validate_tiled_prodigal_output(
     input_fasta: Path,
     proteins_faa: Path,
@@ -330,16 +323,24 @@ def _validate_tiled_prodigal_output(
     )
 
 
-def _retain_failed_prodigal_attempt(
-    failure_dir: Path,
+def _retain_prodigal_attempt(
+    diagnostic_root: Path,
     paths: list[Path],
+    returncode: int,
+    stage: str,
 ) -> Path:
-    """Copy diagnostic artifacts outside the temporary worker directory."""
-    failure_dir.mkdir(parents=True, exist_ok=True)
+    """Preserve one raw subprocess attempt outside Phase 0 invalidation."""
+    diagnostic_root.mkdir(parents=True, exist_ok=True)
+    attempt_dir = Path(tempfile.mkdtemp(prefix=f"{stage}-", dir=diagnostic_root))
+    retained = []
     for path in paths:
         if path.exists():
-            shutil.copy2(path, failure_dir / path.name)
-    return failure_dir
+            shutil.copy2(path, attempt_dir / path.name)
+            retained.append(path.name)
+    (attempt_dir / "attempt.json").write_text(
+        json.dumps({"stage": stage, "returncode": returncode, "artifacts": retained}, indent=2) + "\n"
+    )
+    return attempt_dir
 
 
 def _known_cleanup_failure(returncode: int, stderr_path: Path) -> bool:
@@ -598,13 +599,14 @@ def _repair_cleanup_abort_proteins(
 def _run_prodigal_on_chunk(
     chunk_fasta: str,
     chunk_out: str,
-    has_tiles: bool | None = None,
+    diagnostic_root: Path,
     tile_cores: dict[str, tuple[int, int]] | None = None,
 ) -> str:
-    """Run prodigal-gv CLI on a single chunk FASTA. Returns protein FASTA path."""
-    if has_tiles is None:
-        has_tiles = _contains_internal_tile(chunk_fasta)
-    tile_cores = tile_cores or {}
+    """Run and validate one chunk, retrying nonzero exits per input record."""
+    input_path = Path(chunk_fasta)
+    output_path = Path(chunk_out)
+    gff_path = output_path.with_suffix(".gff")
+    stderr_path = output_path.with_suffix(".stderr")
     cmd = [
         "prodigal-gv",
         "-i",
@@ -612,141 +614,112 @@ def _run_prodigal_on_chunk(
         "-a",
         chunk_out,
         "-o",
-        str(Path(chunk_out).with_suffix(".gff")) if has_tiles else "/dev/null",
+        str(gff_path),
         "-f",
         "gff",
         "-p",
         "meta",
         "-q",
     ]
-    if has_tiles:
-        stderr_path = Path(chunk_out).with_suffix(".stderr")
-        with stderr_path.open("w") as stderr:
-            completed = subprocess.run(
-                cmd,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr,
+    with stderr_path.open("w") as stderr:
+        completed = subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=stderr)
+    if completed.returncode == 0:
+        try:
+            _validate_tiled_prodigal_output(input_path, output_path, gff_path)
+        except (RuntimeError, ValueError) as exc:
+            attempt_dir = _retain_prodigal_attempt(
+                diagnostic_root, [input_path, output_path, gff_path, stderr_path], 0, "chunk"
             )
-        if completed.returncode == 0:
-            try:
-                _validate_tiled_prodigal_output(
-                    Path(chunk_fasta),
-                    Path(chunk_out),
-                    Path(cmd[cmd.index("-o") + 1]),
-                )
-            except RuntimeError:
-                failure_dir = _retain_failed_prodigal_attempt(
-                    Path(chunk_out).parent.parent / "prodigal_failures" / Path(chunk_out).stem,
-                    [
-                        Path(chunk_fasta),
-                        Path(chunk_out),
-                        Path(cmd[cmd.index("-o") + 1]),
-                        stderr_path,
-                    ],
-                )
-                logger.error("Retained invalid Prodigal output in %s", failure_dir)
-                raise
-            return chunk_out
+            raise RuntimeError(f"{exc}; diagnostics: {attempt_dir}") from exc
+        return chunk_out
 
-        logger.warning(
-            "prodigal-gv exited nonzero for tiled worker %s; retrying its records separately",
-            chunk_fasta,
-        )
-        with tempfile.TemporaryDirectory(
-            dir=Path(chunk_out).parent,
-        ) as retry_dir_name:
-            retry_dir = Path(retry_dir_name)
-            retry_outputs: list[Path] = []
-            for index, record in enumerate(SeqIO.parse(chunk_fasta, "fasta")):
-                retry_input = retry_dir / f"record_{index}.fasta"
-                retry_output = retry_dir / f"record_{index}.faa"
-                retry_gff = retry_dir / f"record_{index}.gff"
-                retry_stderr = retry_dir / f"record_{index}.stderr"
-                SeqIO.write([record], retry_input, "fasta")
-                retry_cmd = [
-                    "prodigal-gv",
-                    "-i",
-                    str(retry_input),
-                    "-a",
-                    str(retry_output),
-                    "-o",
-                    str(retry_gff),
-                    "-f",
-                    "gff",
-                    "-p",
-                    "meta",
-                    "-q",
-                ]
-                with retry_stderr.open("w") as stderr:
-                    retry_completed = subprocess.run(
-                        retry_cmd,
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=stderr,
-                    )
-                try:
-                    known_cleanup = retry_completed.returncode != 0 and _known_cleanup_failure(
-                        retry_completed.returncode,
-                        retry_stderr,
-                    )
-                    if retry_completed.returncode != 0 and not known_cleanup:
-                        raise RuntimeError(f"unrecognized nonzero Prodigal-GV exit: {retry_completed.returncode}")
-                    validation = _validate_tiled_prodigal_output(
+    attempt_dir = _retain_prodigal_attempt(
+        diagnostic_root, [input_path, output_path, gff_path, stderr_path], completed.returncode, "chunk"
+    )
+    logger.warning(
+        "prodigal-gv exited %d for %s; retrying records separately; diagnostics: %s",
+        completed.returncode,
+        chunk_fasta,
+        attempt_dir,
+    )
+    with tempfile.TemporaryDirectory(dir=output_path.parent) as retry_dir_name:
+        retry_dir = Path(retry_dir_name)
+        retry_outputs: list[Path] = []
+        for index, record in enumerate(SeqIO.parse(chunk_fasta, "fasta")):
+            retry_input = retry_dir / f"record_{index}.fasta"
+            retry_output = retry_dir / f"record_{index}.faa"
+            retry_gff = retry_dir / f"record_{index}.gff"
+            retry_stderr = retry_dir / f"record_{index}.stderr"
+            retry_paths = [retry_input, retry_output, retry_gff, retry_stderr]
+            SeqIO.write([record], retry_input, "fasta")
+            retry_cmd = [
+                "prodigal-gv",
+                "-i",
+                str(retry_input),
+                "-a",
+                str(retry_output),
+                "-o",
+                str(retry_gff),
+                "-f",
+                "gff",
+                "-p",
+                "meta",
+                "-q",
+            ]
+            with retry_stderr.open("w") as stderr:
+                retry_completed = subprocess.run(retry_cmd, check=False, stdout=subprocess.DEVNULL, stderr=stderr)
+            retry_attempt = None
+            if retry_completed.returncode != 0:
+                # Capture the emitted bytes before any accepted tile repair.
+                retry_attempt = _retain_prodigal_attempt(
+                    diagnostic_root, retry_paths, retry_completed.returncode, "record"
+                )
+            try:
+                known_cleanup = retry_completed.returncode != 0 and _known_cleanup_failure(
+                    retry_completed.returncode,
+                    retry_stderr,
+                )
+                if retry_completed.returncode != 0 and not known_cleanup:
+                    raise RuntimeError(f"unrecognized nonzero Prodigal-GV exit: {retry_completed.returncode}")
+                validation = _validate_tiled_prodigal_output(
+                    retry_input,
+                    retry_output,
+                    retry_gff,
+                    tile_cores=tile_cores,
+                    allow_cleanup_recovery=known_cleanup,
+                )
+                if known_cleanup:
+                    if retry_output.stat().st_size == 0:
+                        raise RuntimeError("nonzero Prodigal-GV exit produced no proteins")
+                    survivor_check_count = _repair_cleanup_abort_proteins(
                         retry_input,
                         retry_output,
                         retry_gff,
-                        tile_cores=tile_cores,
-                        allow_cleanup_recovery=known_cleanup,
+                        validation,
                     )
-                    if known_cleanup:
-                        if retry_output.stat().st_size == 0:
-                            raise RuntimeError("nonzero Prodigal-GV exit produced no proteins")
-                        survivor_check_count = _repair_cleanup_abort_proteins(
-                            retry_input,
-                            retry_output,
-                            retry_gff,
-                            validation,
-                        )
-                        audit_path = _write_cleanup_abort_audit(
-                            Path(chunk_out).parent.parent / "accepted_cleanup_aborts",
-                            record.id,
-                            retry_completed.returncode,
-                            retry_stderr,
-                            validation,
-                            survivor_check_count,
-                        )
-                        logger.warning(
-                            "Accepted owned-core-complete output after known "
-                            "Prodigal-GV cleanup abort for %s; audit: %s",
-                            record.id,
-                            audit_path,
-                        )
-                except (RuntimeError, ValueError):
-                    failure_dir = _retain_failed_prodigal_attempt(
-                        Path(chunk_out).parent.parent / "prodigal_failures" / Path(chunk_out).stem / f"record_{index}",
-                        [retry_input, retry_output, retry_gff, retry_stderr],
+                    audit_path = _write_cleanup_abort_audit(
+                        retry_attempt / "accepted_cleanup_aborts",
+                        record.id,
+                        retry_completed.returncode,
+                        retry_stderr,
+                        validation,
+                        survivor_check_count,
                     )
-                    logger.error("Retained failed Prodigal attempt in %s", failure_dir)
-                    raise
-                retry_outputs.append(retry_output)
+                    logger.warning(
+                        "Accepted owned-core-complete output after known Prodigal-GV cleanup abort for %s; audit: %s",
+                        record.id,
+                        audit_path,
+                    )
+            except (RuntimeError, ValueError) as exc:
+                if retry_attempt is None:
+                    retry_attempt = _retain_prodigal_attempt(diagnostic_root, retry_paths, 0, "record")
+                raise RuntimeError(f"{exc}; diagnostics: {retry_attempt}") from exc
+            retry_outputs.append(retry_output)
 
-            with open(chunk_out, "w") as merged:
-                for retry_output in retry_outputs:
-                    with retry_output.open() as handle:
-                        shutil.copyfileobj(handle, merged)
-        return chunk_out
-
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        if Path(chunk_out).exists() and Path(chunk_out).stat().st_size > 0:
-            logger.warning(
-                "prodigal-gv exited nonzero after writing %s; accepting the existing untiled output for compatibility",
-                chunk_out,
-            )
-        else:
-            raise
+        with output_path.open("w") as merged:
+            for retry_output in retry_outputs:
+                with retry_output.open() as handle:
+                    shutil.copyfileobj(handle, merged)
     return chunk_out
 
 
@@ -842,7 +815,7 @@ def _run_prodigal_parallel(
         tmpdir = Path(tmpdir)
         chunk_inputs = []
         chunk_outputs = []
-        chunk_has_tiles = []
+        chunk_diagnostic_roots = []
         chunk_tile_cores = []
 
         # Distribute scaffolds round-robin by size (largest first)
@@ -871,9 +844,7 @@ def _run_prodigal_parallel(
                 for record in chunk_records
                 if record.id in tile_sources
             }
-            # Strict FAA/GFF validation is genome-scoped, so a short scaffold's
-            # behavior cannot change with thread-dependent chunk packing.
-            chunk_has_tiles.append(bool(tile_sources))
+            chunk_diagnostic_roots.append(output_dir.parent / "prodigal_diagnostics" / output_dir.name)
             chunk_tile_cores.append(cores)
 
         # Run prodigal-gv in parallel
@@ -883,7 +854,7 @@ def _run_prodigal_parallel(
                     _run_prodigal_on_chunk,
                     chunk_inputs,
                     chunk_outputs,
-                    chunk_has_tiles,
+                    chunk_diagnostic_roots,
                     chunk_tile_cores,
                 )
             )
@@ -893,8 +864,6 @@ def _run_prodigal_parallel(
             # Preserve the existing output path exactly for ordinary genomes.
             with open(proteins_faa, "w") as out_f:
                 for chunk_out in chunk_outputs:
-                    if not Path(chunk_out).exists():
-                        continue
                     with open(chunk_out) as in_f:
                         out_f.write(in_f.read())
 
@@ -916,8 +885,6 @@ def _run_prodigal_parallel(
         else:
             predictions: dict[str, list[tuple[int, int, str, str, str]]] = {}
             for chunk_out in chunk_outputs:
-                if not Path(chunk_out).exists():
-                    continue
                 for record in SeqIO.parse(chunk_out, "fasta"):
                     parsed = parse_prodigal_header(record.description, record.id)
                     if not parsed:
@@ -1020,16 +987,22 @@ def _run_prodigal_single(
         "-q",
     ]
     logger.info("Running prodigal-gv: %s", " ".join(cmd))
+    stderr_path = output_dir / "prodigal.stderr"
+    with stderr_path.open("w") as stderr:
+        completed = subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=stderr)
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError as e:
-        if proteins_faa.exists() and proteins_faa.stat().st_size > 0:
-            logger.warning(
-                "prodigal-gv exited with error %s, but output files exist. Treating as success (known cleanup issue).",
-                e.returncode,
-            )
-        else:
-            raise
+        if completed.returncode != 0:
+            raise RuntimeError(f"nonzero Prodigal-GV exit: {completed.returncode}")
+        _validate_tiled_prodigal_output(genome_fasta, proteins_faa, gff_path)
+    except (RuntimeError, ValueError) as exc:
+        attempt_dir = _retain_prodigal_attempt(
+            output_dir.parent / "prodigal_diagnostics" / output_dir.name,
+            [genome_fasta, proteins_faa, gff_path, stderr_path],
+            completed.returncode,
+            "serial",
+        )
+        raise RuntimeError(f"{exc}; diagnostics: {attempt_dir}") from exc
+    stderr_path.unlink()
 
     genes: list[GenePrediction] = []
     for record in SeqIO.parse(proteins_faa, "fasta"):

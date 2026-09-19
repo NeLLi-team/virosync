@@ -1208,7 +1208,8 @@ def _annotate_integration_genes(
         )
         for result in results
     ]
-    hits = scan_integration_genes(proteome_path, regions, threads=config.compute.effective_threads())
+    scan = scan_integration_genes(proteome_path, regions, threads=config.compute.effective_threads())
+    hits = scan.hits
     model_annotations = (
         Path(config.databases.hmm_database).parent / "model_annotations_with_interpro.tsv"
         if config.databases.hmm_database
@@ -1227,5 +1228,12 @@ def _annotate_integration_genes(
     by_region: dict[str, list[dict[str, object]]] = defaultdict(list)
     for hit in hits:
         by_region[hit.region_id].append(asdict(hit))
+    unsearched_by_region: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for unsearched in scan.unsearched:
+        unsearched_by_region[unsearched.region_id].append(asdict(unsearched))
     for result in results:
         result.integration_gene_hits = by_region[result.eve_id]
+        result.integration_hmm_unsearched = unsearched_by_region[result.eve_id]
+        result.integration_hmm_status = (
+            "incomplete_sequence_length" if result.integration_hmm_unsearched else "complete"
+        )

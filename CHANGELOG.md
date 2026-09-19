@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
+- Handle selected proteins above the integration HMM engine's 100,000-residue
+  limit without aborting Phase 3. Output schema 8 records unsearched proteins
+  and screening completeness for each EVE. Proteins and EVE decisions are retained.
+- Validate Prodigal-GV protein and GFF output before accepting gene predictions.
+  Retain failure diagnostics across automatic retries.
+- Prevent Phase 2a duplicate-ID failures by sharing host-trim taxonomy results
+  between candidates at identical coordinates. Each candidate keeps its evidence.
 - Preserve separate evidence and output identifiers for candidates with identical
   coordinates, including ordinary and frameshift-rescue candidates and the A1
   diagnostic mode. Candidates at unique coordinates keep their existing IDs.

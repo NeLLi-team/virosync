@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import asdict
 from pathlib import Path
 
 import pyhmmer
@@ -113,14 +114,17 @@ def test_profile_screen_batches_selected_genes_with_profile_ga_cutoffs(
     def counting_hmmsearch(*args: object, **kwargs: object) -> object:
         nonlocal hmmsearch_calls
         hmmsearch_calls += 1
+        assert "Z" not in kwargs
         return real_hmmsearch(*args, **kwargs)
 
     monkeypatch.setattr(integration_genes.pyhmmer, "hmmsearch", counting_hmmsearch)
 
-    hits = scan_integration_genes(proteome_path, [region], threads=2)
+    scan = scan_integration_genes(proteome_path, [region], threads=1)
+    hits = scan.hits
 
     by_protein_profile = {(hit.protein_id, hit.profile): hit for hit in hits}
     assert hmmsearch_calls == 1
+    assert scan.unsearched == []
     assert set(by_protein_profile) == {
         ("ctg_1", "Phage_integrase"),
         ("ctg_2", "Resolvase"),
@@ -144,6 +148,140 @@ def test_profile_screen_batches_selected_genes_with_profile_ga_cutoffs(
         "serine_recombinase",
         "dde_integrase",
     }
+
+
+def test_mixed_screen_preserves_hits_and_records_every_unsearched_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Oversized proteins retain context while sequence E-values use all targets."""
+    proteome = tmp_path / "proteome.faa"
+    integrase = _profile_consensuses()["Phage_integrase"]
+    region = IntegrationRegion("eve-1", "ctg", 0, 400_000, 0, 400_000)
+    other_region = IntegrationRegion("eve-2", "ctg", 500, 500_000, 400_000, 500_000)
+    _write_proteome(proteome, [("ctg_1", 100, "+", integrase), ("ctg_2", 1_000, "-", "M" * 100_001)])
+    original_bytes = proteome.read_bytes()
+    real_hmmsearch = pyhmmer.hmmsearch
+    search_options: list[dict[str, object]] = []
+
+    def recording_search(profiles: object, sequences: object, **kwargs: object) -> object:
+        search_options.append(kwargs)
+        return real_hmmsearch(profiles, sequences, **kwargs)
+
+    monkeypatch.setattr(integration_genes.pyhmmer, "hmmsearch", recording_search)
+    scan = scan_integration_genes(proteome, [region, other_region], threads=1)
+
+    assert search_options == [
+        {
+            "cpus": 1,
+            "parallel": "targets",
+            "E": float("inf"),
+            "domE": float("inf"),
+            "incE": float("inf"),
+            "incdomE": float("inf"),
+            "Z": 2,
+        }
+    ]
+    supported_proteome = tmp_path / "supported.faa"
+    _write_proteome(supported_proteome, [("ctg_1", 100, "+", integrase)])
+    baseline = scan_integration_genes(supported_proteome, [region], threads=1).hits[0]
+    hit = scan.hits[0]
+    assert hit.evalue == pytest.approx(baseline.evalue * 2, abs=0.0)
+    assert asdict(hit) | {"evalue": baseline.evalue} == asdict(baseline)
+    assert [asdict(record) for record in scan.unsearched] == [
+        {
+            "region_id": "eve-1",
+            "protein_id": "ctg_2",
+            "length_aa": 100_001,
+            "scaffold": "ctg",
+            "start": 1_000,
+            "end": 301_003,
+            "strand": "-",
+            "location": "interior",
+            "reason": "sequence_length_limit",
+            "limit_aa": 100_000,
+        },
+        {
+            "region_id": "eve-2",
+            "protein_id": "ctg_2",
+            "length_aa": 100_001,
+            "scaffold": "ctg",
+            "start": 1_000,
+            "end": 301_003,
+            "strand": "-",
+            "location": "upstream",
+            "reason": "sequence_length_limit",
+            "limit_aa": 100_000,
+        },
+    ]
+    assert proteome.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("length_aa, expected_searches", [(100_000, 1), (100_001, 0)])
+def test_screen_length_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length_aa: int, expected_searches: int
+) -> None:
+    """The engine limit is inclusive and an entirely excluded batch is not searched."""
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome, [("ctg_1", 0, "+", "M" * length_aa)])
+    searched: list[bytes] = []
+
+    def empty_search(profiles: object, sequences: object, **kwargs: object) -> object:
+        assert "Z" not in kwargs
+        searched.extend(sequence.name for sequence in sequences)
+        return [[] for _profile in profiles]
+
+    monkeypatch.setattr(integration_genes.pyhmmer, "hmmsearch", empty_search)
+    scan = scan_integration_genes(proteome, [IntegrationRegion("eve-1", "ctg", 0, 400_000, 0, 400_000)], threads=1)
+
+    assert len(searched) == expected_searches
+    assert scan.hits == []
+    assert len(scan.unsearched) == 1 - expected_searches
+
+
+@pytest.mark.parametrize("regions", [[], [IntegrationRegion("eve-1", "other", 0, 100, 0, 100)]])
+def test_screen_empty_selection_has_no_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, regions: list[IntegrationRegion]
+) -> None:
+    """No regions and regions without proteins both complete without search."""
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome, [("ctg_1", 0, "+", "M" * 30)])
+
+    def unexpected_search(*args: object, **kwargs: object) -> object:
+        pytest.fail("empty selections must not invoke HMMER")
+
+    monkeypatch.setattr(integration_genes.pyhmmer, "hmmsearch", unexpected_search)
+    scan = scan_integration_genes(proteome, regions, threads=1)
+
+    assert scan.hits == []
+    assert scan.unsearched == []
+
+
+def test_unrelated_search_failure_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Length handling must not suppress unrelated HMMER failures."""
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome, [("ctg_1", 0, "+", "M" * 30)])
+
+    def failed_search(*args: object, **kwargs: object) -> object:
+        raise ValueError("unrelated profile failure")
+
+    monkeypatch.setattr(integration_genes.pyhmmer, "hmmsearch", failed_search)
+
+    with pytest.raises(ValueError, match="unrelated profile failure"):
+        scan_integration_genes(proteome, [IntegrationRegion("eve-1", "ctg", 0, 100, 0, 100)], threads=1)
+
+
+def test_missing_profiles_do_not_count_as_a_completed_screen(tmp_path: Path) -> None:
+    """A supported selection still requires the bundled HMM resource."""
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome, [("ctg_1", 0, "+", "M" * 30)])
+
+    with pytest.raises(FileNotFoundError):
+        scan_integration_genes(
+            proteome,
+            [IntegrationRegion("eve-1", "ctg", 0, 100, 0, 100)],
+            threads=1,
+            hmm_path=tmp_path / "missing.hmm",
+        )
 
 
 def test_existing_annotations_keep_source_status_and_ignore_domain_counts(tmp_path: Path) -> None:
