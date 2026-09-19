@@ -26,6 +26,7 @@ def _complete_boundary() -> RefinedBoundary:
         scaffold="scaffold/alpha",
         start=101,
         end=999,
+        candidate_id="EVE_scaffold/alpha_101-999",
         seed_id="seed_7_scaffold_alpha_90",
         original_start=90,
         original_end=1010,

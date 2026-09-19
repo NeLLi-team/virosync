@@ -3,12 +3,14 @@ from __future__ import annotations
 import concurrent.futures
 import csv
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import virosync.pipeline.phase3 as phase3_package
+from virosync.config import PipelineConfig
 from virosync.orchestration import (
     resource_monitor,
 )
@@ -17,6 +19,9 @@ from virosync.orchestration import (
 )
 from virosync.orchestration import (
     utils as orchestration_utils,
+)
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _build_boundary_evidence,
 )
 from virosync.orchestration.resource_monitor import ResourceMonitor
 from virosync.pipeline import search_backend
@@ -97,16 +102,68 @@ def test_boundary_work_dir_preflight_encodes_scaffold(
     tmp_path: Path,
 ) -> None:
     boundary = SimpleNamespace(scaffold="../NODE/1", start=10, end=20)
-    raw_boundary_id = f"{boundary.scaffold}_{boundary.start}_{boundary.end}"
+    raw_boundary_id = f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
 
     work_dirs = orchestration_tasks._preflight_boundary_work_dirs(
         [boundary],
         tmp_path / "work",
     )
 
-    expected_component = safe_filename_component(f"eve_{raw_boundary_id}")
+    expected_component = safe_filename_component(raw_boundary_id)
     assert work_dirs[raw_boundary_id] == tmp_path / "work" / expected_component
     assert (tmp_path / "work").resolve() in work_dirs[raw_boundary_id].resolve().parents
+
+
+def test_same_coordinate_candidate_ids_keep_distinct_work_dirs_and_evidence(
+    tmp_path: Path,
+) -> None:
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=10,
+            end=20,
+            candidate_id="EVE_scaffold_10-20-cordinary",
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=10,
+            end=20,
+            candidate_id="EVE_scaffold_10-20-crescue",
+        ),
+    ]
+    interproscan_map = {
+        boundaries[0].candidate_id: {"source": "ordinary"},
+        boundaries[1].candidate_id: {"source": "rescue"},
+    }
+
+    work_dirs = orchestration_tasks._preflight_boundary_work_dirs(
+        boundaries,
+        tmp_path / "work",
+    )
+    evidence = [
+        _build_boundary_evidence(
+            boundary=boundary,
+            taxonomy_index={},
+            marker_index={},
+            boundary_taxonomy_map={},
+            proteome_index={},
+            boundary_diamond_query=None,
+            interproscan_map=interproscan_map,
+            use_precomputed_taxonomy=False,
+            proteome_path=tmp_path / "proteome.faa",
+            config=PipelineConfig(),
+            logger=logging.getLogger(__name__),
+        )
+        for boundary in boundaries
+    ]
+
+    assert set(work_dirs) == {boundary.candidate_id for boundary in boundaries}
+    assert len(set(work_dirs.values())) == 2
+    assert [item.boundary_id for item in evidence] == [boundary.candidate_id for boundary in boundaries]
+    assert [item.interproscan for item in evidence] == [
+        {"source": "ordinary"},
+        {"source": "rescue"},
+    ]
 
 
 def test_boundary_batch_rejects_duplicates_before_output_or_executor(

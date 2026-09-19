@@ -9,6 +9,8 @@ import pytest
 from Bio import SeqIO
 
 from virosync.ablation import AblationID
+from virosync.config.pipeline_config import PipelineConfig
+from virosync.orchestration._flows.single_genome.phase3 import _annotate_integration_genes
 from virosync.output_contract import (
     COORDINATE_CONVENTION,
     COORDINATE_SCHEMA_VERSION,
@@ -359,6 +361,64 @@ def test_write_eve_sequences_uses_coordinate_overlap(tmp_path: Path) -> None:
 
     assert [record.id for record in first_records] == ["contig_1_1"]
     assert [record.id for record in second_records] == ["contig_1_2"]
+
+
+def test_same_coordinate_candidate_ids_remain_unique_across_exports(
+    tmp_path: Path,
+) -> None:
+    genome_fasta = tmp_path / "genome.fna"
+    proteome_fasta = tmp_path / "proteome.faa"
+    _write_genome_fasta(genome_fasta)
+    _write_proteome_fasta(proteome_fasta)
+    generator = OutputGenerator(
+        output_dir=tmp_path,
+        genome_fasta=genome_fasta,
+        proteome_fasta=proteome_fasta,
+    )
+    candidate_ids = [
+        "EVE_contig_1_0-50-cordinary",
+        "EVE_contig_1_0-50-crescue",
+    ]
+    results = [
+        _build_result(
+            eve_id=candidate_id,
+            scaffold="contig_1",
+            start=0,
+            end=50,
+            confidence_tier="HIGH",
+            status=VerificationStatus.HIGH_CONFIDENCE,
+        )
+        for candidate_id in candidate_ids
+    ]
+
+    canonical_tsv = generator.write_predictions_tsv(results)
+    detailed_tsv = generator.write_predictions_detailed_tsv(results)
+    bed_path = generator.write_predictions_bed(results)
+    gff_path = generator.write_predictions_gff(results)
+    sequence_dir = generator.write_eve_sequences(results, tmp_path / "sequences")
+
+    with canonical_tsv.open(newline="") as handle:
+        canonical_ids = [row["eve_id"] for row in csv.DictReader(handle, delimiter="\t")]
+    with detailed_tsv.open(newline="") as handle:
+        detailed_ids = [row["eve_id"] for row in csv.DictReader(handle, delimiter="\t")]
+    bed_ids = [line.split("\t")[3] for line in bed_path.read_text().splitlines()]
+    gff_ids = [
+        line.split("ID=", 1)[1].split(";", 1)[0]
+        for line in gff_path.read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    sequence_ids = [path.stem for path in (sequence_dir / "nucleotide").glob("*.fna")]
+
+    assert set(canonical_ids) == set(candidate_ids)
+    assert len(canonical_ids) == 2
+    assert set(detailed_ids) == set(candidate_ids)
+    assert len(detailed_ids) == 2
+    assert set(bed_ids) == set(candidate_ids)
+    assert len(bed_ids) == 2
+    assert set(gff_ids) == set(candidate_ids)
+    assert len(gff_ids) == 2
+    assert set(sequence_ids) == set(candidate_ids)
+    assert len(sequence_ids) == 2
 
 
 @pytest.mark.parametrize("writer_name", ["write_gvclass_export", "write_eve_sequences"])
@@ -1039,6 +1099,115 @@ def test_integration_evidence_preserves_boundaries_and_gene_provenance(tmp_path:
         assert (row["pre_tir_start"], row["pre_tir_end"]) == ("20", "120")
         assert row["recombinase_genes"] == "contig_1_1"
         assert json.loads(row["integration_gene_evidence"]) == result.integration_gene_hits
+        assert row["integration_hmm_status"] == "not_assessed"
+        assert row["integration_hmm_unsearched"] == "[]"
     profiles = json.loads(generator.write_evidence_profiles([result]).read_text())
     assert profiles[result.eve_id]["tir_left_start"] == 0
     assert profiles[result.eve_id]["integration_gene_hits"] == result.integration_gene_hits
+    assert profiles[result.eve_id]["integration_hmm_status"] == "not_assessed"
+    assert profiles[result.eve_id]["integration_hmm_unsearched"] == []
+
+
+@pytest.mark.parametrize("independent_annotation", [False, True])
+def test_incomplete_hmm_screen_preserves_acceptance_and_all_exports(
+    tmp_path: Path, independent_annotation: bool
+) -> None:
+    """Unsearched proteins remain distinct from optional independent positive evidence."""
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">contig_1_1 # 1 # 300003 # -1 # ID=1_1;partial=00\n" + "M" * 100_001 + "\n", encoding="utf-8")
+    original_bytes = proteome.read_bytes()
+    result = _build_result(
+        eve_id="EVE_contig_1_0-300003",
+        scaffold="contig_1",
+        start=0,
+        end=300_003,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+        hallmark_count=3,
+        has_mcp=True,
+    )
+    assert result.integration_hmm_status == "not_assessed"
+    assert result.integration_hmm_unsearched == []
+    acceptance_before = select_phase3_acceptance([result], AblationID.A0)
+    assert acceptance_before.canonical_results == (result,)
+    before = result.to_dict()
+    config = PipelineConfig()
+    config.compute.threads = 1
+    config.databases.hmm_database = ""
+    config.phase3.interproscan_enabled = independent_annotation
+    interpro = tmp_path / "phase3" / "interproscan" / "interproscan_batch.tsv"
+    interpro.parent.mkdir(parents=True)
+    interpro.write_text(
+        "EVE_contig_1_0-300003|contig_1_1\tmd5\t100001\tPfam\tPF00589\tPhage integrase\t3\t170\t1E-30"
+        "\tT\t2026-01-01\tIPR002104\tTyrosine recombinase\n",
+        encoding="utf-8",
+    )
+
+    _annotate_integration_genes(
+        [result], proteome_path=proteome, validated_markers=[], output_dir=tmp_path, config=config
+    )
+
+    assert result.integration_hmm_status == "incomplete_sequence_length"
+    expected_unsearched = [
+        {
+            "region_id": result.eve_id,
+            "protein_id": "contig_1_1",
+            "length_aa": 100_001,
+            "scaffold": "contig_1",
+            "start": 0,
+            "end": 300_003,
+            "strand": "-",
+            "location": "interior",
+            "reason": "sequence_length_limit",
+            "limit_aa": 100_000,
+        }
+    ]
+    assert result.integration_hmm_unsearched == expected_unsearched
+    assert len(result.integration_gene_hits) == int(independent_annotation)
+    assert all(hit["source"] == "interproscan" for hit in result.integration_gene_hits)
+    after = result.to_dict()
+    changed = {key for key in after if after[key] != before[key]}
+    assert changed <= {"integration_gene_hits", "integration_hmm_status", "integration_hmm_unsearched"}
+    acceptance_after = select_phase3_acceptance([result], AblationID.A0)
+    assert acceptance_after == acceptance_before
+    generator = OutputGenerator(output_dir=tmp_path)
+    accepted_path = generator.write_predictions_tsv(list(acceptance_after.canonical_results))
+    detailed_path = generator.write_predictions_detailed_tsv([result])
+    with accepted_path.open(encoding="utf-8") as handle:
+        accepted = next(csv.DictReader(handle, delimiter="\t"))
+    with detailed_path.open(encoding="utf-8") as handle:
+        detailed = next(csv.DictReader(handle, delimiter="\t"))
+    evidence = json.loads(generator.write_evidence_profiles([result]).read_text(encoding="utf-8"))[result.eve_id]
+    assert (
+        accepted["integration_hmm_status"] == detailed["integration_hmm_status"] == evidence["integration_hmm_status"]
+    )
+    assert json.loads(accepted["integration_hmm_unsearched"]) == expected_unsearched
+    assert (
+        json.loads(detailed["integration_hmm_unsearched"])
+        == evidence["integration_hmm_unsearched"]
+        == expected_unsearched
+    )
+    assert accepted["recombinase_genes"] == ("contig_1_1" if independent_annotation else ".")
+    assert proteome.read_bytes() == original_bytes
+
+
+def test_empty_integration_selection_exports_complete_status(tmp_path: Path) -> None:
+    """An EVE with no selected proteins still has an assessed, empty screen."""
+    proteome = tmp_path / "empty.faa"
+    proteome.write_text(">other_1 # 1 # 90 # 1 # ID=1_1;partial=00\n" + "M" * 30 + "\n", encoding="utf-8")
+    result = VerificationResult(eve_id="eve-1", scaffold="ctg", start=0, end=100)
+    config = PipelineConfig()
+    config.compute.threads = 1
+    config.databases.hmm_database = ""
+
+    _annotate_integration_genes(
+        [result], proteome_path=proteome, validated_markers=[], output_dir=tmp_path, config=config
+    )
+
+    assert result.integration_hmm_status == "complete"
+    assert result.integration_hmm_unsearched == []
+    path = OutputGenerator(output_dir=tmp_path).write_predictions_detailed_tsv([result])
+    with path.open(encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["integration_hmm_status"] == "complete"
+    assert row["integration_hmm_unsearched"] == "[]"

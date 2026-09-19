@@ -12,6 +12,11 @@ from virosync.output_contract import (
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
+    assign_boundary_candidate_ids,
+    boundary_candidate_id,
+)
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
@@ -75,7 +80,7 @@ def _eligible_anchors(seed: MergedSeed) -> tuple[tuple[str, Anchor], ...]:
     return tuple(selected)
 
 
-def _seed_to_result(seed: MergedSeed) -> VerificationResult:
+def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     eligible_anchors = _eligible_anchors(seed)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
     marker_summary = summarize_marker_hits(hallmark_genes)
@@ -86,7 +91,7 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
     likely_family = region_classification if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"} else "UNKNOWN"
 
     return VerificationResult(
-        eve_id=f"EVE_{seed.scaffold}_{seed.start}-{seed.end}",
+        eve_id=eve_id,
         scaffold=seed.scaffold,
         start=seed.start,
         end=seed.end,
@@ -132,7 +137,21 @@ def _seed_to_result(seed: MergedSeed) -> VerificationResult:
 
 def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
     """Adapt Tier-1-vetted Phase-1 seeds without running Phase 2 or Phase 3."""
-    results = tuple(_seed_to_result(seed) for seed in seeds)
+    boundaries = assign_boundary_candidate_ids(
+        [
+            RefinedBoundary(
+                scaffold=seed.scaffold,
+                start=seed.start,
+                end=seed.end,
+                seed_id=seed.seed_id,
+            )
+            for seed in seeds
+        ]
+    )
+    results = tuple(
+        _seed_to_result(seed, eve_id=boundary_candidate_id(boundary))
+        for seed, boundary in zip(seeds, boundaries, strict=True)
+    )
     exported = len(results)
     return Phase1SeedSurface(
         results=results,

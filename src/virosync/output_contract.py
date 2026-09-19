@@ -1,7 +1,7 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 7
+OUTPUT_SCHEMA_VERSION = 8
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
 # The PUBLISHED class partition. Every surface that reports an EVE's class to a
@@ -74,6 +74,8 @@ INTEGRATION_EVIDENCE_COLUMNS = (
     "tsd_sequence",
     "recombinase_genes",
     "integration_gene_evidence",
+    "integration_hmm_status",
+    "integration_hmm_unsearched",
 )
 
 DETAILED_PREDICTION_COLUMNS = (

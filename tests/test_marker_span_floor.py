@@ -30,6 +30,8 @@ from virosync.pipeline.phase2.boundary_diamond import pORF
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     annotate_boundaries_with_marker_floor,
+    assign_boundary_candidate_ids,
+    boundary_candidate_id,
     merge_adjacent_viral_boundaries,
 )
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
@@ -264,6 +266,58 @@ def test_marker_floor_alternative_recalculates_composition(
     assert alternative.max_kfd == pytest.approx(calculate_kfd(alternative_sequence, background.kmer_freqs, k=4))
     assert alternative.gc_deviation != 0.91
     assert alternative.max_kfd != 0.92
+
+
+def test_marker_floor_alternative_keeps_parent_identity_and_reserves_originals() -> None:
+    ordinary, rescue, wider_original = assign_boundary_candidate_ids(
+        [
+            _boundary(
+                "S1",
+                100,
+                200,
+                orig_start=50,
+                orig_end=250,
+                seed_id="ordinary",
+            ),
+            _boundary(
+                "S1",
+                100,
+                200,
+                orig_start=40,
+                orig_end=260,
+                seed_id="rescue",
+                seed_sources=["frameshift_rescue"],
+            ),
+            _boundary(
+                "S1",
+                50,
+                250,
+                orig_start=50,
+                orig_end=250,
+                seed_id="wider-original",
+            ),
+        ]
+    )
+    parents = {boundary_candidate_id(boundary): boundary for boundary in (ordinary, rescue, wider_original)}
+    rescue_parent = parents[rescue.candidate_id]
+    alternative = replace(
+        rescue_parent,
+        start=50,
+        end=250,
+        candidate_id="",
+    )
+
+    assigned_alternative = assign_boundary_candidate_ids(
+        [alternative],
+        reserved_candidate_ids=parents,
+    )[0]
+
+    assert "frameshift_rescue" in rescue_parent.seed_sources
+    assert ordinary.candidate_id in parents
+    assert rescue.candidate_id in parents
+    assert wider_original.candidate_id == "EVE_S1_50-250"
+    assert assigned_alternative.candidate_id not in parents
+    assert assigned_alternative.candidate_id.startswith("EVE_S1_50-250-c")
 
 
 def test_adjacent_merge_original_span_union_retains_marker_floor() -> None:

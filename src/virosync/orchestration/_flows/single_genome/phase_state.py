@@ -22,7 +22,7 @@ from virosync.pipeline.phase2.boundary_refiner import TIR_STATUSES, RefinedBound
 from virosync.utils.atomic_write import atomic_write
 
 PHASE2_STATE_FILENAME = "refined_state.json"
-PHASE2_STATE_SCHEMA_VERSION = 3
+PHASE2_STATE_SCHEMA_VERSION = 4
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
 PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 
@@ -32,6 +32,7 @@ _POSTERIOR_DTYPES = {"float16", "float32", "float64"}
 
 _BOUNDARY_STRING_FIELDS = (
     "scaffold",
+    "candidate_id",
     "seed_id",
     "host_trim_reason",
     "host_trim_common_euk_taxonomy",

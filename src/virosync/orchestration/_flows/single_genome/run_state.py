@@ -166,8 +166,8 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": ("frameshift-rescued-proteins-v1"),
     "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": ("frameshift-rescued-markers-v1"),
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
-    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v3",
-    "phase2/resume_state.json": "virosync.phase2.resume_state/v2",
+    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v4",
+    "phase2/resume_state.json": "virosync.phase2.resume_state/v3",
     "virosync_predictions.tsv": "canonical-predictions-v6",
     "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v6",
     "virosync_predictions_detailed.tsv": "detailed-predictions-v6",
@@ -818,6 +818,8 @@ def _validate_phase_checkpoint(
 
         phase1_state_from_document(_read_artifact_json(root, "phase1/resume_state.json"))
     elif record.phase == 2:
+        from virosync.pipeline.phase2.boundary_refiner import boundary_candidate_id
+
         from .phase2_resume_state import phase2_resume_state_from_document
         from .phase_state import phase2_state_from_document, phase2_state_to_document
 
@@ -883,7 +885,7 @@ def _validate_phase_checkpoint(
                 boundary.scaffold,
                 boundary.start,
                 boundary.end,
-                f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}",
+                boundary_candidate_id(boundary),
                 int(boundary.confidence * 1000),
                 ".",
             )

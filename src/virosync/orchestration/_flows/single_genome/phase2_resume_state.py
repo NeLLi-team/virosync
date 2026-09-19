@@ -28,7 +28,7 @@ from virosync.utils.atomic_write import atomic_write
 from .phase_state import phase2_state_from_document, phase2_state_to_document
 
 PHASE2_RESUME_STATE_FILENAME = "resume_state.json"
-PHASE2_RESUME_STATE_SCHEMA_VERSION = 2
+PHASE2_RESUME_STATE_SCHEMA_VERSION = 3
 PHASE2_RESUME_STATE_ARTIFACT_TYPE = "virosync.phase2.resume_state"
 PHASE2_RESUME_STATE_SCHEMA = f"{PHASE2_RESUME_STATE_ARTIFACT_TYPE}/v{PHASE2_RESUME_STATE_SCHEMA_VERSION}"
 

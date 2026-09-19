@@ -1461,6 +1461,49 @@ def test_stale_phase_artifact_restarts_that_phase_and_downstream(
     assert mocked_pipeline.resume_flags["phase3"][-1] is False
 
 
+def test_old_phase2_checkpoint_schemas_restart_phase2(
+    mocked_pipeline: _MockPipeline,
+) -> None:
+    mocked_pipeline.fail_phase3_once = True
+    with pytest.raises(RuntimeError, match="injected Phase 3 failure"):
+        mocked_pipeline.run()
+
+    checkpoint_schemas = {
+        "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v3",
+        "phase2/resume_state.json": "virosync.phase2.resume_state/v2",
+    }
+    phase2_marker_path = mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[2]
+    phase2_marker = json.loads(phase2_marker_path.read_text())
+    updated_paths = set()
+    for artifact in phase2_marker["artifacts"]:
+        relative_path = artifact["relative_path"]
+        if relative_path in checkpoint_schemas:
+            artifact["schema"] = checkpoint_schemas[relative_path]
+            updated_paths.add(relative_path)
+    assert updated_paths == set(checkpoint_schemas)
+    atomic_write_json(phase2_marker_path, phase2_marker)
+
+    stale_plan = plan_resume(
+        mocked_pipeline.output_dir,
+        expected_run_fingerprint=mocked_pipeline.fingerprint,
+    )
+    assert stale_plan.reusable_phases == (0, 1)
+    assert stale_plan.restart_phase == 2
+    assert "must use schema 'virosync.phase2.refined_boundaries/v4'" in (stale_plan.reason or "")
+
+    result = mocked_pipeline.run()
+
+    assert result["success"] is True
+    assert mocked_pipeline.calls == {
+        "phase0": 1,
+        "phase1": 2,
+        "phase2": 2,
+        "phase3": 2,
+    }
+    assert mocked_pipeline.resume_flags["phase1"] == [False, True]
+    assert mocked_pipeline.resume_flags["phase2"] == [False, False]
+
+
 @pytest.mark.parametrize("terminal_phase", [1, 2])
 def test_terminal_zero_publishes_exact_prefix_and_zero_success(
     mocked_pipeline: _MockPipeline,

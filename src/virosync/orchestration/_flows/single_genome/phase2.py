@@ -21,7 +21,11 @@ from virosync.pipeline.phase2.boundary_diamond import (
     write_control_stats,
     write_taxonomy_map,
 )
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
+    assign_boundary_candidate_ids,
+    boundary_candidate_id,
+)
 from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
@@ -207,9 +211,11 @@ def _write_phase2_checkpoints(
     boundaries_bed_path = phase2_dir / "refined_boundaries.bed"
     with atomic_write_context(boundaries_bed_path, "w") as handle:
         for boundary in refined_boundaries:
-            eve_id = f"EVE_{boundary.scaffold}_{boundary.start}-{boundary.end}"
             score = int(boundary.confidence * 1000)
-            handle.write(f"{boundary.scaffold}\t{boundary.start}\t{boundary.end}\t{eve_id}\t{score}\t.\n")
+            handle.write(
+                f"{boundary.scaffold}\t{boundary.start}\t{boundary.end}\t"
+                f"{boundary_candidate_id(boundary)}\t{score}\t.\n"
+            )
     write_phase2_state(
         phase2_dir / PHASE2_STATE_FILENAME,
         refined_boundaries,
@@ -414,6 +420,7 @@ def _run_phase2_subflow(
             refined_boundaries,
             masked_path=masked_path,
         )
+        refined_boundaries = assign_boundary_candidate_ids(refined_boundaries)
         boundaries_bed_path = _write_phase2_checkpoints(
             output_dir=output_dir,
             refined_boundaries=refined_boundaries,
@@ -477,15 +484,21 @@ def _run_phase2_subflow(
 
             host_trim_dir = output_dir / "phase2" / "host_trim"
             host_trim_dir.mkdir(parents=True, exist_ok=True)
-            regions_payload = [
-                {
-                    "eve_id": f"EVE_{s.scaffold}_{s.start}-{s.end}",
-                    "scaffold": s.scaffold,
-                    "start": s.start,
-                    "end": s.end,
-                }
-                for s in merged_seeds
-            ]
+            regions_payload = []
+            seen_coordinates: set[tuple[str, int, int]] = set()
+            for seed in merged_seeds:
+                coordinates = (seed.scaffold, seed.start, seed.end)
+                if coordinates in seen_coordinates:
+                    continue
+                seen_coordinates.add(coordinates)
+                regions_payload.append(
+                    {
+                        "eve_id": f"EVE_{seed.scaffold}_{seed.start}-{seed.end}",
+                        "scaffold": seed.scaffold,
+                        "start": seed.start,
+                        "end": seed.end,
+                    }
+                )
             host_trim_threads = gene_taxonomy_threads or threads
             logger.info(
                 "Phase 2a: Running gene taxonomy for host-trim (%d regions)",
@@ -1048,6 +1061,7 @@ def _run_phase2_subflow(
         refined_boundaries,
         masked_path=masked_path,
     )
+    refined_boundaries = assign_boundary_candidate_ids(refined_boundaries)
 
     # Log region statistics with before/after comparison
     if refined_boundaries and merged_seeds:

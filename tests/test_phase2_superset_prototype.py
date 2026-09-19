@@ -16,7 +16,7 @@ from virosync.orchestration._flows.single_genome.phase_state import (
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.seed_merger import MergedSeed
-from virosync.pipeline.phase2 import boundary_diamond
+from virosync.pipeline.phase2 import boundary_diamond, host_signature_trim
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
     DiamondHit,
@@ -225,6 +225,7 @@ def _run_phase2(
     proteome: Path,
     database: Path,
     prototype_enabled: bool,
+    merged_seeds: list[MergedSeed] | None = None,
 ) -> phase2.Phase2Result:
     config = PipelineConfig().with_overrides(
         resume=False,
@@ -250,7 +251,9 @@ def _run_phase2(
     return phase2._run_phase2_subflow(
         masked_path=masked,
         proteome_path=proteome,
-        merged_seeds=[
+        merged_seeds=merged_seeds
+        if merged_seeds is not None
+        else [
             MergedSeed(
                 scaffold="contig",
                 start=100,
@@ -344,6 +347,109 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
         2,
     )
     assert "phase2/superset_diamond/full_proteome.tsv" in {artifact.relative_path for artifact in prototype_artifacts}
+
+
+@pytest.mark.parametrize("prototype_enabled", [False, True], ids=["legacy", "superset"])
+def test_phase2_host_trim_preserves_duplicate_coordinate_candidates(
+    tmp_path: Path,
+    monkeypatch,
+    prototype_enabled: bool,
+) -> None:
+    scaffold = "GWHDPVI00000000|GWHDPVI00008359"
+    masked = tmp_path / "masked.fna"
+    masked.write_text(f">{scaffold}\n" + "ACGT" * 522 + "\n")
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text("")
+    database = tmp_path / "combined.dmnd"
+    database.write_bytes(b"database")
+    duplicate_coordinate_seeds = [
+        MergedSeed(
+            scaffold=scaffold,
+            start=0,
+            end=2087,
+            seed_id=f"seed_412_{scaffold}_0",
+            sources=["hhg", "marker_validation"],
+            hhg_score=30.0,
+            confidence="medium",
+            predicted_family="UNKNOWN",
+        ),
+        MergedSeed(
+            scaffold=scaffold,
+            start=0,
+            end=2087,
+            seed_id=f"seed_413_{scaffold}_0",
+            sources=["hhg", "marker_validation"],
+            hhg_score=20.0,
+            confidence="medium",
+            predicted_family="CRESS",
+        ),
+    ]
+    taxonomy_regions: list[list[dict]] = []
+    trim_inputs: list[list[MergedSeed]] = []
+    materialize_taxonomy = gene_taxonomy.materialize_gene_taxonomy_batch_from_cached_hits
+    trim_seeds = host_signature_trim.trim_seeds_by_host_signature
+
+    def record_materialized_taxonomy(**kwargs):
+        taxonomy_regions.append(kwargs["regions"])
+        return materialize_taxonomy(**kwargs)
+
+    def fake_call_task(_task, **kwargs):
+        return record_materialized_taxonomy(
+            regions=kwargs["regions"],
+            proteome_fasta=kwargs["proteome_path"],
+            diamond_hits={},
+            output_dir=kwargs["output_dir"],
+            high_pident_euk_threshold=kwargs["high_pident_host_threshold"],
+        )
+
+    def record_trim_inputs(**kwargs):
+        trim_inputs.append(kwargs["seeds"])
+        return trim_seeds(**kwargs)
+
+    monkeypatch.setattr(phase2, "call_task", fake_call_task)
+    monkeypatch.setattr(phase2, "run_batched_diamond", lambda **_kwargs: {})
+    monkeypatch.setattr(phase2, "run_full_proteome_diamond", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        gene_taxonomy,
+        "materialize_gene_taxonomy_batch_from_cached_hits",
+        record_materialized_taxonomy,
+    )
+    monkeypatch.setattr(
+        host_signature_trim,
+        "trim_seeds_by_host_signature",
+        record_trim_inputs,
+    )
+
+    result = _run_phase2(
+        output_dir=tmp_path / "result",
+        masked=masked,
+        proteome=proteome,
+        database=database,
+        prototype_enabled=prototype_enabled,
+        merged_seeds=duplicate_coordinate_seeds,
+    )
+
+    assert taxonomy_regions == [
+        [
+            {
+                "eve_id": f"EVE_{scaffold}_0-2087",
+                "scaffold": scaffold,
+                "start": 0,
+                "end": 2087,
+            }
+        ]
+    ]
+    assert len(trim_inputs) == 1
+    assert len(trim_inputs[0]) == 2
+    summary_lines = (tmp_path / "result" / "phase2" / "host_trim" / "host_signature_trim.tsv").read_text().splitlines()
+    assert len(summary_lines) == 3
+    assert [(boundary.predicted_family, boundary.seed_hhg_score) for boundary in result.refined_boundaries] == [
+        ("UNKNOWN", 30.0),
+        ("CRESS", 20.0),
+    ]
+    assert [(boundary.start, boundary.end) for boundary in result.refined_boundaries] == [(0, 2087), (0, 2087)]
+    candidate_ids = [boundary.candidate_id for boundary in result.refined_boundaries]
+    assert len(candidate_ids) == len(set(candidate_ids)) == 2
 
 
 def test_superset_opt_in_round_trips_and_changes_provenance_fingerprint() -> None:

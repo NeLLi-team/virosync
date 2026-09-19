@@ -21,7 +21,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from virosync.ablation import AblationID
 from virosync.config import get_config
@@ -36,7 +36,10 @@ from virosync.pipeline.phase1.viral_markers import (
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
 )
-from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
+    boundary_candidate_id,
+)
 from virosync.pipeline.phase3.gene_taxonomy import viral_hit_categories
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
@@ -1109,6 +1112,10 @@ class VerificationResult:
     jelly_roll_confidence_bonus: float = 0.0  # Confidence bonus from validated DJR
     jelly_roll_mcp_proteins: list[dict] = field(default_factory=list)  # Per-protein results
 
+    # Completeness applies only to selected predicted proteins in the HMM screen.
+    integration_hmm_status: Literal["not_assessed", "complete", "incomplete_sequence_length"] = "not_assessed"
+    integration_hmm_unsearched: list[dict[str, object]] = field(default_factory=list)
+
     @property
     def is_high_or_medium_confidence(self) -> bool:
         """Whether the EVE meets minimum confidence threshold (MEDIUM or HIGH tier)."""
@@ -1222,6 +1229,8 @@ class VerificationResult:
             "pre_tir_end": self.pre_tir_end,
             "tsd_sequence": self.tsd_sequence,
             "integration_gene_hits": self.integration_gene_hits,
+            "integration_hmm_status": self.integration_hmm_status,
+            "integration_hmm_unsearched": self.integration_hmm_unsearched,
             "candidate_length": self.candidate_length,
             "candidate_reduction_bp": self.candidate_reduction_bp,
             "candidate_reduction_reason": self.candidate_reduction_reason,
@@ -2231,9 +2240,8 @@ class EvidenceSynthesizer:
         refined_boundary: RefinedBoundary,
     ) -> VerificationResult:
         """Initialize VerificationResult with boundary and seed metadata."""
-        eve_id = f"EVE_{refined_boundary.scaffold}_{refined_boundary.start}-{refined_boundary.end}"
         result = VerificationResult(
-            eve_id=eve_id,
+            eve_id=boundary_candidate_id(refined_boundary),
             scaffold=refined_boundary.scaffold,
             start=refined_boundary.start,
             end=refined_boundary.end,
