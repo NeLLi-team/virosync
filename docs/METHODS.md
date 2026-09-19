@@ -186,6 +186,19 @@ missed. The reported matched segment can cover only part of a longer repeat;
 `tir_alignment_capped=1` identifies shortened segments. The full ungapped
 alignment length is recorded in `tir_alignment_length`.
 
+ViroSync uses GenomeTools 1.6.6 to index each candidate search interval with `suffixerator`
+and locate exact seven-base seeds with `repfind`. Native output contains seed
+locations rather than all possible repeat pairs. A seed contributes only when
+its marker-specific left and right occurrence counts produce at most 4,096
+pairings. Each eligible pair is generated once. Overlapping search intervals
+share base comparisons; each distinct marker-clipped interval is scored separately.
+This retains alternatives needed to identify ambiguous boundaries.
+
+The segment scorer uses mismatch and score prefix sums with an identity-indexed
+range query. It selects the highest-scoring eligible segment in O(n log n)
+time per group, where n is the interval length. Ties prefer higher identity,
+then longer alignment, then the earlier start.
+
 | `tir_status` | Meaning |
 | --- | --- |
 | `detected` | A qualifying pair defines this child's boundary. |

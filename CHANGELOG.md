@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
+- Accelerate terminal-repeat refinement with exact range-query scoring,
+  shared regional comparisons and GenomeTools repeat seeds. Preserve
+  marker-specific search limits, full repeat endpoints and ambiguity rules.
 - Handle selected proteins above the integration HMM engine's 100,000-residue
   limit without aborting Phase 3. Output schema 8 records unsearched proteins
   and screening completeness for each EVE. Proteins and EVE decisions are retained.

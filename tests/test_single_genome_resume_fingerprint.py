@@ -726,28 +726,31 @@ def test_boltz_executable_is_feature_gated_and_content_bound(
     assert _identity_digest(on_before, "executable:boltz") != (_identity_digest(on_after, "executable:boltz"))
 
 
-def test_skani_executable_is_always_content_bound(
+@pytest.mark.parametrize("executable_name", ["gt", "skani"])
+def test_required_executable_is_always_content_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    executable_name: str,
 ) -> None:
-    binary = tmp_path / "skani"
-    binary.write_bytes(b"SKANI001")
+    binary = tmp_path / executable_name
+    binary.write_bytes(b"BINARY01")
     monkeypatch.setattr(
         orchestrator_module.shutil,
         "which",
-        lambda name: str(binary) if name == "skani" else None,
+        lambda name: str(binary) if name == executable_name else None,
     )
     before = _enabled_executable_identities(
         {"skip_structural": True},
         MaskingConfig(),
     )
-    binary.write_bytes(b"SKANI002")
+    binary.write_bytes(b"BINARY02")
     after = _enabled_executable_identities(
         {"skip_structural": True},
         MaskingConfig(),
     )
 
-    assert _identity_digest(before, "executable:skani") != (_identity_digest(after, "executable:skani"))
+    identity_name = f"executable:{executable_name}"
+    assert _identity_digest(before, identity_name) != _identity_digest(after, identity_name)
     assert _run_fingerprint_for_identity_items(before) != (_run_fingerprint_for_identity_items(after))
 
 

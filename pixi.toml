@@ -49,6 +49,7 @@ repeatmasker = "==4.2.2"
 prodigal-gv = "==2.11.0"
 seqkit = "==2.10.1"
 skani = "==0.2.0"
+genometools-genometools = "==1.6.6"
 
 # Structural analysis
 foldseek = "==10.941cd33"

@@ -14,9 +14,13 @@ import math
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
+from functools import lru_cache
+from itertools import product
 from pathlib import Path
 
+import numpy as np
 from Bio import SeqIO
+from numpy.typing import NDArray
 
 from virosync.pipeline.phase1.viral_markers import get_region_classification_summary
 from virosync.pipeline.phase2.boundary_diamond import (
@@ -28,6 +32,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
 MIN_TIR_ARM_BP = 50
@@ -109,6 +114,7 @@ def _is_low_complexity(sequence: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=4**_KMER_BP)
 def _informative_kmer(kmer: str) -> bool:
     """Return whether a seed is valid and compositionally informative."""
     return not _is_low_complexity(kmer)
@@ -220,20 +226,14 @@ def _passes_identity(mismatches: int, length: int) -> bool:
     return matches * 100 >= round(MIN_TIR_IDENTITY * 100) * length
 
 
-def _valid_window_groups(matches: list[bool]) -> list[tuple[int, int]]:
+def _valid_window_groups(matches: list[bool] | NDArray[np.bool_]) -> list[tuple[int, int]]:
     """Group nearby starts of qualifying minimum-length alignments."""
-    mismatch_prefix = [0]
-    for is_match in matches:
-        mismatch_prefix.append(mismatch_prefix[-1] + (not is_match))
-
-    valid_starts = [
-        start
-        for start in range(len(matches) - MIN_TIR_ARM_BP + 1)
-        if _passes_identity(
-            mismatch_prefix[start + MIN_TIR_ARM_BP] - mismatch_prefix[start],
-            MIN_TIR_ARM_BP,
-        )
-    ]
+    mismatch_prefix = np.empty(len(matches) + 1, dtype=np.int64)
+    mismatch_prefix[0] = 0
+    np.cumsum(~np.asarray(matches, dtype=np.bool_), out=mismatch_prefix[1:])
+    allowed_mismatches = MIN_TIR_ARM_BP * (100 - round(MIN_TIR_IDENTITY * 100)) // 100
+    mismatch_counts = mismatch_prefix[MIN_TIR_ARM_BP:] - mismatch_prefix[:-MIN_TIR_ARM_BP]
+    valid_starts = np.flatnonzero(mismatch_counts <= allowed_mismatches).tolist()
     if not valid_starts:
         return []
 
@@ -249,6 +249,33 @@ def _valid_window_groups(matches: list[bool]) -> list[tuple[int, int]]:
     return groups
 
 
+def _update_prefix_minimum(
+    tree: list[tuple[int, int] | None],
+    index: int,
+    candidate: tuple[int, int],
+) -> None:
+    """Add a candidate to a Fenwick tree of prefix minima."""
+    while index < len(tree):
+        current = tree[index]
+        if current is None or candidate < current:
+            tree[index] = candidate
+        index += index & -index
+
+
+def _prefix_minimum(
+    tree: list[tuple[int, int] | None],
+    index: int,
+) -> tuple[int, int] | None:
+    """Return the minimum candidate through a Fenwick-tree index."""
+    best: tuple[int, int] | None = None
+    while index:
+        current = tree[index]
+        if current is not None and (best is None or current < best):
+            best = current
+        index -= index & -index
+    return best
+
+
 def _best_group_segment(
     matches: list[bool],
     group_start: int,
@@ -259,31 +286,111 @@ def _best_group_segment(
     for is_match in matches:
         mismatch_prefix.append(mismatch_prefix[-1] + (not is_match))
 
-    first_start = 0
     last_start = min(group_end, len(matches) - MIN_TIR_ARM_BP)
+    eligible_starts = [start for start in range(last_start + 1) if matches[start]]
+    if not eligible_starts:
+        return None
+
+    identity_percent = round(MIN_TIR_IDENTITY * 100)
+    max_mismatch_percent = 100 - identity_percent
+    identity_divisor = math.gcd(100, max_mismatch_percent)
+    mismatch_weight = 100 // identity_divisor
+    length_weight = max_mismatch_percent // identity_divisor
+    # The integer identity test is equivalent to requiring the start balance
+    # to be at least the end balance.
+    identity_balance = [
+        mismatch_weight * mismatches - length_weight * offset for offset, mismatches in enumerate(mismatch_prefix)
+    ]
+    score_prefix = [
+        offset * _MATCH_SCORE + mismatches * (_MISMATCH_SCORE - _MATCH_SCORE)
+        for offset, mismatches in enumerate(mismatch_prefix)
+    ]
+
+    balance_coordinates = sorted({identity_balance[start] for start in eligible_starts})
+    prefix_minima: list[tuple[int, int] | None] = [None] * (len(balance_coordinates) + 1)
     best: tuple[int, int, float] | None = None
     best_key: tuple[int, float, int, int] | None = None
-    for start in range(first_start, last_start + 1):
-        max_length = len(matches) - start
-        for length in range(MIN_TIR_ARM_BP, max_length + 1):
-            contained_window_start = max(group_start, start)
-            contained_window_end = min(group_end, start + length - MIN_TIR_ARM_BP)
-            if contained_window_start > contained_window_end:
-                continue
-            if not matches[start] or not matches[start + length - 1]:
-                continue
-            mismatches = mismatch_prefix[start + length] - mismatch_prefix[start]
-            if not _passes_identity(mismatches, length):
-                continue
-            match_count = length - mismatches
-            identity = match_count / length
-            candidate = (start, length, identity)
-            score = match_count * _MATCH_SCORE + mismatches * _MISMATCH_SCORE
-            candidate_key = (score, identity, length, -start)
-            if best_key is None or candidate_key > best_key:
-                best = candidate
-                best_key = candidate_key
+    next_start = 0
+    for end in range(group_start + MIN_TIR_ARM_BP, len(matches) + 1):
+        newest_start = min(last_start, end - MIN_TIR_ARM_BP)
+        while next_start <= newest_start:
+            if matches[next_start]:
+                coordinate = len(balance_coordinates) - bisect_left(
+                    balance_coordinates,
+                    identity_balance[next_start],
+                )
+                _update_prefix_minimum(
+                    prefix_minima,
+                    coordinate,
+                    # Equal score prefixes prefer the latest start, which has
+                    # higher identity for a fixed end and positive valid score.
+                    (score_prefix[next_start], -next_start),
+                )
+            next_start += 1
+
+        if not matches[end - 1]:
+            continue
+        query_index = len(balance_coordinates) - bisect_left(
+            balance_coordinates,
+            identity_balance[end],
+        )
+        selected_start = _prefix_minimum(prefix_minima, query_index)
+        if selected_start is None:
+            continue
+
+        start = -selected_start[1]
+        length = end - start
+        mismatches = mismatch_prefix[end] - mismatch_prefix[start]
+        match_count = length - mismatches
+        identity = match_count / length
+        candidate = (start, length, identity)
+        score = match_count * _MATCH_SCORE + mismatches * _MISMATCH_SCORE
+        candidate_key = (score, identity, length, -start)
+        if best_key is None or candidate_key > best_key:
+            best = candidate
+            best_key = candidate_key
     return best
+
+
+def _aligned_interval_candidates(
+    left: str,
+    matches: list[bool] | NDArray[np.bool_],
+    *,
+    left_offset: int,
+    right_end: int,
+) -> list[TerminalRepeat]:
+    """Score one eligible interval with precomputed base comparisons."""
+    candidates: list[TerminalRepeat] = []
+    groups = _valid_window_groups(matches)
+    if not groups:
+        return candidates
+    if isinstance(matches, np.ndarray):
+        matches = matches.tolist()
+    for group_start, group_end in groups:
+        segment = _best_group_segment(matches, group_start, group_end)
+        if segment is None:
+            continue
+        segment_start, full_arm_length, _ = segment
+        left_start = left_offset + segment_start
+        candidate_right_end = right_end - segment_start
+        arm_length = min(full_arm_length, MAX_TIR_ARM_BP)
+        outer_match_count = sum(matches[segment_start : segment_start + arm_length])
+        if not _passes_identity(arm_length - outer_match_count, arm_length):
+            continue
+        if _is_low_complexity(left[segment_start : segment_start + arm_length]):
+            continue
+        candidates.append(
+            TerminalRepeat(
+                left_start=left_start,
+                left_end=left_start + arm_length,
+                right_start=candidate_right_end - arm_length,
+                right_end=candidate_right_end,
+                identity=outer_match_count / arm_length,
+                alignment_length=full_arm_length,
+                alignment_capped=full_arm_length > MAX_TIR_ARM_BP,
+            )
+        )
+    return candidates
 
 
 def _diagonal_candidates(
@@ -316,37 +423,14 @@ def _diagonal_candidates(
             and left[left_alignment_start + offset] in _DNA_BASES
             for offset in range(interval_start, interval_end)
         ]
-        for group_start, group_end in _valid_window_groups(matches):
-            segment = _best_group_segment(matches, group_start, group_end)
-            if segment is None:
-                continue
-            segment_start, full_arm_length, identity = segment
-            alignment_offset = interval_start + segment_start
-            left_start = left_offset + left_alignment_start + alignment_offset
-            reverse_right_start = right_alignment_start + alignment_offset
-            candidate_right_end = right_end - reverse_right_start
-            arm_length = min(full_arm_length, MAX_TIR_ARM_BP)
-            outer_matches = matches[segment_start : segment_start + arm_length]
-            outer_mismatches = arm_length - sum(outer_matches)
-            if not _passes_identity(outer_mismatches, arm_length):
-                continue
-            identity = sum(outer_matches) / arm_length
-            left_arm = left[
-                left_alignment_start + alignment_offset : left_alignment_start + alignment_offset + arm_length
-            ]
-            if _is_low_complexity(left_arm):
-                continue
-            candidates.append(
-                TerminalRepeat(
-                    left_start=left_start,
-                    left_end=left_start + arm_length,
-                    right_start=candidate_right_end - arm_length,
-                    right_end=candidate_right_end,
-                    identity=identity,
-                    alignment_length=full_arm_length,
-                    alignment_capped=full_arm_length > MAX_TIR_ARM_BP,
-                )
+        candidates.extend(
+            _aligned_interval_candidates(
+                left[left_alignment_start + interval_start : left_alignment_start + interval_end],
+                matches,
+                left_offset=left_offset + left_alignment_start + interval_start,
+                right_end=right_end - right_alignment_start - interval_start,
             )
+        )
     return candidates
 
 
@@ -535,6 +619,164 @@ def _retain_best_outer_pair(
         candidates[key] = candidate
 
 
+@lru_cache(maxsize=1)
+def _informative_seeds() -> tuple[str, ...]:
+    """Return informative seeds and their complements for native location queries."""
+    seeds = {"".join(bases) for bases in product("ACGT", repeat=_KMER_BP) if _informative_kmer("".join(bases))}
+    return tuple(sorted(seeds | {_reverse_complement(seed) for seed in seeds}))
+
+
+def _eligible_region_seed_pairs(
+    seed_index: dict[str, tuple[int, ...]],
+    sequence_length: int,
+    marker_limits: list[tuple[int, int]],
+) -> tuple[NDArray[np.int64], NDArray[np.bool_]]:
+    """Generate each pair once, after at least one marker passes the pairing cap."""
+    limits = np.asarray(marker_limits, dtype=np.int64) - _KMER_BP + 1
+    allowed = np.zeros((len(marker_limits), len(seed_index)), dtype=np.bool_)
+    chunks: list[NDArray[np.int64]] = []
+    for seed_id, (seed, positions) in enumerate(seed_index.items()):
+        if not _informative_kmer(seed):
+            continue
+        left = np.asarray(positions, dtype=np.int64)
+        right = (
+            sequence_length - _KMER_BP - np.asarray(seed_index.get(_reverse_complement(seed), ())[::-1], dtype=np.int64)
+        )
+        left_counts = np.searchsorted(left, limits[:, 0])
+        right_counts = np.searchsorted(right, limits[:, 1])
+        counts = left_counts * right_counts
+        eligible = (counts > 0) & (counts <= _MAX_SEED_PAIRINGS)
+        allowed[:, seed_id] = eligible
+        # Prefix rectangles form a staircase. Its disjoint strips retain every
+        # eligible pair without generating the larger bounding rectangle.
+        frontier: list[tuple[int, int]] = []
+        largest_right = 0
+        for left_count, right_count in sorted(
+            set(zip(left_counts[eligible].tolist(), right_counts[eligible].tolist(), strict=True)),
+            reverse=True,
+        ):
+            if right_count > largest_right:
+                frontier.append((left_count, right_count))
+                largest_right = right_count
+        previous_left = 0
+        for left_count, right_count in reversed(frontier):
+            left_positions = np.repeat(left[previous_left:left_count], right_count)
+            right_positions = np.tile(right[:right_count], left_count - previous_left)
+            chunks.append(
+                np.column_stack(
+                    (right_positions - left_positions, left_positions, np.full(len(left_positions), seed_id))
+                )
+            )
+            previous_left = left_count
+    if not chunks:
+        return np.empty((0, 3), dtype=np.int64), allowed
+    pairs = np.concatenate(chunks)
+    return pairs[np.lexsort((pairs[:, 1], pairs[:, 0]))], allowed
+
+
+def _marker_search_intervals(
+    pairs: NDArray[np.int64],
+    left_length: int,
+    right_length: int,
+) -> NDArray[np.int64]:
+    """Return merged (diagonal, start, end) intervals from sorted eligible pairs."""
+    earlier, later = pairs[:-1], pairs[1:]
+    diagonal = later[:, 0]
+    starts = np.maximum(np.maximum(0, -diagonal), later[:, 1] + _KMER_BP - MAX_TIR_ARM_BP)
+    ends = np.minimum(np.minimum(left_length, right_length - diagonal), earlier[:, 1] + MAX_TIR_ARM_BP)
+    supported = (
+        (earlier[:, 0] == diagonal)
+        & (later[:, 1] - earlier[:, 1] <= MAX_TIR_ARM_BP - _KMER_BP)
+        & (ends - starts >= MIN_TIR_ARM_BP)
+    )
+    intervals = np.column_stack((diagonal[supported], starts[supported], ends[supported]))
+    if not len(intervals):
+        return np.empty((0, 3), dtype=np.int64)
+
+    # Starts and ends are monotonic within each diagonal, so run endpoints
+    # preserve the scalar merge bounds.
+    new_run = np.empty(len(intervals), dtype=np.bool_)
+    new_run[0] = True
+    new_run[1:] = (intervals[1:, 0] != intervals[:-1, 0]) | (intervals[1:, 1] > intervals[:-1, 2])
+    first = np.flatnonzero(new_run)
+    last = np.append(first[1:] - 1, len(intervals) - 1)
+    return np.column_stack((intervals[first, 0], intervals[first, 1], intervals[last, 2]))
+
+
+def _region_search_intervals(
+    sequence: str,
+    groups: list[_MarkerGroup],
+    *,
+    scan_start: int,
+) -> dict[int, set[tuple[int, int]]]:
+    """Index native seed locations once and retain each marker's clipped intervals."""
+    marker_limits = [
+        (group.start - scan_start, len(sequence) - group.end + scan_start)
+        for group in groups
+        if min(group.start - scan_start, len(sequence) - group.end + scan_start) >= MIN_TIR_ARM_BP
+    ]
+    intervals_by_diagonal: dict[int, set[tuple[int, int]]] = defaultdict(set)
+    if not marker_limits:
+        return intervals_by_diagonal
+    seed_index = find_seed_positions(sequence, _KMER_BP, _informative_seeds())
+    pairs, allowed = _eligible_region_seed_pairs(seed_index, len(sequence), marker_limits)
+    interval_chunks: list[NDArray[np.int64]] = []
+    for marker_index, (left_length, right_length) in enumerate(marker_limits):
+        eligible = (
+            (pairs[:, 1] < left_length - _KMER_BP + 1)
+            & (pairs[:, 1] + pairs[:, 0] < right_length - _KMER_BP + 1)
+            & allowed[marker_index, pairs[:, 2]]
+        )
+        intervals = _marker_search_intervals(pairs[eligible], left_length, right_length)
+        if len(intervals):
+            interval_chunks.append(intervals)
+    if not interval_chunks:
+        return intervals_by_diagonal
+    intervals = np.concatenate(interval_chunks)
+    intervals = intervals[np.lexsort((intervals[:, 2], intervals[:, 1], intervals[:, 0]))]
+    distinct = np.concatenate(([True], np.any(intervals[1:] != intervals[:-1], axis=1)))
+    for diagonal, start, end in intervals[distinct].tolist():
+        intervals_by_diagonal[diagonal].add((start, end))
+    return intervals_by_diagonal
+
+
+def _region_diagonal_candidates(
+    sequence: str,
+    bases: NDArray[np.uint8],
+    reverse_bases: NDArray[np.uint8],
+    diagonal: int,
+    intervals: set[tuple[int, int]],
+    *,
+    scan_start: int,
+) -> list[TerminalRepeat]:
+    """Compare each diagonal base once and score each eligible interval once."""
+    candidates: list[TerminalRepeat] = []
+    matches = np.empty(0, dtype=np.bool_)
+    previous_start = previous_end = 0
+    for start, end in sorted(intervals):
+        if start >= previous_end:
+            matches = np.empty(0, dtype=np.bool_)
+            previous_end = start
+        else:
+            matches = matches[start - previous_start :]
+        if end > previous_end:
+            left_bases = bases[previous_end:end]
+            is_dna = (left_bases == 65) | (left_bases == 67) | (left_bases == 71) | (left_bases == 84)
+            additional_matches = (left_bases == reverse_bases[previous_end + diagonal : end + diagonal]) & is_dna
+            matches = np.concatenate((matches, additional_matches))
+        candidates.extend(
+            _aligned_interval_candidates(
+                sequence[start:end],
+                matches[: end - start],
+                left_offset=scan_start + start,
+                right_end=scan_start + len(sequence) - start - diagonal,
+            )
+        )
+        previous_start = start
+        previous_end = max(previous_end, end)
+    return candidates
+
+
 def _discover_marker_anchored_candidates(
     sequence: str,
     *,
@@ -542,17 +784,24 @@ def _discover_marker_anchored_candidates(
     scan_end: int,
     groups: list[_MarkerGroup],
 ) -> list[TerminalRepeat]:
-    """Return distinct repeat pairs found around individual marker proteins."""
+    """Discover repeat evidence once per region with marker-specific eligibility."""
     candidates: dict[tuple[int, int], TerminalRepeat] = {}
-    scan_seed_index = _build_scan_seed_index(sequence[scan_start:scan_end])
-    for group in groups:
-        for candidate in find_terminal_inverted_repeats(
-            sequence,
+    scan_sequence = sequence[scan_start:scan_end].upper()
+    reverse_sequence = _reverse_complement(scan_sequence)
+    bases = np.frombuffer(scan_sequence.encode("ascii", "replace"), dtype=np.uint8)
+    reverse_bases = np.frombuffer(reverse_sequence.encode("ascii", "replace"), dtype=np.uint8)
+    for diagonal, intervals in _region_search_intervals(
+        scan_sequence,
+        groups,
+        scan_start=scan_start,
+    ).items():
+        for candidate in _region_diagonal_candidates(
+            scan_sequence,
+            bases,
+            reverse_bases,
+            diagonal,
+            intervals,
             scan_start=scan_start,
-            scan_end=scan_end,
-            marker_start=group.start,
-            marker_end=group.end,
-            _scan_seed_index=scan_seed_index,
         ):
             _retain_best_outer_pair(candidates, candidate)
     return sorted(
