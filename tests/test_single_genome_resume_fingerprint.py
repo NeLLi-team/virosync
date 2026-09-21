@@ -61,6 +61,14 @@ from virosync.orchestration._flows.single_genome.run_state import (
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
 
 
+@pytest.fixture(autouse=True)
+def _corrected_caller_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep executable fingerprint tests independent of a real native installation."""
+    executable = tmp_path / "prodigal-gv"
+    executable.write_bytes(b"corrected native fixture")
+    monkeypatch.setattr(orchestrator_module, "resolve_prodigal_executable", lambda: executable)
+
+
 def _seed_outputs(output_dir: Path) -> None:
     """Write the minimal valid run.log + prediction tables (no manifest yet)."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -606,6 +614,24 @@ def _identity_digest(items, name: str) -> str | None:
         (item.manifest_sha256 for item in items if item.name == name),
         None,
     )
+
+
+def test_prodigal_identity_uses_corrected_resolver_not_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record the selected corrected binary even when PATH contains an older caller."""
+    selected = tmp_path / "native/prodigal-gv"
+    selected.parent.mkdir()
+    selected.write_bytes(b"corrected caller")
+    old = tmp_path / "old/prodigal-gv"
+    old.parent.mkdir()
+    old.write_bytes(b"old caller")
+    monkeypatch.setattr(orchestrator_module, "resolve_prodigal_executable", lambda: selected)
+    monkeypatch.setattr(orchestrator_module.shutil, "which", lambda name: str(old) if name == "prodigal-gv" else None)
+    identities = _enabled_executable_identities({"skip_structural": True}, MaskingConfig())
+    expected = orchestrator_module._executable_path_identity("prodigal-gv", selected)
+    assert _identity_digest(identities, "executable:prodigal-gv") == expected.manifest_sha256
+    selected.write_bytes(b"changed corrected caller")
+    changed = _enabled_executable_identities({"skip_structural": True}, MaskingConfig())
+    assert _identity_digest(changed, "executable:prodigal-gv") != expected.manifest_sha256
 
 
 def test_gvclass_path_executable_is_feature_gated_and_content_bound(

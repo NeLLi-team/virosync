@@ -130,6 +130,7 @@ ostreococcus_prodigal.faa
 pixi.lock
 !/pixi.lock
 !tools/boltz_runtime/pixi.lock
+!src/virosync/data/prodigal_gv/pixi.lock
 
 # Analysis working directories and packed resource archives (never commit)
 resources_work/

@@ -18,7 +18,7 @@ main = CHECKER["main"]
 
 def test_checker_script_resolves_source_without_pythonpath(tmp_path: Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(CHECKER_PATH), str(tmp_path / "missing")],
+        [sys.executable, "-B", str(CHECKER_PATH), str(tmp_path / "missing")],
         cwd=tmp_path,
         check=False,
         capture_output=True,

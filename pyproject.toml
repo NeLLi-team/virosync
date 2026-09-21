@@ -20,7 +20,7 @@ virosync = "virosync.cli.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-virosync = ["data/integration_profiles.hmm", "data/integration_profiles.json"]
+virosync = ["data/integration_profiles.hmm", "data/integration_profiles.json", "data/prodigal_gv/*"]
 
 [tool.ruff]
 line-length = 120

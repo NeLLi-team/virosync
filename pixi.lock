@@ -25,7 +25,6 @@ environments:
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-io-compress-2.216-pl5321h503566f_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-json-xs-4.04-pl5321h9948957_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-list-moreutils-xs-0.430-pl5321h7b50bb2_5.tar.bz2
-      - conda: https://conda.anaconda.org/bioconda/linux-64/prodigal-gv-2.11.0-h577a1d6_5.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/pyhmmer-0.11.3-py311haab0aaa_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/rmblast-2.14.1-hdb21ba3_2.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/seqkit-2.10.1-he881be0_0.conda
@@ -569,7 +568,6 @@ environments:
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-io-compress-2.216-pl5321h503566f_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-json-xs-4.04-pl5321h9948957_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-list-moreutils-xs-0.430-pl5321h7b50bb2_5.tar.bz2
-      - conda: https://conda.anaconda.org/bioconda/linux-64/prodigal-gv-2.11.0-h577a1d6_5.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/pyhmmer-0.11.3-py311haab0aaa_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/rmblast-2.14.1-hdb21ba3_2.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/seqkit-2.10.1-he881be0_0.conda
@@ -1129,7 +1127,6 @@ environments:
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-io-compress-2.216-pl5321h503566f_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-json-xs-4.04-pl5321h9948957_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/perl-list-moreutils-xs-0.430-pl5321h7b50bb2_5.tar.bz2
-      - conda: https://conda.anaconda.org/bioconda/linux-64/prodigal-gv-2.11.0-h577a1d6_5.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/pyhmmer-0.11.3-py311haab0aaa_0.conda
       - conda: https://conda.anaconda.org/bioconda/linux-64/rmblast-2.14.1-hdb21ba3_2.tar.bz2
       - conda: https://conda.anaconda.org/bioconda/linux-64/seqkit-2.10.1-he881be0_0.conda
@@ -1810,17 +1807,6 @@ packages:
   purls: []
   size: 51506
   timestamp: 1741776389435
-- conda: https://conda.anaconda.org/bioconda/linux-64/prodigal-gv-2.11.0-h577a1d6_5.tar.bz2
-  sha256: d104bac9baced0e55b04f20c4dc4cda4946d362935073aea2c788d7a2fd23445
-  md5: 4348916135142cfc3618cb1ad50e98e0
-  depends:
-  - libgcc >=13
-  - libzlib >=1.3.1,<2.0a0
-  - zlib
-  license: GPL-3.0-only
-  purls: []
-  size: 713443
-  timestamp: 1734150468723
 - conda: https://conda.anaconda.org/bioconda/linux-64/pyhmmer-0.11.3-py311haab0aaa_0.conda
   sha256: c5e9db47920ea946c7b518f62f96f936f0ab3501ac7f556d76195acab7210754
   md5: 9d06f96305c7788e8903a6e07847d2bd

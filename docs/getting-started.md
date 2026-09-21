@@ -9,7 +9,39 @@ ViroSync requires Linux x86-64, [Git](https://git-scm.com/), and
 git clone https://github.com/NeLLi-team/virosync.git
 cd virosync
 pixi install --locked
+pixi run setup-prodigal-gv
 ```
+
+Native setup builds Prodigal-GV 2.11.0 with the pinned node-capacity correction
+and locked compiler environment. It reports `Corrected Prodigal-GV ready:`
+followed by the executable path. Repeating setup verifies the existing build.
+
+The runtime and its required libraries live under
+`~/.local/share/virosync/prodigal-gv/`. To choose another owned directory, set
+`VIROSYNC_PRODIGAL_RUNTIME` to an absolute path before setup and keep that value
+for subsequent runs. Do not move the completed directory: its library paths
+refer to the original location. Failed builds retain their source and build log
+for diagnosis.
+
+The full compiler environment path must fit in 255 filesystem bytes, including
+the subdirectories for the recipe. Setup checks the resolved path before
+creating an installation or downloading source. If the path is too long, choose
+a shorter permanent owned directory through `VIROSYNC_PRODIGAL_RUNTIME`, for
+example `export VIROSYNC_PRODIGAL_RUNTIME="$HOME/.vs-native"`. A symlink alias
+does not shorten the resolved path.
+
+The `run` and example Pixi tasks check native setup automatically. Help and
+version commands remain available without compilation. Gene calling requires
+the corrected runtime and never selects a Prodigal executable from PATH.
+For direct console or Python use in the documented Pixi environment, run:
+
+```bash
+python -m virosync.utils.prodigal_runtime setup
+```
+
+The source distribution and wheel include the recipe, patch, build lock, and
+upstream license. Installing the Python package alone does not provision the
+native runtime or the other Pixi dependencies.
 
 ## Install the core resources
 

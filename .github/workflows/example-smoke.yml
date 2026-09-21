@@ -35,6 +35,9 @@ jobs:
       - name: Install locked environment
         run: pixi install --locked
 
+      - name: Set up corrected gene caller
+        run: pixi run setup-prodigal-gv
+
       - name: Fully verify provisioned resources
         env:
           EXPECTED_DB_VERSION: v1.0.7

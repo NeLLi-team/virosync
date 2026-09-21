@@ -247,6 +247,9 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
     genome = tmp_path / "demo.fna"
     genome.write_text(">scaffold\nACGT\n")
     output_dir = tmp_path / "results" / "demo"
+    executable = tmp_path / "corrected-prodigal-gv"
+    executable.write_bytes(b"corrected caller fixture")
+    monkeypatch.setattr(orchestrator, "resolve_prodigal_executable", lambda: executable)
     monkeypatch.setattr(
         orchestrator,
         "_completed_run_artifacts",

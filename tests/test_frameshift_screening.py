@@ -567,6 +567,9 @@ def test_frameshift_runtime_has_no_bath_identity_and_tracks_native_artifacts(
         return None
 
     monkeypatch.setattr(orchestrator, "_executable_resource_identity", fake_identity)
+    executable = tmp_path / "corrected-prodigal-gv"
+    executable.write_bytes(b"corrected caller fixture")
+    monkeypatch.setattr(orchestrator, "resolve_prodigal_executable", lambda: executable)
     orchestrator._enabled_executable_identities(
         {"frameshift_screening_enabled": True},
         MaskingConfig(),

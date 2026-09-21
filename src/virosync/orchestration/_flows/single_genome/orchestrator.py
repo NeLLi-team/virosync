@@ -51,6 +51,7 @@ from virosync.pipeline.phase0.masking import (
 )
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, validate_path_component
+from virosync.utils.prodigal_runtime import resolve_prodigal_executable
 from virosync.utils.resource_installer import verified_install_receipt
 from virosync.validation.tsv_invariants import (
     TSVInvariantError,
@@ -424,7 +425,7 @@ def _enabled_executable_identities(
     flat_config: dict,
     masking: MaskingConfig,
 ) -> list:
-    names = {"diamond", "gt", "prodigal-gv", "skani"}
+    names = {"diamond", "gt", "skani"}
     if masking.backend in {MaskingBackend.TRF, MaskingBackend.TRF_REPEATMASKER}:
         names.add("trf")
     if masking.backend in {
@@ -437,6 +438,7 @@ def _enabled_executable_identities(
     if bool(flat_config.get("enable_phylogenetic")):
         names.add("gvclass")
     identities = [identity for name in sorted(names) if (identity := _executable_resource_identity(name)) is not None]
+    identities.append(_executable_path_identity("prodigal-gv", resolve_prodigal_executable()))
     if bool(flat_config.get("run_gvclass")) and flat_config.get("gvclass_path"):
         gvclass = Path(flat_config["gvclass_path"]) / "gvclass"
         if gvclass.is_file() and not gvclass.is_symlink():
