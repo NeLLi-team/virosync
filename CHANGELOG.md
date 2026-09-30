@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
+- Deliver a pinned Prodigal-GV node-capacity correction through native setup.
+  Gene calling, run identity, and version reporting select the same verified
+  executable without falling back to the vulnerable PATH binary. Retain the
+  compiler library environment at its original path.
 - Accelerate terminal-repeat refinement with exact range-query scoring,
   shared regional comparisons and GenomeTools repeat seeds. Preserve
   marker-specific search limits, full repeat endpoints and ambiguity rules.

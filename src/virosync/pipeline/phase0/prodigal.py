@@ -13,10 +13,13 @@ import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import repeat
 from pathlib import Path
 
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
+
+from virosync.utils.prodigal_runtime import resolve_prodigal_executable
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +239,7 @@ def _run_prodigal_on_chunk(
     chunk_fasta: str,
     chunk_out: str,
     diagnostic_root: Path,
+    executable: Path,
 ) -> str:
     """Run and validate one chunk, retrying nonzero exits per input record."""
     input_path = Path(chunk_fasta)
@@ -243,7 +247,7 @@ def _run_prodigal_on_chunk(
     gff_path = output_path.with_suffix(".gff")
     stderr_path = output_path.with_suffix(".stderr")
     cmd = [
-        "prodigal-gv",
+        str(executable),
         "-i",
         chunk_fasta,
         "-a",
@@ -288,7 +292,7 @@ def _run_prodigal_on_chunk(
             retry_paths = [retry_input, retry_output, retry_gff, retry_stderr]
             SeqIO.write([record], retry_input, "fasta")
             retry_cmd = [
-                "prodigal-gv",
+                str(executable),
                 "-i",
                 str(retry_input),
                 "-a",
@@ -342,16 +346,17 @@ def run_prodigal_genome(
     proteins_faa = output_dir / "proteome.fasta"
     gff_path = output_dir / "genes.gff"
 
-    if shutil.which("prodigal-gv") is None:
-        raise RuntimeError("prodigal-gv not found in PATH.")
+    executable = resolve_prodigal_executable()
 
     use_parallel = threads > 1
     if not use_parallel:
         with genome_fasta.open() as handle:
             use_parallel = any(len(record.seq) > _LONG_SCAFFOLD_BP for record in SeqIO.parse(handle, "fasta"))
     if use_parallel:
-        return _run_prodigal_parallel(genome_fasta, output_dir, proteins_faa, gff_path, max(1, threads))
-    return _run_prodigal_single(genome_fasta, output_dir, proteins_faa, gff_path, mode)
+        return _run_prodigal_parallel(
+            genome_fasta, output_dir, proteins_faa, gff_path, max(1, threads), executable=executable
+        )
+    return _run_prodigal_single(genome_fasta, output_dir, proteins_faa, gff_path, mode, executable=executable)
 
 
 def _run_prodigal_parallel(
@@ -360,6 +365,8 @@ def _run_prodigal_parallel(
     proteins_faa: Path,
     gff_path: Path,
     threads: int,
+    *,
+    executable: Path,
 ) -> tuple[Path, list[GenePrediction]]:
     """Split genome into chunks and run prodigal-gv in parallel."""
     # Read all scaffolds and split long records into bounded work units. The
@@ -446,6 +453,7 @@ def _run_prodigal_parallel(
                     chunk_inputs,
                     chunk_outputs,
                     chunk_diagnostic_roots,
+                    repeat(executable),
                 )
             )
 
@@ -557,13 +565,15 @@ def _run_prodigal_single(
     proteins_faa: Path,
     gff_path: Path,
     mode: str,
+    *,
+    executable: Path,
 ) -> tuple[Path, list[GenePrediction]]:
     """Run prodigal-gv CLI on entire genome (single process)."""
     # genes.gff is an upstream-native Prodigal artifact and therefore retains
     # standard 1-based GFF coordinates. Only header-derived in-memory records
     # are normalized to ViroSync's 0-based half-open convention.
     cmd = [
-        "prodigal-gv",
+        str(executable),
         "-i",
         str(genome_fasta),
         "-a",

@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from virosync.utils.prodigal_runtime import resolve_prodigal_executable
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,6 +86,8 @@ def capture_tool_versions() -> dict[str, str]:
 
     for tool, cmd in tools.items():
         try:
+            if tool == "prodigal-gv":
+                cmd = [str(resolve_prodigal_executable()), "-v"]
             result = subprocess.run(
                 cmd,
                 capture_output=True,

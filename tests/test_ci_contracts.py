@@ -105,4 +105,4 @@ def test_frameshift_example_task_is_explicit_opt_in() -> None:
     assert "results/example-frameshift/" in task
     assert "--frameshift-screening" in task
     assert "--clean-run" in task
-    assert 'depends-on = ["setup-databases"]' in task
+    assert 'depends-on = ["setup-databases", "setup-prodigal-gv"]' in task

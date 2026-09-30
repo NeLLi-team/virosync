@@ -54,7 +54,14 @@ def test_untiled_parallel_rejects_invalid_success_before_merge(
 
     monkeypatch.setattr(prodigal.subprocess, "run", invalid_output)
     with pytest.raises(RuntimeError):
-        prodigal._run_prodigal_parallel(genome, output_dir, merged, output_dir / "genes.gff", threads=1)
+        prodigal._run_prodigal_parallel(
+            genome,
+            output_dir,
+            merged,
+            output_dir / "genes.gff",
+            threads=1,
+            executable=Path("/fixture/corrected/prodigal-gv"),
+        )
     assert not merged.exists()
     assert not list(output_dir.glob("tmp*"))
     attempts = list((tmp_path / "prodigal_diagnostics" / "phase0").glob("*/attempt.json"))
@@ -93,12 +100,26 @@ def test_untiled_nonzero_requires_valid_record_retries(
     monkeypatch.setattr(prodigal.subprocess, "run", retry_output)
     merged = output_dir / "proteome.fasta"
     if retry_returncode == 0 and valid:
-        _, genes = prodigal._run_prodigal_parallel(genome, output_dir, merged, output_dir / "genes.gff", threads=1)
+        _, genes = prodigal._run_prodigal_parallel(
+            genome,
+            output_dir,
+            merged,
+            output_dir / "genes.gff",
+            threads=1,
+            executable=Path("/fixture/corrected/prodigal-gv"),
+        )
         assert [gene.gene_id for gene in genes] == ["first_1", "second_1"]
         assert calls == 3
     else:
         with pytest.raises(RuntimeError):
-            prodigal._run_prodigal_parallel(genome, output_dir, merged, output_dir / "genes.gff", threads=1)
+            prodigal._run_prodigal_parallel(
+                genome,
+                output_dir,
+                merged,
+                output_dir / "genes.gff",
+                threads=1,
+                executable=Path("/fixture/corrected/prodigal-gv"),
+            )
         assert not merged.exists()
     attempts = list((tmp_path / "prodigal_diagnostics" / "phase0").glob("*/attempt.json"))
     assert any(json.loads(path.read_text())["returncode"] == 23 for path in attempts)
@@ -121,7 +142,12 @@ def test_valid_untiled_parallel_preserves_bytes_and_order(tmp_path: Path, monkey
 
     monkeypatch.setattr(prodigal.subprocess, "run", valid_output)
     proteins, genes = prodigal._run_prodigal_parallel(
-        genome, output_dir, output_dir / "proteome.fasta", output_dir / "genes.gff", threads=2
+        genome,
+        output_dir,
+        output_dir / "proteome.fasta",
+        output_dir / "genes.gff",
+        threads=2,
+        executable=Path("/fixture/corrected/prodigal-gv"),
     )
     assert proteins.read_text() == (
         ">first_1 # 1 # 6 # 1 # ID=1_1;partial=00\nM*\n"
@@ -156,12 +182,12 @@ def test_serial_prodigal_requires_valid_zero_exit(
     monkeypatch.setattr(prodigal.subprocess, "run", serial_output)
     args = (genome, output_dir, output_dir / "proteome.fasta", output_dir / "genes.gff", "meta")
     if valid and returncode == 0:
-        _, genes = prodigal._run_prodigal_single(*args)
+        _, genes = prodigal._run_prodigal_single(*args, executable=Path("/fixture/corrected/prodigal-gv"))
         assert [gene.gene_id for gene in genes] == ["first_1", "second_1"]
         assert not (output_dir / "prodigal.stderr").exists()
     else:
         with pytest.raises(RuntimeError, match="diagnostics:"):
-            prodigal._run_prodigal_single(*args)
+            prodigal._run_prodigal_single(*args, executable=Path("/fixture/corrected/prodigal-gv"))
 
 
 @pytest.mark.parametrize("parallel", [False, True])
@@ -188,11 +214,21 @@ def test_prodigal_diagnostics_survive_phase0_invalidation(
         with pytest.raises(RuntimeError, match="diagnostics:"):
             if parallel:
                 prodigal._run_prodigal_parallel(
-                    genome, output_dir, output_dir / "proteome.fasta", output_dir / "genes.gff", threads=1
+                    genome,
+                    output_dir,
+                    output_dir / "proteome.fasta",
+                    output_dir / "genes.gff",
+                    threads=1,
+                    executable=Path("/fixture/corrected/prodigal-gv"),
                 )
             else:
                 prodigal._run_prodigal_single(
-                    genome, output_dir, output_dir / "proteome.fasta", output_dir / "genes.gff", "meta"
+                    genome,
+                    output_dir,
+                    output_dir / "proteome.fasta",
+                    output_dir / "genes.gff",
+                    "meta",
+                    executable=Path("/fixture/corrected/prodigal-gv"),
                 )
         invalidate_from_phase(tmp_path, from_phase=0)
         assert not output_dir.exists()
@@ -256,6 +292,7 @@ def test_long_scaffold_tiles_are_rebased_and_renumbered(
         tmp_path / "proteome.fasta",
         tmp_path / "genes.gff",
         threads=2,
+        executable=Path("/fixture/corrected/prodigal-gv"),
     )
 
     assert [gene.gene_id for gene in genes] == [
@@ -317,6 +354,7 @@ def test_tiled_record_rejects_valid_output_after_nonzero_exit(
             str(chunk_fasta),
             str(chunk_out),
             tmp_path / "diagnostics",
+            executable=Path("/fixture/corrected/prodigal-gv"),
         )
 
     assert calls == 2
@@ -386,7 +424,12 @@ def test_tiled_chunk_retains_mismatched_faa_and_gff(
     monkeypatch.setattr(prodigal.subprocess, "run", mismatched_output)
 
     with pytest.raises(RuntimeError, match="coordinates differ"):
-        prodigal._run_prodigal_on_chunk(str(chunk_fasta), str(chunk_out), tmp_path / "diagnostics")
+        prodigal._run_prodigal_on_chunk(
+            str(chunk_fasta),
+            str(chunk_out),
+            tmp_path / "diagnostics",
+            executable=Path("/fixture/corrected/prodigal-gv"),
+        )
 
     failure_dir = next((tmp_path / "diagnostics").glob("chunk-*"))
     assert (failure_dir / "chunk_2.fasta").exists()
@@ -418,7 +461,12 @@ def test_tiled_chunk_rejects_truncated_protein(
     monkeypatch.setattr(prodigal.subprocess, "run", truncated_output)
 
     with pytest.raises(RuntimeError, match="protein length does not match"):
-        prodigal._run_prodigal_on_chunk(str(chunk_fasta), str(chunk_out), tmp_path / "diagnostics")
+        prodigal._run_prodigal_on_chunk(
+            str(chunk_fasta),
+            str(chunk_out),
+            tmp_path / "diagnostics",
+            executable=Path("/fixture/corrected/prodigal-gv"),
+        )
 
 
 def test_tiled_merge_rejects_unmapped_scaffold_ids(
@@ -448,6 +496,7 @@ def test_tiled_merge_rejects_unmapped_scaffold_ids(
             tmp_path / "proteome.fasta",
             tmp_path / "genes.gff",
             threads=2,
+            executable=Path("/fixture/corrected/prodigal-gv"),
         )
 
 
@@ -466,7 +515,9 @@ def test_tiled_genome_sets_diagnostic_root_for_every_chunk(
         _chunk_fasta: str,
         chunk_out: str,
         diagnostic_root: Path,
+        executable: Path,
     ) -> str:
+        assert executable == Path("/fixture/corrected/prodigal-gv")
         observed.append(diagnostic_root)
         Path(chunk_out).write_text("")
         return chunk_out
@@ -479,6 +530,7 @@ def test_tiled_genome_sets_diagnostic_root_for_every_chunk(
         tmp_path / "proteome.fasta",
         tmp_path / "genes.gff",
         threads=3,
+        executable=Path("/fixture/corrected/prodigal-gv"),
     )
 
     assert len(observed) == 3
@@ -493,11 +545,12 @@ def test_long_scaffold_is_tiled_with_one_thread(
     output_dir = tmp_path / "output"
     genome.write_text(">long\nACGTACG\n")
     monkeypatch.setattr(prodigal, "_LONG_SCAFFOLD_BP", 6)
-    monkeypatch.setattr(prodigal.shutil, "which", lambda _name: "/bin/prodigal-gv")
+    monkeypatch.setattr(prodigal, "resolve_prodigal_executable", lambda: Path("/fixture/corrected/prodigal-gv"))
     sentinel = output_dir / "proteome.fasta"
 
-    def fake_parallel(*args):
+    def fake_parallel(*args, executable: Path):
         assert args[-1] == 1
+        assert executable == Path("/fixture/corrected/prodigal-gv")
         return sentinel, []
 
     monkeypatch.setattr(prodigal, "_run_prodigal_parallel", fake_parallel)
@@ -520,4 +573,5 @@ def test_input_scaffold_rejects_reserved_tile_prefix(tmp_path: Path) -> None:
             tmp_path / "proteome.fasta",
             tmp_path / "genes.gff",
             threads=2,
+            executable=Path("/fixture/corrected/prodigal-gv"),
         )

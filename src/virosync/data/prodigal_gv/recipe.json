@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "prodigal-gv-2.11.0-node-capacity-1",
+  "archive_url": "https://github.com/apcamargo/prodigal-gv/archive/refs/tags/2.11.0.zip",
+  "archive_sha256": "1fb40a8ae204ce2f41a413edb1edf5b8f22c28c2812320e2807ab48f8e8ce795",
+  "source_directory": "prodigal-gv-2.11.0",
+  "patch_sha256": "1a396792c0bf14a1b9586e687eefeb3dd17abf41d6083ed96f39130e3220f6be",
+  "compiler": "x86_64-conda-linux-gnu-cc",
+  "cflags": ["-pedantic", "-Wall", "-O3", "-g", "-DSUPPORT_GZIP_COMPRESSED"],
+  "modification": "ViroSync node-capacity correction, 2026-09-19: checked dynamic growth and zero initialization; preserves candidate enumeration and scoring.",
+  "upstream_license": "GPL-3.0-only"
+}

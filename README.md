@@ -21,11 +21,15 @@ ViroSync supports Linux x86-64 and uses [Pixi](https://pixi.sh/).
 git clone https://github.com/NeLLi-team/virosync.git
 cd virosync
 pixi install --locked
+pixi run setup-prodigal-gv
 pixi run setup-virosync-resources
 ```
 
 Resources download about 6 GB, use about 13 GB when installed, and need about
 19 GB during setup. Allow more space for the Pixi environment and results.
+Native setup builds the pinned Prodigal-GV capacity correction. The
+[installation guide](docs/getting-started.md) covers its runtime directory and
+direct Python or console use.
 
 ## Quick start
 

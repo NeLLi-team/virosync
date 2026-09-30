@@ -1,0 +1,276 @@
+--- a/main.c
++++ b/main.c
+@@ -44,7 +44,7 @@
+ 
+   int rv, slen, nn, ng, i, ipath, *gc_frame, do_training, output, max_phase;
+   int closed, do_mask, nmask, force_nonsd, user_tt, is_meta, num_seq, quiet;
+-  int piped, max_slen, fnum;
++  int piped, fnum;
+   double max_score, gc, low, high;
+   unsigned char *seq, *rseq, *useq;
+   char *train_file, *start_file, *trans_file, *nuc_file;
+@@ -55,6 +55,7 @@
+   struct stat fbuf;
+   pid_t pid;
+   struct _node *nodes;
++  size_t node_capacity = STT_NOD;
+   struct _gene *genes;
+   struct _training tinf;
+   struct _metagenomic_bin meta[NUM_META];
+@@ -64,7 +65,7 @@
+   seq = (unsigned char *)malloc(MAX_SEQ/4*sizeof(unsigned char));
+   rseq = (unsigned char *)malloc(MAX_SEQ/4*sizeof(unsigned char));
+   useq = (unsigned char *)malloc(MAX_SEQ/8*sizeof(unsigned char));
+-  nodes = (struct _node *)malloc(STT_NOD*sizeof(struct _node));
++  nodes = (struct _node *)malloc(node_capacity*sizeof(struct _node));
+   genes = (struct _gene *)malloc(MAX_GENES*sizeof(struct _gene));
+   if(seq == NULL || rseq == NULL || nodes == NULL || genes == NULL) {
+     fprintf(stderr, "\nError: Malloc failed on sequence/orfs\n\n"); exit(1);
+@@ -72,7 +73,7 @@
+   memset(seq, 0, MAX_SEQ/4*sizeof(unsigned char));
+   memset(rseq, 0, MAX_SEQ/4*sizeof(unsigned char));
+   memset(useq, 0, MAX_SEQ/8*sizeof(unsigned char));
+-  memset(nodes, 0, STT_NOD*sizeof(struct _node));
++  memset(nodes, 0, node_capacity*sizeof(struct _node));
+   memset(genes, 0, MAX_GENES*sizeof(struct _gene));
+   memset(&tinf, 0, sizeof(struct _training));
+ 
+@@ -93,7 +94,7 @@
+   start_file = NULL; trans_file = NULL; nuc_file = NULL;
+   start_ptr = stdout; trans_ptr = stdout; nuc_ptr = stdout;
+   input_file = NULL; output_file = NULL; piped = 0;
+-  output_ptr = stdout; max_slen = 0;
++  output_ptr = stdout;
+   output = 0; closed = 0; do_mask = 0; force_nonsd = 0;
+ 
+   /* Filename for input copy if needed */
+@@ -339,15 +340,8 @@
+     if(quiet == 0) {
+       fprintf(stderr, "Locating all potential starts and stops...");
+     }
+-    if(slen > max_slen && slen > STT_NOD*8) {
+-      nodes = (struct _node *)realloc(nodes, (int)(slen/8)*sizeof(struct _node));
+-      if(nodes == NULL) {
+-        fprintf(stderr, "Realloc failed on nodes\n\n");
+-        exit(11);
+-      }
+-      max_slen = slen;
+-    }
+-    nn = add_nodes(seq, rseq, slen, nodes, closed, mlist, nmask, &tinf);
++    nn = add_nodes(seq, rseq, slen, &nodes, &node_capacity, closed, mlist,
++                   nmask, &tinf);
+     qsort(nodes, nn, sizeof(struct _node), &compare_nodes);
+     if(quiet == 0) {
+       fprintf(stderr, "%d nodes\n", nn);
+@@ -483,16 +477,6 @@
+       fprintf(stderr, "Finding genes in sequence #%d (%d bp)...", num_seq, slen);
+     }
+ 
+-    /* Reallocate memory if this is the biggest sequence we've seen */
+-    if(slen > max_slen && slen > STT_NOD*8) {
+-      nodes = (struct _node *)realloc(nodes, (int)(slen/8)*sizeof(struct _node));
+-      if(nodes == NULL) {
+-        fprintf(stderr, "Realloc failed on nodes\n\n");
+-        exit(11);
+-      }
+-      max_slen = slen;
+-    }
+-
+     /* Calculate short header for this sequence */
+     calc_short_header(cur_header, short_header, num_seq);
+ 
+@@ -502,7 +486,8 @@
+         Find all the potential starts and stops, sort them, and create a
+         comprehensive list of nodes for dynamic programming.
+       ***********************************************************************/
+-      nn = add_nodes(seq, rseq, slen, nodes, closed, mlist, nmask, &tinf);
++      nn = add_nodes(seq, rseq, slen, &nodes, &node_capacity, closed, mlist,
++                     nmask, &tinf);
+       qsort(nodes, nn, sizeof(struct _node), &compare_nodes);
+ 
+       /***********************************************************************
+@@ -547,8 +532,8 @@
+         if(i == 0 || meta[i].tinf->trans_table !=
+            meta[i-1].tinf->trans_table) {
+           memset(nodes, 0, nn*sizeof(struct _node));
+-          nn = add_nodes(seq, rseq, slen, nodes, closed, mlist, nmask,
+-                         meta[i].tinf);
++          nn = add_nodes(seq, rseq, slen, &nodes, &node_capacity, closed,
++                         mlist, nmask, meta[i].tinf);
+           qsort(nodes, nn, sizeof(struct _node), &compare_nodes);
+         }
+         if(meta[i].tinf->gc < low || meta[i].tinf->gc > high) continue;
+@@ -568,8 +553,8 @@
+ 
+       /* Recover the nodes for the best of the runs */
+       memset(nodes, 0, nn*sizeof(struct _node));
+-      nn = add_nodes(seq, rseq, slen, nodes, closed, mlist, nmask,
+-                       meta[max_phase].tinf);
++      nn = add_nodes(seq, rseq, slen, &nodes, &node_capacity, closed,
++                     mlist, nmask, meta[max_phase].tinf);
+       qsort(nodes, nn, sizeof(struct _node), &compare_nodes);
+       score_nodes(seq, rseq, slen, nodes, nn, meta[max_phase].tinf, closed,
+                   is_meta);
+--- a/node.c
++++ b/node.c
+@@ -18,18 +18,48 @@
+     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *******************************************************************************/
+ 
++#include <limits.h>
++#include <stdint.h>
+ #include "node.h"
++
++/* Grow before an append; node counts and stored node indices remain ints. */
++static struct _node *reserve_node(struct _node **buffer, size_t *capacity,
++                                 int nn) {
++  struct _node *grown;
++  size_t limit, next_capacity;
++
++  if((size_t)nn < *capacity) return *buffer;
++  limit = SIZE_MAX/sizeof(struct _node);
++  if(limit > INT_MAX) limit = INT_MAX;
++  if(*capacity >= limit) {
++    fprintf(stderr, "Node capacity exceeds allocation or index limits\n\n");
++    exit(11);
++  }
++  next_capacity = *capacity > limit/2 ? limit : *capacity*2;
++  grown = (struct _node *)realloc(*buffer,
++                                next_capacity*sizeof(struct _node));
++  if(grown == NULL) {
++    fprintf(stderr, "Realloc failed on nodes\n\n");
++    exit(11);
++  }
++  memset(grown + *capacity, 0,
++         (next_capacity-*capacity)*sizeof(struct _node));
++  *buffer = grown;
++  *capacity = next_capacity;
++  return grown;
++}
+ 
+ /*******************************************************************************
+   Adds nodes to the node list.  Genes must be >=90bp in length, unless they
+   run off the edge, in which case they only have to be 50bp.
+ *******************************************************************************/
+ 
+-int add_nodes(unsigned char *seq, unsigned char *rseq, int slen, struct _node
+-              *nodes, int closed, mask *mlist, int nm, struct _training
+-              *tinf) {
++int add_nodes(unsigned char *seq, unsigned char *rseq, int slen,
++              struct _node **buffer, size_t *capacity, int closed, mask *mlist,
++              int nm, struct _training *tinf) {
+   int i, nn = 0, last[3], saw_start[3], min_dist[3];
+   int slmod = 0;
++  struct _node *nodes = *buffer;
+ 
+   /* Forward strand nodes */
+   slmod = slen%3;
+@@ -42,6 +72,7 @@
+   for(i = slen-3; i >= 0; i--) {
+     if(is_stop(seq, i, tinf)==1) {
+       if(saw_start[i%3] == 1) {
++        nodes = reserve_node(buffer, capacity, nn);
+         if(is_stop(seq, last[i%3], tinf) == 0) nodes[nn].edge = 1;
+         nodes[nn].ndx = last[i%3]; 
+         nodes[nn].type = STOP;
+@@ -57,6 +88,7 @@
+      
+     if(is_start(seq, i, tinf) == 1 && is_atg(seq, i)==1 && ((last[i%3]-i+3)
+             >= min_dist[i%3]) && cross_mask(i, last[i%3], mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = i; 
+       nodes[nn].type = ATG; 
+       saw_start[i%3] = 1;
+@@ -65,6 +97,7 @@
+     }
+     else if(is_start(seq, i, tinf) == 1 && is_gtg(seq, i)==1 && ((last[i%3]-i+3)
+             >= min_dist[i%3]) && cross_mask(i, last[i%3], mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = i; 
+       nodes[nn].type = GTG; 
+       saw_start[i%3] = 1;
+@@ -73,6 +106,7 @@
+     }
+     else if(is_start(seq, i, tinf) == 1 && is_ttg(seq, i)==1 && ((last[i%3]-i+3)
+             >= min_dist[i%3]) && cross_mask(i, last[i%3], mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = i; 
+       nodes[nn].type = TTG; 
+       saw_start[i%3] = 1;
+@@ -81,6 +115,7 @@
+     }
+     else if(i <= 2 && closed == 0 && ((last[i%3]-i) > MIN_EDGE_GENE) &&
+             cross_mask(i, last[i%3], mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = i; 
+       nodes[nn].type = ATG; 
+       saw_start[i%3] = 1;
+@@ -91,6 +126,7 @@
+   }
+   for(i = 0; i < 3; i++) {
+     if(saw_start[i%3] == 1) {
++      nodes = reserve_node(buffer, capacity, nn);
+       if(is_stop(seq, last[i%3], tinf) == 0) nodes[nn].edge = 1;
+       nodes[nn].ndx = last[i%3]; 
+       nodes[nn].type = STOP;
+@@ -109,6 +145,7 @@
+   for(i = slen-3; i >= 0; i--) {
+     if(is_stop(rseq, i, tinf)==1) {
+       if(saw_start[i%3] == 1) {
++        nodes = reserve_node(buffer, capacity, nn);
+         if(is_stop(rseq, last[i%3], tinf) == 0) nodes[nn].edge = 1;
+         nodes[nn].ndx = slen-last[i%3]-1; 
+         nodes[nn].type = STOP;
+@@ -125,6 +162,7 @@
+     if(is_start(rseq, i, tinf) == 1 && is_atg(rseq, i)==1 && ((last[i%3]-i+3)
+        >= min_dist[i%3]) && cross_mask(slen-last[i%3]-1, slen-i-1, mlist, nm) ==
+        0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = slen - i - 1; 
+       nodes[nn].type = ATG; 
+       saw_start[i%3] = 1;
+@@ -134,6 +172,7 @@
+     else if(is_start(rseq, i, tinf) == 1 && is_gtg(rseq, i)==1 && 
+             ((last[i%3]-i+3) >= min_dist[i%3]) && cross_mask(slen-last[i%3]-1,
+             slen-i-1, mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = slen - i - 1; 
+       nodes[nn].type = GTG; 
+       saw_start[i%3] = 1;
+@@ -143,6 +182,7 @@
+     else if(is_start(rseq, i, tinf) == 1 && is_ttg(rseq, i)==1 && 
+             ((last[i%3]-i+3) >= min_dist[i%3]) && cross_mask(slen-last[i%3]-1,
+             slen-i-1, mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = slen - i - 1; 
+       nodes[nn].type = TTG; 
+       saw_start[i%3] = 1;
+@@ -151,6 +191,7 @@
+     }
+     else if(i <= 2 && closed == 0 && ((last[i%3]-i) > MIN_EDGE_GENE) &&
+             cross_mask(slen-last[i%3]-1, slen-i-1, mlist, nm) == 0) {
++      nodes = reserve_node(buffer, capacity, nn);
+       nodes[nn].ndx = slen - i - 1; 
+       nodes[nn].type = ATG; 
+       saw_start[i%3] = 1;
+@@ -161,6 +202,7 @@
+   }
+   for(i = 0; i < 3; i++) {
+     if(saw_start[i%3] == 1) {
++      nodes = reserve_node(buffer, capacity, nn);
+       if(is_stop(rseq, last[i%3], tinf) == 0) nodes[nn].edge = 1;
+       nodes[nn].ndx = slen - last[i%3] - 1; 
+       nodes[nn].type = STOP;
+--- a/node.h
++++ b/node.h
+@@ -72,8 +72,8 @@
+   int elim;            /* If set to 1, eliminate this gene from the model */
+ };
+ 
+-int add_nodes(unsigned char *, unsigned char *, int, struct _node *, int,
+-              mask *, int, struct _training *);
++int add_nodes(unsigned char *, unsigned char *, int, struct _node **, size_t *,
++              int, mask *, int, struct _training *);
+ void reset_node_scores(struct _node *, int);
+ int compare_nodes(const void *, const void *);
+ int stopcmp_nodes(const void *, const void *);
