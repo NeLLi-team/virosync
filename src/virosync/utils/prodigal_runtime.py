@@ -32,6 +32,7 @@ MAX_COMPILER_PREFIX_BYTES = 255
 class NativeRecipe:
     """Packaged source and build inputs for one immutable runtime installation."""
 
+    name: str
     archive_url: str
     archive_sha256: str
     source_directory: str
@@ -41,14 +42,38 @@ class NativeRecipe:
     sha256: str
 
 
+@dataclass(frozen=True)
+class ProdigalRuntimeIdentity:
+    """Verified identity of the selected corrected caller for provenance records."""
+
+    executable: Path
+    recipe_name: str
+    recipe_sha256: str
+    executable_sha256: str
+
+
 def resolve_prodigal_executable() -> Path:
     """Return the verified corrected caller, without searching PATH or installing it."""
     recipe = _load_recipe()
     return _verify_installation(_runtime_directory(recipe), recipe)
 
 
+def describe_prodigal_runtime() -> ProdigalRuntimeIdentity:
+    """Return the verified caller with its recipe name and the digests from its receipt."""
+    recipe = _load_recipe()
+    runtime = _runtime_directory(recipe)
+    executable = _verify_installation(runtime, recipe)
+    receipt = json.loads((runtime / "receipt.json").read_text(encoding="utf-8"))
+    return ProdigalRuntimeIdentity(
+        executable=executable,
+        recipe_name=recipe.name,
+        recipe_sha256=receipt["recipe_sha256"],
+        executable_sha256=receipt["binary"]["sha256"],
+    )
+
+
 def setup_prodigal_runtime() -> Path:
-    """Build once in a stable owned prefix, retaining failed setup evidence."""
+    """Build once in a stable owned prefix, retaining failed compilation evidence."""
     recipe = _load_recipe()
     runtime = _runtime_directory(recipe)
     root = runtime.parent
@@ -65,7 +90,15 @@ def setup_prodigal_runtime() -> Path:
             )
         runtime.mkdir(mode=0o700)
         LOGGER.info("Building corrected Prodigal-GV in %s", runtime)
-        _build_runtime(runtime, recipe)
+        built = False
+        try:
+            _build_runtime(runtime, recipe)
+            built = True
+        finally:
+            # A failure before compilation (download, hash, extraction) leaves no
+            # build log and nothing worth keeping; remove it so a rerun can succeed.
+            if not built and not (runtime / "build.log").exists():
+                shutil.rmtree(runtime, ignore_errors=True)
         return _verify_installation(runtime, recipe)
 
 
@@ -79,6 +112,7 @@ def _load_recipe() -> NativeRecipe:
         raise RuntimeError("Packaged Prodigal-GV recipe or capacity patch is inconsistent")
     identity = {name: _digest(content) for name, content in resources.items()}
     return NativeRecipe(
+        name=document["name"],
         archive_url=document["archive_url"],
         archive_sha256=document["archive_sha256"],
         source_directory=document["source_directory"],

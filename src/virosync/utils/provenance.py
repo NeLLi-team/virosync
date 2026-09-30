@@ -16,7 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from virosync.utils.prodigal_runtime import resolve_prodigal_executable
+from virosync.utils.prodigal_runtime import describe_prodigal_runtime, resolve_prodigal_executable
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ def capture_tool_versions() -> dict[str, str]:
     tools = {
         "diamond": ["diamond", "version"],
         "prodigal-gv": ["prodigal-gv", "-v"],
+        "gt": ["gt", "--version"],
         "foldseek": ["foldseek", "version"],
     }
 
@@ -110,6 +111,18 @@ def capture_tool_versions() -> dict[str, str]:
             versions[tool] = f"error: {e}"
 
     return versions
+
+
+def capture_gene_caller_identity(version: str) -> dict[str, str]:
+    """Record which corrected Prodigal-GV build ran, since its version string is unchanged."""
+    identity = describe_prodigal_runtime()
+    return {
+        "tool": "prodigal-gv",
+        "version": version,
+        "recipe_name": identity.recipe_name,
+        "recipe_sha256": identity.recipe_sha256,
+        "executable_sha256": identity.executable_sha256,
+    }
 
 
 def compute_file_checksum(file_path: Path, algorithm: str = "sha256") -> str:
@@ -248,6 +261,7 @@ def write_provenance(
             "version": tool_versions.get("virosync", "unknown"),
         },
         "tool_versions": tool_versions,
+        "gene_caller": capture_gene_caller_identity(tool_versions.get("prodigal-gv", "unknown")),
         "databases": capture_database_info(config),
         "input_genome": {
             "path": str(input_genome.absolute()) if input_genome else "N/A",
