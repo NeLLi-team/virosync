@@ -24,6 +24,12 @@ from virosync.orchestration.cli import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _skip_native_tool_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise configuration flow, not the native gene caller or GenomeTools."""
+    monkeypatch.setattr(orchestration_cli, "_preflight_native_tools", lambda: None)
+
+
 def _application() -> ApplicationConfig:
     return ApplicationConfig.from_dict(
         {

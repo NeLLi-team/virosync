@@ -378,6 +378,7 @@ def test_tiled_record_rejects_valid_output_after_nonzero_exit(
 
 def test_serial_prodigal_accepts_crlf_input_like_lf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CRLF and LF copies of one genome give identical proteins and coordinates."""
+    monkeypatch.setattr(prodigal, "resolve_prodigal_executable", lambda: Path("/fixture/corrected/prodigal-gv"))
     lf_genome = tmp_path / "lf.fasta"
     crlf_genome = tmp_path / "crlf.fasta"
     lf_genome.write_bytes(b">first some description\nATGTAA\n>second\nATGTAA\n")
