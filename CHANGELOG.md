@@ -4,15 +4,43 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+
+- `provenance.json` records the corrected gene caller under `gene_caller`: the
+  Prodigal-GV version string, the packaged recipe name, the recipe SHA-256 and
+  the SHA-256 of the executable that ran. GenomeTools joins the captured tool
+  versions.
+- A regression test runs a 400 kb start-dense record, which aborted the
+  previous caller, through the corrected runtime; it skips only when the
+  runtime is not installed.
+- Pixi task `check-tsv-invariants` runs `scripts/check_tsv_invariants.py` on a
+  detailed prediction table.
+
+### Changed
+
+- Accelerate terminal-repeat refinement with exact range-query scoring,
+  shared regional comparisons and GenomeTools repeat seeds. Preserve
+  marker-specific search limits, full repeat endpoints and ambiguity rules.
+
 ### Fixed
 
 - Deliver a pinned Prodigal-GV node-capacity correction through native setup.
   Gene calling, run identity, and version reporting select the same verified
   executable without falling back to the vulnerable PATH binary. Retain the
   compiler library environment at its original path.
-- Accelerate terminal-repeat refinement with exact range-query scoring,
-  shared regional comparisons and GenomeTools repeat seeds. Preserve
-  marker-specific search limits, full repeat endpoints and ambiguity rules.
+- Accept genomes with CRLF line endings in single-process gene calling. The
+  Prodigal-GV GFF validator reads LF-only newlines, so a carriage return that
+  Prodigal copies into the sequence header no longer rejects valid output.
+- Remove the incomplete native runtime directory when setup fails before
+  compilation (download, archive hash or extraction), so a rerun can succeed.
+  Failed compilations keep their build log and still block silent replacement.
+- Reject an empty FASTA record ID at input validation with a clear error.
+- Resolve the corrected Prodigal-GV runtime and GenomeTools once before any
+  genome is dispatched, and stop with the setup hint instead of failing each
+  genome after retries. Help, version and resource commands do not need the
+  runtime.
+- Include GenomeTools stderr in repeat-search errors and reject seed lengths
+  below 1 before running `gt repfind`.
 - Handle selected proteins above the integration HMM engine's 100,000-residue
   limit without aborting Phase 3. Output schema 8 records unsearched proteins
   and screening completeness for each EVE. Proteins and EVE decisions are retained.
