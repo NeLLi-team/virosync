@@ -376,6 +376,55 @@ def test_tiled_record_rejects_valid_output_after_nonzero_exit(
     )
 
 
+def test_serial_prodigal_accepts_crlf_input_like_lf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CRLF and LF copies of one genome give identical proteins and coordinates."""
+    lf_genome = tmp_path / "lf.fasta"
+    crlf_genome = tmp_path / "crlf.fasta"
+    lf_genome.write_bytes(b">first some description\nATGTAA\n>second\nATGTAA\n")
+    crlf_genome.write_bytes(b">first some description\r\nATGTAA\r\n>second\r\nATGTAA\r\n")
+
+    def prodigal_like(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        # Prodigal copies a CRLF header's carriage return into seqhdr and nowhere else.
+        _proteins, gff = _write_untiled_outputs(cmd)
+        if b"\r\n" in Path(cmd[cmd.index("-i") + 1]).read_bytes():
+            gff.write_bytes(gff.read_bytes().replace(b'"\n', b'\r"\n'))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(prodigal.subprocess, "run", prodigal_like)
+    lf_dir = tmp_path / "lf_phase0"
+    crlf_dir = tmp_path / "crlf_phase0"
+
+    _, lf_genes = prodigal.run_prodigal_genome(lf_genome, lf_dir, threads=1)
+    _, crlf_genes = prodigal.run_prodigal_genome(crlf_genome, crlf_dir, threads=1)
+
+    assert [gene.gene_id for gene in lf_genes] == ["first_1", "second_1"]
+    assert crlf_genes == lf_genes
+    assert not (tmp_path / "prodigal_diagnostics").exists()
+
+
+@pytest.mark.parametrize(
+    "sequence_data_line",
+    [
+        '# Sequence Data: seqnum=1;seqlen=12;seqhdr="first\n',
+        '# Sequence Data: seqnum=1;seqhdr="first"\n',
+        '# Sequence Data: seqnum=1;seqlen=12;seqhdr="first"\rextra\n',
+    ],
+)
+def test_strict_validation_rejects_malformed_sequence_data(tmp_path: Path, sequence_data_line: str) -> None:
+    """Reading the GFF with LF-only newlines keeps rejecting malformed header lines."""
+    input_fasta = tmp_path / "input.fasta"
+    proteins_faa = tmp_path / "proteins.faa"
+    genes_gff = tmp_path / "genes.gff"
+    input_fasta.write_text(f">first\n{'A' * 12}\n")
+    proteins_faa.write_text(">first_1 # 1 # 3 # 1 # ID=1_1\nM\n")
+    genes_gff.write_bytes(
+        ("##gff-version 3\n" + sequence_data_line + "first\tProdigal\tCDS\t1\t3\t.\t+\t0\tID=1_1\n").encode()
+    )
+
+    with pytest.raises(RuntimeError, match="unparseable Sequence Data"):
+        prodigal._validate_tiled_prodigal_output(input_fasta, proteins_faa, genes_gff)
+
+
 def test_strict_validation_rejects_no_delimiter_final_header(
     tmp_path: Path,
 ) -> None:
