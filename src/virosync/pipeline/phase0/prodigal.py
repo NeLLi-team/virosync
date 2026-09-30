@@ -146,7 +146,9 @@ def _validate_tiled_prodigal_output(
 
     observed_sequences: Counter[tuple[str, int]] = Counter()
     gff_coordinates: Counter[tuple[str, int, int, str]] = Counter()
-    with genes_gff.open() as handle:
+    # Prodigal copies a CRLF input header, carriage return included, into
+    # seqhdr; universal newlines would split that line inside the quotes.
+    with genes_gff.open(newline="\n") as handle:
         for line_number, line in enumerate(handle, start=1):
             if line.startswith("# Sequence Data:"):
                 match = _SEQUENCE_DATA_RE.match(line)

@@ -533,6 +533,23 @@ def test_programming_error_escapes_without_fallback_or_success_status(
     assert not (output_dir / "masking_status.json").exists()
 
 
+def test_empty_input_id_fails_before_backend(tmp_path: Path, monkeypatch) -> None:
+    input_fasta = tmp_path / "empty_id.fna"
+    input_fasta.write_text(">\nACGT\n>named\nTGCA\n")
+
+    def _attempt(**_kwargs):
+        raise AssertionError("backend must not run")
+
+    monkeypatch.setattr(masking, "_run_backend_attempt", _attempt)
+
+    with pytest.raises(ValueError, match="record 1 has an empty ID"):
+        masking.mask_genome_pipeline(
+            input_fasta,
+            tmp_path / "masking",
+            config=MaskingConfig(backend=MaskingBackend.OFF),
+        )
+
+
 def test_duplicate_input_ids_fail_before_backend_and_cannot_fallback_off(
     tmp_path: Path,
     monkeypatch,
@@ -1064,6 +1081,11 @@ def test_provenance_reuses_validated_masking_status_versions(
         config=config,
     )
     monkeypatch.setattr(provenance, "capture_tool_versions", lambda: {"virosync": "test"})
+    monkeypatch.setattr(
+        provenance,
+        "describe_prodigal_runtime",
+        lambda: SimpleNamespace(recipe_name="fixture", recipe_sha256="recipe", executable_sha256="binary"),
+    )
     provenance.write_provenance(
         tmp_path / "run",
         {

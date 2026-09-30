@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -34,6 +36,7 @@ def packaged_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
         json.dumps(
             {
                 "schema_version": 1,
+                "name": "fixture-recipe-1",
                 "archive_url": "https://example.invalid/source.zip",
                 "archive_sha256": runtime._digest(archive.getvalue()),
                 "source_directory": "upstream",
@@ -160,16 +163,154 @@ def test_missing_corrected_runtime_never_uses_path(packaged_recipe: bytes, monke
         runtime.resolve_prodigal_executable()
 
 
-def test_archive_mismatch_retains_incomplete_evidence(
+def _runtime_directory() -> Path:
+    """Return the installation directory the packaged fixture recipe selects."""
+    return Path(os.environ["VIROSYNC_PRODIGAL_RUNTIME"]) / runtime._load_recipe().sha256
+
+
+def _fail_once(monkeypatch: pytest.MonkeyPatch, target: object, name: str, error: Exception) -> None:
+    """Make one attribute raise on its first call and behave normally afterwards."""
+    original = getattr(target, name)
+    calls: list[int] = []
+
+    def flaky(*args: object, **kwargs: object) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            raise error
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, flaky)
+
+
+def _first_then(first: object, rest: object) -> object:
+    """Return a callable that yields ``first`` once and ``rest()`` afterwards."""
+    calls: list[int] = []
+
+    def choose(*_args: object, **_kwargs: object) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            return first
+        return rest()
+
+    return choose
+
+
+def test_download_failure_removes_incomplete_directory_and_retry_succeeds(
     packaged_recipe: bytes, native_commands: list[list[str]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A bad download never reaches compilation, publication or automatic replacement."""
-    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"wrong archive"))
+    """A failed download leaves nothing behind, so the next setup builds normally."""
+    _fail_once(monkeypatch, runtime.urllib.request, "urlopen", urllib.error.URLError("connection refused"))
+    with pytest.raises(urllib.error.URLError):
+        runtime.setup_prodigal_runtime()
+    assert not _runtime_directory().exists()
+    assert (_runtime_directory().parent / ".setup.lock").is_file()
+    assert native_commands == []
+
+    executable = runtime.setup_prodigal_runtime()
+
+    assert runtime.resolve_prodigal_executable() == executable
+    assert len(native_commands) == 4
+
+
+def test_archive_mismatch_removes_incomplete_directory_and_retry_succeeds(
+    packaged_recipe: bytes, native_commands: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad download never reaches compilation and does not block the next attempt."""
+    monkeypatch.setattr(
+        runtime.urllib.request,
+        "urlopen",
+        _first_then(io.BytesIO(b"wrong archive"), lambda: io.BytesIO(packaged_recipe)),
+    )
     with pytest.raises(RuntimeError, match="archive hash mismatch"):
         runtime.setup_prodigal_runtime()
+    assert not _runtime_directory().exists()
     assert native_commands == []
+
+    executable = runtime.setup_prodigal_runtime()
+
+    assert runtime.resolve_prodigal_executable() == executable
+    assert len(native_commands) == 4
+
+
+def test_extraction_failure_removes_incomplete_directory_and_retry_succeeds(
+    packaged_recipe: bytes, native_commands: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt archive fails before compilation and does not block the next attempt."""
+    _fail_once(monkeypatch, runtime.zipfile, "ZipFile", zipfile.BadZipFile("truncated archive"))
+    with pytest.raises(zipfile.BadZipFile):
+        runtime.setup_prodigal_runtime()
+    assert not _runtime_directory().exists()
+    assert native_commands == []
+
+    executable = runtime.setup_prodigal_runtime()
+
+    assert runtime.resolve_prodigal_executable() == executable
+    assert len(native_commands) == 4
+
+
+def test_failed_compilation_is_retained_with_its_build_log(
+    packaged_recipe: bytes, native_commands: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compilation evidence stays on disk and blocks silent replacement."""
+    invoke = runtime.subprocess.run
+
+    def failing_make(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if "make" in command:
+            raise subprocess.CalledProcessError(2, command)
+        return invoke(command, **kwargs)
+
+    monkeypatch.setattr(runtime.subprocess, "run", failing_make)
+    with pytest.raises(subprocess.CalledProcessError):
+        runtime.setup_prodigal_runtime()
+    assert (_runtime_directory() / "build.log").is_file()
+    assert not (_runtime_directory() / "receipt.json").exists()
     with pytest.raises(RuntimeError, match="Incomplete native build retained"):
         runtime.setup_prodigal_runtime()
+
+
+def test_describe_prodigal_runtime_reports_verified_identity(
+    packaged_recipe: bytes, native_commands: list[list[str]]
+) -> None:
+    """The provenance identity names the packaged recipe and the receipt's executable digest."""
+    executable = runtime.setup_prodigal_runtime()
+    receipt = json.loads((executable.parents[1] / "receipt.json").read_text(encoding="utf-8"))
+
+    identity = runtime.describe_prodigal_runtime()
+
+    assert identity.executable == executable
+    assert identity.recipe_name == "fixture-recipe-1"
+    assert identity.recipe_sha256 == receipt["recipe_sha256"] == runtime._load_recipe().sha256
+    assert identity.executable_sha256 == hashlib.sha256(b"corrected executable fixture").hexdigest()
+    assert identity.executable_sha256 == receipt["binary"]["sha256"]
+
+
+def test_provenance_records_gene_caller_identity(
+    packaged_recipe: bytes, native_commands: list[list[str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """provenance.json keeps the version string and adds the corrected caller's identity."""
+    from virosync.utils import provenance
+
+    executable = runtime.setup_prodigal_runtime()
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(__version__="fixture"))
+    monkeypatch.setitem(sys.modules, "torch_geometric", SimpleNamespace(__version__="fixture"))
+    monkeypatch.setitem(sys.modules, "pyhmmer", SimpleNamespace(__version__="fixture"))
+    monkeypatch.setattr(
+        provenance.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "Prodigal V2.11.0-gv: fixture\n", ""),
+    )
+
+    provenance.write_provenance(tmp_path / "run", {})
+
+    document = json.loads((tmp_path / "run/provenance.json").read_text(encoding="utf-8"))
+    assert document["tool_versions"]["prodigal-gv"] == "Prodigal V2.11.0-gv: fixture"
+    assert document["gene_caller"] == {
+        "tool": "prodigal-gv",
+        "version": "Prodigal V2.11.0-gv: fixture",
+        "recipe_name": "fixture-recipe-1",
+        "recipe_sha256": runtime._load_recipe().sha256,
+        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+    }
 
 
 def test_packaged_patch_must_match_recipe(packaged_recipe: bytes) -> None:
@@ -248,5 +389,8 @@ def test_version_probe_uses_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyP
         return subprocess.CompletedProcess(command, 0, "fixture", "")
 
     monkeypatch.setattr(provenance.subprocess, "run", probe)
-    assert provenance.capture_tool_versions()["prodigal-gv"] == "fixture"
+    versions = provenance.capture_tool_versions()
+    assert versions["prodigal-gv"] == "fixture"
+    assert versions["gt"] == "fixture"
     assert [str(executable), "-v"] in observed
+    assert ["gt", "--version"] in observed

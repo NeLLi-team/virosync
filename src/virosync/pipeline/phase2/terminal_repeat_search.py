@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-__all__ = ["find_seed_positions"]
+__all__ = ["find_seed_positions", "resolve_genometools_executable"]
 
 _DNA_BASES = frozenset("ACGT")
+
+
+def resolve_genometools_executable() -> Path:
+    """Return the GenomeTools executable or raise a clear error before Phase 2 starts."""
+    executable = shutil.which("gt")
+    if executable is None:
+        raise RuntimeError(
+            "GenomeTools executable 'gt' was not found on PATH; terminal-repeat refinement "
+            "requires the pinned genometools-genometools package from the ViroSync Pixi environment"
+        )
+    return Path(executable)
 
 
 def find_seed_positions(
@@ -17,7 +29,17 @@ def find_seed_positions(
     seed_length: int,
     kmers: tuple[str, ...],
 ) -> dict[str, tuple[int, ...]]:
-    """Return sorted region positions for each selected k-mer that occurs."""
+    """Return sorted region positions for each selected k-mer that occurs.
+
+    Raises:
+        ValueError: ``seed_length`` is below 1; ``gt repfind -l 0`` would report
+            unbounded matches.
+        RuntimeError: GenomeTools is missing or one of its commands fails; the
+            message carries the command's stderr.
+    """
+    if seed_length < 1:
+        raise ValueError(f"seed_length must be >= 1, got {seed_length}")
+    executable = resolve_genometools_executable()
     native_sequence = _normalize_sequence(sequence)
     with tempfile.TemporaryDirectory(prefix="virosync-repfind-") as directory:
         work_dir = Path(directory)
@@ -27,8 +49,8 @@ def find_seed_positions(
         output_path = work_dir / "matches.tsv"
         input_path.write_text(f">sequence\n{native_sequence}\n", encoding="utf-8")
         _write_queries(query_path, kmers)
-        _build_suffix_index(input_path, index_path)
-        _run_repfind(index_path, query_path, output_path, seed_length)
+        _build_suffix_index(executable, input_path, index_path)
+        _run_repfind(executable, index_path, query_path, output_path, seed_length)
         return _read_positions(output_path, kmers)
 
 
@@ -44,11 +66,11 @@ def _write_queries(query_path: Path, kmers: tuple[str, ...]) -> None:
             queries.write(f">{query_number}\n{kmer}\n")
 
 
-def _build_suffix_index(input_path: Path, index_path: Path) -> None:
+def _build_suffix_index(executable: Path, input_path: Path, index_path: Path) -> None:
     """Build the enhanced suffix array required by repfind."""
-    subprocess.run(
+    _run_genometools(
         [
-            "gt",
+            str(executable),
             "suffixerator",
             "-db",
             str(input_path),
@@ -61,13 +83,12 @@ def _build_suffix_index(input_path: Path, index_path: Path) -> None:
             "-ssp",
             "-sds",
         ],
-        check=True,
-        capture_output=True,
-        text=True,
+        stdout=subprocess.PIPE,
     )
 
 
 def _run_repfind(
+    executable: Path,
     index_path: Path,
     query_path: Path,
     output_path: Path,
@@ -75,9 +96,9 @@ def _run_repfind(
 ) -> None:
     """Write exact forward query occurrences to a temporary file."""
     with output_path.open("w", encoding="utf-8") as output:
-        subprocess.run(
+        _run_genometools(
             [
-                "gt",
+                str(executable),
                 "repfind",
                 "-ii",
                 str(index_path),
@@ -92,11 +113,17 @@ def _run_repfind(
                 "s.start",
                 "q.seqnum",
             ],
-            check=True,
             stdout=output,
-            stderr=subprocess.PIPE,
-            text=True,
         )
+
+
+def _run_genometools(command: list[str], *, stdout: object) -> None:
+    """Run one GenomeTools command and surface its stderr when it fails."""
+    try:
+        subprocess.run(command, check=True, stdout=stdout, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip()
+        raise RuntimeError(f"gt {command[1]} failed with exit status {error.returncode}: {detail}") from error
 
 
 def _read_positions(

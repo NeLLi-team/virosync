@@ -37,7 +37,7 @@ and BED row.
 
 | Columns | Table | Interpretation |
 | --- | --- | --- |
-| `eve_id`, `scaffold`, `start`, `end`, `length` | Both | Region identity and final coordinates. |
+| `eve_id`, `scaffold`, `start`, `end`, `length` | Both | Region identity and final coordinates. `eve_id` is an opaque identifier; see below. |
 | `confidence_tier`, `final_confidence` | Both | Rule-based evidence tier and score. |
 | `effective_eve_class` | Both | Published region class. |
 | `hallmark_total`, `hallmark_unique`, `mcp_gene_ids` | Both | Viral hallmark and major capsid protein evidence. |
@@ -57,6 +57,21 @@ and BED row.
 | `integration_gene_evidence` | Both | JSON records with protein identifiers, genomic coordinates, location, enzyme family, annotation source, profile accession and scores. Includes DDE integrases and recombinases. A dot means no qualifying gene annotation. |
 | `integration_hmm_status` | Both | `complete` means every selected predicted protein was searched, including an empty selection. `incomplete_sequence_length` means one or more selected proteins exceeded the HMM engine limit. `not_assessed` means the screen has not completed. |
 | `integration_hmm_unsearched` | Both | JSON list of proteins excluded from the integration HMM search, with original identifiers, lengths, genomic coordinates, strand, EVE context, exclusion reason and limit. An empty list is `[]`; check the status to distinguish a completed screen from one not assessed. |
+
+### Region identifiers
+
+`eve_id` has the form `EVE_<scaffold>_<start>-<end>` when no other candidate
+shares the coordinates. A candidate that shares its coordinates with another
+candidate, for example an ordinary candidate and a frameshift-rescue candidate,
+carries the suffix `-c` followed by 16 hexadecimal characters, such as
+`EVE_scaffold_1_1000-5000-c3f2a9b7c1d0e4f56`. Candidates created together at
+the same coordinates all carry the suffix; a candidate added later at
+coordinates an existing candidate already uses carries the suffix while the
+earlier candidate keeps its plain identifier. The suffix is derived from the
+candidate's internal seed and is deterministic for a given input and
+configuration. The same identifier appears in the TSV, BED and GFF3 outputs.
+Treat `eve_id` as an opaque identifier: read coordinates from the `scaffold`,
+`start` and `end` columns rather than from the identifier.
 
 `canonical_selection_outcome` records direct retention, gate rejection, loss
 of a frameshift-rescued marker, overlap selection or suppression, or lack of

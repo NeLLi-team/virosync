@@ -160,7 +160,9 @@ def _validate_input_fasta(path: Path) -> None:
         raise ValueError(f"invalid input FASTA {path}: contains no records")
     seen: set[str] = set()
     duplicates: set[str] = set()
-    for record in records:
+    for index, record in enumerate(records, start=1):
+        if not record.id:
+            raise ValueError(f"invalid input FASTA {path}: record {index} has an empty ID")
         if record.id in seen:
             duplicates.add(record.id)
         seen.add(record.id)

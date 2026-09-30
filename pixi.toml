@@ -100,6 +100,8 @@ check-structural-runtime = "PYTHONPATH=src python scripts/check_structural_runti
 # === Development ===
 lint = "ruff check src tests scripts && ruff format --check src tests scripts src/virosync/report/eve_analysis.py"
 check-production-ready = "python scripts/ci/check_production_ready.py"
+# Usage: pixi run check-tsv-invariants --detailed-tsv <run>/<genome>/virosync_predictions_detailed.tsv
+check-tsv-invariants = "PYTHONPATH=src python scripts/check_tsv_invariants.py"
 
 [feature.dev.dependencies]
 # Development tools
