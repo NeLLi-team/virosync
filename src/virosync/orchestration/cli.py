@@ -29,9 +29,11 @@ from virosync.orchestration.python_runner import (
     _preflight_genome_runs,
     run_batch_python,
 )
+from virosync.pipeline.phase2.terminal_repeat_search import resolve_genometools_executable
 from virosync.report.graphviz_runtime import graphviz_runtime_error
 from virosync.utils.database_manager import ViroSyncDatabaseManager
 from virosync.utils.executables import resolve_boltz_executable
+from virosync.utils.prodigal_runtime import resolve_prodigal_executable
 
 # Supported genome file extensions
 GENOME_EXTENSIONS = {".fna", ".fasta", ".fa"}
@@ -1524,6 +1526,7 @@ def run(
         _preflight_genome_runs(genome_paths, output_dir)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    _preflight_native_tools()
 
     timestamp = datetime.now(UTC).isoformat(timespec="seconds")
     if verbose:
@@ -1580,6 +1583,15 @@ def run(
     )
 
     _print_batch_results(results, output_dir, quiet=quiet)
+
+
+def _preflight_native_tools() -> None:
+    """Resolve the gene caller and GenomeTools once, before resources or genomes are touched."""
+    try:
+        resolve_prodigal_executable()
+        resolve_genometools_executable()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _print_batch_results(results: list[GenomeRunResult], output_dir: Path, *, quiet: bool) -> None:
