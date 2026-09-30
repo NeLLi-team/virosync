@@ -15,6 +15,7 @@ import pytest
 from Bio import SeqIO
 
 from virosync.pipeline.phase0 import prodigal
+from virosync.utils import prodigal_runtime
 from virosync.utils.prodigal_runtime import resolve_prodigal_executable
 
 _EXAMPLE_GENOME = Path(__file__).resolve().parents[1] / "example/test-1.fna"
@@ -25,11 +26,14 @@ _START_DENSE_RECORD_BP = 400_002
 
 @pytest.fixture(scope="module")
 def corrected_runtime() -> Path:
-    """Select the verified corrected caller or skip when it is not installed."""
-    try:
-        return resolve_prodigal_executable()
-    except (OSError, ValueError, RuntimeError) as error:
-        pytest.skip(f"corrected Prodigal-GV runtime is not installed: {error}")
+    """Select the verified corrected caller; skip only when no installation exists.
+
+    A present but corrupted or incomplete installation fails instead of skipping.
+    """
+    runtime = prodigal_runtime._runtime_directory(prodigal_runtime._load_recipe())
+    if not runtime.exists():
+        pytest.skip(f"corrected Prodigal-GV runtime is not installed at {runtime}")
+    return resolve_prodigal_executable()
 
 
 @pytest.fixture
