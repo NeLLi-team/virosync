@@ -20,8 +20,8 @@ archive contains the DIAMOND database; the matching source companion contains
 the FASTA. Both encode the same marker reference set.
 
 Update your ViroSync checkout before installing v1.1.0. The resource update
-includes code changes for MCP roles and functional categories; the older
-1.0.1 release lacks them.
+includes code changes for MCP roles and functional categories; checkouts
+from before the v1.1.0 resource commits lack them.
 
 Setup downloads about 6 GB and installs about 13 GB. The archive and installed
 data can use about 19 GB at the same time. Allow extra space for the Pixi
