@@ -19,6 +19,7 @@ from virosync.orchestration._flows.single_genome.phase_state import (
     write_phase2_state,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
 
 
 def _complete_boundary() -> RefinedBoundary:
@@ -50,6 +51,17 @@ def _complete_boundary() -> RefinedBoundary:
         tir_scan_start=50,
         tir_scan_end=1050,
         tsd_sequence="GAGGCT",
+        repeat_evidence=assess_repeat_evidence(
+            None,
+            scaffold="scaffold/alpha",
+            input_id="seed_7_scaffold_alpha_90",
+            start=101,
+            end=999,
+            parent_start=110,
+            parent_end=1000,
+            coverage_intervals=(),
+            extension_bp=100,
+        ),
         seed_sources=["hhg", "novelty", "compositional"],
         seed_confidence="high",
         seed_hhg_score=0.91,
@@ -158,6 +170,30 @@ def test_phase2_state_round_trip_preserves_none_and_empty_posterior_shape() -> N
 
     _assert_boundaries_equal(without_posteriors, loaded[0])
     _assert_boundaries_equal(with_empty_posteriors, loaded[1])
+
+
+def test_phase2_state_rejects_corrupt_repeat_evidence() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["boundaries"][0]["repeat_evidence"]["assessed_start"] = 102
+
+    with pytest.raises(Phase2StateError, match="repeat evidence ID"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_repeat_evidence_from_another_boundary() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["boundaries"][0]["scaffold"] = "other"
+
+    with pytest.raises(Phase2StateError, match="repeat_evidence differs from its Phase-2 boundary"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_pre_repeat_schema() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["schema_version"] = 4
+
+    with pytest.raises(Phase2StateError, match="unsupported.*schema_version"):
+        phase2_state_from_document(document)
 
 
 def test_phase2_state_round_trip_preserves_tir_split_children() -> None:

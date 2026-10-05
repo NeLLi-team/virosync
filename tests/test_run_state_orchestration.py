@@ -53,6 +53,7 @@ from virosync.orchestration._flows.single_genome.run_state import (
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASSES,
     OUTPUT_SCHEMA_VERSION,
+    REPEAT_CANDIDATE_COLUMNS,
     normalize_effective_eve_class,
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
@@ -465,6 +466,7 @@ class _MockPipeline:
         export_score = int(min(1000, final_confidence * 1000))
         (directory / "virosync_predictions.tsv").write_text(canonical_content)
         (directory / "virosync_predictions_detailed.tsv").write_text(detailed_content)
+        (directory / "virosync_repeat_candidates.tsv").write_text("\t".join(REPEAT_CANDIDATE_COLUMNS) + "\n")
         (directory / "virosync_predictions.bed").write_text(
             f"scaffold\t0\t4\tEVE_1\t{export_score}\t.\n" if rows else ""
         )
@@ -1263,7 +1265,7 @@ def test_duplicate_final_outputs_must_agree(
             else "phase3_synthesis/virosync_predictions.tsv"
         )
         content = (mocked_pipeline.output_dir / source_relative).read_text().replace("0.91", "0.92")
-        schema = "canonical-predictions-v6"
+        schema = "canonical-predictions-v7"
         expected_error = "duplicate canonical prediction tables disagree"
     else:
         source_relative = next(
@@ -1298,6 +1300,25 @@ def test_duplicate_final_outputs_must_agree(
         run_state_module._validate_success_artifacts(
             mocked_pipeline.output_dir,
             (*state.artifacts, duplicate_identity),
+            state.result,
+            run_fingerprint=state.run_fingerprint,
+            identities=state.identities,
+        )
+
+
+def test_repeat_sidecar_copies_must_agree_even_when_both_hashes_are_current(
+    mocked_pipeline: _MockPipeline,
+) -> None:
+    mocked_pipeline.run()
+    state = load_run_state(mocked_pipeline.output_dir)
+    sidecar = mocked_pipeline.output_dir / "virosync_repeat_candidates.tsv"
+    sidecar.write_text("eve_id\tcandidate_id\nEVE_1\tchanged_pair\n")
+    changed = build_artifact_identity(sidecar, root=mocked_pipeline.output_dir, schema="virosync.repeat_candidates/v1")
+    artifacts = tuple(artifact for artifact in state.artifacts if artifact.relative_path != sidecar.name)
+    with pytest.raises(ValueError, match="duplicate repeat candidate tables disagree"):
+        run_state_module._validate_success_artifacts(
+            mocked_pipeline.output_dir,
+            (*artifacts, changed),
             state.result,
             run_fingerprint=state.run_fingerprint,
             identities=state.identities,
@@ -1489,7 +1510,7 @@ def test_old_phase2_checkpoint_schemas_restart_phase2(
     )
     assert stale_plan.reusable_phases == (0, 1)
     assert stale_plan.restart_phase == 2
-    assert "must use schema 'virosync.phase2.refined_boundaries/v4'" in (stale_plan.reason or "")
+    assert "must use schema 'virosync.phase2.refined_boundaries/v5'" in (stale_plan.reason or "")
 
     result = mocked_pipeline.run()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import itertools
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,18 @@ from virosync.output_contract import (
     DETAILED_PREDICTION_EXTENDED_COLUMNS,
     INTEGRATION_EVIDENCE_COLUMNS,
     OUTPUT_SCHEMA_VERSION,
+    REPEAT_CANDIDATE_COLUMNS,
 )
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     merge_adjacent_viral_boundaries,
+)
+from virosync.pipeline.phase2.repeat_evidence import (
+    DirectRepeatCandidate,
+    EndAssessment,
+    TsdAssessment,
+    _stable_id,
+    assess_repeat_evidence,
 )
 from virosync.pipeline.phase3.acceptance_selection import select_phase3_acceptance
 from virosync.pipeline.phase3.evidence_graph import (
@@ -39,6 +48,7 @@ from virosync.pipeline.phase3.output_generator import (
     OutputGenerator,
     evaluate_v2_quality_gate,
 )
+from virosync.validation.tsv_invariants import run_tsv_invariant_checks
 
 CANONICAL_BASE_FIELDS = (
     "eve_id",
@@ -1211,3 +1221,263 @@ def test_empty_integration_selection_exports_complete_status(tmp_path: Path) -> 
         row = next(csv.DictReader(handle, delimiter="\t"))
     assert row["integration_hmm_status"] == "complete"
     assert row["integration_hmm_unsearched"] == "[]"
+
+
+@pytest.fixture
+def repeat_result() -> VerificationResult:
+    """Provide two retained alternatives, including an arm at host coordinate zero."""
+    evidence = assess_repeat_evidence(
+        None,
+        scaffold="contig_1",
+        input_id="input-parent",
+        start=50,
+        end=500,
+        parent_start=0,
+        parent_end=600,
+        coverage_intervals=(),
+        extension_bp=50,
+    )
+    first = DirectRepeatCandidate(_stable_id("dr", evidence.evidence_id, 0, 50, 500, 550), 0, 50, 500, 550, 1.0, 50)
+    second = DirectRepeatCandidate(_stable_id("dr", evidence.evidence_id, 25, 75, 475, 525), 25, 75, 475, 525, 0.96, 50)
+    return VerificationResult(
+        eve_id="EVE_contig_1_50-500",
+        scaffold="contig_1",
+        start=50,
+        end=500,
+        repeat_evidence=replace(
+            evidence,
+            left=EndAssessment(0, 100, 0, 100, "completed"),
+            right=EndAssessment(450, 550, 450, 550, "incomplete", ("ambiguous_bases",), 2),
+            candidates=(second, first),
+            display_candidate_id=first.candidate_id,
+            filtered_low_complexity_left=1,
+            filtered_low_complexity_right=2,
+        ),
+    )
+
+
+def _read_tsv_rows(path: Path) -> list[dict[str, str]]:
+    """Read exported rows without converting coordinate zero or missing markers."""
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+@pytest.mark.parametrize("writer_name", ["write_predictions_tsv", "write_predictions_detailed_tsv"])
+def test_repeat_evidence_exports_assessed_interval_and_limits(
+    tmp_path: Path, repeat_result: VerificationResult, writer_name: str
+) -> None:
+    """Raw alternatives retain parent scope and do not replace the accepted interval."""
+    generator = OutputGenerator(output_dir=tmp_path)
+    before = repeat_result.to_dict()
+
+    row = _read_tsv_rows(getattr(generator, writer_name)([repeat_result]))[0]
+    profiles = json.loads(generator.write_evidence_profiles([repeat_result]).read_text(encoding="utf-8"))
+
+    assert (row["start"], row["end"], row["repeat_assessed_start"], row["repeat_assessed_end"]) == (
+        "50",
+        "500",
+        "50",
+        "500",
+    )
+    assert (row["repeat_input_id"], row["repeat_parent_start"], row["repeat_parent_end"]) == (
+        "input-parent",
+        "0",
+        "600",
+    )
+    assert (row["repeat_left_status"], row["repeat_right_status"], row["direct_repeat_candidate_count"]) == (
+        "completed",
+        "incomplete",
+        "2",
+    )
+    assert json.loads(row["repeat_right_assessment"])["reasons"] == ["ambiguous_bases"]
+    assert json.loads(row["repeat_filter_counts"]) == {
+        "filtered_low_complexity_left": 1,
+        "filtered_low_complexity_right": 2,
+        "filtered_overlapping": 0,
+    }
+    assert row["tsd_assessment_status"] == "not_assessed_no_anchor"
+    assert json.loads(row["tsd_assessment"])["anchor_source"] == "none"
+    assert profiles[repeat_result.eve_id]["repeat_evidence"]["left"]["window_start"] == 0
+    assert repeat_result.to_dict() == before
+
+
+def test_repeat_sidecar_keeps_rejected_pairs_when_canonical_output_is_empty(
+    tmp_path: Path, repeat_result: VerificationResult
+) -> None:
+    """Every final EVE keeps its parent link even when none reaches the canonical table."""
+    other = replace(repeat_result, eve_id="EVE_other")
+    generator = OutputGenerator(output_dir=tmp_path)
+
+    outputs = generator.generate_all([other, repeat_result], canonical_results=[], promoted_low_results=[])
+    original_sidecar = outputs["repeat_candidates_tsv"].read_bytes()
+    rows = _read_tsv_rows(outputs["repeat_candidates_tsv"])
+    generator.write_repeat_candidates(
+        [
+            replace(
+                repeat_result,
+                repeat_evidence=replace(
+                    repeat_result.repeat_evidence, candidates=repeat_result.repeat_evidence.candidates[::-1]
+                ),
+            ),
+            other,
+        ]
+    )
+
+    assert _read_tsv_rows(outputs["predictions_tsv"]) == []
+    assert len(_read_tsv_rows(outputs["predictions_detailed_tsv"])) == 2
+    assert [row["eve_id"] for row in rows] == ["EVE_contig_1_50-500", "EVE_contig_1_50-500", "EVE_other", "EVE_other"]
+    assert {row["repeat_evidence_id"] for row in rows} == {repeat_result.repeat_evidence.evidence_id}
+    assert {row["interpretation"] for row in rows} == {"unresolved"}
+    assert {(row["outer_start"], row["outer_end"], row["inner_start"], row["inner_end"]) for row in rows} == {
+        ("0", "550", "50", "500"),
+        ("25", "525", "75", "475"),
+    }
+    assert len({row["candidate_id"] for row in rows}) == 2
+    assert list(rows[0]) == list(REPEAT_CANDIDATE_COLUMNS)
+    assert outputs["repeat_candidates_tsv"].read_bytes() == original_sidecar
+    assert run_tsv_invariant_checks(outputs["predictions_detailed_tsv"]).error_count == 0
+
+
+def test_repeat_negative_assessment_is_distinct_from_missing_evidence(
+    tmp_path: Path, repeat_result: VerificationResult
+) -> None:
+    """Zero retained pairs does not erase whether either endpoint was searched."""
+    negative = replace(
+        repeat_result, repeat_evidence=replace(repeat_result.repeat_evidence, candidates=(), display_candidate_id="")
+    )
+    missing = replace(repeat_result, eve_id="EVE_missing", repeat_evidence=None)
+    generator = OutputGenerator(output_dir=tmp_path)
+
+    outputs = generator.generate_all([negative, missing], canonical_results=[], promoted_low_results=[])
+    rows = {row["eve_id"]: row for row in _read_tsv_rows(outputs["predictions_detailed_tsv"])}
+    negative_row, missing_row = rows[negative.eve_id], rows[missing.eve_id]
+
+    assert _read_tsv_rows(outputs["repeat_candidates_tsv"]) == []
+    assert (negative_row["direct_repeat_candidate_count"], missing_row["direct_repeat_candidate_count"]) == ("0", "0")
+    assert (negative_row["repeat_left_status"], missing_row["repeat_left_status"]) == ("completed", "not_assessed")
+    assert (negative_row["repeat_right_status"], missing_row["repeat_right_status"]) == ("incomplete", "not_assessed")
+    assert negative_row["repeat_evidence_id"] != "."
+    assert missing_row["repeat_evidence_id"] == "."
+    assert negative_row["tsd_assessment_status"] == "not_assessed_no_anchor"
+    assert missing_row["tsd_assessment_status"] == "not_assessed"
+    assert run_tsv_invariant_checks(outputs["predictions_detailed_tsv"]).error_count == 0
+
+
+def test_repeat_invariants_require_sidecar_even_without_pairs(
+    tmp_path: Path, repeat_result: VerificationResult
+) -> None:
+    """An absent candidate artifact cannot masquerade as a completed zero-pair export."""
+    missing = replace(repeat_result, repeat_evidence=None)
+    path = OutputGenerator(output_dir=tmp_path).write_predictions_detailed_tsv([missing])
+    sidecar = path.with_name("virosync_repeat_candidates.tsv")
+    assert _read_tsv_rows(sidecar) == []
+    assert run_tsv_invariant_checks(path).error_count == 0
+
+    sidecar.unlink()
+    report = run_tsv_invariant_checks(path)
+
+    assert "repeat_sidecar_missing" in {issue.check for issue in report.fatal_issues}
+
+
+def test_repeat_tsd_assessment_retains_legacy_match_at_tir_anchor(
+    tmp_path: Path, repeat_result: VerificationResult
+) -> None:
+    """The new anchor record and the legacy short-flank sequence remain consistent."""
+    anchored = replace(
+        repeat_result,
+        tir_present=True,
+        tir_status="detected",
+        tir_candidate_count=1,
+        tir_left_start=50,
+        tir_left_end=100,
+        tir_right_start=450,
+        tir_right_end=500,
+        tir_alignment_length=50,
+        tir_identity=1.0,
+        tsd_sequence="ACG",
+        repeat_evidence=replace(
+            repeat_result.repeat_evidence,
+            tsd=TsdAssessment("assessed_match", "retained_tir", 50, 500, "ACG", null_assessed=40, null_matches=5),
+        ),
+    )
+    generator = OutputGenerator(output_dir=tmp_path)
+
+    accepted = _read_tsv_rows(generator.write_predictions_tsv([anchored]))[0]
+    detailed_path = generator.write_predictions_detailed_tsv([anchored])
+    detailed = _read_tsv_rows(detailed_path)[0]
+
+    assert accepted["tsd_sequence"] == detailed["tsd_sequence"] == "ACG"
+    assert (detailed["tsd_anchor_start"], detailed["tsd_anchor_end"], detailed["tsd_assessment_status"]) == (
+        "50",
+        "500",
+        "assessed_match",
+    )
+    assert json.loads(detailed["tsd_assessment"])["sequence"] == "ACG"
+    assert run_tsv_invariant_checks(detailed_path).error_count == 0
+
+    inconsistent_path = generator.write_predictions_detailed_tsv([replace(anchored, tsd_sequence="ACT")])
+    report = run_tsv_invariant_checks(inconsistent_path)
+
+    assert "repeat_evidence_contract" in {issue.check for issue in report.fatal_issues}
+
+
+def test_repeat_tsd_no_anchor_rejects_retained_tir(tmp_path: Path, repeat_result: VerificationResult) -> None:
+    """A retained TIR provides an anchor even when no short duplication was found."""
+    generator = OutputGenerator(output_dir=tmp_path)
+    path = generator.write_predictions_detailed_tsv([repeat_result])
+    assert run_tsv_invariant_checks(path).error_count == 0
+    contradictory = replace(
+        repeat_result,
+        tir_present=True,
+        tir_status="detected",
+        tir_candidate_count=1,
+        tir_left_start=50,
+        tir_left_end=100,
+        tir_right_start=450,
+        tir_right_end=500,
+        tir_alignment_length=50,
+        tir_identity=1.0,
+    )
+
+    path = generator.write_predictions_detailed_tsv([contradictory])
+    report = run_tsv_invariant_checks(path)
+
+    assert ("repeat_evidence_contract", "Retained TIR pair contradicts the no-anchor short-flank assessment") in {
+        (issue.check, issue.message) for issue in report.fatal_issues
+    }
+
+
+@pytest.mark.parametrize(
+    ("output_key", "column", "replacement", "expected_check"),
+    [
+        ("repeat_candidates_tsv", "eve_id", "EVE_orphan", "repeat_evidence_orphan"),
+        ("repeat_candidates_tsv", "repeat_evidence_id", "re-wrong-parent", "repeat_evidence_contract"),
+        ("repeat_candidates_tsv", "left_start", "1", "repeat_evidence_contract"),
+        ("repeat_candidates_tsv", "inner_start", "1", "repeat_evidence_contract"),
+        ("predictions_detailed_tsv", "direct_repeat_candidate_count", "3", "repeat_evidence_contract"),
+        ("predictions_detailed_tsv", "start", "51", "repeat_evidence_contract"),
+    ],
+)
+def test_repeat_export_invariants_reject_tampered_linkage(
+    tmp_path: Path,
+    repeat_result: VerificationResult,
+    output_key: str,
+    column: str,
+    replacement: str,
+    expected_check: str,
+) -> None:
+    """Published sidecars cannot drift from their assessed interval or final EVE."""
+    outputs = OutputGenerator(output_dir=tmp_path).generate_all(
+        [repeat_result], canonical_results=[], promoted_low_results=[]
+    )
+    assert run_tsv_invariant_checks(outputs["predictions_detailed_tsv"]).error_count == 0
+    rows = _read_tsv_rows(outputs[output_key])
+    rows[0][column] = replacement
+    with outputs[output_key].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    report = run_tsv_invariant_checks(outputs["predictions_detailed_tsv"])
+
+    assert expected_check in {issue.check for issue in report.fatal_issues}

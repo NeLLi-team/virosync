@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+from virosync.output_contract import REPEAT_CANDIDATE_COLUMNS, REPEAT_EVIDENCE_COLUMNS
+from virosync.pipeline.phase2.repeat_evidence import evidence_from_dict
 
 EMPTY_VALUES = {"", ".", "NA", "None", "null", "NULL"}
 BOOL_TRUE_VALUES = {"1", "true", "True", "yes", "YES"}
@@ -206,6 +211,102 @@ def _load_gene_taxonomy_totals(
     return by_eve
 
 
+def _repeat_candidate_rows(path: Path) -> tuple[dict[str, list[dict[str, str]]], list[InvariantIssue]]:
+    """Read the retained-pair sidecar once, preserving duplicate rows for validation."""
+    by_eve: dict[str, list[dict[str, str]]] = defaultdict(list)
+    issues = []
+    if not path.is_file():
+        return by_eve, issues
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames != list(REPEAT_CANDIDATE_COLUMNS):
+            issues.append(
+                InvariantIssue(".", "repeat_sidecar_schema", "error", "Repeat candidate header differs from schema")
+            )
+        for row in reader:
+            by_eve[row.get("eve_id", ".")].append(row)
+    return by_eve, issues
+
+
+def _check_repeat_evidence(row: dict[str, str], candidates: list[dict[str, str]]) -> None:
+    """Validate the nested evidence contract and its final-EVE sidecar join."""
+    if _is_empty(row["repeat_evidence_id"]):
+        if candidates or row["direct_repeat_candidate_count"] != "0" or not _is_empty(row["direct_repeat_display_id"]):
+            raise ValueError("Unassessed EVE carries direct-repeat candidates")
+        if row["repeat_left_status"] != "not_assessed" or row["repeat_right_status"] != "not_assessed":
+            raise ValueError("Missing repeat evidence cannot carry an assessed endpoint")
+        if row["tsd_assessment_status"] != "not_assessed":
+            raise ValueError("Missing repeat evidence cannot carry a short-flank assessment")
+        return
+    for pair in candidates:
+        if pair["repeat_evidence_id"] != row["repeat_evidence_id"]:
+            raise ValueError("Candidate sidecar evidence reference differs from detailed TSV")
+        if pair["scaffold"] != row["scaffold"]:
+            raise ValueError("Candidate sidecar scaffold differs from final EVE")
+    integer_fields = ("left_start", "left_end", "right_start", "right_end", "alignment_length")
+    pair_documents = []
+    for pair in candidates:
+        document: dict[str, object] = {
+            key: pair[key] for key in ("candidate_id", "orientation", "method", "interpretation")
+        }
+        document.update({key: int(pair[key]) for key in integer_fields})
+        document["identity"] = float(pair["identity"])
+        for reported, arm in (
+            ("outer_start", "left_start"),
+            ("outer_end", "right_end"),
+            ("inner_start", "left_end"),
+            ("inner_end", "right_start"),
+        ):
+            if int(pair[reported]) != document[arm]:
+                raise ValueError("Candidate interval geometry differs from repeat arms")
+        pair_documents.append(document)
+    document = {
+        "evidence_id": row["repeat_evidence_id"],
+        "scaffold": row["scaffold"],
+        "input_id": row["repeat_input_id"],
+        **{key: int(row[f"repeat_{key}"]) for key in ("assessed_start", "assessed_end", "parent_start", "parent_end")},
+        "left": json.loads(row["repeat_left_assessment"]),
+        "right": json.loads(row["repeat_right_assessment"]),
+        "candidates": pair_documents,
+        "display_candidate_id": "" if _is_empty(row["direct_repeat_display_id"]) else row["direct_repeat_display_id"],
+        "tsd": json.loads(row["tsd_assessment"]),
+        **json.loads(row["repeat_search_parameters"]),
+        **json.loads(row["repeat_filter_counts"]),
+    }
+    evidence = evidence_from_dict(document)
+    if len(evidence.candidates) != int(row["direct_repeat_candidate_count"]):
+        raise ValueError("Direct-repeat candidate count disagrees with sidecar")
+    for side, coordinate in (("left", "start"), ("right", "end")):
+        assessment = getattr(evidence, side)
+        if assessment.status != row[f"repeat_{side}_status"]:
+            raise ValueError("Repeat per-end status disagrees with assessment")
+        if int(row[coordinate]) != getattr(evidence, f"assessed_{coordinate}"):
+            if assessment.status != "not_assessed" or "endpoint_changed" not in assessment.reasons:
+                raise ValueError("Changed endpoint retains an assessment from its parent")
+            if evidence.display_candidate_id or evidence.tsd.status != "not_assessed_endpoint_changed":
+                raise ValueError("Changed endpoint retains display or short-flank assessment")
+    if evidence.tsd.status != row["tsd_assessment_status"]:
+        raise ValueError("Short-flank status disagrees with assessment")
+    if row.get("tir_present") in BOOL_TRUE_VALUES and evidence.tsd.status == "not_assessed_no_anchor":
+        raise ValueError("Retained TIR pair contradicts the no-anchor short-flank assessment")
+    if evidence.tsd.anchor_source == "retained_tir":
+        if (evidence.tsd.anchor_start, evidence.tsd.anchor_end) != (
+            _parse_int(row["tir_left_start"]),
+            _parse_int(row["tir_right_end"]),
+        ):
+            raise ValueError("Short-flank anchors disagree with retained TIR pair")
+        legacy_sequence = "" if _is_empty(row["tsd_sequence"]) else row["tsd_sequence"]
+        if (
+            evidence.tsd.status in {"assessed_match", "assessed_no_match", "incomplete"}
+            and legacy_sequence != evidence.tsd.sequence
+        ):
+            raise ValueError("Short-flank assessment disagrees with legacy TSD sequence")
+    for coordinate in ("anchor_start", "anchor_end"):
+        reported = row[f"tsd_{coordinate}"]
+        if (None if _is_empty(reported) else int(reported)) != getattr(evidence.tsd, coordinate):
+            raise ValueError("Short-flank anchor disagrees with assessment")
+
+
 def run_tsv_invariant_checks(
     detailed_tsv: Path,
     gene_taxonomy_all_tsv: Path | None = None,
@@ -213,6 +314,9 @@ def run_tsv_invariant_checks(
     """Check core TSV invariants that previously regressed."""
     issues: list[InvariantIssue] = []
     rows_checked = 0
+    repeat_path = detailed_tsv.with_name("virosync_repeat_candidates.tsv")
+    repeat_rows, repeat_issues = _repeat_candidate_rows(repeat_path)
+    issues.extend(repeat_issues)
 
     og_pattern = re.compile(r"\bOG\d+\b", re.IGNORECASE)
     gvogm_pattern = re.compile(r"\bGVOGM\d+\b", re.IGNORECASE)
@@ -222,6 +326,12 @@ def run_tsv_invariant_checks(
     with detailed_tsv.open() as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fieldnames = set(reader.fieldnames or [])
+        if "repeat_evidence_id" in fieldnames and not repeat_path.is_file():
+            issues.append(InvariantIssue(".", "repeat_sidecar_missing", "error", "Repeat candidate sidecar is missing"))
+        if "repeat_evidence_id" in fieldnames and not set(REPEAT_EVIDENCE_COLUMNS) <= fieldnames:
+            issues.append(
+                InvariantIssue(".", "repeat_evidence_schema", "error", "Repeat assessment columns are missing")
+            )
         required_support_fields = {
             "total_proteins",
             "ncldv_top10_proteins",
@@ -252,6 +362,15 @@ def run_tsv_invariant_checks(
                         message=message,
                     )
                 )
+
+            candidate_rows = repeat_rows.pop(eve_id, [])
+            if "repeat_evidence_id" in fieldnames:
+                try:
+                    _check_repeat_evidence(row, candidate_rows)
+                except (ValueError, TypeError, KeyError) as error:
+                    add_issue("repeat_evidence_contract", str(error))
+            elif candidate_rows:
+                add_issue("repeat_evidence_contract", "Candidate pairs lack a detailed assessment record")
 
             total_proteins = _parse_int(row.get("total_proteins"))
             og_count = _parse_int(row.get("og_count"))
@@ -495,6 +614,12 @@ def run_tsv_invariant_checks(
                 )
             )
 
+    for eve_id in repeat_rows:
+        issues.append(
+            InvariantIssue(
+                eve_id, "repeat_evidence_orphan", "error", "Candidate sidecar EVE is absent from detailed TSV"
+            )
+        )
     return InvariantReport(rows_checked=rows_checked, issues=issues)
 
 

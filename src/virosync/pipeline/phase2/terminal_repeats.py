@@ -555,11 +555,15 @@ def _resolve_partition_conflicts(
 
 def find_target_site_duplication(sequence: str, candidate: TerminalRepeat) -> str:
     """Return the longest exact direct repeat immediately outside a TIR pair."""
-    sequence = sequence.upper()
-    available = min(candidate.left_start, len(sequence) - candidate.right_end, _MAX_TSD_BP)
+    return find_target_site_duplication_at(sequence, candidate.left_start, candidate.right_end)
+
+
+def find_target_site_duplication_at(sequence: str, start: int, end: int) -> str:
+    """Apply the legacy exact 3–9 bp comparison at a supplied pair of termini."""
+    available = min(start, len(sequence) - end, _MAX_TSD_BP)
     for length in range(available, _MIN_TSD_BP - 1, -1):
-        left = sequence[candidate.left_start - length : candidate.left_start]
-        right = sequence[candidate.right_end : candidate.right_end + length]
+        left = sequence[start - length : start].upper()
+        right = sequence[end : end + length].upper()
         if left == right and set(left) <= _DNA_BASES and len(set(left)) > 1:
             return left
     return ""

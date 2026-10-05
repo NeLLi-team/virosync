@@ -19,10 +19,11 @@ import numpy as np
 
 from virosync.features.compositional import WindowFeatures
 from virosync.pipeline.phase2.boundary_refiner import TIR_STATUSES, RefinedBoundary
+from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence, evidence_from_dict, evidence_to_dict
 from virosync.utils.atomic_write import atomic_write
 
 PHASE2_STATE_FILENAME = "refined_state.json"
-PHASE2_STATE_SCHEMA_VERSION = 4
+PHASE2_STATE_SCHEMA_VERSION = 5
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
 PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 
@@ -92,7 +93,7 @@ _BOUNDARY_BOOLEAN_FIELDS = (
     "tir_boundary_override",
     "tir_alignment_capped",
 )
-_BOUNDARY_SPECIAL_FIELDS = ("state_posteriors", "window_features")
+_BOUNDARY_SPECIAL_FIELDS = ("state_posteriors", "window_features", "repeat_evidence")
 _BOUNDARY_FIELDS = (
     *_BOUNDARY_STRING_FIELDS,
     *_BOUNDARY_INTEGER_FIELDS,
@@ -383,6 +384,10 @@ def _boundary_to_document(boundary: object, index: int) -> dict[str, object]:
         _window_to_document(window, f"{context}.window_features[{window_index}]")
         for window_index, window in enumerate(boundary.window_features)
     ]
+    document["repeat_evidence"] = (
+        evidence_to_dict(boundary.repeat_evidence) if boundary.repeat_evidence is not None else None
+    )
+    _repeat_evidence_from_document(document, context)
     _validate_tir_contract(document, context)
     return document
 
@@ -416,8 +421,27 @@ def _boundary_from_document(value: object, index: int) -> RefinedBoundary:
         _window_from_document(window, f"{context}.window_features[{window_index}]")
         for window_index, window in enumerate(raw_windows)
     ]
+    kwargs["repeat_evidence"] = _repeat_evidence_from_document(document, context)
     _validate_tir_contract(kwargs, context)
     return RefinedBoundary(**kwargs)
+
+
+def _repeat_evidence_from_document(boundary: dict[str, object], context: str) -> RepeatEvidence | None:
+    """Validate the nested repeat contract at the checkpoint boundary."""
+    value = boundary["repeat_evidence"]
+    if value is None:
+        return None
+    try:
+        evidence = evidence_from_dict(value)
+    except ValueError as error:
+        raise Phase2StateError(f"{context}.repeat_evidence: {error}") from error
+    if (evidence.scaffold, evidence.assessed_start, evidence.assessed_end) != (
+        boundary["scaffold"],
+        boundary["start"],
+        boundary["end"],
+    ):
+        raise Phase2StateError(f"{context}.repeat_evidence differs from its Phase-2 boundary")
+    return evidence
 
 
 def phase2_state_to_document(

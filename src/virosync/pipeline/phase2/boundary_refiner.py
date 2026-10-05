@@ -9,12 +9,15 @@ taxonomy trimming. The CRF refiner remains for compatibility with older
 experiments and artifacts.
 """
 
+from __future__ import annotations
+
 import hashlib
 import logging
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -34,6 +37,9 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.taxonomy_utils import calculate_fingerprint_overlap, compute_hit_weight
+
+if TYPE_CHECKING:
+    from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +248,7 @@ class RefinedBoundary:
     tir_scan_start: int | None = None
     tir_scan_end: int | None = None
     tsd_sequence: str = ""
+    repeat_evidence: RepeatEvidence | None = None
 
     # Validated-marker floor (Phase-3 re-admit METADATA -- never applied to
     # start/end). When this boundary's own seed span carried >=2 validated viral

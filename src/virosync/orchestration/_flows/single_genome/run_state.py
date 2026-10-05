@@ -65,6 +65,7 @@ _FINAL_OUTPUTS = (
     "virosync_predictions.bed",
     "virosync_predictions.gff3",
     "virosync_predictions_detailed.tsv",
+    "virosync_repeat_candidates.tsv",
     "virosync_summary.json",
     "virosync_tsv_invariant_report.tsv",
     "gvclass_results.tsv",
@@ -135,6 +136,7 @@ _FINAL_REQUIRED_PATH_GROUPS = (
         "phase3_synthesis/virosync_predictions.tsv",
     ),
     ("virosync_predictions_detailed.tsv",),
+    ("virosync_repeat_candidates.tsv",),
     (
         "virosync_predictions.bed",
         "phase3_synthesis/virosync_predictions.bed",
@@ -166,12 +168,14 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": ("frameshift-rescued-proteins-v1"),
     "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": ("frameshift-rescued-markers-v1"),
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
-    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v4",
-    "phase2/resume_state.json": "virosync.phase2.resume_state/v3",
-    "virosync_predictions.tsv": "canonical-predictions-v6",
-    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v6",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v6",
-    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v6"),
+    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v5",
+    "phase2/resume_state.json": "virosync.phase2.resume_state/v4",
+    "virosync_predictions.tsv": "canonical-predictions-v7",
+    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v7",
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v7",
+    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v7"),
+    "virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
+    "phase3_synthesis/virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
     "phase3_synthesis/virosync_predictions.bed": ("canonical-predictions-bed-v1"),
     "virosync_predictions.gff3": "canonical-predictions-gff3-v1",
@@ -499,10 +503,11 @@ def _observe_artifact(
                 if row_mode == "table":
                     if nonempty_rows == 0:
                         if schema in {
-                            "canonical-predictions-v6",
-                            "detailed-predictions-v6",
+                            "canonical-predictions-v7",
+                            "detailed-predictions-v7",
+                            "virosync.repeat_candidates/v1",
                         }:
-                            raise ValueError(f"final prediction table has no header: {relative_path}")
+                            raise ValueError(f"final evidence table has no header: {relative_path}")
                         row_count = 0
                     else:
                         row_count = nonempty_rows - 1
@@ -2572,6 +2577,11 @@ def _validate_success_artifacts(
         raise ValueError("duplicate canonical prediction tables disagree")
     if len({(artifact.size, artifact.sha256, artifact.row_count) for artifact in detailed}) != 1:
         raise ValueError("duplicate detailed prediction tables disagree")
+    repeat_candidates = [
+        artifact for artifact in normalized if Path(artifact.relative_path).name == "virosync_repeat_candidates.tsv"
+    ]
+    if len({(artifact.size, artifact.sha256, artifact.row_count) for artifact in repeat_candidates}) != 1:
+        raise ValueError("duplicate repeat candidate tables disagree")
     canonical_path = next(
         path
         for path in (

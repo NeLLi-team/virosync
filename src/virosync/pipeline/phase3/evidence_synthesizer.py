@@ -55,6 +55,7 @@ from .phylogenetic_validation import (
 
 if TYPE_CHECKING:
     from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomyRecord
+    from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence
 
     from .structural_homology import BoltzFoldSeekAnalyzer, StructuralHomologyResult
     from .tmvec_database import TMVecDatabaseSearch
@@ -1005,6 +1006,7 @@ class VerificationResult:
     pre_tir_start: int | None = None
     pre_tir_end: int | None = None
     tsd_sequence: str = ""
+    repeat_evidence: RepeatEvidence | None = None
     integration_gene_hits: list[dict[str, object]] = field(default_factory=list)
 
     # Contig-edge detection (partial EVE flag - no penalty, just informational)
@@ -1132,6 +1134,8 @@ class VerificationResult:
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
+        from virosync.pipeline.phase2.repeat_evidence import evidence_to_dict
+
         return {
             "eve_id": self.eve_id,
             "scaffold": self.scaffold,
@@ -1228,6 +1232,7 @@ class VerificationResult:
             "pre_tir_start": self.pre_tir_start,
             "pre_tir_end": self.pre_tir_end,
             "tsd_sequence": self.tsd_sequence,
+            "repeat_evidence": evidence_to_dict(self.repeat_evidence) if self.repeat_evidence is not None else None,
             "integration_gene_hits": self.integration_gene_hits,
             "integration_hmm_status": self.integration_hmm_status,
             "integration_hmm_unsearched": self.integration_hmm_unsearched,
@@ -2276,6 +2281,7 @@ class EvidenceSynthesizer:
             pre_tir_start=getattr(refined_boundary, "pre_tir_start", None),
             pre_tir_end=getattr(refined_boundary, "pre_tir_end", None),
             tsd_sequence=getattr(refined_boundary, "tsd_sequence", ""),
+            repeat_evidence=refined_boundary.repeat_evidence,
         )
         candidate_start = getattr(refined_boundary, "candidate_start", None)
         candidate_end = getattr(refined_boundary, "candidate_end", None)

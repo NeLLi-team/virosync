@@ -31,6 +31,7 @@ from virosync.orchestration._flows.single_genome.resume import (
     _completed_run_artifacts,
 )
 from virosync.orchestration._flows.single_genome.run_state import load_run_state
+from virosync.output_contract import REPEAT_CANDIDATE_COLUMNS
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
 from virosync.pipeline.phase1.seed_merger import MergedSeed
@@ -359,6 +360,7 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
             detailed = Path(kwargs["output_dir"]) / "virosync_predictions_detailed.tsv"
             detailed.parent.mkdir(parents=True, exist_ok=True)
             detailed.write_text("eve_id\ttotal_proteins\tncldv_top10_proteins\nEVE_1\t1\t2\n")
+            detailed.with_name("virosync_repeat_candidates.tsv").write_text("\t".join(REPEAT_CANDIDATE_COLUMNS) + "\n")
             return {}
         return None
 
