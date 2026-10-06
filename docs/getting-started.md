@@ -98,6 +98,8 @@ Each genome has accepted calls in
 `phase3_synthesis/virosync_predictions.tsv` and
 `phase3_synthesis/virosync_predictions.gff3`. Use
 `virosync_predictions_detailed.tsv` to inspect all scored candidates.
+The default repeat assessment writes pairs to `virosync_repeat_candidates.tsv`.
+Runs that end before Phase 3 write empty prediction tables at the genome root.
 
 See [Outputs](METHODS.md#output-specification) for the other result
 files and the [command-line reference](reference/cli.md) for all options.

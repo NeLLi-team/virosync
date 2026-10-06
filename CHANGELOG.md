@@ -4,8 +4,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-06
+
 ### Added
 
+- Bounded searches for same-orientation repeat pairs of at least 50 bases and
+  90% identity near existing EVE endpoints. The evidence retains alternative
+  pairs and per-end search limits without changing boundaries or acceptance.
+  This extends the existing inverted-repeat and short target-site duplication
+  checks; it does not establish the biological origin of a repeat pair.
+- Output schema 9 adds 18 repeat-evidence summary columns and the required
+  `virosync_repeat_candidates.tsv` sidecar. The sidecar includes accepted and
+  rejected candidates and preserves its header when no pairs are retained.
+  Target-site duplication records distinguish missing anchors, incomplete
+  assessment, matches and no match, with shifted-anchor diagnostic counts.
+  See the [output reference](docs/METHODS.md).
 - `provenance.json` records the corrected gene caller under `gene_caller`: the
   Prodigal-GV version string, the packaged recipe name, the recipe SHA-256 and
   the SHA-256 of the executable that ran. GenomeTools joins the captured tool
@@ -18,12 +31,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- Older refined-boundary and full Phase 2 checkpoints are recomputed after
+  upgrade. Completed-run validation authenticates the repeat sidecar, and
+  changed endpoints invalidate endpoint-specific repeat summaries.
+- Document the paired regression across 155 inputs, which preserved all
+  existing prediction fields and sequence/interval exports. Summed per-input
+  runtime increased 1.8% overall and 12.4% across five real genomes in single
+  baseline-first runs. See [performance and limits](docs/performance.md).
 - Accelerate terminal-repeat refinement with exact range-query scoring,
   shared regional comparisons and GenomeTools repeat seeds. Preserve
   marker-specific search limits, full repeat endpoints and ambiguity rules.
 
 ### Fixed
 
+- Reject unexpected keys in repeat-parameter and filter-count JSON cells during
+  TSV validation, so those cells cannot replace the recorded evidence or pairs.
 - Deliver a pinned Prodigal-GV node-capacity correction through native setup.
   Gene calling, run identity, and version reporting select the same verified
   executable without falling back to the vulnerable PATH binary. Retain the
@@ -42,7 +64,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Include GenomeTools stderr in repeat-search errors and reject seed lengths
   below 1 before running `gt repfind`.
 - Handle selected proteins above the integration HMM engine's 100,000-residue
-  limit without aborting Phase 3. Output schema 8 records unsearched proteins
+  limit without aborting Phase 3. Detailed output records unsearched proteins
   and screening completeness for each EVE. Proteins and EVE decisions are retained.
 - Validate Prodigal-GV protein and GFF output before accepting gene predictions.
   Retain failure diagnostics across automatic retries.

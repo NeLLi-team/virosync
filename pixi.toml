@@ -3,7 +3,7 @@
 
 [workspace]
 name = "virosync"
-version = "1.0.1"
+version = "1.0.2"
 description = "Framework for discovering and characterizing ancient viral elements (EVEs) in eukaryotic genomes"
 authors = ["ViroSync Development Team"]
 channels = ["conda-forge", "bioconda"]

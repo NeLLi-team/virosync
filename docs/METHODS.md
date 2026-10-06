@@ -22,6 +22,15 @@ The main per-genome files are:
 | `phase3_synthesis/virosync_summary.json` | Per-genome counts and run metadata. |
 | `phase3_synthesis/eve_ani_edges.tsv` | ANI comparisons used for clustering. Can include candidates removed from the final accepted set. |
 | `phase3_synthesis/gene_taxonomy/` | Per-candidate gene taxonomy tables. Written when at least one EVE is accepted. |
+| `notebooks/jupyter/eve_analysis.ipynb` | Per-genome report, including repeat-assessment summaries for accepted EVEs. Use the detailed table and repeat sidecar for rejected candidates. |
+
+A run that ends before Phase 3, for example because no marker hits or seeds
+remain, writes its empty `virosync_predictions.tsv`,
+`virosync_predictions_detailed.tsv`, `virosync_predictions.bed`,
+`virosync_predictions.gff3`, `virosync_repeat_candidates.tsv`, and summary at the
+genome root. It need not have a `phase3_synthesis/` directory. Empty TSVs retain
+their headers. A run that reaches Phase 3 can also have zero accepted EVEs while
+retaining rejected candidates and repeat pairs in the detailed outputs.
 
 In `batch_summary.tsv`, `predictions` counts all candidates and `accepted`
 counts rows in the accepted-prediction table. Each accepted region has one
@@ -35,6 +44,10 @@ The GFF3 interval `start + 1` through `end` describes the same bases as its TSV
 and BED row.
 
 ### Key TSV columns
+
+Both tables use output schema 9. The repeat-evidence groups below comprise 18
+columns in each table; they are separate from the 17-column
+[repeat-pair sidecar](#repeat-pair-sidecar).
 
 | Columns | Table | Interpretation |
 | --- | --- | --- |
@@ -53,8 +66,8 @@ and BED row.
 | `tir_scan_start`, `tir_scan_end` | Both | Genomic interval searched for repeat pairs. |
 | `tir_alignment_capped`, `tir_alignment_length` | Both | Whether the reported arms were shortened to 500 bp, and the full ungapped alignment length used to select their outer ends. |
 | `tir_boundary_override`, `pre_tir_start`, `pre_tir_end` | Both | Whether a repeat pair controls the final boundary, and the parent coordinates before repeat refinement. Split children share these parent coordinates. |
-| `tsd_sequence` | Both | Candidate target-site duplication immediately outside the repeat-defined interval, when found. |
-| `repeat_evidence_id`, `repeat_input_id`, `repeat_assessed_start`, `repeat_assessed_end`, `repeat_parent_start`, `repeat_parent_end` | Both | Stable evidence and input-seed linkage, the interval actually assessed, and its parent before legacy TIR partitioning. |
+| `tsd_sequence` | Both | Candidate 3–9 bp duplication immediately outside the retained TIR anchors, when found. Check `tsd_assessment_status` before interpreting it at a changed endpoint. |
+| `repeat_evidence_id`, `repeat_input_id`, `repeat_assessed_start`, `repeat_assessed_end`, `repeat_parent_start`, `repeat_parent_end` | Both | Stable evidence and input-seed linkage, the interval actually assessed, and its parent before TIR partitioning. |
 | `repeat_left_status`, `repeat_right_status`, `repeat_left_assessment`, `repeat_right_assessment` | Both | Per-end status and JSON with requested and searched host windows, clipping reasons and ambiguous-base counts. A completed search is relative to the recorded method and windows. |
 | `repeat_search_parameters`, `repeat_filter_counts` | Both | JSON with the discovery method, thresholds and limits, plus aggregate counts of excluded low-complexity and overlapping pairs. |
 | `direct_repeat_candidate_count`, `direct_repeat_display_id` | Both | Number of retained pairs and a display representative. The display pair has no boundary authority. |
@@ -63,6 +76,59 @@ and BED row.
 | `integration_gene_evidence` | Both | JSON records with protein identifiers, genomic coordinates, location, enzyme family, annotation source, profile accession and scores. Includes DDE integrases and recombinases. A dot means no qualifying gene annotation. |
 | `integration_hmm_status` | Both | `complete` means every selected predicted protein was searched, including an empty selection. `incomplete_sequence_length` means one or more selected proteins exceeded the HMM engine limit. `not_assessed` means the screen has not completed. |
 | `integration_hmm_unsearched` | Both | JSON list of proteins excluded from the integration HMM search, with original identifiers, lengths, genomic coordinates, strand, EVE context, exclusion reason and limit. An empty list is `[]`; check the status to distinguish a completed screen from one not assessed. |
+
+### Repeat-pair sidecar
+
+`virosync_repeat_candidates.tsv` contains one row per retained pair and final
+EVE candidate. Join `eve_id` and `repeat_evidence_id` to the detailed table for
+the assessment windows, statuses, parameters and filter counts. A shared source
+assessment can appear under more than one final EVE identifier. Rows are ordered
+by `eve_id`, then `candidate_id`; row order does not rank the alternatives.
+
+| Sidecar columns | Interpretation |
+| --- | --- |
+| `eve_id`, `scaffold`, `repeat_evidence_id` | Final candidate identifier, host scaffold, and source assessment identifier. |
+| `candidate_id` | Deterministic identifier for the pair within its source assessment. |
+| `orientation` | `direct`: the two arms have the same orientation. |
+| `left_start`, `left_end`, `right_start`, `right_end` | Host coordinates of the matched arms, using 0-based, half-open intervals. |
+| `identity`, `alignment_length` | Matching-base fraction from 0 to 1 and ungapped alignment length in base pairs. |
+| `method` | Discovery method recorded with the pair. |
+| `interpretation` | `unresolved`: sequence similarity does not establish host or viral origin. |
+| `outer_start`, `outer_end` | Interval including both arms: `left_start` through `right_end`. |
+| `inner_start`, `inner_end` | Interval excluding both arms: `left_end` through `right_start`. |
+
+A header-only sidecar means there are no retained pairs. It does not mean every
+endpoint was searched completely. Read `repeat_left_status` and
+`repeat_right_status` in the detailed table. When no evidence record exists,
+those statuses and `tsd_assessment_status` are `not_assessed`, the pair count is
+zero, and the remaining evidence fields are dots.
+
+### Output compatibility and resume
+
+The public output and coordinate versions are independent of checkpoint and
+artifact versions:
+
+| Contract | Current version |
+| --- | --- |
+| Public output schema | 9 |
+| Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v4` |
+| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v5` |
+| Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v7` |
+| Repeat-pair artifact | `virosync.repeat_candidates/v1` |
+
+Resume validates the input, configuration, software, environment, resources,
+phase checkpoints and output artifacts. The Phase-2 checkpoints retain the
+nested repeat assessments; TSV and BED reports cannot reconstruct that state.
+Incompatible checkpoint schemas cannot be reused. A changed run fingerprint
+starts a new run; otherwise only the validated sequence of completed phases
+can be reused.
+
+The repeat-candidate table is required even when it has only a header. If both
+root and Phase-3 copies are recorded, they must agree. Missing or altered pairs,
+invalid coordinates, inconsistent counts, or broken links to detailed candidates
+prevent a completed-run resume. `--clean-run` requests a new run regardless of
+the saved state.
 
 ### Region identifiers
 
@@ -165,6 +231,16 @@ comparison.
 
 ## Integration evidence
 
+Three repeat observations have different roles:
+
+| Evidence | Sequence relationship | Role |
+| --- | --- | --- |
+| Terminal inverted repeat (TIR) | Opposite orientations, compared after reverse complementation | A qualifying, unambiguous pair can refine or split a candidate boundary. |
+| Short-flank match | Exact 3–9 bp match immediately outside retained TIR anchors | Candidate target-site duplication (TSD); evidence only. |
+| Long direct-repeat pair | Same orientation, at least 50 bp under the current search method | Annotation near the assessed endpoints; does not change accepted boundaries. |
+
+### Terminal inverted repeats
+
 Terminal inverted repeats (TIRs) are paired sequences in opposite orientations.
 The repeat screen searches the original, unmasked candidate sequence and its
 extended flanks, limited to the region with gene-taxonomy coverage. The flank
@@ -231,6 +307,8 @@ then longer alignment, then the earlier start.
 | `no_marker_anchor` | No retained marker span was available to anchor the search. |
 | `not_assessed` | Repeat screening has not been applied. |
 
+### Integration-associated genes
+
 The default gene screen uses five bundled Pfam profiles through PyHMMER.
 Both sequence and domain scores must pass the profile's curated gathering
 threshold. It runs without InterProScan and covers the final EVE, its original
@@ -277,49 +355,96 @@ scope and ambiguity status when interpreting a pair.
 
 ### Direct-repeat assessment
 
-Output schema 9 records direct-repeat evidence by default for genome candidates.
-The screen uses unmasked host sequence in windows on both sides of each current
-endpoint. The existing boundary-extension distance sets the requested radius;
-the method caps it at 10,000 bases. Scaffold ends and contiguous Phase-2 taxonomy
-coverage clip each window. Missing sequence, missing coverage, ambiguous bases,
-low complexity and search limits are recorded separately for each end. A pair
-can be present when assessment is incomplete.
+Direct-repeat evidence is recorded by default for genome candidates. The screen
+uses unmasked host sequence around the endpoints assessed in Phase 2. The
+`phase1.extension_kb` setting supplies the requested radius, 5 kb by default;
+the method caps it at 10,000 bases. Scaffold ends and contiguous Phase-2
+taxonomy coverage clip each window. The JSON endpoint assessments record both
+the requested and searched windows, reasons for limits, and ambiguous-base
+counts. A pair can be present when assessment is incomplete.
 
 The inward half of each window stops at the input interval midpoint, so a pair
 spans the two endpoint neighborhoods. `midpoint_partition` records this method
 constraint and permits a completed assessment when no other limit applies.
 
-The method uses exact forward 7-base seeds and ungapped alignments, retaining
-arms of at least 50 bases at at least 90% identity. Both arms must pass the
-low-complexity filter. Limits are 65,536 seed pairings, 8,192 diagonals and 128
-retained pairs per assessment. Seed entropy and the maximum seed-chain distance
-are recorded with the other parameters. These pilot thresholds have not been
-calibrated as universal biological cutoffs. Repeat absence does not lower
-confidence or exclude a degraded EVE.
+The method uses exact forward seeds and ungapped alignments. Both arms must
+pass the [TIR left-arm complexity filter](#terminal-inverted-repeats). The
+recorded `repeat_search_parameters` are:
 
-Each sidecar row retains both arms, identity, alignment length and method.
-Together, `eve_id` and `repeat_evidence_id` link it to the final candidate's
-assessment context in the detailed table. The evidence identifier also links
-readmitted candidates to their shared source assessment.
-`outer_start` and `outer_end` include both arms; `inner_start` and `inner_end`
-exclude them. The difference records the unresolved choice between viral
-terminal repeats and duplicated host sequence. These are geometric alternatives,
-not statistical confidence intervals or inferred attachment sites.
-The interpretation remains `unresolved`; host repeats and nested elements can
-produce the same geometry. Direct-repeat evidence does not alter accepted
-coordinates, gene membership, identifiers, classes or confidence tiers.
+| Parameter | Value |
+| --- | --- |
+| `method` | `forward-7mer-ungapped-score-v1` |
+| `seed_bp` | 7 bp |
+| `min_arm_bp` | 50 bp |
+| `min_identity` | 0.90 |
+| `min_seed_entropy_bits` | 1.2 bits |
+| `max_seed_chain_bp` | 493 bp between consecutive seed starts |
+| `max_window_radius_bp` | 10,000 bp per endpoint |
+| `max_seed_pairings` | 65,536 |
+| `max_diagonals` | 8,192 |
+| `max_candidates` | 128 retained pairs per assessment |
 
-Short-flank assessment uses the existing exact 3–9-base comparison at retained
-TIR termini. `not_assessed_no_anchor` records candidates without a retained TIR.
-`not_assessed` means no evidence record exists and makes no claim about anchor
-absence. The diagnostic translates both termini together by each nonzero
-integer offset from −20 to +20 bases, excluding clipped or ambiguous controls.
+Seeds with fewer left–right occurrence combinations are searched first.
+Overlapping arms and low-complexity arms are excluded, with counts retained in
+`repeat_filter_counts`. These thresholds have not been calibrated as universal
+biological cutoffs. Diverged or indel-rich repeats can be missed. Repeat absence
+does not lower confidence or exclude a degraded EVE.
+
+| Endpoint status | Meaning |
+| --- | --- |
+| `completed` | The recorded method completed within its defined endpoint window, without a limiting reason. Zero pairs means no qualifying pair was retained under that search. |
+| `incomplete` | A window, sequence, partner, or search limit prevented a complete assessment. Retained pairs remain available. |
+| `not_assessed` | No usable assessment exists at that endpoint, including missing sequence or coverage, or an endpoint changed after assessment. |
+
+| Recorded reasons | Interpretation |
+| --- | --- |
+| `missing_sequence`, `missing_coverage` | Host sequence or a contiguous taxonomy-covered window is unavailable. |
+| `contig_clipped`, `taxonomy_clipped`, `window_limit` | A scaffold end, taxonomy coverage, or radius cap reduced the requested window. |
+| `insufficient_window`, `insufficient_paired_window`, `partner_unavailable` | One or both endpoints lack enough searchable sequence for paired arms. |
+| `ambiguous_bases`, `low_complexity` | Sequence content limits the assessment. Ambiguous bases are not bridged as ordinary mismatches. |
+| `seed_pairing_limit`, `diagonal_limit`, `candidate_limit` | The corresponding cap limited the search or retained alternatives. |
+| `endpoint_changed` | The final endpoint differs from the assessed endpoint. |
+| `midpoint_partition` | The defined inward-window split; this reason alone permits `completed`. |
+
+The [repeat-pair sidecar](#repeat-pair-sidecar) lists the retained alternatives. Its
+outer and inner intervals record the unresolved choice between viral terminal
+repeats and duplicated host sequence. They are geometric alternatives, not
+statistical confidence intervals or inferred attachment sites.
+The interpretation remains `unresolved`; host repeats, terminal viral repeats
+and nested elements can produce the same geometry. The
+`direct_repeat_display_id` selects a representative for display, not a boundary.
+Direct-repeat evidence does not alter accepted coordinates, gene membership,
+identifiers, classes or confidence tiers.
+
+### Short-flank assessment
+
+Short-flank assessment uses the exact 3–9-base comparison at retained TIR
+termini. The long direct-repeat pairs do not supply these anchors.
+`tsd_anchor_start` and `tsd_anchor_end` identify the assessed TIR interval.
+
+| `tsd_assessment_status` | Meaning |
+| --- | --- |
+| `assessed_match` | An eligible exact short match was found at the retained TIR anchors. |
+| `assessed_no_match` | The flanks were assessed and no eligible match was found. |
+| `incomplete` | Clipping or ambiguous bases limit one or both flanks; inspect the per-end reasons and any retained sequence. |
+| `not_assessed_no_anchor` | No retained TIR anchor pair was available. |
+| `not_assessed_endpoint_changed` | A candidate endpoint changed after the source assessment. |
+| `not_assessed` | No repeat-evidence record exists; anchor absence is not established. |
+
+The `tsd_assessment` JSON retains the anchor source, matched sequence, per-end
+reasons and a local shifted-anchor diagnostic. The diagnostic translates both
+termini together by each nonzero integer offset from −20 to +20 bases, excluding
+clipped or ambiguous controls. `null_assessed` counts the usable offsets and
+`null_matches` counts those with a qualifying short match.
 These correlated comparisons summarize local matching frequency; they do not
 estimate independent boundary accuracy or a calibrated chance probability.
 A Phase-3 readmission that changes an endpoint retains its parent
 evidence and pair alternatives, marks that endpoint unassessed, clears the
 display representative and records `not_assessed_endpoint_changed` for the
-short-flank assessment. Its sidecar rows carry the final EVE identifier.
+short-flank assessment. Its sidecar rows carry the final EVE identifier, while
+the assessed and parent coordinates continue to describe the source assessment.
+At unchanged retained TIR anchors, the matched sequence agrees with
+`tsd_sequence`.
 
 ### Interpreting integration signatures
 
@@ -332,7 +457,7 @@ An exact short direct repeat immediately outside the TIRs can be a target-site
 duplication (TSD). Experimentally integrated mavirus has 5–6 bp TSDs
 ([Fischer and Hackl, 2016](https://doi.org/10.1038/nature20593)). The
 `tsd_sequence` field reports the longest exact 3–9 bp match immediately outside
-the reported pair. It excludes ambiguous bases and homopolymers. This is a
+the retained TIR pair. It excludes ambiguous bases and homopolymers. This is a
 candidate duplication, not proof of insertion; short matches can occur by chance.
 
 Tyrosine-recombinase integration can produce matching attachment-site cores

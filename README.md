@@ -1,6 +1,6 @@
 # ViroSync
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
@@ -61,6 +61,12 @@ genome. Each genome directory contains:
 - `phase3_synthesis/virosync_predictions.tsv`: accepted EVE calls.
 - `phase3_synthesis/virosync_predictions.gff3`: accepted EVE coordinates and annotations.
 - `virosync_predictions_detailed.tsv`: all candidates and their evidence.
+- `virosync_repeat_candidates.tsv`: same-orientation repeat pairs linked to the
+  detailed candidates, including rejected candidates.
+
+Direct-repeat assessment runs by default and annotates evidence without changing
+accepted boundaries or confidence tiers. See [Outputs](docs/METHODS.md) for the
+repeat fields and the root-level output layout of runs that end before Phase 3.
 
 Frameshift-sensitive marker detection is off by default. Add
 `--frameshift-screening` to enable it. See the
@@ -69,6 +75,6 @@ Frameshift-sensitive marker detection is off by default. Add
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.0.1 uses resource bundle v1.0.7.
+ViroSync 1.0.2 uses resource bundle v1.0.7.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from virosync.output_contract import REPEAT_CANDIDATE_COLUMNS, REPEAT_EVIDENCE_COLUMNS
-from virosync.pipeline.phase2.repeat_evidence import evidence_from_dict
+from virosync.pipeline.phase2.repeat_evidence import FILTER_COUNT_FIELDS, SEARCH_PARAMETER_FIELDS, evidence_from_dict
 
 EMPTY_VALUES = {"", ".", "NA", "None", "null", "NULL"}
 BOOL_TRUE_VALUES = {"1", "true", "True", "yes", "YES"}
@@ -214,7 +214,7 @@ def _load_gene_taxonomy_totals(
 def _repeat_candidate_rows(path: Path) -> tuple[dict[str, list[dict[str, str]]], list[InvariantIssue]]:
     """Read the retained-pair sidecar once, preserving duplicate rows for validation."""
     by_eve: dict[str, list[dict[str, str]]] = defaultdict(list)
-    issues = []
+    issues: list[InvariantIssue] = []
     if not path.is_file():
         return by_eve, issues
     with path.open(newline="") as handle:
@@ -260,6 +260,12 @@ def _check_repeat_evidence(row: dict[str, str], candidates: list[dict[str, str]]
             if int(pair[reported]) != document[arm]:
                 raise ValueError("Candidate interval geometry differs from repeat arms")
         pair_documents.append(document)
+    search_parameters = json.loads(row["repeat_search_parameters"])
+    filter_counts = json.loads(row["repeat_filter_counts"])
+    if not isinstance(search_parameters, dict) or set(search_parameters) != set(SEARCH_PARAMETER_FIELDS):
+        raise ValueError("repeat_search_parameters must contain exactly the search-parameter keys")
+    if not isinstance(filter_counts, dict) or set(filter_counts) != set(FILTER_COUNT_FIELDS):
+        raise ValueError("repeat_filter_counts must contain exactly the filter-count keys")
     document = {
         "evidence_id": row["repeat_evidence_id"],
         "scaffold": row["scaffold"],
@@ -270,8 +276,8 @@ def _check_repeat_evidence(row: dict[str, str], candidates: list[dict[str, str]]
         "candidates": pair_documents,
         "display_candidate_id": "" if _is_empty(row["direct_repeat_display_id"]) else row["direct_repeat_display_id"],
         "tsd": json.loads(row["tsd_assessment"]),
-        **json.loads(row["repeat_search_parameters"]),
-        **json.loads(row["repeat_filter_counts"]),
+        **search_parameters,
+        **filter_counts,
     }
     evidence = evidence_from_dict(document)
     if len(evidence.candidates) != int(row["direct_repeat_candidate_count"]):

@@ -36,6 +36,9 @@ from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
+from virosync.pipeline.phase3.output_generator import OutputGenerator
 from virosync.validation import tsv_invariants
 from virosync.validation.tsv_invariants import (
     InvariantIssue,
@@ -81,6 +84,64 @@ def test_fatal_invariant_writes_report_before_raising(tmp_path: Path) -> None:
     assert summary["status"] == "FAIL"
     assert int(summary["error_count"]) >= 1
     assert summary["warning_count"] == "0"
+
+
+@pytest.mark.parametrize("column", ["repeat_search_parameters", "repeat_filter_counts"])
+def test_repeat_metadata_cannot_override_sidecar_candidates(tmp_path: Path, column: str) -> None:
+    """Metadata cells cannot discard a sidecar pair before strict evidence validation."""
+    evidence = assess_repeat_evidence(
+        None,
+        scaffold="host",
+        input_id="seed",
+        start=100,
+        end=420,
+        parent_start=0,
+        parent_end=500,
+        coverage_intervals=(),
+        extension_bp=90,
+    )
+    result = VerificationResult(eve_id="EVE_1", scaffold="host", start=100, end=420, repeat_evidence=evidence)
+    detailed = OutputGenerator(output_dir=tmp_path).write_predictions_detailed_tsv([result])
+    assert tsv_invariants.run_tsv_invariant_checks(detailed).passed
+
+    pair = dict.fromkeys(REPEAT_CANDIDATE_COLUMNS, ".")
+    pair.update(
+        eve_id=result.eve_id,
+        scaffold=result.scaffold,
+        repeat_evidence_id=evidence.evidence_id,
+        candidate_id="invalid-pair",
+        orientation="direct",
+        left_start="50",
+        left_end="100",
+        right_start="420",
+        right_end="470",
+        identity="2.0",
+        alignment_length="50",
+        method=evidence.method,
+        interpretation="unresolved",
+        outer_start="50",
+        outer_end="470",
+        inner_start="100",
+        inner_end="420",
+    )
+    with detailed.with_name("virosync_repeat_candidates.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=REPEAT_CANDIDATE_COLUMNS, delimiter="\t")
+        writer.writeheader()
+        writer.writerow(pair)
+    assert not tsv_invariants.run_tsv_invariant_checks(detailed).passed
+
+    with detailed.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    row[column] = json.dumps({**json.loads(row[column]), "candidates": []})
+    with detailed.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+
+    report = tsv_invariants.run_tsv_invariant_checks(detailed)
+
+    assert not report.passed
+    assert "repeat_evidence_contract" in {issue.check for issue in report.fatal_issues}
 
 
 def test_missing_detailed_tsv_writes_typed_failure_report(tmp_path: Path) -> None:
