@@ -118,6 +118,72 @@ def _notebook_code() -> str:
     return "\n".join(cell.source for cell in notebook.cells if cell.cell_type == "code")
 
 
+def test_notebook_repeat_evidence_displays_assessment_without_promoting_candidates() -> None:
+    """The report retains a negative result and positive incomplete evidence separately."""
+    predictions = pd.DataFrame(
+        [
+            {
+                "eve_id": "EVE_negative",
+                "repeat_assessed_start": 0,
+                "repeat_assessed_end": 1000,
+                "repeat_left_status": "completed",
+                "repeat_right_status": "completed",
+                "direct_repeat_candidate_count": 0,
+                "direct_repeat_display_id": ".",
+                "tsd_assessment_status": "not_assessed_no_anchor",
+                "final_confidence": 0.9,
+            },
+            {
+                "eve_id": "EVE_incomplete",
+                "repeat_assessed_start": 1200,
+                "repeat_assessed_end": 2500,
+                "repeat_left_status": "incomplete",
+                "repeat_right_status": "completed",
+                "direct_repeat_candidate_count": 2,
+                "direct_repeat_display_id": "pair-display",
+                "tsd_assessment_status": "incomplete",
+                "final_confidence": 0.4,
+            },
+            {
+                "eve_id": "EVE_unassessed",
+                "repeat_assessed_start": ".",
+                "repeat_assessed_end": ".",
+                "repeat_left_status": "not_assessed",
+                "repeat_right_status": "not_assessed",
+                "direct_repeat_candidate_count": 0,
+                "direct_repeat_display_id": ".",
+                "tsd_assessment_status": "not_assessed",
+                "final_confidence": 0.3,
+            },
+        ]
+    )
+    before = predictions.copy(deep=True)
+    displayed: list[pd.DataFrame] = []
+
+    exec(_notebook_cell("_repeat_columns = ["), {"predictions": predictions, "display": displayed.append})
+
+    assert len(displayed) == 1
+    assert displayed[0]["eve_id"].tolist() == ["EVE_negative", "EVE_incomplete", "EVE_unassessed"]
+    assert displayed[0]["repeat_assessed_start"].tolist() == [0, 1200, "."]
+    assert displayed[0]["direct_repeat_candidate_count"].tolist() == [0, 2, 0]
+    assert displayed[0]["repeat_left_status"].tolist() == ["completed", "incomplete", "not_assessed"]
+    assert displayed[0]["tsd_assessment_status"].tolist() == ["not_assessed_no_anchor", "incomplete", "not_assessed"]
+    pd.testing.assert_frame_equal(predictions, before)
+
+
+@pytest.mark.parametrize("rows", [[], [{"eve_id": "EVE_legacy", "start": 0, "end": 1000}]])
+def test_notebook_repeat_evidence_handles_empty_and_legacy_outputs(
+    rows: list[dict[str, object]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Older reports without repeat fields and empty canonical calls still render."""
+    displayed: list[pd.DataFrame] = []
+
+    exec(_notebook_cell("_repeat_columns = ["), {"predictions": pd.DataFrame(rows), "display": displayed.append})
+
+    assert displayed == []
+    assert capsys.readouterr().out == "No repeat assessment records in this result.\n"
+
+
 def _standalone_helper_cell() -> str:
     """Return the notebook's self-contained helper cell.
 

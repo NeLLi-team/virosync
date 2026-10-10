@@ -1,7 +1,7 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 8
+OUTPUT_SCHEMA_VERSION = 9
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
 # The PUBLISHED class partition. Every surface that reports an EVE's class to a
@@ -55,6 +55,47 @@ DETAILED_TAXONOMY_PARTITION = (
     "PHAGE",
 )
 
+REPEAT_EVIDENCE_COLUMNS = (
+    "repeat_evidence_id",
+    "repeat_input_id",
+    "repeat_assessed_start",
+    "repeat_assessed_end",
+    "repeat_parent_start",
+    "repeat_parent_end",
+    "repeat_left_status",
+    "repeat_right_status",
+    "repeat_left_assessment",
+    "repeat_right_assessment",
+    "repeat_search_parameters",
+    "repeat_filter_counts",
+    "direct_repeat_candidate_count",
+    "direct_repeat_display_id",
+    "tsd_assessment_status",
+    "tsd_anchor_start",
+    "tsd_anchor_end",
+    "tsd_assessment",
+)
+
+REPEAT_CANDIDATE_COLUMNS = (
+    "eve_id",
+    "scaffold",
+    "repeat_evidence_id",
+    "candidate_id",
+    "orientation",
+    "left_start",
+    "left_end",
+    "right_start",
+    "right_end",
+    "identity",
+    "alignment_length",
+    "method",
+    "interpretation",
+    "outer_start",
+    "outer_end",
+    "inner_start",
+    "inner_end",
+)
+
 INTEGRATION_EVIDENCE_COLUMNS = (
     "tir_present",
     "tir_status",
@@ -76,6 +117,7 @@ INTEGRATION_EVIDENCE_COLUMNS = (
     "integration_gene_evidence",
     "integration_hmm_status",
     "integration_hmm_unsearched",
+    *REPEAT_EVIDENCE_COLUMNS,
 )
 
 DETAILED_PREDICTION_COLUMNS = (

@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import random
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +39,8 @@ from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     assign_boundary_candidate_ids,
 )
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase2.terminal_repeats import find_target_site_duplication
 from virosync.pipeline.taxonomy_utils import TaxonomyFingerprint
 
 
@@ -67,6 +71,17 @@ def _boundary() -> RefinedBoundary:
         tir_scan_start=50,
         tir_scan_end=1050,
         tsd_sequence="GAGGCT",
+        repeat_evidence=assess_repeat_evidence(
+            None,
+            scaffold="scaffold/alpha",
+            input_id="seed-b",
+            start=101,
+            end=999,
+            parent_start=120,
+            parent_end=1000,
+            coverage_intervals=(),
+            extension_bp=100,
+        ),
         seed_sources=["hhg", "novelty"],
         seed_confidence="high",
         seed_hhg_score=0.9123456789012345,
@@ -263,6 +278,91 @@ def test_phase2_resume_state_round_trip_preserves_optional_none_values() -> None
     loaded = phase2_resume_state_from_document(phase2_resume_state_to_document(state))
 
     assert loaded == state
+
+
+def test_phase2_resume_state_rejects_pre_repeat_schema() -> None:
+    document = phase2_resume_state_to_document(_state())
+    document["schema_version"] = 3
+
+    with pytest.raises(Phase2ResumeStateError, match="unsupported.*schema_version"):
+        phase2_resume_state_from_document(document)
+
+
+def test_repeat_annotation_records_missing_raw_sequence() -> None:
+    boundary = RefinedBoundary(scaffold="missing", start=0, end=100, seed_id="source")
+
+    phase2._annotate_boundary_repeats(
+        [boundary],
+        raw_genome_path=None,
+        boundary_diamond_query=None,
+        extension_bp=100,
+    )
+
+    assert boundary.repeat_evidence.input_id == "source"
+    assert boundary.repeat_evidence.left.status == "not_assessed"
+    assert boundary.repeat_evidence.right.status == "not_assessed"
+    assert boundary.repeat_evidence.candidates == ()
+    assert boundary.repeat_evidence.tsd.status == "not_assessed_no_anchor"
+    assert (boundary.start, boundary.end, boundary.candidate_id) == (0, 100, "")
+
+
+def test_repeat_annotation_preserves_retained_tir_and_uses_real_taxonomy_windows(tmp_path: Path) -> None:
+    rng = random.Random(135)
+    sequence = "".join(rng.choices("ACGT", k=600))
+    reverse_arm = sequence[100:160].translate(str.maketrans("ACGT", "TGCA"))[::-1]
+    sequence = sequence[:91] + "AAAGAGGCT" + sequence[100:440] + reverse_arm + "GAGGCT" + sequence[506:]
+    raw_genome = tmp_path / "raw.fna"
+    raw_genome.write_text(f">raw\n{sequence.lower()}\n", encoding="utf-8")
+    boundary = RefinedBoundary(
+        scaffold="raw",
+        start=100,
+        end=500,
+        seed_id="unsplit-parent",
+        pre_tir_start=110,
+        pre_tir_end=490,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=100,
+        tir_left_end=160,
+        tir_right_start=440,
+        tir_right_end=500,
+        tir_identity=1.0,
+        tir_alignment_length=60,
+        tir_candidate_count=1,
+        tir_boundary_override=True,
+        tsd_sequence="GAGGCT",
+    )
+    boundary = assign_boundary_candidate_ids([boundary])[0]
+    unchanged = replace(boundary)
+    query = GenomeDiamondQuery(
+        seed_gene_mappings={
+            "left": SeedGeneMapping("left", "raw", 100, 160, flank_start_bp=80, flank_end_bp=190),
+            "right": SeedGeneMapping("right", "raw", 440, 500, flank_start_bp=420, flank_end_bp=550),
+        }
+    )
+
+    phase2._annotate_boundary_repeats(
+        [boundary],
+        raw_genome_path=raw_genome,
+        boundary_diamond_query=query,
+        extension_bp=100,
+    )
+
+    evidence = boundary.repeat_evidence
+    assert evidence.input_id == "unsplit-parent"
+    assert (evidence.parent_start, evidence.parent_end) == (110, 490)
+    assert (evidence.assessed_start, evidence.assessed_end) == (100, 500)
+    assert (evidence.left.window_start, evidence.left.window_end) == (80, 190)
+    assert (evidence.right.window_start, evidence.right.window_end) == (420, 550)
+    assert evidence.left.status == evidence.right.status == "incomplete"
+    assert "taxonomy_clipped" in evidence.left.reasons
+    assert "taxonomy_clipped" in evidence.right.reasons
+    assert evidence.tsd.status == "assessed_match"
+    assert (evidence.tsd.anchor_start, evidence.tsd.anchor_end) == (100, 500)
+    assert evidence.tsd.anchor_source == "retained_tir"
+    assert evidence.tsd.sequence == find_target_site_duplication(sequence, phase2._retained_terminal_repeat(boundary))
+    assert evidence.tsd.sequence == unchanged.tsd_sequence
+    assert replace(boundary, repeat_evidence=None) == unchanged
 
 
 def test_phase2_resume_state_rejects_schema_drift_and_duplicate_mapping_keys() -> None:

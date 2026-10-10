@@ -29,6 +29,7 @@ from virosync.pipeline.phase2.boundary_refiner import (
     assign_boundary_candidate_ids,
     boundary_candidate_id,
 )
+from virosync.pipeline.phase2.repeat_evidence import for_changed_endpoints
 from virosync.pipeline.phase3.acceptance_selection import (
     select_phase3_acceptance,
 )
@@ -920,6 +921,11 @@ def _run_phase3_subflow(
                 start=min(boundary.start, floor_start),
                 end=max(boundary.end, floor_end),
                 candidate_id="",
+                repeat_evidence=for_changed_endpoints(
+                    boundary.repeat_evidence,
+                    start=min(boundary.start, floor_start),
+                    end=max(boundary.end, floor_end),
+                ),
             )
         )
 

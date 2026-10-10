@@ -9,22 +9,30 @@ earlier mutating ``clamp`` approach extended already-accepted regions and droppe
 them MEDIUM->LOW -> NCLDV loss).
 """
 
+import logging
+import random
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from virosync.config import PipelineConfig
 from virosync.features.compositional import (
     BackgroundModel,
     calculate_gc_deviation,
     calculate_kfd,
 )
+from virosync.orchestration._flows.single_genome import phase3
 from virosync.orchestration._flows.single_genome.phase2 import (
     _recalculate_boundary_composition,
 )
 from virosync.orchestration._flows.single_genome.phase3 import (
     _is_marker_floor_recovery_candidate,
+)
+from virosync.orchestration._flows.single_genome.phase_state import (
+    phase2_state_from_document,
+    phase2_state_to_document,
 )
 from virosync.pipeline.phase2.boundary_diamond import pORF
 from virosync.pipeline.phase2.boundary_refiner import (
@@ -34,7 +42,8 @@ from virosync.pipeline.phase2.boundary_refiner import (
     boundary_candidate_id,
     merge_adjacent_viral_boundaries,
 )
-from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase3.evidence_synthesizer import EvidenceSynthesizer, VerificationResult
 
 
 def _marker(scaffold, start, end, status="validated", porf=None):
@@ -318,6 +327,99 @@ def test_marker_floor_alternative_keeps_parent_identity_and_reserves_originals()
     assert wider_original.candidate_id == "EVE_S1_50-250"
     assert assigned_alternative.candidate_id not in parents
     assert assigned_alternative.candidate_id.startswith("EVE_S1_50-250-c")
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_marker_floor_readmission_retains_repeat_parent_without_stale_endpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resumed: bool,
+) -> None:
+    rng = random.Random(315)
+    sequence = "".join(rng.choices("ACGT", k=7000))
+    sequence = sequence[:240] + sequence[100:160] + sequence[300:]
+    masked_path = tmp_path / "masked.fna"
+    masked_path.write_text(f">S1\n{sequence}\n", encoding="utf-8")
+    boundary = _boundary("S1", 100, 300, orig_start=50, orig_end=6500, seed_id="parent-seed")
+    boundary.marker_floor_start = 100
+    boundary.marker_floor_end = 6500
+    boundary = assign_boundary_candidate_ids([boundary])[0]
+    evidence = assess_repeat_evidence(
+        sequence,
+        scaffold="S1",
+        input_id="parent-seed",
+        start=100,
+        end=300,
+        parent_start=100,
+        parent_end=300,
+        coverage_intervals=((0, 7000),),
+        extension_bp=100,
+    )
+    boundary.repeat_evidence = evidence
+    original_state = phase2_state_to_document([boundary])
+    boundaries = phase2_state_from_document(original_state) if resumed else [boundary]
+    synthesizer = EvidenceSynthesizer()
+
+    def verify(**kwargs) -> list[VerificationResult]:
+        result = synthesizer._initialize_result(kwargs["boundaries"][0])
+        result.confidence_tier = "MEDIUM"
+        result.final_confidence = 0.5
+        result.likely_family = "NCLDV"
+        result.taxonomy_class = "NCLDV"
+        result.hallmark_count = 2
+        result.hallmark_genes = ["ncldv_polb"]
+        result.gene_taxonomy_total = 10
+        result.gene_taxonomy_viral_top10 = 6
+        return [result]
+
+    monkeypatch.setattr(phase3, "_run_interproscan", lambda **kwargs: None)
+    monkeypatch.setattr(phase3, "_precompute_tmvec", lambda **kwargs: (None, "cpu"))
+    monkeypatch.setattr(phase3, "_load_or_classify_jelly_roll", lambda **kwargs: None)
+    monkeypatch.setattr(
+        phase3,
+        "_build_boundary_evidence",
+        lambda **kwargs: phase3._BoundaryEvidence(boundary_candidate_id(kwargs["boundary"]), [], None, None),
+    )
+    monkeypatch.setattr(phase3, "_run_verification", verify)
+    monkeypatch.setattr(phase3, "cluster_accepted_eves", lambda *args, **kwargs: (None, []))
+    monkeypatch.setattr(phase3, "_annotate_integration_genes", lambda *args, **kwargs: None)
+    config = PipelineConfig()
+    config.execution.resume = resumed
+
+    result = phase3._run_phase3_subflow(
+        masked_path=masked_path,
+        proteome_path=tmp_path / "unused.faa",
+        validated_markers=[],
+        host_signatures=set(),
+        host_signature_model_payload=None,
+        refined_boundaries=boundaries,
+        boundary_taxonomy_map={},
+        boundary_diamond_query=None,
+        proteome_index={},
+        merged_seeds=[],
+        output_dir=tmp_path,
+        config=config,
+        validated_hits_tsv=tmp_path / "absent.tsv",
+        logger=logging.getLogger(__name__),
+        resume_authorized=resumed,
+    )
+
+    assert evidence.candidates
+    assert len(result.verification_results) == 2
+    assert len(result.accepted_results) == 1
+    recovered = result.accepted_results[0]
+    assert (recovered.eve_id, recovered.start, recovered.end) == ("EVE_S1_100-6500", 100, 6500)
+    assert recovered.repeat_evidence.evidence_id == evidence.evidence_id
+    assert recovered.repeat_evidence.input_id == "parent-seed"
+    assert recovered.repeat_evidence.candidates == evidence.candidates
+    assert (recovered.repeat_evidence.assessed_start, recovered.repeat_evidence.assessed_end) == (100, 300)
+    assert recovered.repeat_evidence.left == evidence.left
+    assert recovered.repeat_evidence.right.status == "not_assessed"
+    assert "endpoint_changed" in recovered.repeat_evidence.right.reasons
+    assert recovered.repeat_evidence.display_candidate_id == ""
+    assert recovered.repeat_evidence.tsd.status == "not_assessed_endpoint_changed"
+    assert phase2_state_to_document(boundaries) == original_state
+    assert recovered.to_dict()["repeat_evidence"]["evidence_id"] == evidence.evidence_id
 
 
 def test_adjacent_merge_original_span_union_retains_marker_floor() -> None:

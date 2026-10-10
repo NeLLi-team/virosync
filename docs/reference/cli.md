@@ -55,6 +55,11 @@ Relative paths in a list file start at the current working directory.
 | `--max-concurrent-genomes N` | Set the same genome limit as `--workers`. Minimum: 1. Both values must agree if you supply both. |
 | `-v`, `--verbose` | Show the effective config and diagnostic logs instead of the progress display. |
 
+Without `--clean-run`, reuse requires matching run identities and validated
+checkpoints and outputs, including the repeat-candidate table. See
+[Output compatibility and resume](../METHODS.md#output-compatibility-and-resume)
+for the required files and schema versions.
+
 ### Database and tool paths
 
 All path overrides in this table must exist.
@@ -103,6 +108,10 @@ All path overrides in this table must exist.
 | `--interproscan`, `--no-interproscan` | Enable or disable InterProScan. Missing runtime or data disables the layer with a warning. |
 | `--use-taxonomy-ml`, `--no-taxonomy-ml` | Enable or disable Phase 2 taxonomy-boundary machine learning. |
 | `--taxonomy-ml-model MODEL` | Select `logreg`, `gbdt`, or `xgboost` for taxonomy-boundary refinement. |
+
+The core [direct-repeat assessment](../METHODS.md#direct-repeat-assessment) runs
+by default and has no separate enable flag. It reads unmasked host sequence;
+`--skip-masking` controls preprocessing and does not disable this assessment.
 
 <!-- cli-reference:virosync-orchestrate -->
 ## Orchestration commands

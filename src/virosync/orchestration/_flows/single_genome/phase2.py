@@ -1,5 +1,6 @@
 """Phase 2 subflow: boundary refinement (host-trim, taxonomy, Diamond)."""
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from virosync.pipeline.phase2.boundary_refiner import (
     assign_boundary_candidate_ids,
     boundary_candidate_id,
 )
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase2.terminal_repeats import TerminalRepeat
 from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
@@ -140,6 +143,69 @@ def _seeds_to_refined_boundaries(
         )
         for seed in merged_seeds
     ]
+
+
+def _annotate_boundary_repeats(
+    boundaries: list[RefinedBoundary],
+    *,
+    raw_genome_path: Path | None,
+    boundary_diamond_query: GenomeDiamondQuery | None,
+    extension_bp: int,
+) -> None:
+    """Attach raw-sequence repeat evidence after assigning public candidate IDs."""
+    from Bio import SeqIO
+
+    if not boundaries:
+        return
+    by_scaffold: dict[str, list[RefinedBoundary]] = defaultdict(list)
+    coverage_by_scaffold: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for boundary in boundaries:
+        by_scaffold[boundary.scaffold].append(boundary)
+    if boundary_diamond_query is not None:
+        for mapping in boundary_diamond_query.seed_gene_mappings.values():
+            coverage_by_scaffold[mapping.scaffold].append((mapping.flank_start_bp, mapping.flank_end_bp))
+
+    scaffold_index = SeqIO.index(str(raw_genome_path), "fasta") if raw_genome_path is not None else None
+    try:
+        for scaffold, scaffold_boundaries in by_scaffold.items():
+            sequence = (
+                str(scaffold_index[scaffold].seq) if scaffold_index is not None and scaffold in scaffold_index else None
+            )
+            for boundary in scaffold_boundaries:
+                boundary.repeat_evidence = assess_repeat_evidence(
+                    sequence,
+                    scaffold=scaffold,
+                    input_id=boundary.seed_id or boundary_candidate_id(boundary),
+                    start=boundary.start,
+                    end=boundary.end,
+                    parent_start=boundary.pre_tir_start if boundary.pre_tir_start is not None else boundary.start,
+                    parent_end=boundary.pre_tir_end if boundary.pre_tir_end is not None else boundary.end,
+                    coverage_intervals=tuple(coverage_by_scaffold[scaffold]),
+                    extension_bp=extension_bp,
+                    tir=_retained_terminal_repeat(boundary),
+                )
+    finally:
+        if scaffold_index is not None:
+            scaffold_index.close()
+
+
+def _retained_terminal_repeat(boundary: RefinedBoundary) -> TerminalRepeat | None:
+    """Recover the retained legacy TIR pair without changing its interpretation."""
+    if not boundary.tir_present:
+        return None
+    assert boundary.tir_left_start is not None
+    assert boundary.tir_left_end is not None
+    assert boundary.tir_right_start is not None
+    assert boundary.tir_right_end is not None
+    return TerminalRepeat(
+        left_start=boundary.tir_left_start,
+        left_end=boundary.tir_left_end,
+        right_start=boundary.tir_right_start,
+        right_end=boundary.tir_right_end,
+        identity=boundary.tir_identity,
+        alignment_length=boundary.tir_alignment_length,
+        alignment_capped=boundary.tir_alignment_capped,
+    )
 
 
 def _recalculate_boundary_composition(
@@ -1062,6 +1128,12 @@ def _run_phase2_subflow(
         masked_path=masked_path,
     )
     refined_boundaries = assign_boundary_candidate_ids(refined_boundaries)
+    _annotate_boundary_repeats(
+        refined_boundaries,
+        raw_genome_path=raw_genome_path,
+        boundary_diamond_query=boundary_diamond_query,
+        extension_bp=config.phase1.extension_kb * 1000,
+    )
 
     # Log region statistics with before/after comparison
     if refined_boundaries and merged_seeds:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virosync"
-version = "1.0.1"
+version = "1.0.2"
 description = "Framework for discovering and characterizing ancient viral elements in eukaryotic genomes"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"

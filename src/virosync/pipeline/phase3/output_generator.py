@@ -12,7 +12,7 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -30,6 +30,8 @@ from virosync.output_contract import (
     DETAILED_PREDICTION_EXTENDED_COLUMNS,
     DETAILED_TAXONOMY_PARTITION,
     INTEGRATION_EVIDENCE_COLUMNS,
+    REPEAT_CANDIDATE_COLUMNS,
+    REPEAT_EVIDENCE_COLUMNS,
     canonical_family,
     coordinate_contract_metadata,
     normalize_effective_eve_class,
@@ -212,6 +214,46 @@ def _integration_evidence_row(result: VerificationResult) -> dict[str, str]:
     ):
         value = getattr(result, name)
         row[name] = str(value) if value is not None else "."
+    row.update(_repeat_evidence_row(result))
+    return row
+
+
+def _repeat_evidence_row(result: VerificationResult) -> dict[str, str]:
+    """Describe assessment scope separately from pair presence and boundary authority."""
+    from virosync.pipeline.phase2.repeat_evidence import FILTER_COUNT_FIELDS, SEARCH_PARAMETER_FIELDS
+
+    evidence = result.repeat_evidence
+    row = dict.fromkeys(REPEAT_EVIDENCE_COLUMNS, ".")
+    row.update(
+        repeat_left_status="not_assessed",
+        repeat_right_status="not_assessed",
+        direct_repeat_candidate_count="0",
+        tsd_assessment_status="not_assessed",
+    )
+    if evidence is None:
+        return row
+    row.update(
+        repeat_evidence_id=evidence.evidence_id,
+        repeat_input_id=evidence.input_id,
+        repeat_left_status=evidence.left.status,
+        repeat_right_status=evidence.right.status,
+        direct_repeat_candidate_count=str(len(evidence.candidates)),
+        direct_repeat_display_id=evidence.display_candidate_id or ".",
+        tsd_assessment_status=evidence.tsd.status,
+    )
+    for name in ("assessed_start", "assessed_end", "parent_start", "parent_end"):
+        row[f"repeat_{name}"] = str(getattr(evidence, name))
+    for side in ("left", "right"):
+        row[f"repeat_{side}_assessment"] = json.dumps(asdict(getattr(evidence, side)), separators=(",", ":"))
+    for column, names in (
+        ("repeat_search_parameters", SEARCH_PARAMETER_FIELDS),
+        ("repeat_filter_counts", FILTER_COUNT_FIELDS),
+    ):
+        row[column] = json.dumps({name: getattr(evidence, name) for name in names}, separators=(",", ":"))
+    row["tsd_assessment"] = json.dumps(asdict(evidence.tsd), separators=(",", ":"))
+    for name in ("anchor_start", "anchor_end"):
+        value = getattr(evidence.tsd, name)
+        row[f"tsd_{name}"] = str(value) if value is not None else "."
     return row
 
 
@@ -1438,6 +1480,7 @@ class OutputGenerator:
             output_files["predictions_bed"] = self.write_predictions_bed([])
             output_files["predictions_gff"] = self.write_predictions_gff([])
             output_files["predictions_detailed_tsv"] = self.write_predictions_detailed_tsv(all_results)
+            output_files["repeat_candidates_tsv"] = self.output_dir / "virosync_repeat_candidates.tsv"
             output_files["interproscan_summary_tsv"] = self.write_interproscan_summary([])
             output_files["evidence_json"] = self.write_evidence_profiles([])
             output_files["tmvec_proteins_tsv"] = self.write_tmvec_proteins_tsv(all_results)
@@ -1455,6 +1498,7 @@ class OutputGenerator:
         output_files["predictions_bed"] = self.write_predictions_bed(results)
         output_files["predictions_gff"] = self.write_predictions_gff(results)
         output_files["predictions_detailed_tsv"] = self.write_predictions_detailed_tsv(all_results)
+        output_files["repeat_candidates_tsv"] = self.output_dir / "virosync_repeat_candidates.tsv"
         output_files["interproscan_summary_tsv"] = self.write_interproscan_summary(results)
         output_files["evidence_json"] = self.write_evidence_profiles(results)
         output_files["tmvec_proteins_tsv"] = self.write_tmvec_proteins_tsv(all_results)
@@ -1477,6 +1521,34 @@ class OutputGenerator:
         logger.info(f"Generated {len(output_files)} output files in {self.output_dir}")
 
         return output_files
+
+    def write_repeat_candidates(self, results: list[VerificationResult]) -> Path:
+        """Write retained alternatives linked to final EVE IDs, including rejected calls."""
+        output_path = self.output_dir / "virosync_repeat_candidates.tsv"
+        with atomic_write_context(output_path) as handle:
+            writer = csv.DictWriter(handle, fieldnames=REPEAT_CANDIDATE_COLUMNS, delimiter="\t")
+            writer.writeheader()
+            for result in sorted(results, key=lambda item: item.eve_id):
+                evidence = result.repeat_evidence
+                if evidence is None:
+                    continue
+                common = {
+                    "eve_id": result.eve_id,
+                    "scaffold": result.scaffold,
+                    "repeat_evidence_id": evidence.evidence_id,
+                }
+                for pair in sorted(evidence.candidates, key=lambda item: item.candidate_id):
+                    writer.writerow(
+                        {
+                            **common,
+                            **asdict(pair),
+                            "outer_start": pair.left_start,
+                            "outer_end": pair.right_end,
+                            "inner_start": pair.left_end,
+                            "inner_end": pair.right_start,
+                        }
+                    )
+        return output_path
 
     def write_interproscan_summary(self, results: list[VerificationResult]) -> Path:
         """Write InterProScan annotation summary per region."""
@@ -1913,6 +1985,7 @@ class OutputGenerator:
                 row = self._detailed_prediction_row(result, sources, columns)
                 handle.write("\t".join(row) + "\n")
 
+        self.write_repeat_candidates(results)
         logger.info(f"Wrote {len(results)} detailed predictions to {output_path}")
         return output_path
 

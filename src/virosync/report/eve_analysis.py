@@ -46,6 +46,7 @@ FLANK_SIZE = 5000
 import numpy as np
 import pandas as pd
 from IPython import get_ipython
+from IPython.display import display
 
 _ipython = get_ipython()
 if _ipython is not None:
@@ -728,6 +729,34 @@ if _host_model and _level_tokens:
     fig.suptitle(f"{GENOME_ID} Host Signature: Taxonomy Token Weights", fontsize=13, fontweight="bold")
     plt.savefig(BASE / "host_signature_model.png", dpi=300, bbox_inches="tight")
     plt.show()
+
+# %% [markdown]
+# ## Repeat evidence
+#
+# Direct-repeat pairs describe sequence similarity near the assessed EVE ends.
+# Their host or viral origin is unresolved, and they do not change accepted
+# boundaries or confidence. A completed assessment refers to the recorded
+# windows and ungapped search method. Incomplete assessments can contain pairs.
+# Short-flank matches are assessed only at retained TIR anchors. The shifted
+# controls in the evidence JSON describe local chance matching, not accuracy.
+# All retained pairs, including alternatives for rejected candidates, are in
+# `virosync_repeat_candidates.tsv`. The table below shows canonical EVEs.
+
+# %%
+_repeat_columns = [
+    "eve_id",
+    "repeat_assessed_start",
+    "repeat_assessed_end",
+    "repeat_left_status",
+    "repeat_right_status",
+    "direct_repeat_candidate_count",
+    "direct_repeat_display_id",
+    "tsd_assessment_status",
+]
+if not predictions.empty and set(_repeat_columns).issubset(predictions.columns):
+    display(predictions[_repeat_columns])
+else:
+    print("No repeat assessment records in this result.")
 
 # %% [markdown]
 # ## EVE Summary

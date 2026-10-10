@@ -56,6 +56,7 @@ from virosync.output_contract import (
     COORDINATE_SCHEMA_VERSION,
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
     OUTPUT_SCHEMA_VERSION,
+    REPEAT_CANDIDATE_COLUMNS,
     effective_eve_class_count_total,
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
@@ -269,6 +270,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     canonical.write_text(_ZERO_PREDICTION_HEADER)
     detailed = output_dir / "virosync_predictions_detailed.tsv"
     detailed.write_text(_ZERO_PREDICTION_HEADER)
+    repeat_candidates = output_dir / "virosync_repeat_candidates.tsv"
+    repeat_candidates.write_text("\t".join(REPEAT_CANDIDATE_COLUMNS) + "\n")
     export_dir = canonical.parent
     bed = export_dir / "virosync_predictions.bed"
     gff = export_dir / "virosync_predictions.gff3"
@@ -328,8 +331,9 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
             (ablation_events, "virosync.ablation_events/v1"),
-            (canonical, "canonical-predictions-v6"),
-            (detailed, "detailed-predictions-v6"),
+            (canonical, "canonical-predictions-v7"),
+            (detailed, "detailed-predictions-v7"),
+            (repeat_candidates, "virosync.repeat_candidates/v1"),
             (bed, "canonical-predictions-bed-v1"),
             (gff, "canonical-predictions-gff3-v1"),
             (summary, "virosync-summary-v3"),

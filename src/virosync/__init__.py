@@ -5,7 +5,7 @@ A bioinformatics framework for discovering candidate giant endogenous viral elem
 boundary refinement, and multi-evidence confidence scoring.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __author__ = "ViroSync Development Team"
 
 from pathlib import Path

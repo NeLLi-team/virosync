@@ -121,6 +121,7 @@ _FINAL_ROOT_NAMES = frozenset(
         "virosync_predictions.bed",
         "virosync_predictions.gff3",
         "virosync_predictions_detailed.tsv",
+        "virosync_repeat_candidates.tsv",
         "virosync_summary.json",
         "virosync_tsv_invariant_report.tsv",
         "gvclass_results.tsv",
@@ -558,9 +559,11 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "ablation_events.json":
         return "virosync.ablation_events/v1"
     if path.name == "virosync_predictions.tsv":
-        return "canonical-predictions-v6"
+        return "canonical-predictions-v7"
     if path.name == "virosync_predictions_detailed.tsv":
-        return "detailed-predictions-v6"
+        return "detailed-predictions-v7"
+    if path.name == "virosync_repeat_candidates.tsv":
+        return "virosync.repeat_candidates/v1"
     if path.name == "virosync_predictions.bed":
         return "canonical-predictions-bed-v1"
     if path.name == "virosync_predictions.gff3":
@@ -744,6 +747,7 @@ def _final_artifacts(
         for name in (
             "virosync_predictions.tsv",
             "virosync_predictions_detailed.tsv",
+            "virosync_repeat_candidates.tsv",
             "virosync_predictions.bed",
             "virosync_predictions.gff3",
             "virosync_summary.json",
@@ -1846,10 +1850,13 @@ def _single_genome_flow_impl(
     # 1. Detailed predictions TSV (copy from phase3_synthesis to root)
     src = candidate_output_dir / "virosync_predictions_detailed.tsv"
     dst = output_dir / "virosync_predictions_detailed.tsv"
-    detailed_generated = src.is_file()
-    if detailed_generated:
-        shutil.copy(src, dst)
-        final_outputs["predictions_detailed"] = str(dst)
+    shutil.copy(src, dst)
+    final_outputs["predictions_detailed"] = str(dst)
+
+    repeat_candidates = candidate_output_dir / "virosync_repeat_candidates.tsv"
+    repeat_destination = output_dir / repeat_candidates.name
+    shutil.copy(repeat_candidates, repeat_destination)
+    final_outputs["repeat_candidates"] = str(repeat_destination)
 
     gene_taxonomy_all = output_files_all.get("gene_taxonomy_all")
     gene_taxonomy_all_path = Path(gene_taxonomy_all) if isinstance(gene_taxonomy_all, (str, Path)) else None
@@ -1857,7 +1864,7 @@ def _single_genome_flow_impl(
         gene_taxonomy_all_path = None
 
     invariant_report_path = output_dir / "virosync_tsv_invariant_report.tsv"
-    detailed_for_check = dst if detailed_generated else src
+    detailed_for_check = dst
     try:
         invariant_report = enforce_tsv_invariants(
             detailed_tsv=detailed_for_check,
