@@ -711,6 +711,8 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
         )
         is None
     )
+
+
 CAPSID = (
     "MSNKVQLTPEFAAAIRKGLLDNGYTVEEIAKALGVSRQTVYNWLKGEGSLPDADLLLKLASIFGVSVDYLLGLESEEVRSHAQSLAEKLNRLSPEQRNAVIQLVEALAQTSVSH"
 )

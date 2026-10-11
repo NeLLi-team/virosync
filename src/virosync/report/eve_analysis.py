@@ -1891,9 +1891,7 @@ else:
                     {
                         "id": "unlabeled",
                         "name": "Genes without a capsid call",
-                        "feature_ids": [
-                            f["id"] for f in features if f["name"] != "MCP" and f["id"] not in flank_ids
-                        ],
+                        "feature_ids": [f["id"] for f in features if f["name"] != "MCP" and f["id"] not in flank_ids],
                         "style": {"label_visible": False},
                     },
                 ],  # fmt: skip
