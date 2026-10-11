@@ -25,6 +25,8 @@ hdbscan = "==0.8.41"
 # Visualization
 matplotlib = ">=3.8.0"
 seaborn = ">=0.13.0"
+# Node.js runs the Syntviz renderer for the report's gene-neighborhood figure.
+nodejs = "22.*"
 
 # Data storage
 h5py = "==3.15.1"
@@ -70,6 +72,8 @@ python-kaleido = ">=1.2.0,<2"
 papermill = ">=2.6"
 nbformat = ">=5.9"
 jupytext = ">=1.16"
+# Interactive gene-neighborhood figure in the EVE report.
+syntviz = ">=0.1,<0.2"
 
 [tasks]
 # Unified CLI entrypoint.  Bare `-i/-o` invocations are auto-forwarded to

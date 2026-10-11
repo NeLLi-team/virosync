@@ -711,3 +711,277 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
         )
         is None
     )
+CAPSID = (
+    "MSNKVQLTPEFAAAIRKGLLDNGYTVEEIAKALGVSRQTVYNWLKGEGSLPDADLLLKLASIFGVSVDYLLGLESEEVRSHAQSLAEKLNRLSPEQRNAVIQLVEALAQTSVSH"
+)
+PRIMASE = (
+    "MKKLLPTAAAGLLLLAAQPAMAQVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVS"
+    "AISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
+)
+FLANK = "MDEHWQTRPLAVFGGSIKNCYEQPMLRDTSAHGVIFNKWEYCPLQDRTSMAGHVEKNFWLYTRCPDSIQAMNE"
+SYNTVIZ_CELL = "# ---- Gene neighborhoods in Syntviz ----"
+
+
+def _syntviz_gene(
+    porf_id: str,
+    start: int,
+    end: int,
+    category: str,
+    strand: str = "+",
+    *,
+    is_mcp: bool = False,
+):
+    return {
+        "porf_id": porf_id,
+        "start": start,
+        "end": end,
+        "strand": strand,
+        "category": category,
+        "is_mcp": is_mcp,
+    }
+
+
+def _syntviz_eve(contig: str, tier: str, confidence: float, core: list[dict]) -> dict:
+    return {
+        "scaffold": contig,
+        "eve_start": 1_000,
+        "eve_end": 2_000,
+        "ext_start": 0,
+        "ext_end": 3_000,
+        "length": 3_000,
+        "eve_length": 1_000,
+        "confidence": confidence,
+        "confidence_tier": tier,
+        "left_flank_genes": [_syntviz_gene(f"{contig}_1", 100, 400, "HOST")],
+        "eve_genes": core,
+        "right_flank_genes": [],
+    }
+
+
+def _syntviz_namespace(tmp_path: Path, eves: dict[str, dict], proteins: dict[str, str]) -> dict[str, object]:
+    (tmp_path / "phase0").mkdir(exist_ok=True)
+    flanks = {gene["porf_id"]: FLANK for info in eves.values() for gene in info["left_flank_genes"]}
+    (tmp_path / "phase0" / "proteome.fasta").write_text(
+        "".join(f">{porf_id} # 1 # 2 # 1 # ID=x\n{seq}\n" for porf_id, seq in (flanks | proteins).items())
+    )
+    displayed: list[object] = []
+    return {
+        "Path": Path,
+        "display": displayed.append,
+        "displayed": displayed,
+        "SYNTVIZ_INTERACTIVE": False,
+        "FLANK_SIZE": 5_000,
+        "BASE": tmp_path,
+        "GENOME_ID": "demo",
+        "SHOW_TIERS": ["HIGH", "MEDIUM", "LOW"],
+        "COLORS": {
+            "PPV": "#EE7733",
+            "NCLDV": "#009988",
+            "HOST": "#0077BB",
+            "UNKNOWN": "#BBBBBB",
+        },
+        "eve_genes_extended": eves,
+    }
+
+
+def _three_eves(tmp_path: Path) -> dict[str, object]:
+    """Two HIGH EVEs share a capsid protein; one MEDIUM EVE shares nothing."""
+    eves = {
+        "EVE_demo|contig_1_1000-2000": _syntviz_eve(
+            "contig_1",
+            "HIGH",
+            0.9,
+            [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV", is_mcp=True)],
+        ),
+        "EVE_demo|contig_2_1000-2000": _syntviz_eve(
+            "contig_2",
+            "HIGH",
+            0.8,
+            [_syntviz_gene("contig_2_2", 1_200, 1_563, "PPV", is_mcp=True)],
+        ),
+        "EVE_demo|contig_3_1000-2000": _syntviz_eve(
+            "contig_3",
+            "MEDIUM",
+            0.5,
+            [_syntviz_gene("contig_3_2", 1_100, 1_463, "NCLDV")],
+        ),
+    }
+    return _syntviz_namespace(
+        tmp_path,
+        eves,
+        {"contig_1_2": CAPSID, "contig_2_2": CAPSID, "contig_3_2": PRIMASE},
+    )
+
+
+def _syntviz_session(tmp_path: Path):
+    from syntviz.models import Session
+
+    return Session.model_validate_json((tmp_path / "eve_gene_map.syntviz.json").read_text())
+
+
+def _displayed_types(namespace: dict[str, object]) -> list[str]:
+    return [type(item).__name__ for item in namespace["displayed"]]
+
+
+def test_notebook_syntviz_figure_links_shared_proteins_and_groups_tiers(
+    tmp_path: Path,
+) -> None:
+    namespace = _three_eves(tmp_path)
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    rows = {row.id: row for row in session.sequences}
+    assert [rows[row_id].name.split()[0] for row_id in session.view.row_order] == [
+        "HIGH",
+        "HIGH",
+        "MEDIUM",
+    ]
+    assert rows["EVE_demo|contig_3_1000-2000:window"].name == "MEDIUM c3:1.0–2.0 kb"
+    assert {row.length_bp for row in rows.values()} == {3_000}
+    assert len(session.features) == 6
+    assert {annotation.value for annotation in session.annotations} == {
+        "PPV",
+        "NCLDV",
+        "HOST",
+    }
+    groups = {group.id: set(group.feature_ids) for group in session.view.style_groups}
+    capsids = {
+        "EVE_demo|contig_1_1000-2000:contig_1_2",
+        "EVE_demo|contig_2_1000-2000:contig_2_2",
+    }
+    assert groups["mcp"] == capsids
+    assert groups["flanks"] == {f"EVE_demo|contig_{n}_1000-2000:contig_{n}_1" for n in (1, 2, 3)}
+    assert len(session.homology_hits) == 1
+    hit = session.homology_hits[0]
+    assert {hit.query_feature_id, hit.target_feature_id} == capsids
+    assert hit.identity_fraction == 1.0
+    assert len(session.runs[0].searched_pairs) == 6
+    assert session.view.link_filters.hit_color == "identity"
+    assert (tmp_path / "eve_gene_map_syntviz.svg").read_text().startswith("<svg")
+    assert (tmp_path / "eve_gene_map_syntviz.png").read_bytes().startswith(b"\x89PNG")
+    # The shipped report embeds the static PNG, not the multi-megabyte viewer.
+    assert _displayed_types(namespace) == ["Image"]
+
+
+def test_notebook_syntviz_figure_orders_similar_rows_and_flips_reverse_capsids(
+    tmp_path: Path,
+) -> None:
+    """Confidence order A, B, C, D; A and C share a capsid, B and D a primase."""
+    eves = {
+        f"EVE_demo|contig_{name}_1000-2000": _syntviz_eve(
+            f"contig_{name}",
+            "HIGH",
+            confidence,
+            [
+                _syntviz_gene(
+                    f"contig_{name}_2",
+                    1_100,
+                    1_463,
+                    "PPV",
+                    strand,
+                    is_mcp=protein == CAPSID,
+                )
+            ],
+        )
+        for name, confidence, protein, strand in [
+            ("a", 0.9, CAPSID, "+"),
+            ("b", 0.8, PRIMASE, "+"),
+            ("c", 0.7, CAPSID, "-"),
+            ("d", 0.6, PRIMASE, "+"),
+        ]
+    }
+    proteins = {
+        "contig_a_2": CAPSID,
+        "contig_b_2": PRIMASE,
+        "contig_c_2": CAPSID,
+        "contig_d_2": PRIMASE,
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, proteins)
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    order = [row_id.split("_")[2] for row_id in session.view.row_order]
+    assert abs(order.index("a") - order.index("c")) == 1
+    assert abs(order.index("b") - order.index("d")) == 1
+    assert session.view.orientations["EVE_demo|contig_c_1000-2000:window"] == -1
+    assert session.view.orientations["EVE_demo|contig_a_1000-2000:window"] == 1
+
+
+def test_notebook_syntviz_figure_clips_genes_at_the_window_edges(
+    tmp_path: Path,
+) -> None:
+    eve = _syntviz_eve("contig_1", "HIGH", 0.9, [_syntviz_gene("contig_1_2", 1_100, 3_300, "PPV")])
+    eve["left_flank_genes"] = [_syntviz_gene("contig_1_1", -60, 400, "HOST")]
+    namespace = _syntviz_namespace(tmp_path, {"EVE_demo|contig_1_1000-2000": eve}, {"contig_1_2": CAPSID})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    features = {feature.id.split(":")[1]: feature for feature in _syntviz_session(tmp_path).features}
+    left, core = features["contig_1_1"], features["contig_1_2"]
+    assert (left.segments[0].start_bp, left.partial_start) == (0, True)
+    assert (core.segments[0].end_bp, core.partial_end) == (3_000, True)
+    assert not core.partial_start
+
+
+def test_notebook_syntviz_figure_records_searches_without_hits(tmp_path: Path) -> None:
+    eves = {
+        "EVE_demo|contig_1_1000-2000": _syntviz_eve("contig_1", "HIGH", 0.9, [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV")]),
+        "EVE_demo|contig_2_1000-2000": _syntviz_eve("contig_2", "HIGH", 0.8, [_syntviz_gene("contig_2_2", 1_100, 1_463, "PPV")]),
+    }  # fmt: skip
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID, "contig_2_2": PRIMASE})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    assert session.homology_hits == []
+    assert len(session.runs[0].searched_pairs) == 2
+
+
+def test_notebook_syntviz_figure_fits_many_rows_in_the_renderer_limit(
+    tmp_path: Path,
+) -> None:
+    eves = {
+        f"EVE_demo|contig_{index}_1000-2000": _syntviz_eve(
+            f"contig_{index}",
+            "LOW",
+            0.1,
+            [_syntviz_gene(f"contig_{index}_2", 1_100, 1_463, "PPV")],
+        )
+        for index in range(300)
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, {})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    assert len(session.sequences) == 300
+    assert session.view.height_px <= 16_384
+    assert (tmp_path / "eve_gene_map_syntviz.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_notebook_syntviz_figure_is_interactive_on_request(tmp_path: Path) -> None:
+    namespace = _three_eves(tmp_path)
+    namespace["SYNTVIZ_INTERACTIVE"] = True
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    assert _displayed_types(namespace) == ["Figure"]
+
+
+def test_notebook_syntviz_figure_needs_neither_diamond_nor_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _three_eves(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    assert len(session.sequences) == 3
+    assert session.homology_hits == []
+    assert session.runs[0].searched_pairs == []
+    assert not (tmp_path / "eve_gene_map_syntviz.svg").exists()
+    assert _displayed_types(namespace) == ["Figure"]

@@ -41,6 +41,9 @@ SHOW_TIERS = ["HIGH", "MEDIUM", "LOW"]
 ANI_THRESHOLD = 95.0
 MIN_ALIGNED_FRACTION = 50.0
 FLANK_SIZE = 5000
+# The Syntviz gene-neighborhood figure embeds its interactive viewer only on
+# request: the viewer and session add several megabytes to the notebook.
+SYNTVIZ_INTERACTIVE = False
 
 # %%
 import numpy as np
@@ -1612,6 +1615,311 @@ else:
     from IPython.display import FileLink
 
     FileLink(str(BASE / "eve_gene_map_with_flanks.png"))
+
+# %% [markdown]
+# ## Gene Neighborhoods in Syntviz
+#
+# The same EVEs and flanks as the overview, drawn by [Syntviz](https://pypi.org/project/syntviz/). Genes take the overview's category colors; flanking genes are faded and major capsid proteins are outlined. Grey ribbons join proteins of EVE cores in adjacent rows that share a DIAMOND blastp hit (`--more-sensitive`, E ≤ 1e-5, identity ≥ 20%, best hit per protein pair), darker for higher identity. Within each confidence tier, rows are ordered so that EVEs with similar proteins sit next to each other; each row is shown with its first MCP pointing right. Ribbons show protein similarity, not orthology or conserved gene order. This notebook shows `eve_gene_map_syntviz.png`; `eve_gene_map_syntviz.svg` is the same figure as vectors. The session is saved as `eve_gene_map.syntviz.json`: `syntviz view eve_gene_map.syntviz.json` opens it in the interactive viewer, where rows, filters and colors can be changed. Setting the `SYNTVIZ_INTERACTIVE` parameter to `True` embeds that viewer here instead, which adds several megabytes to the notebook. Without DIAMOND the figure has no ribbons; without Node.js rows keep their confidence order, no image files are written and the interactive view is shown.
+
+# %%
+# ---- Gene neighborhoods in Syntviz ----
+import shutil
+import subprocess
+import tempfile
+
+from syntviz.models import Session
+from syntviz.notebook import Figure
+from syntviz.runtime import execute, render
+
+SYNTVIZ_LINK_EVALUE = 1e-5
+SYNTVIZ_LINK_MIN_PIDENT = 20.0
+SYNTVIZ_RUN = "virosync-report"
+# DIAMOND otherwise uses every core; reports of parallel genomes share the machine.
+SYNTVIZ_DIAMOND_THREADS = 4
+# Syntviz renders figures of at most 16,384 pixels per side.
+SYNTVIZ_MAX_HEIGHT_PX = 16_000
+SYNTVIZ_TIERS = [tier for tier in ("HIGH", "MEDIUM", "LOW") if tier in SHOW_TIERS]
+DIAMOND_FIELDS = [
+    "qseqid",
+    "sseqid",
+    "pident",
+    "qstart",
+    "qend",
+    "sstart",
+    "send",
+    "evalue",
+    "bitscore",
+]
+
+
+def _syntviz_protein_sequences(porf_ids):
+    """Read the proteome sequences of the requested genes, without stop symbols."""
+    sequences, current = {}, None
+    with (BASE / "phase0" / "proteome.fasta").open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith(">"):
+                porf_id = line[1:].split(" # ")[0].split()[0]
+                current = porf_id if porf_id in porf_ids else None
+                if current:
+                    sequences[current] = ""
+            elif current:
+                sequences[current] += line.strip().rstrip("*")
+    return sequences
+
+
+def _syntviz_label(info):
+    """Name a row by tier, shortened scaffold and EVE interval in kb."""
+    scaffold = str(info["scaffold"]).replace("contig_", "c")
+    return f"{info['confidence_tier']} {scaffold}:{info['eve_start'] / 1e3:.1f}–{info['eve_end'] / 1e3:.1f} kb"
+
+
+def _syntviz_row(eve_id, info, sequences):
+    """Return the genome, row, genes and category annotations of one EVE window."""
+    offset, sequence_id = info["ext_start"], f"{eve_id}:window"
+    genome = {"id": eve_id, "name": eve_id}
+    row = {
+        "id": sequence_id,
+        "genome_id": eve_id,
+        "name": _syntviz_label(info),
+        "length_bp": info["ext_end"] - offset,
+        "topology": "linear",
+    }
+    features, annotations = [], []
+    for gene in [
+        *info["left_flank_genes"],
+        *info["eve_genes"],
+        *info["right_flank_genes"],
+    ]:
+        feature_id = f"{eve_id}:{gene['porf_id']}"
+        strand = {"+": 1, "-": -1}.get(gene["strand"], 0)
+        length_aa = len(sequences.get(gene["porf_id"], "")) or (gene["end"] - gene["start"]) // 3 - 1
+        # Core genes are chosen by overlap, so a long one can reach past the window.
+        start, end = max(gene["start"], offset), min(gene["end"], info["ext_end"])
+        features.append(
+            {
+                "id": feature_id,
+                "genome_id": eve_id,
+                "placement": "placed",
+                "sequence_id": sequence_id,
+                "type": "CDS",
+                "name": "MCP" if gene["is_mcp"] else gene["porf_id"],
+                "segments": [{"start_bp": start - offset, "end_bp": end - offset, "strand": strand}],
+                "partial_start": start > gene["start"],
+                "partial_end": end < gene["end"],
+                "protein_length_aa": max(length_aa, 1),
+                "run_id": SYNTVIZ_RUN,
+            }
+        )
+        annotations.append(
+            {
+                "id": f"{feature_id}:category",
+                "target": {"kind": "feature", "feature_id": feature_id},
+                "namespace": "category",
+                "value": gene["category"],
+                "evidence_source": "ViroSync report gene category (DIAMOND best-hit taxonomy)",
+                "run_id": SYNTVIZ_RUN,
+            }
+        )
+    return genome, row, features, annotations
+
+
+def _syntviz_protein_hits(core_genes, sequences, lengths):
+    """Return the best DIAMOND hit of each protein pair from different EVEs.
+
+    Also return the EVEs whose proteins were searched; none when DIAMOND did not run.
+    """
+    diamond = shutil.which("diamond")
+    searched = sorted({eve_id for eve_id, _ in core_genes.values()})
+    if diamond is None or len(searched) < 2:
+        print("Syntviz figure: DIAMOND unavailable or fewer than two EVEs; no protein ribbons.")
+        return [], []
+    threads = ["--threads", str(SYNTVIZ_DIAMOND_THREADS)]
+    with tempfile.TemporaryDirectory(prefix="virosync-syntviz-") as temporary:
+        work = Path(temporary)
+        (work / "core.faa").write_text("".join(f">{gene}\n{sequences[gene]}\n" for gene in core_genes))
+        subprocess.run(
+            [
+                diamond,
+                "makedb",
+                "--in",
+                work / "core.faa",
+                "-d",
+                work / "core",
+                *threads,
+                "--quiet",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [diamond, "blastp", "-q", work / "core.faa", "-d", work / "core", "-o", work / "hits.tsv",
+             "--more-sensitive", "--evalue", str(SYNTVIZ_LINK_EVALUE), "--max-target-seqs", "0",
+             "--outfmt", "6", *DIAMOND_FIELDS, *threads, "--quiet"],
+            check=True,
+        )  # fmt: skip
+        rows = (line.split("\t") for line in (work / "hits.tsv").read_text().splitlines())
+        best = {}
+        for row in rows:
+            hit = dict(zip(DIAMOND_FIELDS, row, strict=True))
+            (query_eve, query_id), (target_eve, target_id) = (
+                core_genes[hit["qseqid"]],
+                core_genes[hit["sseqid"]],
+            )
+            if query_eve == target_eve or float(hit["pident"]) < SYNTVIZ_LINK_MIN_PIDENT:
+                continue
+            pair = frozenset((query_id, target_id))
+            if pair not in best or float(hit["bitscore"]) > best[pair][1]["score"]:
+                best[pair] = (hit, _syntviz_hit(hit, query_id, target_id, lengths))
+    return [record for _, record in best.values()], searched
+
+
+def _syntviz_hit(hit, query_id, target_id, lengths):
+    """Convert one DIAMOND row into a Syntviz homology hit."""
+    query_end = min(int(hit["qend"]), lengths[query_id])
+    target_end = min(int(hit["send"]), lengths[target_id])
+    return {
+        "id": f"hit:{query_id}:{target_id}",
+        "query_feature_id": query_id,
+        "target_feature_id": target_id,
+        "query_interval": {"start_aa": int(hit["qstart"]) - 1, "end_aa": query_end},
+        "target_interval": {"start_aa": int(hit["sstart"]) - 1, "end_aa": target_end},
+        "identity_fraction": round(float(hit["pident"]) / 100, 4),
+        "identity_definition": "DIAMOND pident over the aligned columns",
+        "source_identity_unit": "percent",
+        "query_coverage_fraction": round((query_end - int(hit["qstart"]) + 1) / lengths[query_id], 4),
+        "target_coverage_fraction": round((target_end - int(hit["sstart"]) + 1) / lengths[target_id], 4),
+        "score": float(hit["bitscore"]),
+        "score_type": "bits",
+        "evalue": float(hit["evalue"]),
+        "run_id": SYNTVIZ_RUN,
+    }
+
+
+def _syntviz_orientation(info):
+    """Flip a row whose first MCP lies on the reverse strand."""
+    mcps = sorted((gene["start"], gene["strand"]) for gene in info["eve_genes"] if gene["is_mcp"])
+    return -1 if mcps and mcps[0][1] == "-" else 1
+
+
+syntviz_eves = [
+    (eve_id, info)
+    for tier in SYNTVIZ_TIERS
+    for eve_id, info in sorted(eve_genes_extended.items(), key=lambda item: -item[1]["confidence"])
+    if info["confidence_tier"] == tier
+]
+if not syntviz_eves:
+    print("No EVEs for the Syntviz figure.")
+else:
+    core_genes = {
+        gene["porf_id"]: (eve_id, f"{eve_id}:{gene['porf_id']}")
+        for eve_id, info in syntviz_eves
+        for gene in info["eve_genes"]
+    }
+    flank_genes = {gene["porf_id"] for _, info in syntviz_eves for key in ("left_flank_genes", "right_flank_genes") for gene in info[key]}  # fmt: skip
+    sequences = _syntviz_protein_sequences(set(core_genes) | flank_genes)
+    core_genes = {gene: ids for gene, ids in core_genes.items() if sequences.get(gene)}
+    parts = [_syntviz_row(eve_id, info, sequences) for eve_id, info in syntviz_eves]
+    features = [feature for _, _, row_features, _ in parts for feature in row_features]
+    lengths = {feature["id"]: feature["protein_length_aa"] for feature in features}
+    hits, searched = _syntviz_protein_hits(core_genes, sequences, lengths)
+    run = {
+        "id": SYNTVIZ_RUN,
+        "tool": "ViroSync EVE report",
+        "tool_version": "1",
+        "parameters": {
+            "link_evalue": SYNTVIZ_LINK_EVALUE,
+            "link_min_pident": SYNTVIZ_LINK_MIN_PIDENT,
+        },
+        "searched_pairs": [{"query_genome_id": a, "target_genome_id": b} for a in searched for b in searched if a != b],
+    }
+    row_order = [row["id"] for _, row, _, _ in parts]
+    mcp_ids = [feature["id"] for feature in features if feature["name"] == "MCP"]
+    flank_ids = {f"{eve_id}:{gene}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "right_flank_genes") for gene in (g["porf_id"] for g in info[key])}  # fmt: skip
+    # Rows tighten so that a genome with hundreds of EVEs stays inside the size limit.
+    row_spacing = min(64, (SYNTVIZ_MAX_HEIGHT_PX - 260) / len(parts))
+    categories = {annotation["value"] for _, _, _, row_annotations in parts for annotation in row_annotations}
+    syntviz_session = Session.model_validate(
+        {
+            "id": f"virosync-{GENOME_ID}-eves",
+            "name": f"{GENOME_ID} EVE gene neighborhoods (ViroSync)",
+            "runs": [run],
+            "genomes": [genome for genome, _, _, _ in parts],
+            "sequences": [row for _, row, _, _ in parts],
+            "features": features,
+            "annotations": [annotation for _, _, _, row_annotations in parts for annotation in row_annotations],
+            "homology_hits": hits,
+            "view": {
+                "visualization": "linear",
+                "mode": "overview",
+                "width_px": 1400,
+                "height_px": int(260 + row_spacing * len(parts)),
+                "row_spacing_px": row_spacing,
+                "gene_height_px": min(14, 0.6 * row_spacing),
+                "gene_body_ratio": 0.6,
+                "arrowhead_px": 6,
+                "row_order": row_order,
+                "row_alignment": "evidence",
+                "orientations": {
+                    row: _syntviz_orientation(info) for row, (_, info) in zip(row_order, syntviz_eves, strict=True)
+                },  # fmt: skip
+                "labels": {"visible": True, "position": "above", "font_size_px": 10},
+                "link_filters": {
+                    "kinds": ["homology"],
+                    "hit_color": "identity",
+                    "shape": "straight",
+                    "opacity": 0.8,
+                    "projection": "whole_feature",
+                    "max_links": 20_000,
+                },  # fmt: skip
+                "colors": {
+                    "by": "annotation",
+                    "annotation_namespace": "category",
+                    "palette": {category: COLORS.get(category, COLORS["UNKNOWN"]) for category in categories},
+                },  # fmt: skip
+                "style_groups": [
+                    {
+                        "id": "mcp",
+                        "name": "Major capsid protein",
+                        "feature_ids": mcp_ids,
+                        "style": {"stroke": "#000000", "stroke_width_px": 1.6},
+                    },
+                    {
+                        "id": "flanks",
+                        "name": f"Flanking genes ({FLANK_SIZE // 1000} kb)",
+                        "feature_ids": sorted(flank_ids),
+                        "style": {"opacity": 0.45, "label_visible": False},
+                    },
+                    {
+                        "id": "unlabeled",
+                        "name": "Genes without a capsid call",
+                        "feature_ids": [
+                            f["id"] for f in features if f["name"] != "MCP" and f["id"] not in flank_ids
+                        ],
+                        "style": {"label_visible": False},
+                    },
+                ],  # fmt: skip
+            },
+        }
+    )
+    has_node = shutil.which("node") is not None
+    tier_rows = [[row["id"] for _, row, _, _ in parts if row["name"].startswith(f"{tier} ")] for tier in SYNTVIZ_TIERS]
+    # Two rows have no better order; order larger tiers by protein similarity.
+    ordering = [{"op": "orderRowsBySimilarity", "sequence_ids": rows} for rows in tier_rows if len(rows) > 2]
+    if has_node and hits and ordering:
+        syntviz_session = execute(syntviz_session, ordering)
+    (BASE / "eve_gene_map.syntviz.json").write_text(syntviz_session.model_dump_json(), encoding="utf-8")
+    if has_node:
+        render(syntviz_session, BASE / "eve_gene_map_syntviz.svg")
+        render(syntviz_session, BASE / "eve_gene_map_syntviz.png")
+    else:
+        print("Syntviz figure: Node.js unavailable; rows keep confidence order and no image is written.")
+    print(f"Syntviz figure: {len(parts)} EVEs, {len(features)} genes, {len(hits)} protein ribbons")
+    if SYNTVIZ_INTERACTIVE or not has_node:
+        display(Figure(syntviz_session))
+    else:
+        from IPython.display import Image
+
+        display(Image(filename=str(BASE / "eve_gene_map_syntviz.png")))
+
 
 # %% [markdown]
 # ## Detailed Gene Contexts
