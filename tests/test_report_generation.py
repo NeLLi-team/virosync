@@ -732,6 +732,7 @@ def _syntviz_gene(
     strand: str = "+",
     *,
     is_mcp: bool = False,
+    fold_type: str = "",
 ):
     return {
         "porf_id": porf_id,
@@ -740,6 +741,7 @@ def _syntviz_gene(
         "strand": strand,
         "category": category,
         "is_mcp": is_mcp,
+        "fold_type": fold_type,
     }
 
 
@@ -793,7 +795,7 @@ def _three_eves(tmp_path: Path) -> dict[str, object]:
             "contig_1",
             "HIGH",
             0.9,
-            [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV", is_mcp=True)],
+            [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV", is_mcp=True, fold_type="DJR")],
         ),
         "EVE_demo|contig_2_1000-2000": _syntviz_eve(
             "contig_2",
@@ -834,12 +836,8 @@ def test_notebook_syntviz_figure_links_shared_proteins_and_groups_tiers(
 
     session = _syntviz_session(tmp_path)
     rows = {row.id: row for row in session.sequences}
-    assert [rows[row_id].name.split()[0] for row_id in session.view.row_order] == [
-        "HIGH",
-        "HIGH",
-        "MEDIUM",
-    ]
-    assert rows["EVE_demo|contig_3_1000-2000:window"].name == "MEDIUM c3:1.0–2.0 kb"
+    assert [rows[row_id].name.split()[0] for row_id in session.view.row_order] == ["H", "H", "M"]
+    assert rows["EVE_demo|contig_3_1000-2000:window"].name == "M 0.50 c3 1–2 kb"
     assert {row.length_bp for row in rows.values()} == {3_000}
     assert len(session.features) == 6
     assert {annotation.value for annotation in session.annotations} == {
@@ -860,6 +858,24 @@ def test_notebook_syntviz_figure_links_shared_proteins_and_groups_tiers(
     assert hit.identity_fraction == 1.0
     assert len(session.runs[0].searched_pairs) == 6
     assert session.view.link_filters.hit_color == "identity"
+    # The source range stays in the tooltip of each row.
+    assert session.view.row_coordinates == "none"
+    gene_markers = {
+        (marker.anchor.feature_id, marker.glyph)
+        for marker in session.view.markers
+        if marker.anchor.kind == "feature_segment"
+    }
+    assert gene_markers == {
+        ("EVE_demo|contig_1_1000-2000:contig_1_2", "circle"),
+        ("EVE_demo|contig_1_1000-2000:contig_1_2", "star"),
+        ("EVE_demo|contig_2_1000-2000:contig_2_2", "circle"),
+    }
+    boundaries = {
+        (marker.anchor.sequence_id, marker.anchor.position_bp, marker.glyph)
+        for marker in session.view.markers
+        if marker.anchor.kind == "sequence_position"
+    }
+    assert boundaries == {(row_id, bp, "diamond") for row_id in rows for bp in (1_000, 1_999)}
     assert (tmp_path / "eve_gene_map_syntviz.svg").read_text().startswith("<svg")
     assert (tmp_path / "eve_gene_map_syntviz.png").read_bytes().startswith(b"\x89PNG")
     # The shipped report embeds the static PNG, not the multi-megabyte viewer.
@@ -927,6 +943,46 @@ def test_notebook_syntviz_figure_clips_genes_at_the_window_edges(
     assert not core.partial_start
 
 
+def test_notebook_syntviz_figure_links_no_low_confidence_eves(tmp_path: Path) -> None:
+    eves = {
+        f"EVE_demo|contig_{n}_1000-2000": _syntviz_eve(
+            f"contig_{n}", "LOW", 0.1, [_syntviz_gene(f"contig_{n}_2", 1_100, 1_463, "PPV")]
+        )
+        for n in (1, 2)
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID, "contig_2_2": CAPSID})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    assert session.homology_hits == []
+    assert session.runs[0].searched_pairs == []
+
+
+def test_notebook_syntviz_figure_keeps_proteins_that_a_low_eve_shares(tmp_path: Path) -> None:
+    """A LOW EVE overlapping a HIGH one shares its capsid gene."""
+    eves = {
+        f"EVE_demo|contig_{n}_1000-2000": _syntviz_eve(
+            f"contig_{n}", "HIGH", 0.9, [_syntviz_gene(f"contig_{n}_2", 1_100, 1_463, "PPV")]
+        )
+        for n in (1, 2)
+    }
+    eves["EVE_demo|contig_2_1050-2050"] = _syntviz_eve(
+        "contig_2", "LOW", 0.1, [_syntviz_gene("contig_2_2", 1_100, 1_463, "PPV")]
+    )
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID, "contig_2_2": CAPSID})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    (hit,) = session.homology_hits
+    assert {hit.query_feature_id, hit.target_feature_id} == {
+        "EVE_demo|contig_1_1000-2000:contig_1_2",
+        "EVE_demo|contig_2_1000-2000:contig_2_2",
+    }
+    assert len(session.runs[0].searched_pairs) == 2
+
+
 def test_notebook_syntviz_figure_records_searches_without_hits(tmp_path: Path) -> None:
     eves = {
         "EVE_demo|contig_1_1000-2000": _syntviz_eve("contig_1", "HIGH", 0.9, [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV")]),
@@ -943,24 +999,30 @@ def test_notebook_syntviz_figure_records_searches_without_hits(tmp_path: Path) -
 
 def test_notebook_syntviz_figure_fits_many_rows_in_the_renderer_limit(
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     eves = {
         f"EVE_demo|contig_{index}_1000-2000": _syntviz_eve(
             f"contig_{index}",
             "LOW",
             0.1,
-            [_syntviz_gene(f"contig_{index}_2", 1_100, 1_463, "PPV")],
+            [_syntviz_gene(f"contig_{index}_2", 1_100, 1_463, "PPV", is_mcp=True)],
         )
-        for index in range(300)
+        for index in range(350)
     }
     namespace = _syntviz_namespace(tmp_path, eves, {})
 
     exec(_notebook_cell(SYNTVIZ_CELL), namespace)
 
     session = _syntviz_session(tmp_path)
-    assert len(session.sequences) == 300
+    assert len(session.sequences) == 350
     assert session.view.height_px <= 16_384
     assert (tmp_path / "eve_gene_map_syntviz.png").read_bytes().startswith(b"\x89PNG")
+    # Syntviz draws at most 1,000 markers; each EVE keeps both diamonds and its circle or none.
+    markers_per_row = Counter(marker.id.split(":")[1] for marker in session.view.markers)
+    assert set(markers_per_row.values()) == {3}
+    assert len(markers_per_row) == 333
+    assert "markers omitted for 17 EVEs" in capsys.readouterr().out
 
 
 def test_notebook_syntviz_figure_is_interactive_on_request(tmp_path: Path) -> None:

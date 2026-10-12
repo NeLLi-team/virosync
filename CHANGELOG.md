@@ -7,13 +7,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 
 - The report notebook draws the EVE gene neighborhoods with Syntviz as well:
-  one row per shown EVE with its flanks, genes in the report's category colors,
-  outlined capsid proteins, and grey ribbons for DIAMOND blastp hits between
-  proteins of different EVE cores (E ≤ 1e-5, identity ≥ 20%), with rows ordered
-  by protein similarity within each confidence tier. The report writes
+  one row per shown EVE with its flanks, named by tier, confidence and
+  interval; genes in the report's category colors, outlined capsid proteins,
+  MCP circles and fold stars as in the overview, diamonds at the EVE
+  boundaries, and grey ribbons for DIAMOND blastp hits between proteins of
+  different HIGH or MEDIUM EVE cores (E ≤ 1e-5, identity ≥ 20%), with rows
+  ordered by protein similarity within each confidence tier. The report writes
   `eve_gene_map.syntviz.json` plus PNG and SVG copies and shows the PNG; the
   `SYNTVIZ_INTERACTIVE` notebook parameter embeds the interactive viewer
-  instead. The environment adds `syntviz` (PyPI) and Node.js 22.
+  instead. The environment adds `syntviz` 0.2 (PyPI) and Node.js 22.
 
 ## [1.0.2] - 2026-10-06
 

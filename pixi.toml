@@ -73,7 +73,7 @@ papermill = ">=2.6"
 nbformat = ">=5.9"
 jupytext = ">=1.16"
 # Interactive gene-neighborhood figure in the EVE report.
-syntviz = ">=0.1,<0.2"
+syntviz = ">=0.2,<0.3"
 
 [tasks]
 # Unified CLI entrypoint.  Bare `-i/-o` invocations are auto-forwarded to
