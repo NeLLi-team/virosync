@@ -312,7 +312,9 @@ class Phase2Config:
     host_trim_step_bp: int = 1000
     host_trim_max_host_fraction: float = 0.3
     host_trim_min_viral_fraction: float = 0.05
-    host_trim_score_threshold: float = 0.3
+    # Share of a gene's ten hits that must sit in the host's own lineage.
+    # Order-level agreement on average; measured on the five real genomes.
+    host_trim_score_threshold: float = 0.35
     host_trim_buffer_kb: int = 5
     host_signature_min_token_len: int = 3
     host_trim_min_overlap_score: float = 0.40  # Min fingerprint overlap for host classification
