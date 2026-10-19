@@ -587,6 +587,20 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         "ARC",
     ]
 
+    # A gene the Phase 2 search never covered has no taxonomy record at all,
+    # which the map must not show as a search that returned nothing.
+    namespace["BOUNDARY_TAXONOMY"] = {
+        key: value for key, value in namespace["BOUNDARY_TAXONOMY"].items() if key != "contig_4"
+    }
+    exec(_notebook_cell("# ---- Build extended gene map data ----"), namespace)
+    unsearched = {
+        gene["porf_id"]: gene["category"]
+        for eve in namespace["eve_genes_extended"].values()
+        for gene in eve["left_flank_genes"] + eve["eve_genes"] + eve["right_flank_genes"]
+    }
+    assert unsearched["contig_4"] == "UNSEARCHED"
+    assert unsearched["contig_1"] == "BAC"
+
     namespace.update(
         {
             "plt": plt,
@@ -606,8 +620,11 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
                     "BAC",
                     "ARC",
                     "UNKNOWN",
+                    "UNSEARCHED",
                 )
             },
+            "UNSEARCHED_EDGE": "#777777",
+            "UNSEARCHED_LINESTYLE": (0, (2.0, 1.2)),
             "HOST_GENUS": "",
         }
     )
