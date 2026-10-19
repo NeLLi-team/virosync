@@ -261,6 +261,9 @@ class Phase1Config:
     assembly_mode: AssemblyMode = AssemblyMode.DEFAULT
     hmm_chunk_size: int | None = None
     frameshift_screening_enabled: bool = False
+    # Pfam arbitration of ambiguous marker hits. Off only to measure what
+    # the step contributes; every benchmarked run has it on.
+    pfam_arbitration_enabled: bool = True
 
     # Region assembly
     initial_window_bp: int = 10000
@@ -316,6 +319,9 @@ class Phase2Config:
     # Order-level agreement on average; measured on the five real genomes.
     host_trim_score_threshold: float = 0.35
     host_trim_buffer_kb: int = 5
+    # Phase 2c: terminal-repeat refinement. Off only to measure what the step
+    # contributes; every benchmarked run has it on.
+    terminal_repeat_enabled: bool = True
     host_signature_min_token_len: int = 3
     host_trim_min_overlap_score: float = 0.40  # Min fingerprint overlap for host classification
     # Phase 2b: batched Diamond for boundary refinement (always enabled as of Jan 2026)
@@ -576,6 +582,8 @@ FIELD_SPECS: list[FieldSpec] = [
         wo_aliases=("taxonomy_ml_neighbor_window",),
     ),
     _spec("boundary_host_trim_enabled", "phase2", "host_trim_enabled"),
+    _spec("boundary_terminal_repeat_enabled", "phase2", "terminal_repeat_enabled"),
+    _spec("pfam_arbitration_enabled", "phase1", "pfam_arbitration_enabled"),
     _spec("boundary_host_trim_window_bp", "phase2", "host_trim_window_bp"),
     _spec("boundary_host_trim_step_bp", "phase2", "host_trim_step_bp"),
     _spec("boundary_host_trim_max_host_fraction", "phase2", "host_trim_max_host_fraction"),

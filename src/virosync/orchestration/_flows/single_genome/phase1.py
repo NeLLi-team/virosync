@@ -432,7 +432,7 @@ def _run_phase1_subflow(
     )
     logger.info(f"HMM hits: {len(hhg_hits)}")
 
-    pfam_query_proteins = ambiguous_proteins(hhg_hits)
+    pfam_query_proteins = ambiguous_proteins(hhg_hits) if phase1.pfam_arbitration_enabled else []
     if pfam_query_proteins:
         model_dir = Path(hmm_database).parent
         pfam_hmm_path = model_dir / "pfam_virosync_screening.hmm"
