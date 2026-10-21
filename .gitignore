@@ -13,6 +13,7 @@ eggs/
 
 # Benchmark harness, results and manuscript live in the virosync-bench repo.
 /benchmarking/
+/manuscript/
 
 # Virtual environments
 .venv/
