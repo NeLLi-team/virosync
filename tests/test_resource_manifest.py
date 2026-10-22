@@ -9,6 +9,7 @@ import pytest
 import virosync.utils.resource_manifest as resource_manifest
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
+    GENE_FUNCTION_RESOURCE_FILES,
     LEGACY_SEMANTIC_COUNT_KEYS,
     RESOURCE_MANIFEST_NAME,
     RUNTIME_RESOURCE_FILES,
@@ -18,6 +19,8 @@ from virosync.utils.resource_manifest import (
     build_resource_manifest,
     build_split_resource_manifests,
     load_resource_manifest,
+    runtime_resource_files,
+    semantic_count_keys,
     validate_resource_tree,
 )
 
@@ -438,4 +441,214 @@ def test_schema_v2_rejects_incomplete_or_unexpected_contract_fields(
     manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
     with pytest.raises(ResourceManifestError, match=message):
+        load_resource_manifest(manifest_path)
+
+
+GENE_FUNCTION_LABELS_HEADER = b"profile\tsource\tlabel\tmodule\tmax_evalue\tdescription\n"
+
+
+def _add_gene_function_files(root: Path, profile_names: tuple[str, str] = ("PfamOne", "VOG00001")) -> None:
+    first, second = profile_names
+    (root / "models/gene_function.hmm").write_bytes(
+        b"HMMER3/f\nNAME  PfamOne\n//\nNAME  VOG00001\n//\n",
+    )
+    (root / "models/gene_function_labels.tsv").write_bytes(
+        GENE_FUNCTION_LABELS_HEADER
+        + f"{first}\tPfam 38.2\tMTase\tother\t1e-05\tone\n".encode()
+        + f"{second}\tVOGDB 228\tMCP\tcapsid\t1e-09\ttwo\n".encode()
+    )
+
+
+def _diamond_count(payload: Path | bytes) -> int:
+    assert isinstance(payload, Path)
+    return 3 if payload.name == "marker.dmnd" else 5
+
+
+def _runtime_tree(tmp_path: Path, version: str) -> tuple[Path, resource_manifest.ResourceManifest, bytes]:
+    """Build a full tree with the gene-function files; return its extracted runtime view."""
+    full = tmp_path / "full" / "virosync"
+    for relative, content in _payloads(version).items():
+        destination = full / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _add_pfam_hmm(full)
+    _add_gene_function_files(full)
+    (runtime, runtime_bytes), _ = build_split_resource_manifests(
+        full,
+        version,
+        diamond_sequence_counter=_diamond_count,
+    )
+    extracted = tmp_path / "runtime" / "virosync"
+    for item in runtime.files:
+        destination = extracted / item.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((full / item.path).read_bytes())
+    (extracted / RESOURCE_MANIFEST_NAME).write_bytes(runtime_bytes)
+    return extracted, runtime, runtime_bytes
+
+
+@pytest.mark.parametrize("version", ["v1.0.7", "v1.1.0", "v1.1.99"])
+def test_runtime_resource_files_before_v1_2_0_keep_the_nine_file_list(version: str) -> None:
+    assert runtime_resource_files(version) == RUNTIME_RESOURCE_FILES
+    assert len(RUNTIME_RESOURCE_FILES) == 9
+
+
+@pytest.mark.parametrize("version", ["v1.2.0", "v1.10.0", "v2.0.0"])
+def test_runtime_resource_files_from_v1_2_0_add_the_gene_function_files(version: str) -> None:
+    assert runtime_resource_files(version) == (
+        *RUNTIME_RESOURCE_FILES,
+        "models/gene_function.hmm",
+        "models/gene_function_labels.tsv",
+    )
+    assert GENE_FUNCTION_RESOURCE_FILES == ("models/gene_function.hmm", "models/gene_function_labels.tsv")
+
+
+@pytest.mark.parametrize("version", ["v1.0.7", "v1.1.0"])
+def test_semantic_count_keys_before_v1_2_0_keep_the_nine_keys(version: str) -> None:
+    assert semantic_count_keys(version) == SEMANTIC_COUNT_KEYS
+
+
+def test_semantic_count_keys_from_v1_2_0_add_the_gene_function_counts() -> None:
+    assert semantic_count_keys("v1.2.0") == (*SEMANTIC_COUNT_KEYS, "gene_function_models", "gene_function_labels")
+
+
+def test_v1_2_0_runtime_manifest_lists_the_gene_function_files_with_their_own_roles(tmp_path: Path) -> None:
+    extracted, runtime, _ = _runtime_tree(tmp_path, "v1.2.0")
+
+    roles = {item.path: item.role for item in runtime.files}
+    assert tuple(roles) == runtime_resource_files("v1.2.0")
+    assert roles["models/gene_function.hmm"] == "gene_function_models"
+    assert roles["models/gene_function_labels.tsv"] == "gene_function_labels"
+    assert runtime.semantic_counts["gene_function_models"] == 2
+    assert runtime.semantic_counts["gene_function_labels"] == 2
+    assert load_resource_manifest(extracted) == runtime
+    assert validate_resource_tree(extracted).files_verified == 11
+
+
+def test_v1_2_0_source_manifest_carries_the_same_counts_as_the_runtime_manifest(tmp_path: Path) -> None:
+    full = tmp_path / "full" / "virosync"
+    for relative, content in _payloads("v1.2.0").items():
+        destination = full / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _add_pfam_hmm(full)
+    _add_gene_function_files(full)
+
+    (runtime, _), (source, _) = build_split_resource_manifests(
+        full,
+        "v1.2.0",
+        diamond_sequence_counter=_diamond_count,
+    )
+
+    assert tuple(item.path for item in source.files) == SOURCE_RESOURCE_FILES
+    assert source.semantic_counts == runtime.semantic_counts
+
+
+def test_runtime_manifest_before_v1_2_0_ignores_gene_function_files_in_the_tree(tmp_path: Path) -> None:
+    _, runtime, _ = _runtime_tree(tmp_path, "v1.1.0")
+
+    assert tuple(item.path for item in runtime.files) == RUNTIME_RESOURCE_FILES
+    assert tuple(runtime.semantic_counts) == SEMANTIC_COUNT_KEYS
+
+
+def test_building_a_v1_2_0_manifest_requires_the_gene_function_files(tmp_path: Path) -> None:
+    full = tmp_path / "full" / "virosync"
+    for relative, content in _payloads("v1.2.0").items():
+        destination = full / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _add_pfam_hmm(full)
+
+    with pytest.raises(ResourceManifestError, match="gene_function_models"):
+        build_split_resource_manifests(full, "v1.2.0", diamond_sequence_counter=_diamond_count)
+
+
+def test_building_a_v1_2_0_manifest_rejects_unequal_gene_function_counts(tmp_path: Path) -> None:
+    full = tmp_path / "full" / "virosync"
+    for relative, content in _payloads("v1.2.0").items():
+        destination = full / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _add_pfam_hmm(full)
+    _add_gene_function_files(full)
+    (full / "models/gene_function_labels.tsv").write_bytes(
+        GENE_FUNCTION_LABELS_HEADER + b"PfamOne\tPfam 38.2\tMTase\tother\t1e-05\tone\n"
+    )
+
+    with pytest.raises(ResourceManifestError, match="gene-function model and label counts differ"):
+        build_split_resource_manifests(full, "v1.2.0", diamond_sequence_counter=_diamond_count)
+
+
+def test_building_a_v1_2_0_manifest_rejects_labels_for_other_profiles(tmp_path: Path) -> None:
+    full = tmp_path / "full" / "virosync"
+    for relative, content in _payloads("v1.2.0").items():
+        destination = full / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    _add_pfam_hmm(full)
+    _add_gene_function_files(full, ("PfamOne", "VOG99999"))
+
+    with pytest.raises(ResourceManifestError, match="gene-function profile identifiers disagree"):
+        build_split_resource_manifests(full, "v1.2.0", diamond_sequence_counter=_diamond_count)
+
+
+def test_validation_rejects_labels_for_other_profiles(tmp_path: Path) -> None:
+    extracted, _, _ = _runtime_tree(tmp_path, "v1.2.0")
+    labels = extracted / "models/gene_function_labels.tsv"
+    labels.write_bytes(labels.read_bytes().replace(b"VOG00001", b"VOG99999"))
+    manifest_path = extracted / RESOURCE_MANIFEST_NAME
+    document = json.loads(manifest_path.read_text())
+    entry = next(item for item in document["files"] if item["path"] == "models/gene_function_labels.tsv")
+    entry["sha256"] = resource_manifest.sha256_file(labels)
+    manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ResourceManifestError, match="gene-function profile identifiers disagree"):
+        validate_resource_tree(extracted)
+
+
+def test_validation_rejects_a_gene_function_count_that_differs_from_the_manifest(tmp_path: Path) -> None:
+    extracted, _, _ = _runtime_tree(tmp_path, "v1.2.0")
+    manifest_path = extracted / RESOURCE_MANIFEST_NAME
+    document = json.loads(manifest_path.read_text())
+    document["semantic_counts"]["gene_function_models"] = 3
+    document["semantic_counts"]["gene_function_labels"] = 3
+    manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ResourceManifestError, match="semantic count mismatch for gene_function_models"):
+        validate_resource_tree(extracted)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda doc: doc["files"].pop(), "payload set"),
+        (lambda doc: doc["files"].pop(9), "payload set"),
+        (lambda doc: doc["semantic_counts"].pop("gene_function_labels"), "semantic_counts keys"),
+        (lambda doc: doc["files"][9].update(role="hmm_models"), "role mismatch"),
+        (lambda doc: doc["semantic_counts"].update(gene_function_labels=3), "gene-function model and label counts"),
+    ],
+)
+def test_v1_2_0_runtime_manifest_rejects_a_broken_gene_function_contract(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    extracted, _, runtime_bytes = _runtime_tree(tmp_path, "v1.2.0")
+    document = json.loads(runtime_bytes)
+    mutation(document)
+    manifest_path = tmp_path / "mutated-manifest.json"
+    manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ResourceManifestError, match=message):
+        load_resource_manifest(manifest_path)
+
+
+def test_a_v1_1_0_manifest_cannot_carry_the_gene_function_files(tmp_path: Path) -> None:
+    _, _, runtime_bytes = _runtime_tree(tmp_path, "v1.2.0")
+    document = json.loads(runtime_bytes)
+    document.update(version="v1.1.0", resource_version="v1.1.0")
+    manifest_path = tmp_path / "mutated-manifest.json"
+    manifest_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ResourceManifestError, match="payload set.*unexpected=.*gene_function"):
         load_resource_manifest(manifest_path)

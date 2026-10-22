@@ -22,8 +22,9 @@ The main per-genome files are:
 | `phase3_synthesis/virosync_summary.json` | Per-genome counts and run metadata. |
 | `phase3_synthesis/eve_ani_edges.tsv` | ANI comparisons used for clustering. Can include candidates removed from the final accepted set. |
 | `phase3_synthesis/gene_taxonomy/` | Per-candidate gene taxonomy tables. Written when at least one EVE is accepted. |
+| `phase3_synthesis/gene_functions.tsv` | Function labels of core genes in the accepted EVEs. Columns: `eve_id`, `porf_id`, `label`, `module`, `evidence`, `evalue`; one row per labelled gene. Written when at least one EVE is accepted and the resource bundle is v1.2.0 or later. See [gene-function labels](#gene-function-labels). |
 | `notebooks/jupyter/eve_analysis.ipynb` | Per-genome report, including repeat-assessment summaries for accepted EVEs. Use the detailed table and repeat sidecar for rejected candidates. |
-| `eve_gene_map.syntviz.json` | Report figure: the shown EVEs with their flanks, gene categories and DIAMOND protein hits between EVE cores, as a [Syntviz](https://pypi.org/project/syntviz/) session. `syntviz view` opens it in the interactive viewer. Written when the report shows at least one EVE. |
+| `eve_gene_map.syntviz.json` | Report figure: the shown EVEs with their flanks, gene categories, gene functions and DIAMOND protein hits between EVE cores, as a [Syntviz](https://pypi.org/project/syntviz/) session. `syntviz view` opens it in the interactive viewer. Written when the report shows at least one EVE. |
 | `eve_gene_map_syntviz.png`, `eve_gene_map_syntviz.svg` | The same figure as images. Written only when Node.js is available. |
 
 A run that ends before Phase 3, for example because no marker hits or seeds
@@ -190,6 +191,55 @@ stronger optional fold evidence takes priority. This is a marker-family
 inference, not structural or experimental confirmation. The `confidence`
 column in the MCP table describes fold evidence; it is distinct from
 `final_confidence` for an EVE.
+
+## Gene-function labels
+
+A resource bundle of v1.2.0 or later lets ViroSync name the genes inside each
+accepted EVE. Labels follow the gene vocabulary of Bellas and Sommaruga (2026,
+bioRxiv, doi:10.64898/2026.06.19.733378, Fig. 4). They are labels only. They
+never change detection, boundaries, scores, tiers or any other output column.
+Flanking genes get no label.
+
+ViroSync picks one label per core gene from the first source that gives one:
+
+1. **Curated model.** The gene's best-scoring Phase 1 HMM hit at E ≤ 1e-5 names
+   the gene when it is a curated ViroSync model. Evidence: the model name. A
+   renamed or relaxed OG-backed model (sources `gvclass_existing_og_to_vs` and
+   `OG_backed_relaxed_low_overlap_*`) names a gene only when its top Pfam domain
+   occurs in at least 50% of the sampled members of the model and belongs to the
+   vocabulary. Evidence: `<model> (OG; <domain> in k/n members)`. Metadata that
+   cannot be trusted gives no label from that model: no sampled members, a
+   malformed count, or a count above the number of sampled members.
+2. **Pfam.** The strongest hit of the gene against the Pfam families of the
+   vocabulary, at an i-Evalue of 1e-5 or lower. Evidence: `Pfam:<name>`.
+3. **VOG.** The strongest hit against a VOGDB group whose consensus description
+   names a vocabulary gene, at a full-sequence E-value of 1e-9 or lower.
+   Evidence: `VOG:<id>`.
+
+`module` groups the labels: capsid (MCP, mCP, ATPase, Protease, Portal,
+Terminase, Triplex), replication (PolB, pPolB, PolA, SF1, SF3, AEP),
+integration (YR, RVE, Int), mriya (VLTF2, VLTF3, HUH), other (MTase, Tet,
+SLATT, Lipase) and hallmark (RNAPL, TFIIB). `evalue` is the E-value of the hit
+that gave the label.
+
+E-values follow the `hmmscan` convention: the database size is the number of
+profiles in `gene_function.hmm`, not the number of genes a run searches. A
+gene gets the same E-value and label whether the run searches it alone or with
+thousands of other genes. The profile files and their selection are described in the
+[resource bundle](RESOURCE_BUNDLE.md#gene-function-profiles-bundle-v120-and-later).
+
+Core genes include confirmed frameshift-rescued proteins inside the EVE, which
+have no gene-taxonomy record. ViroSync searches them from the rescue FASTA of
+Phase 1. Labels of rescued proteins appear in `gene_functions.tsv`; the report
+gene maps draw the Phase 0 genes only.
+
+On a bundle before v1.2.0, ViroSync logs one INFO line and writes no
+`gene_functions.tsv`, and the report draws the gene map as before. A bundle
+with only one of the two gene-function files is corrupt, and the run stops with
+an error that names the missing file. With the table, the static gene map
+prints each label under its core gene and drops a label that has no free line,
+and the Syntviz figure uses the label as the feature name and records it, with
+its evidence, as a `function` annotation.
 
 ## Workflow summary
 

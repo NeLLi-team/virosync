@@ -51,6 +51,13 @@ LEGACY_RUNTIME_RESOURCE_FILES: tuple[str, ...] = tuple(
     path for path in RUNTIME_RESOURCE_FILES if path != "models/pfam_virosync_screening.hmm"
 )
 
+# Runtime bundles of GENE_FUNCTION_FIRST_VERSION and later carry the gene-function
+# profile set after RUNTIME_RESOURCE_FILES. Earlier bundles keep their file lists.
+GENE_FUNCTION_FIRST_VERSION: tuple[int, int, int] = (1, 2, 0)
+GENE_FUNCTION_HMM = "models/gene_function.hmm"
+GENE_FUNCTION_LABELS = "models/gene_function_labels.tsv"
+GENE_FUNCTION_RESOURCE_FILES: tuple[str, ...] = (GENE_FUNCTION_HMM, GENE_FUNCTION_LABELS)
+
 SOURCE_RESOURCE_FILES: tuple[str, ...] = (
     "models/combined.hmm.h3f",
     "models/combined.hmm.h3i",
@@ -71,6 +78,8 @@ SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
     "taxonomy_labels",
 )
 
+GENE_FUNCTION_SEMANTIC_COUNT_KEYS: tuple[str, ...] = ("gene_function_models", "gene_function_labels")
+
 LEGACY_SEMANTIC_COUNT_KEYS: tuple[str, ...] = tuple(key for key in SEMANTIC_COUNT_KEYS if key != "pfam_models")
 
 REQUIRED_SEMANTIC_COUNT_KEYS: tuple[str, ...] = (
@@ -87,6 +96,8 @@ _CANONICAL_ROLES: Mapping[str, str] = {
     "DATABASE_README.txt": "bundle_documentation",
     "models/combined.hmm": "hmm_models",
     "models/pfam_virosync_screening.hmm": "pfam_models",
+    GENE_FUNCTION_HMM: "gene_function_models",
+    GENE_FUNCTION_LABELS: "gene_function_labels",
     "models/combined.hmm.h3f": "hmm_index",
     "models/combined.hmm.h3i": "hmm_index",
     "models/combined.hmm.h3m": "hmm_index",
@@ -123,6 +134,13 @@ def _validate_marker_count_parity(semantic_counts: Mapping[str, int]) -> None:
         raise ResourceManifestError(
             f"marker protein and marker DIAMOND sequence counts differ: {marker_proteins} != {marker_diamond}"
         )
+
+
+def _validate_gene_function_count_parity(semantic_counts: Mapping[str, int]) -> None:
+    models = semantic_counts.get("gene_function_models")
+    labels = semantic_counts.get("gene_function_labels")
+    if models is not None and labels is not None and models != labels:
+        raise ResourceManifestError(f"gene-function model and label counts differ: {models} != {labels}")
 
 
 @dataclass(frozen=True)
@@ -162,6 +180,28 @@ class ResourceValidationResult:
 
 ResourcePayload: TypeAlias = Path | bytes
 DiamondSequenceCounter: TypeAlias = Callable[[ResourcePayload], int]
+
+
+def runtime_resource_files(version: str) -> tuple[str, ...]:
+    """Return the payload files of a runtime bundle of *version*, in canonical order.
+
+    Bundles of v1.2.0 and later also carry the gene-function profile set.
+    """
+    if _has_gene_function_files(version):
+        return (*RUNTIME_RESOURCE_FILES, *GENE_FUNCTION_RESOURCE_FILES)
+    return RUNTIME_RESOURCE_FILES
+
+
+def semantic_count_keys(version: str) -> tuple[str, ...]:
+    """Return the schema-2 semantic-count keys of a bundle of *version*, in canonical order."""
+    if _has_gene_function_files(version):
+        return (*SEMANTIC_COUNT_KEYS, *GENE_FUNCTION_SEMANTIC_COUNT_KEYS)
+    return SEMANTIC_COUNT_KEYS
+
+
+def _has_gene_function_files(version: str) -> bool:
+    parts = tuple(int(part) for part in _validate_version(version, "version")[1:].split("."))
+    return parts >= GENE_FUNCTION_FIRST_VERSION
 
 
 def sha256_file(path: Path) -> str:
@@ -299,7 +339,7 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
 
     payload_files = {
         "legacy": CORE_RESOURCE_FILES,
-        "runtime": RUNTIME_RESOURCE_FILES,
+        "runtime": runtime_resource_files(version),
         "source": SOURCE_RESOURCE_FILES,
     }[bundle_kind]
     required = set(payload_files)
@@ -315,8 +355,9 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
     raw_counts = document["semantic_counts"]
     if not isinstance(raw_counts, dict):
         raise ResourceManifestError("semantic_counts must be an object")
-    required_counts = set(SEMANTIC_COUNT_KEYS) if schema_version == 2 else set(REQUIRED_SEMANTIC_COUNT_KEYS)
-    allowed_counts = set(SEMANTIC_COUNT_KEYS if schema_version == 2 else LEGACY_SEMANTIC_COUNT_KEYS)
+    version_count_keys = semantic_count_keys(version)
+    required_counts = set(version_count_keys) if schema_version == 2 else set(REQUIRED_SEMANTIC_COUNT_KEYS)
+    allowed_counts = set(version_count_keys if schema_version == 2 else LEGACY_SEMANTIC_COUNT_KEYS)
     present_counts = set(raw_counts)
     if not required_counts.issubset(present_counts) or not present_counts.issubset(allowed_counts):
         raise ResourceManifestError(
@@ -325,7 +366,7 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
             f"unexpected={sorted(present_counts - allowed_counts)}"
         )
     semantic_counts: dict[str, int] = {}
-    for key in SEMANTIC_COUNT_KEYS:
+    for key in version_count_keys:
         if key not in raw_counts:
             continue
         value = raw_counts[key]
@@ -335,6 +376,7 @@ def _parse_manifest(content: bytes, manifest_sha256: str) -> ResourceManifest:
     if "hmm_index_files" in semantic_counts and semantic_counts["hmm_index_files"] != len(_HMM_INDEX_FILES):
         raise ResourceManifestError(f"semantic_counts.hmm_index_files must be {len(_HMM_INDEX_FILES)}")
     _validate_marker_count_parity(semantic_counts)
+    _validate_gene_function_count_parity(semantic_counts)
 
     return ResourceManifest(
         schema_version=schema_version,
@@ -518,14 +560,15 @@ def compute_semantic_counts(
         "marker_proteins": _count_prefixed_lines(_payload_at(resource_root, "marker/marker.faa", overrides), b">"),
         "taxonomy_labels": _count_taxonomy_rows(_payload_at(resource_root, "taxonomy/labels.tsv", overrides)),
     }
-    pfam_relative = "models/pfam_virosync_screening.hmm"
-    pfam_payload = (
-        overrides[pfam_relative]
-        if overrides is not None and pfam_relative in overrides
-        else resource_root / pfam_relative
-    )
-    if isinstance(pfam_payload, bytes) or pfam_payload.is_file():
+    pfam_payload = _payload_at(resource_root, "models/pfam_virosync_screening.hmm", overrides)
+    if _payload_exists(pfam_payload):
         counts["pfam_models"] = _count_prefixed_lines(pfam_payload, b"NAME")
+    gene_function_hmm = _payload_at(resource_root, GENE_FUNCTION_HMM, overrides)
+    if _payload_exists(gene_function_hmm):
+        counts["gene_function_models"] = _count_prefixed_lines(gene_function_hmm, b"NAME")
+    gene_function_labels = _payload_at(resource_root, GENE_FUNCTION_LABELS, overrides)
+    if _payload_exists(gene_function_labels):
+        counts["gene_function_labels"] = _count_tsv_rows(gene_function_labels, header=True)
     if include_diamond:
         if diamond_sequence_counter is None:
 
@@ -541,7 +584,11 @@ def compute_semantic_counts(
         counts["proteome_diamond_sequences"] = diamond_sequence_counter(
             _payload_at(resource_root, "genomes/combined_proteome.dmnd", overrides)
         )
-    return {key: counts[key] for key in SEMANTIC_COUNT_KEYS if key in counts}
+    return {key: counts[key] for key in (*SEMANTIC_COUNT_KEYS, *GENE_FUNCTION_SEMANTIC_COUNT_KEYS) if key in counts}
+
+
+def _payload_exists(payload: ResourcePayload) -> bool:
+    return isinstance(payload, bytes) or payload.is_file()
 
 
 def _payload_size(payload: ResourcePayload) -> int:
@@ -570,7 +617,11 @@ def _manifest_document(
             }
             for item in files
         ],
-        "semantic_counts": {key: semantic_counts[key] for key in SEMANTIC_COUNT_KEYS if key in semantic_counts},
+        "semantic_counts": {
+            key: semantic_counts[key]
+            for key in (*SEMANTIC_COUNT_KEYS, *GENE_FUNCTION_SEMANTIC_COUNT_KEYS)
+            if key in semantic_counts
+        },
     }
 
 
@@ -654,7 +705,7 @@ def build_resource_manifest(
         diamond_sequence_counter,
         LEGACY_SEMANTIC_COUNT_KEYS,
     )
-    counts.pop("pfam_models", None)
+    counts = {key: counts[key] for key in LEGACY_SEMANTIC_COUNT_KEYS}
 
     document = _manifest_document(normalized_version, immutable_files, counts)
     content = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -682,16 +733,21 @@ def build_split_resource_manifests(
     """Build bound schema-v2 runtime and source manifests."""
     normalized_version = _validate_version(version, "version")
     resource_root = Path(root)
+    version_count_keys = semantic_count_keys(normalized_version)
     counts = _validated_semantic_counts(
         resource_root,
         overrides,
         diamond_sequence_counter,
-        SEMANTIC_COUNT_KEYS,
+        version_count_keys,
     )
+    counts = {key: counts[key] for key in version_count_keys}
+    if GENE_FUNCTION_HMM in runtime_resource_files(normalized_version):
+        _validate_gene_function_count_parity(counts)
+        _validate_gene_function_identity(resource_root)
 
     runtime_files = _manifest_files(
         resource_root,
-        RUNTIME_RESOURCE_FILES,
+        runtime_resource_files(normalized_version),
         overrides,
     )
     runtime_document = _manifest_document(
@@ -801,19 +857,30 @@ def _validate_tree_inventory(
         )
 
 
-def _validate_hmm_annotation_identity(root: Path) -> None:
-    hmm_names: list[str] = []
-    with (root / "models/combined.hmm").open("rt", encoding="utf-8") as handle:
+def _hmm_names(path: Path) -> list[str]:
+    names: list[str] = []
+    with path.open("rt", encoding="utf-8") as handle:
         for line in handle:
             fields = line.split()
             if len(fields) >= 2 and fields[0] == "NAME":
-                hmm_names.append(fields[1])
-    annotation_names: list[str] = []
-    with (root / "models/model_annotations_with_interpro.tsv").open("rt", encoding="utf-8") as handle:
+                names.append(fields[1])
+    return names
+
+
+def _first_column(path: Path) -> list[str]:
+    """Return the first column of a TSV table, without its header row."""
+    values: list[str] = []
+    with path.open("rt", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle):
             if line_number == 0 or not line.strip():
                 continue
-            annotation_names.append(line.rstrip("\n").split("\t", 1)[0])
+            values.append(line.rstrip("\n").split("\t", 1)[0])
+    return values
+
+
+def _validate_hmm_annotation_identity(root: Path) -> None:
+    hmm_names = _hmm_names(root / "models/combined.hmm")
+    annotation_names = _first_column(root / "models/model_annotations_with_interpro.tsv")
     if len(hmm_names) != len(set(hmm_names)):
         raise ResourceManifestError("HMM NAME values must be unique")
     if len(annotation_names) != len(set(annotation_names)):
@@ -823,6 +890,21 @@ def _validate_hmm_annotation_identity(root: Path) -> None:
         unexpected = sorted(set(annotation_names) - set(hmm_names))[:5]
         raise ResourceManifestError(
             f"HMM and model-annotation identifiers disagree; missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _validate_gene_function_identity(root: Path) -> None:
+    hmm_names = _hmm_names(root / GENE_FUNCTION_HMM)
+    label_names = _first_column(root / GENE_FUNCTION_LABELS)
+    if len(hmm_names) != len(set(hmm_names)):
+        raise ResourceManifestError("gene-function HMM NAME values must be unique")
+    if len(label_names) != len(set(label_names)):
+        raise ResourceManifestError("gene-function label profiles must be unique")
+    if set(hmm_names) != set(label_names):
+        missing = sorted(set(hmm_names) - set(label_names))[:5]
+        unexpected = sorted(set(label_names) - set(hmm_names))[:5]
+        raise ResourceManifestError(
+            f"gene-function profile identifiers disagree; missing={missing}, unexpected={unexpected}"
         )
 
 
@@ -889,6 +971,12 @@ def validate_resource_tree(
                     payload_paths["models/pfam_virosync_screening.hmm"],
                     b"NAME",
                 )
+            if GENE_FUNCTION_HMM in payload_paths:
+                actual_counts["gene_function_models"] = _count_prefixed_lines(payload_paths[GENE_FUNCTION_HMM], b"NAME")
+            if GENE_FUNCTION_LABELS in payload_paths:
+                actual_counts["gene_function_labels"] = _count_tsv_rows(
+                    payload_paths[GENE_FUNCTION_LABELS], header=True
+                )
             hmm_indices = [payload_paths[relative] for relative in _HMM_INDEX_FILES if relative in payload_paths]
             if hmm_indices:
                 actual_counts["hmm_index_files"] = sum(1 for payload in hmm_indices if payload.stat().st_size > 0)
@@ -924,6 +1012,8 @@ def validate_resource_tree(
             "models/model_annotations_with_interpro.tsv",
         }.issubset(payload_paths):
             _validate_hmm_annotation_identity(resource_root)
+        if {GENE_FUNCTION_HMM, GENE_FUNCTION_LABELS}.issubset(payload_paths):
+            _validate_gene_function_identity(resource_root)
 
     if full:
         diamond_counts = {}

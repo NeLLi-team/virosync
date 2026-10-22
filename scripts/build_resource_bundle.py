@@ -28,16 +28,20 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyhmmer
+
 # Keep the documented ``pixi run python scripts/...`` invocation independent of
 # whether the project has been installed in editable mode.
 _SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from virosync.pipeline.phase3.gene_functions import read_gene_function_profiles
 from virosync.utils.resource_manifest import (
     CORE_RESOURCE_FILES,
+    GENE_FUNCTION_HMM,
+    GENE_FUNCTION_LABELS,
     RESOURCE_MANIFEST_NAME,
-    RUNTIME_RESOURCE_FILES,
     SOURCE_RESOURCE_FILES,
     DiamondSequenceCounter,
     ResourceManifestError,
@@ -45,12 +49,22 @@ from virosync.utils.resource_manifest import (
     build_resource_manifest,
     build_split_resource_manifests,
     diamond_sequence_count,
+    runtime_resource_files,
     sha256_file,
 )
 
 HMM_INDEX_SUFFIXES = (".h3f", ".h3i", ".h3m", ".h3p")
 TAR_FORMAT = tarfile.GNU_FORMAT
 _VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+_GENE_FUNCTION_PAYLOAD_LINES = (
+    "  models/gene_function.hmm                    Pfam and VOGDB profiles that label genes\n"
+    "  models/gene_function_labels.tsv             label, module and cut-off of each profile\n"
+)
+_GENE_FUNCTION_CREDITS = (
+    "Credits for the gene-function profiles:\n"
+    "  VOGDB (CC BY 4.0): Trgovec-Greif et al. 2024, Viruses 16:1191, doi:10.3390/v16081191\n"
+    "  Pfam (CC0): Pfam-A profiles from EMBL-EBI\n\n"
+)
 
 
 @dataclass(frozen=True)
@@ -127,23 +141,75 @@ def _validate_pfam_annotations(path: Path) -> None:
         )
 
 
+def _gene_function_count(resources_dir: Path, version: str) -> int | None:
+    """Return the gene-function profile count when *version* carries that set, else None.
+
+    The two files are parsed here, once, because the manifest authenticates them by hash
+    and installation does not parse them. They must hold at least one profile, and the
+    HMM names and the labels table must name the same profiles, each once.
+    """
+    if GENE_FUNCTION_HMM not in runtime_resource_files(version):
+        return None
+    for relative in (GENE_FUNCTION_HMM, GENE_FUNCTION_LABELS):
+        if not (resources_dir / relative).is_file():
+            raise ResourceManifestError(f"missing resource payload: {resources_dir / relative}")
+    hmm_names = _gene_function_hmm_names(resources_dir / GENE_FUNCTION_HMM)
+    try:
+        profiles = read_gene_function_profiles(resources_dir / GENE_FUNCTION_LABELS)
+    except ValueError as exc:
+        raise ResourceManifestError(f"{GENE_FUNCTION_LABELS} is invalid: {exc}") from exc
+    if not profiles:
+        raise ResourceManifestError(f"{GENE_FUNCTION_LABELS} holds no profiles")
+    if set(hmm_names) != set(profiles):
+        raise ResourceManifestError(
+            "gene-function profile names disagree between the HMM library and the labels table; "
+            f"only in the library={sorted(set(hmm_names) - set(profiles))[:5]}, "
+            f"only in the table={sorted(set(profiles) - set(hmm_names))[:5]}"
+        )
+    return len(hmm_names)
+
+
+def _gene_function_hmm_names(path: Path) -> list[str]:
+    """Parse the HMM library with pyhmmer and return its profile names, each unique."""
+    try:
+        with pyhmmer.plan7.HMMFile(path) as handle:
+            names = [hmm.name.decode() for hmm in handle]
+    except (EOFError, ValueError) as exc:
+        raise ResourceManifestError(f"{GENE_FUNCTION_HMM} is not a HMMER3 text library: {exc}") from exc
+    if not names:
+        raise ResourceManifestError(f"{GENE_FUNCTION_HMM} holds no profiles")
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise ResourceManifestError(f"{GENE_FUNCTION_HMM} lists profile {repeated[0]!r} twice")
+    return names
+
+
 def _readme_bytes(
     resources_dir: Path,
     version: str,
     *,
     split_runtime: bool = False,
     pfam_count: int | None = None,
+    gene_function_count: int | None = None,
 ) -> bytes:
     hmm_count = _count_prefixed_lines(resources_dir / "models/combined.hmm", b"NAME")
     marker_count = _count_prefixed_lines(resources_dir / "marker/marker.faa", b">")
     if split_runtime:
         if pfam_count is None:
             raise ResourceManifestError("split runtime README requires a Pfam model count")
+        gene_function_summary = ""
+        gene_function_payload = ""
+        gene_function_credits = ""
+        if gene_function_count is not None:
+            gene_function_summary = f"Gene-function profiles (models/gene_function.hmm): {gene_function_count}\n"
+            gene_function_payload = _GENE_FUNCTION_PAYLOAD_LINES
+            gene_function_credits = _GENE_FUNCTION_CREDITS
         content = (
             f"ViroSync core runtime resource bundle {version}\n"
             f"{'=' * 48}\n\n"
             f"HMM profiles (models/combined.hmm): {hmm_count}\n"
             f"Pfam screening profiles: {pfam_count}\n"
+            f"{gene_function_summary}"
             f"TIER-1 marker proteins (source artifact): {marker_count}\n\n"
             "Runtime payload:\n"
             "  models/combined.hmm                         Phase 1 marker HMM library\n"
@@ -152,7 +218,9 @@ def _readme_bytes(
             "  models/og_marker_name_map.tsv               VS<->OG marker name map\n"
             "  marker/marker.dmnd                           TIER-1 validation database\n"
             "  genomes/combined_proteome.dmnd               TIER-2 taxonomy database\n"
-            "  taxonomy/labels.tsv                          genome-to-lineage labels\n\n"
+            "  taxonomy/labels.tsv                          genome-to-lineage labels\n"
+            f"{gene_function_payload}\n"
+            f"{gene_function_credits}"
             "Source/repair artifact:\n"
             "  models/combined.hmm.h3f/.h3i/.h3m/.h3p      HMMER indices\n"
             "  marker/marker.faa                            marker protein source\n\n"
@@ -433,6 +501,7 @@ def build_split_resource_bundles(
         raise ResourceManifestError(f"resources directory must be an existing directory: {resources_dir}")
     pfam_count = _validate_pfam_hmm(resources_dir / "models/pfam_virosync_screening.hmm")
     _validate_pfam_annotations(resources_dir / "models/model_annotations_with_interpro.tsv")
+    gene_function_count = _gene_function_count(resources_dir, version)
 
     runtime_output = Path(runtime_output).expanduser().resolve(strict=False)
     source_output = Path(source_output).expanduser().resolve(strict=False)
@@ -464,6 +533,7 @@ def build_split_resource_bundles(
             version,
             split_runtime=True,
             pfam_count=pfam_count,
+            gene_function_count=gene_function_count,
         )
 
         if diamond_sequence_counter is None:
@@ -502,7 +572,7 @@ def build_split_resource_bundles(
                 runtime_temporary,
                 overrides=overrides,
                 manifest_bytes=runtime_manifest_bytes,
-                payload_files=RUNTIME_RESOURCE_FILES,
+                payload_files=runtime_resource_files(version),
             )
             create_deterministic_archive(
                 resources_dir,

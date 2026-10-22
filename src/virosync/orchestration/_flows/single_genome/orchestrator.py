@@ -49,6 +49,7 @@ from virosync.pipeline.phase0.masking import (
     MaskingResult,
     load_masking_result,
 )
+from virosync.pipeline.phase3.gene_functions import GeneFunctionInputs
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, validate_path_component
 from virosync.utils.prodigal_runtime import resolve_prodigal_executable
@@ -367,6 +368,8 @@ def _enabled_resource_identities(flat_config: dict) -> list:
                 "model_annotations_with_interpro.tsv",
                 "og_marker_name_map.tsv",
                 "pfam_virosync_screening.hmm",
+                "gene_function.hmm",
+                "gene_function_labels.tsv",
             ):
                 sibling = selected.parent / sibling_name
                 if sibling.is_file():
@@ -570,6 +573,8 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
         return "canonical-predictions-gff3-v1"
     if path.name == "eve_ani_edges.tsv":
         return "eve-ani-edges-v1"
+    if path.name == "gene_functions.tsv":
+        return "gene-functions-v1"
     if path.name == "virosync_summary.json":
         return "virosync-summary-v3"
     if path.name == "masking_status.json":
@@ -752,6 +757,7 @@ def _final_artifacts(
             "virosync_predictions.gff3",
             "virosync_summary.json",
             "eve_ani_edges.tsv",
+            "gene_functions.tsv",
         )
         if (candidate := synthesis / name).is_file()
     )
@@ -930,6 +936,22 @@ def _publish_terminal_success(
         "output_files": _authenticated_output_files(output_dir),
         "run_state": asdict(state),
     }
+
+
+def _gene_function_inputs(
+    hmm_database: Path | None,
+    output_dir: Path,
+    *,
+    threads: int,
+) -> GeneFunctionInputs | None:
+    """Return where Phase 3 finds the evidence that labels genes, or None without an HMM database."""
+    if hmm_database is None:
+        return None
+    return GeneFunctionInputs(
+        hmm_database=Path(hmm_database),
+        model_hits=output_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv",
+        threads=threads,
+    )
 
 
 def _write_combined_eve_fasta(
@@ -1840,6 +1862,7 @@ def _single_genome_flow_impl(
         export_all_eve_sequences=phase3.export_all_eve_sequences,
         canonical_results=accepted_results,
         promoted_low_results=promoted_low_results,
+        gene_function_inputs=_gene_function_inputs(databases.hmm_database, output_dir, threads=threads),
     )
 
     # === FINAL OUTPUTS TO ROOT ===

@@ -38,6 +38,7 @@ from virosync.utils.resource_manifest import (
     ResourceManifestError,
     ResourceValidationResult,
     load_resource_manifest,
+    runtime_resource_files,
     validate_resource_tree,
 )
 
@@ -483,7 +484,7 @@ class ViroSyncDatabaseManager:
         except (OSError, ResourceManifestError):
             manifest = None
         if manifest is not None and manifest.schema_version == 2:
-            return list(RUNTIME_RESOURCE_FILES)
+            return list(runtime_resource_files(manifest.version))
         return list(LEGACY_RUNTIME_RESOURCE_FILES)
 
     @classmethod

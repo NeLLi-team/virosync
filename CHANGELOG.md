@@ -6,6 +6,22 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- Gene-function labels for the core genes of accepted EVEs (including confirmed
+  frameshift-rescued proteins), in the vocabulary of
+  Bellas and Sommaruga (2026): MCP, mCP, ATPase, Protease, Portal, Terminase,
+  Triplex, PolB, pPolB, PolA, SF1, SF3, AEP, YR, RVE, Int, VLTF2, VLTF3, HUH,
+  MTase, Tet, SLATT, Lipase, RNAPL and TFIIB, each in one of six modules. A label
+  comes from the best curated Phase 1 model, or a renamed OG-backed model whose
+  top Pfam domain holds in half of its sampled members, then from Pfam and VOGDB
+  profile hits. Phase 3 writes `phase3_synthesis/gene_functions.tsv`. The report
+  prints the labels under the core genes of the static gene map and records them
+  in the Syntviz figure. Labels never change detection, boundaries, scores,
+  tiers or existing columns. The new files `models/gene_function.hmm` and
+  `models/gene_function_labels.tsv` are required in runtime bundles of v1.2.0 and
+  later (`scripts/build_gene_function_profiles.py` builds them from Pfam-A and
+  VOGDB; both are credited in the bundle README). A run on an older bundle
+  writes no gene-function table.
+
 - The report notebook draws the EVE gene neighborhoods with Syntviz as well:
   one row per shown EVE with its flanks, named by tier, confidence and
   interval; genes in the report's category colors, outlined capsid proteins,

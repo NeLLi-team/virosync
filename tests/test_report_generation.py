@@ -733,6 +733,8 @@ def _syntviz_gene(
     *,
     is_mcp: bool = False,
     fold_type: str = "",
+    function_label: str = "",
+    function_evidence: str = "",
 ):
     return {
         "porf_id": porf_id,
@@ -742,6 +744,8 @@ def _syntviz_gene(
         "category": category,
         "is_mcp": is_mcp,
         "fold_type": fold_type,
+        "function_label": function_label,
+        "function_evidence": function_evidence,
     }
 
 
@@ -1049,3 +1053,272 @@ def test_notebook_syntviz_figure_needs_neither_diamond_nor_node(
     assert session.runs[0].searched_pairs == []
     assert not (tmp_path / "eve_gene_map_syntviz.svg").exists()
     assert _displayed_types(namespace) == ["Figure"]
+
+
+def test_notebook_syntviz_figure_names_a_gene_by_its_function_and_annotates_the_evidence(tmp_path: Path) -> None:
+    eves = {
+        "EVE_demo|contig_1_1000-2000": _syntviz_eve(
+            "contig_1",
+            "HIGH",
+            0.9,
+            [
+                _syntviz_gene(
+                    "contig_1_2", 1_100, 1_463, "PPV", function_label="PolB", function_evidence="Pfam:DNA_pol_B"
+                ),
+                _syntviz_gene("contig_1_3", 1_500, 1_800, "PPV", is_mcp=True),
+                _syntviz_gene("contig_1_4", 1_850, 1_990, "PPV"),
+            ],
+        )
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID, "contig_1_3": CAPSID, "contig_1_4": PRIMASE})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    names = {feature.id.split(":")[1]: feature.name for feature in session.features}
+    assert names["contig_1_2"] == "PolB"
+    assert names["contig_1_3"] == "MCP"
+    assert names["contig_1_4"] == "contig_1_4"
+    function = [annotation for annotation in session.annotations if annotation.namespace == "function"]
+    assert [(a.target.feature_id, a.value) for a in function] == [("EVE_demo|contig_1_1000-2000:contig_1_2", "PolB")]
+    assert "Pfam:DNA_pol_B" in function[0].evidence_source
+
+
+def test_notebook_syntviz_figure_keeps_the_capsid_outline_when_a_capsid_has_a_function_label(tmp_path: Path) -> None:
+    eves = {
+        "EVE_demo|contig_1_1000-2000": _syntviz_eve(
+            "contig_1",
+            "HIGH",
+            0.9,
+            [
+                _syntviz_gene(
+                    "contig_1_2",
+                    1_100,
+                    1_463,
+                    "PPV",
+                    is_mcp=True,
+                    function_label="MCP",
+                    function_evidence="GVOGm0003",
+                ),
+                _syntviz_gene(
+                    "contig_1_3", 1_500, 1_800, "PPV", function_label="MCP", function_evidence="Pfam:Capsid_NCLDV"
+                ),
+            ],
+        )
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID, "contig_1_3": CAPSID})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    groups = {group.id: set(group.feature_ids) for group in _syntviz_session(tmp_path).view.style_groups}
+    assert groups["mcp"] == {"EVE_demo|contig_1_1000-2000:contig_1_2"}
+
+
+def test_notebook_syntviz_palette_colors_categories_only(tmp_path: Path) -> None:
+    eves = {
+        "EVE_demo|contig_1_1000-2000": _syntviz_eve(
+            "contig_1",
+            "HIGH",
+            0.9,
+            [_syntviz_gene("contig_1_2", 1_100, 1_463, "PPV", function_label="PolB", function_evidence="x")],
+        )
+    }
+    namespace = _syntviz_namespace(tmp_path, eves, {"contig_1_2": CAPSID})
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    palette = _syntviz_session(tmp_path).view.colors.palette
+    assert set(palette) == {"PPV", "HOST"}
+
+
+@pytest.mark.parametrize(
+    ("spans", "expected"),
+    [
+        ([(0, 10), (12, 20), (30, 40)], [0, 0, 0]),
+        ([(0, 10), (5, 15), (30, 40)], [0, 1, 0]),
+        ([(0, 10), (10.5, 20)], [0, 1]),
+        ([(0, 10), (5, 15), (8, 18)], [0, 1, None]),
+        ([], []),
+    ],
+)
+def test_notebook_function_labels_move_to_a_free_row_or_are_dropped(
+    spans: list[tuple[float, float]], expected: list[int | None]
+) -> None:
+    namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_helper_cell(), namespace)
+
+    assert namespace["_function_label_rows"](spans, 1.0, 2) == expected
+
+
+GENE_FUNCTIONS_HEADER = "eve_id\tporf_id\tlabel\tmodule\tevidence\tevalue\n"
+
+
+def _load_data_namespace(tmp_path: Path, gene_functions: str | None) -> dict[str, object]:
+    """Run the notebook's load cell on one EVE whose five genes are 30 bp apart."""
+    synthesis = tmp_path / "phase3_synthesis"
+    synthesis.mkdir()
+    (synthesis / "evidence_profiles.json").write_text(
+        json.dumps(
+            {
+                "EVE_contig_30-120": {
+                    "scaffold": "contig",
+                    "start": 30,
+                    "end": 120,
+                    "status": "accepted",
+                    "final_confidence": 0.9,
+                    "confidence_tier": "HIGH",
+                    "taxonomy_class": "NCLDV",
+                }
+            }
+        )
+    )
+    (tmp_path / "phase0").mkdir()
+    (tmp_path / "phase0" / "proteome.fasta").write_text(
+        "".join(
+            f">contig_{index} # {start} # {start + 29} # 1 # ID=contig_{index};partial=00\nM\n"
+            for index, start in enumerate(range(1, 151, 30), start=1)
+        )
+    )
+    if gene_functions is not None:
+        (synthesis / "gene_functions.tsv").write_text(GENE_FUNCTIONS_HEADER + gene_functions)
+    helpers: dict[str, object] = {"pd": pd}
+    exec(_standalone_helper_cell(), helpers)
+    namespace: dict[str, object] = {
+        "BASE": tmp_path,
+        "SYNTHESIS": synthesis,
+        "GENOME_ID": "demo",
+        "SHOW_TIERS": ["HIGH"],
+        "json": json,
+        "pd": pd,
+        "defaultdict": defaultdict,
+        "re": re,
+        "csv": csv,
+        "_report_is_mcp_gene": helpers["_report_is_mcp_gene"],
+        "_report_prodigal_gene": helpers["_report_prodigal_gene"],
+        "_function_label_rows": helpers["_function_label_rows"],
+    }
+    exec(_notebook_cell("# ---- Load data ----"), namespace)
+    return namespace
+
+
+def _gene_record_namespace(tmp_path: Path, gene_functions: str | None) -> dict[str, object]:
+    namespace = _load_data_namespace(tmp_path, gene_functions)
+    namespace.update(
+        {
+            "BOUNDARY_TAXONOMY": {},
+            "_report_viral_category": lambda _record: None,
+            "_canonical_viral_category": lambda _origin, _target: None,
+            "is_host_gene": lambda _target: False,
+            "FLANK_SIZE": 0,
+            "canon_family": lambda profile: profile["taxonomy_class"],
+        }
+    )
+    exec(_notebook_cell("def _make_gene_record(gene, region):"), namespace)
+    return namespace
+
+
+def test_notebook_loads_gene_functions_by_eve_and_gene(tmp_path: Path) -> None:
+    namespace = _load_data_namespace(tmp_path, "EVE_contig_30-120\tcontig_2\tPolB\treplication\tGVOGm0054\t1e-20\n")
+
+    assert namespace["gene_function_by_gene"] == {
+        ("EVE_contig_30-120", "contig_2"): {"label": "PolB", "module": "replication", "evidence": "GVOGm0054"}
+    }
+
+
+def test_notebook_loads_no_gene_functions_when_the_table_is_absent(tmp_path: Path) -> None:
+    assert _load_data_namespace(tmp_path, None)["gene_function_by_gene"] == {}
+
+
+def test_notebook_gives_core_genes_their_function_and_flanking_genes_none(tmp_path: Path) -> None:
+    namespace = _gene_record_namespace(
+        tmp_path,
+        "EVE_contig_30-120\tcontig_2\tPolB\treplication\tGVOGm0054\t1e-20\n"
+        "EVE_contig_30-120\tcontig_1\tMCP\tcapsid\tGVOGm0003\t1e-20\n",
+    )
+
+    eve = namespace["eve_genes_extended"]["EVE_contig_30-120"]
+
+    assert [(g["porf_id"], g["function_label"], g["function_evidence"]) for g in eve["eve_genes"]] == [
+        ("contig_2", "PolB", "GVOGm0054"),
+        ("contig_3", "", ""),
+        ("contig_4", "", ""),
+    ]
+    assert all(not gene.get("function_label") for gene in eve["left_flank_genes"] + eve["right_flank_genes"])
+
+
+def _draw_gene_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gene_functions: str | None) -> dict[str, object]:
+    namespace = _gene_record_namespace(tmp_path, gene_functions)
+    namespace.update(
+        {
+            "plt": plt,
+            "mpatches": mpatches,
+            "Line2D": Line2D,
+            "Counter": Counter,
+            "COLORS": defaultdict(lambda: "#BBBBBB"),
+            "HOST_GENUS": "",
+        }
+    )
+    monkeypatch.setattr(plt, "savefig", lambda *args, **kwargs: None)
+    monkeypatch.setattr(plt, "show", lambda: None)
+    monkeypatch.setattr(plt, "tight_layout", lambda *args, **kwargs: None)
+    exec(_notebook_cell("# ---- Gene Map: all canonical EVEs with colored flanking genes ----"), namespace)
+    return namespace
+
+
+def test_notebook_gene_map_prints_the_function_under_each_labelled_core_gene(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = _draw_gene_map(
+        tmp_path,
+        monkeypatch,
+        "EVE_contig_30-120\tcontig_2\tPolB\treplication\tGVOGm0054\t1e-20\n"
+        "EVE_contig_30-120\tcontig_4\tPortal\tcapsid\tMirus_Portal\t1e-30\n",
+    )
+
+    ax = namespace["ax"]
+    labels = {text.get_text(): text for text in ax.texts if text.get_text() in {"PolB", "Portal"}}
+    assert set(labels) == {"PolB", "Portal"}
+    assert labels["PolB"].get_position()[0] == pytest.approx(45.0)
+    assert labels["Portal"].get_position()[0] == pytest.approx(105.0)
+    assert all(text.get_position()[1] < 0 for text in labels.values())
+    plt.close(namespace["fig"])
+
+
+def test_notebook_gene_map_labels_never_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    long_label = "Terminase" * 7
+    crowded = "".join(f"EVE_contig_30-120\tcontig_{index}\t{long_label}\tcapsid\tx\t1e-20\n" for index in (2, 3, 4))
+    namespace = _draw_gene_map(tmp_path, monkeypatch, crowded)
+
+    ax = namespace["ax"]
+    renderer = namespace["fig"].canvas.get_renderer()
+    boxes = [text.get_window_extent(renderer) for text in ax.texts if text.get_text() == long_label]
+    assert len(boxes) == 3
+    assert not any(a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i + 1 :])
+    assert len({round(text.get_position()[1], 3) for text in ax.texts if text.get_text() == long_label}) == 2
+    plt.close(namespace["fig"])
+
+
+def test_notebook_gene_map_draws_no_function_labels_without_the_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = _draw_gene_map(tmp_path, monkeypatch, None)
+
+    assert not [text for text in namespace["ax"].texts if text.get_text() in {"PolB", "Portal", "MCP"}]
+    plt.close(namespace["fig"])
+
+
+def test_notebook_gene_map_ignores_a_rescued_protein_that_no_drawn_gene_carries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = _draw_gene_map(
+        tmp_path,
+        monkeypatch,
+        "EVE_contig_30-120\tcontig_2\tPolB\treplication\tGVOGm0054\t1e-20\n"
+        "EVE_contig_30-120\tcontig_VSR0123456789abcdef\tTerminase\tcapsid\tPfam:Terminase_6N\t1e-30\n",
+    )
+
+    eve = namespace["eve_genes_extended"]["EVE_contig_30-120"]
+    assert "contig_VSR0123456789abcdef" not in {gene["porf_id"] for gene in eve["eve_genes"]}
+    assert [gene["function_label"] for gene in eve["eve_genes"] if gene["function_label"]] == ["PolB"]
+    assert {text.get_text() for text in namespace["ax"].texts} & {"PolB", "Terminase"} == {"PolB"}
+    plt.close(namespace["fig"])

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tarfile
 from pathlib import Path
 
+import pyhmmer
 import pytest
 
 from virosync.utils.resource_manifest import (
@@ -15,6 +17,7 @@ from virosync.utils.resource_manifest import (
     RUNTIME_RESOURCE_FILES,
     SOURCE_RESOURCE_FILES,
     ResourceManifestError,
+    runtime_resource_files,
 )
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts/build_resource_bundle.py"
@@ -26,6 +29,23 @@ _SCRIPT_SPEC.loader.exec_module(_SCRIPT_MODULE)
 build_resource_bundle = _SCRIPT_MODULE.build_resource_bundle
 build_split_resource_bundles = _SCRIPT_MODULE.build_split_resource_bundles
 TAR_FORMAT = _SCRIPT_MODULE.TAR_FORMAT
+
+
+def _hmm_text(*names: str) -> bytes:
+    """Return HMMER3 text for tiny profiles with the given names."""
+    alphabet = pyhmmer.easel.Alphabet.amino()
+    sequence = pyhmmer.easel.TextSequence(name=b"seed", sequence="MKVLAAGIVALLAAGCSSQWERTY").digitize(alphabet)
+    buffer = io.BytesIO()
+    for name in names:
+        hmm, _, _ = pyhmmer.plan7.Builder(alphabet).build(sequence, pyhmmer.plan7.Background(alphabet))
+        hmm.name = name.encode()
+        hmm.write(buffer, binary=False)
+    return buffer.getvalue()
+
+
+LABELS_HEADER = b"profile\tsource\tlabel\tmodule\tmax_evalue\tdescription\n"
+PFAM_ROW = b"PfamOne\tPfam 38.2\tMTase\tother\t1e-05\tone\n"
+VOG_ROW = b"VOG00001\tVOGDB 228\tMCP\tcapsid\t1e-09\ttwo\n"
 
 
 def _resource_tree(root: Path) -> Path:
@@ -50,6 +70,8 @@ def _resource_tree(root: Path) -> Path:
         "marker/marker.dmnd": b"marker diamond\n",
         "genomes/combined_proteome.dmnd": b"proteome diamond\n",
         "taxonomy/labels.tsv": b"genome-one\tNCLDV\n",
+        "models/gene_function.hmm": _hmm_text("PfamOne", "VOG00001"),
+        "models/gene_function_labels.tsv": LABELS_HEADER + PFAM_ROW + VOG_ROW,
         "DB_METADATA.json": b'{"install_local": true}\n',
         "unrelated.txt": b"must not be packaged\n",
     }
@@ -374,3 +396,126 @@ def test_split_prep_failure_publishes_neither_artifact(
 
     assert runtime_output.read_bytes() == b"existing runtime\n"
     assert source_output.read_bytes() == b"existing source\n"
+
+
+def _split_build(tmp_path: Path, resources: Path, version: str) -> tuple[Path, Path]:
+    runtime = tmp_path / "runtime.tar.gz"
+    source = tmp_path / "source.tar.gz"
+    build_split_resource_bundles(
+        resources,
+        runtime,
+        source,
+        version,
+        skip_hmmpress=True,
+        skip_marker_dmnd=True,
+        diamond_sequence_counter=_diamond_count,
+    )
+    return runtime, source
+
+
+def _member_bytes(archive: tarfile.TarFile, name: str) -> bytes:
+    handle = archive.extractfile(name)
+    assert handle is not None
+    return handle.read()
+
+
+def test_split_builder_packages_the_gene_function_files_in_a_v1_2_0_runtime_bundle(tmp_path: Path) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+
+    runtime, source = _split_build(tmp_path, resources, "v1.2.0")
+
+    with tarfile.open(runtime, "r:gz") as archive:
+        names = [member.name for member in archive.getmembers()]
+        manifest = json.loads(_member_bytes(archive, f"virosync/{RESOURCE_MANIFEST_NAME}"))
+    assert names == [
+        *(f"virosync/{path}" for path in runtime_resource_files("v1.2.0")),
+        f"virosync/{RESOURCE_MANIFEST_NAME}",
+    ]
+    assert {entry["path"]: entry["role"] for entry in manifest["files"]}["models/gene_function.hmm"] == (
+        "gene_function_models"
+    )
+    assert manifest["semantic_counts"]["gene_function_models"] == 2
+    assert manifest["semantic_counts"]["gene_function_labels"] == 2
+    with tarfile.open(source, "r:gz") as archive:
+        source_names = [member.name for member in archive.getmembers()]
+    assert "virosync/models/gene_function.hmm" not in source_names
+
+
+def test_split_builder_readme_credits_vogdb_and_pfam_from_v1_2_0(tmp_path: Path) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+
+    runtime, _ = _split_build(tmp_path, resources, "v1.2.0")
+
+    with tarfile.open(runtime, "r:gz") as archive:
+        readme = _member_bytes(archive, "virosync/DATABASE_README.txt").decode()
+    assert "Gene-function profiles (models/gene_function.hmm): 2" in readme
+    assert "VOGDB (CC BY 4.0): Trgovec-Greif et al. 2024, Viruses 16:1191, doi:10.3390/v16081191" in readme
+    assert "Pfam (CC0)" in readme
+
+
+def test_split_builder_before_v1_2_0_leaves_the_gene_function_files_out_of_the_bundle(tmp_path: Path) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+
+    runtime, _ = _split_build(tmp_path, resources, "v1.1.0")
+
+    with tarfile.open(runtime, "r:gz") as archive:
+        names = [member.name for member in archive.getmembers()]
+        readme = _member_bytes(archive, "virosync/DATABASE_README.txt").decode()
+        manifest = json.loads(_member_bytes(archive, f"virosync/{RESOURCE_MANIFEST_NAME}"))
+    assert names == [*(f"virosync/{path}" for path in RUNTIME_RESOURCE_FILES), f"virosync/{RESOURCE_MANIFEST_NAME}"]
+    assert "VOGDB" not in readme
+    assert "gene_function_models" not in manifest["semantic_counts"]
+
+
+def test_split_builder_requires_the_gene_function_files_from_v1_2_0(tmp_path: Path) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+    (resources / "models/gene_function.hmm").unlink()
+
+    with pytest.raises(ResourceManifestError, match="gene_function.hmm"):
+        _split_build(tmp_path, resources, "v1.2.0")
+
+    assert not (tmp_path / "runtime.tar.gz").exists()
+
+
+@pytest.mark.parametrize(
+    ("hmm", "labels", "message"),
+    [
+        pytest.param(
+            b"HMMER3/f\nNAME  PfamOne\n//\nNAME  VOG00001\n//\n", None, "no profiles", id="hmm-with-name-lines-only"
+        ),
+        pytest.param(b"not an hmm\n", None, "gene_function.hmm", id="hmm-not-hmmer"),
+        pytest.param(_hmm_text("PfamOne", "PfamOne"), None, "twice", id="hmm-repeats-a-name"),
+        pytest.param(_hmm_text("PfamOne", "VOG00001", "Extra"), None, "disagree", id="hmm-has-a-profile-without-a-row"),
+        pytest.param(None, LABELS_HEADER + PFAM_ROW, "disagree", id="table-lacks-a-row"),
+        pytest.param(None, LABELS_HEADER, "no profiles", id="table-has-no-rows"),
+        pytest.param(
+            None,
+            LABELS_HEADER + PFAM_ROW + b"VOG00001\tVOGDB 228\tNOT_A_LABEL\tcapsid\t1e-09\ttwo\n",
+            "NOT_A_LABEL",
+            id="table-has-a-label-outside-the-vocabulary",
+        ),
+        pytest.param(None, LABELS_HEADER + PFAM_ROW + PFAM_ROW, "repeats profile", id="table-repeats-a-profile"),
+    ],
+)
+def test_split_builder_rejects_gene_function_payloads_that_do_not_parse_or_disagree(
+    tmp_path: Path, hmm: bytes | None, labels: bytes | None, message: str
+) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+    if hmm is not None:
+        (resources / "models/gene_function.hmm").write_bytes(hmm)
+    if labels is not None:
+        (resources / "models/gene_function_labels.tsv").write_bytes(labels)
+
+    with pytest.raises(ResourceManifestError, match=message):
+        _split_build(tmp_path, resources, "v1.2.0")
+
+    assert not (tmp_path / "runtime.tar.gz").exists()
+
+
+def test_split_builder_does_not_parse_gene_function_files_before_v1_2_0(tmp_path: Path) -> None:
+    resources = _resource_tree(tmp_path / "source" / "virosync")
+    (resources / "models/gene_function.hmm").write_bytes(b"not an hmm\n")
+
+    runtime, _ = _split_build(tmp_path, resources, "v1.1.0")
+
+    assert runtime.exists()

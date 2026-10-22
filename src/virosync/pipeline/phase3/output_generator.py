@@ -41,6 +41,12 @@ from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 from .evidence_synthesizer import VerificationResult
+from .gene_functions import (
+    GeneFunctionInputs,
+    find_gene_function_resources,
+    label_core_genes,
+    write_gene_functions,
+)
 from .gene_taxonomy import qualified_viral_hits
 
 logger = logging.getLogger(__name__)
@@ -537,6 +543,7 @@ class OutputGenerator:
         extended_output: bool = True,
         seed_marker_allowlist: list[str] | None = None,
         export_all_eve_sequences: bool = False,
+        gene_function_inputs: GeneFunctionInputs | None = None,
     ):
         """Initialize output generator.
 
@@ -544,6 +551,8 @@ class OutputGenerator:
             output_dir: Base output directory
             genome_fasta: Path to genome FASTA (for extracting sequences)
             proteome_fasta: Path to proteome FASTA (for extracting proteins)
+            gene_function_inputs: Files that label core genes; without them
+                (or without a proteome) no gene-function table is written
         """
         self.output_dir = Path(output_dir)
         self.genome_fasta = genome_fasta
@@ -551,6 +560,7 @@ class OutputGenerator:
         self.extended_output = extended_output
         self.seed_marker_allowlist = seed_marker_allowlist or []
         self.export_all_eve_sequences = export_all_eve_sequences
+        self.gene_function_inputs = gene_function_inputs
 
         # Load sequences if provided
         self._genome_sequences = None
@@ -1508,6 +1518,7 @@ class OutputGenerator:
             promoted_low_confidence=promoted_low_count,
         )
         output_files.update(self.write_gene_taxonomy(all_results))  # Write gene taxonomy for ALL EVEs
+        output_files.update(self.write_gene_functions(results))
 
         # GVClass-compatible outputs
         if self.genome_sequences:
@@ -2099,6 +2110,56 @@ class OutputGenerator:
             logger.info("Wrote combined gene taxonomy: %d records to %s", all_records_count, all_records_path)
 
         return output_files
+
+    def write_gene_functions(self, results: list[VerificationResult]) -> dict[str, Path]:
+        """Label the core genes of *results* and write ``gene_functions.tsv``.
+
+        Flanking genes get no label. Labels never change another output. A resource
+        bundle before v1.2.0 has no gene-function profiles, so it gets no table.
+        """
+        inputs = self.gene_function_inputs
+        if inputs is None or self.proteome_fasta is None:
+            return {}
+        resources = find_gene_function_resources(inputs.hmm_database)
+        if resources is None:
+            logger.info(
+                "Skipping gene_functions.tsv: %s has no gene-function profiles (a bundle before v1.2.0)",
+                Path(inputs.hmm_database).parent,
+            )
+            return {}
+        genes = list(
+            dict.fromkeys(
+                (result.eve_id, record.porf_id)
+                for result in results
+                for record in map(_normalize_gene_taxonomy_record, result.gene_taxonomy_records)
+                if not record.is_flanking
+            )
+        )
+        genes += [(result.eve_id, porf_id) for result in results for porf_id in self._rescued_core_porf_ids(result)]
+        rescue_fasta = self._find_confirmed_frameshift_proteins()
+        rows = label_core_genes(
+            genes,
+            resources,
+            model_hits=inputs.model_hits,
+            proteomes=[self.proteome_fasta, *([rescue_fasta] if rescue_fasta else [])],
+            threads=inputs.threads,
+        )
+        output_path = self.output_dir / "gene_functions.tsv"
+        write_gene_functions(rows, output_path)
+        logger.info("Labelled %d of %d core genes; wrote %s", len(rows), len(genes), output_path)
+        return {"gene_functions": output_path}
+
+    def _rescued_core_porf_ids(self, result: VerificationResult) -> list[str]:
+        """Return confirmed frameshift-rescued proteins inside the EVE, which have no taxonomy record."""
+        if self._find_confirmed_frameshift_proteins() is None:
+            return []
+        porfs_by_scaffold = self._load_porfs_by_scaffold()
+        rescued = self._rescued_protein_sequences or {}
+        return [
+            porf_id
+            for porf_start, porf_end, porf_id in porfs_by_scaffold.get(result.scaffold, [])
+            if porf_id in rescued and porf_start < result.end and porf_end > result.start
+        ]
 
     def write_evidence_profiles(self, results: list[VerificationResult]) -> Path:
         """Write detailed evidence profiles to JSON."""

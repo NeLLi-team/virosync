@@ -279,9 +279,16 @@ def _build_archive(
 def _build_schema2_archive(
     tmp_path: Path,
     bundle_kind: str,
+    version: str = VERSION,
 ) -> tuple[Path, bytes, resource_manifest.ResourceManifest]:
-    payloads = _payloads()
+    payloads = _payloads(version)
     payloads["models/pfam_virosync_screening.hmm"] = b"HMMER3/f\nNAME  PfamOne\nGA    10.0 10.0;\n//\n"
+    payloads["models/gene_function.hmm"] = b"HMMER3/f\nNAME  PfamOne\n//\nNAME  VOG00001\n//\n"
+    payloads["models/gene_function_labels.tsv"] = (
+        b"profile\tsource\tlabel\tmodule\tmax_evalue\tdescription\n"
+        b"PfamOne\tPfam 38.2\tMTase\tother\t1e-05\tone\n"
+        b"VOG00001\tVOGDB 228\tMCP\tcapsid\t1e-09\ttwo\n"
+    )
     resources = _write_tree(
         tmp_path / "schema2-resources",
         payloads,
@@ -289,12 +296,12 @@ def _build_schema2_archive(
     )
     runtime, source = resource_manifest.build_split_resource_manifests(
         resources,
-        VERSION,
+        version,
         diamond_sequence_counter=lambda _payload: 1,
     )
     if bundle_kind == "runtime":
         manifest, manifest_bytes = runtime
-        payload_files = resource_manifest.RUNTIME_RESOURCE_FILES
+        payload_files = resource_manifest.runtime_resource_files(version)
     elif bundle_kind == "source":
         manifest, manifest_bytes = source
         payload_files = resource_manifest.SOURCE_RESOURCE_FILES
@@ -1042,6 +1049,47 @@ def test_schema2_runtime_bundle_installs_and_reuses_its_full_receipt(
         semantic_runner=semantic_runner,
     )
     assert events == ["receipt"]
+
+
+def test_v1_2_0_runtime_bundle_installs_with_the_gene_function_files(tmp_path: Path) -> None:
+    archive, manifest_bytes, manifest = _build_schema2_archive(tmp_path, "runtime", "v1.2.0")
+    target = tmp_path / "resources" / "virosync"
+
+    installed = _setup(
+        target,
+        archive,
+        manifest_bytes,
+        version="v1.2.0",
+        semantic_runner=SemanticProbe(manifest.semantic_counts),
+    )
+
+    candidate = installed.resolve(strict=True)
+    installed_files = {path.relative_to(candidate).as_posix() for path in candidate.rglob("*") if path.is_file()}
+    assert installed_files == {
+        *resource_manifest.runtime_resource_files("v1.2.0"),
+        resource_manifest.RESOURCE_MANIFEST_NAME,
+        "DB_METADATA.json",
+    }
+    assert ViroSyncDatabaseManager.required_files_for_path(installed) == list(
+        resource_manifest.runtime_resource_files("v1.2.0")
+    )
+    assert ViroSyncDatabaseManager._check_missing_files(installed) == []
+
+
+def test_v1_1_0_runtime_bundle_keeps_the_nine_required_files(tmp_path: Path) -> None:
+    archive, manifest_bytes, manifest = _build_schema2_archive(tmp_path, "runtime", "v1.1.0")
+    target = tmp_path / "resources" / "virosync"
+
+    installed = _setup(
+        target,
+        archive,
+        manifest_bytes,
+        version="v1.1.0",
+        semantic_runner=SemanticProbe(manifest.semantic_counts),
+    )
+
+    assert ViroSyncDatabaseManager.required_files_for_path(installed) == list(resource_manifest.RUNTIME_RESOURCE_FILES)
+    assert not (installed / "models/gene_function.hmm").exists()
 
 
 @pytest.mark.parametrize("active_candidate", [False, True])

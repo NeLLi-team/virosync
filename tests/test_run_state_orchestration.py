@@ -108,6 +108,8 @@ class _MockPipeline:
         self.effective_eve_class = "NCLDV"
         self.phase3_boundaries: list[RefinedBoundary] = []
         self.require_combined_fasta_before_report = False
+        self.generate_outputs_kwargs: list[dict] = []
+        self.write_gene_functions = False
 
         self.identity, self.fingerprint = self._run_identity()
         monkeypatch.setattr(
@@ -405,6 +407,7 @@ class _MockPipeline:
 
     def _call_task(self, task_fn, *args, **kwargs):
         if task_fn is orchestrator.generate_outputs_task:
+            self.generate_outputs_kwargs.append(kwargs)
             output_dir = Path(kwargs["output_dir"])
             result = kwargs["verification_results"][0]
             self._write_predictions(
@@ -415,6 +418,10 @@ class _MockPipeline:
                 final_confidence=result.final_confidence,
                 effective_eve_class=self.effective_eve_class,
             )
+            if self.write_gene_functions:
+                (output_dir / "gene_functions.tsv").write_text(
+                    "eve_id\tporf_id\tlabel\tmodule\tevidence\tevalue\nEVE_1\tg1\tPolB\treplication\tGVOGm0054\t1e-20\n"
+                )
             return {
                 "predictions_tsv": output_dir / "virosync_predictions.tsv",
                 "predictions_detailed_tsv": (output_dir / "virosync_predictions_detailed.tsv"),
@@ -991,6 +998,40 @@ def test_fresh_run_publishes_artifact_backed_state_in_order(
     ]
     assert load_run_state(mocked_pipeline.output_dir).status == "success"
     assert all((mocked_pipeline.output_dir / marker).is_file() for marker in PHASE_MARKER_FILENAMES)
+
+
+def test_phase3_outputs_receive_the_hmm_database_and_the_phase1_hits(
+    mocked_pipeline: _MockPipeline, tmp_path: Path
+) -> None:
+    hmm_database = tmp_path / "models" / "combined.hmm"
+    hmm_database.parent.mkdir()
+    hmm_database.write_text("HMMER3/f\n")
+
+    orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id="demo",
+        device="cpu",
+        resume=True,
+        hmm_database=hmm_database,
+    )
+
+    inputs = mocked_pipeline.generate_outputs_kwargs[-1]["gene_function_inputs"]
+    assert inputs.hmm_database == hmm_database
+    assert inputs.model_hits == mocked_pipeline.output_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv"
+
+
+def test_gene_function_table_is_content_authenticated(mocked_pipeline: _MockPipeline) -> None:
+    mocked_pipeline.write_gene_functions = True
+    mocked_pipeline.run()
+
+    recorded = {artifact.relative_path for artifact in load_run_state(mocked_pipeline.output_dir).artifacts}
+    assert "phase3_synthesis/gene_functions.tsv" in recorded
+    _assert_mutations_invalidate_at_phase(
+        path=mocked_pipeline.output_dir / "phase3_synthesis" / "gene_functions.tsv",
+        expected_phase=3,
+        mocked_pipeline=mocked_pipeline,
+    )
 
 
 @pytest.mark.parametrize(

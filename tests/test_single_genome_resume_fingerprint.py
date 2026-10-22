@@ -967,3 +967,24 @@ def test_manifest_is_stale_false_for_interrupted_run_without_manifest(tmp_path: 
 def test_manifest_is_stale_false_for_corrupt_manifest(tmp_path: Path) -> None:
     (tmp_path / "virosync_run_complete.json").write_text("{not json")
     assert _manifest_is_stale(tmp_path, expected_fingerprint="x") is False
+
+
+@pytest.mark.parametrize("sibling", ["gene_function.hmm", "gene_function_labels.tsv"])
+def test_gene_function_files_beside_a_bare_hmm_database_enter_the_fingerprint(tmp_path: Path, sibling: str) -> None:
+    models = tmp_path / "models"
+    models.mkdir()
+    hmm_database = models / "combined.hmm"
+    hmm_database.write_text("HMMER3/f\n")
+    (models / sibling).write_text("before\n")
+    before = _run_fingerprint_with_resources({"hmm_database": hmm_database})
+    (models / sibling).write_text("after!\n")
+    after = _run_fingerprint_with_resources({"hmm_database": hmm_database})
+
+    assert before != after
+
+
+def test_a_bare_hmm_database_without_gene_function_files_still_has_a_fingerprint(tmp_path: Path) -> None:
+    hmm_database = tmp_path / "combined.hmm"
+    hmm_database.write_text("HMMER3/f\n")
+
+    assert len(_run_fingerprint_with_resources({"hmm_database": hmm_database})) == 64

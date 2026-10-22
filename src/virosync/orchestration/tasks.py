@@ -19,6 +19,7 @@ from virosync.pipeline.phase0.masking import (
     quick_mask as _quick_mask,
 )
 from virosync.pipeline.phase2.boundary_refiner import boundary_candidate_id
+from virosync.pipeline.phase3.gene_functions import GeneFunctionInputs
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
 # Public module attribute for callers and tests. It is not an automatic
@@ -1311,6 +1312,7 @@ def generate_outputs_task(
     export_all_eve_sequences: bool = False,
     canonical_results: list | None = None,
     promoted_low_results: list | None = None,
+    gene_function_inputs: GeneFunctionInputs | None = None,
 ) -> dict:
     """Generate output files from verification results.
 
@@ -1328,6 +1330,9 @@ def generate_outputs_task(
             Phase-3 acceptance policy.
         promoted_low_results: Identity-preserving subset of canonical results
             that the normal quality gate promoted from LOW confidence.
+        gene_function_inputs: Files that label the core genes of the output EVEs.
+            Without them, or with a resource bundle before v1.2.0, no
+            ``gene_functions.tsv`` is written.
 
     Returns:
         Dictionary mapping output type to file path
@@ -1350,6 +1355,7 @@ def generate_outputs_task(
         extended_output=extended_output,
         seed_marker_allowlist=seed_marker_allowlist,
         export_all_eve_sequences=export_all_eve_sequences,
+        gene_function_inputs=gene_function_inputs,
     )
 
     return output_gen.generate_all(

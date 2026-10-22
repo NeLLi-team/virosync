@@ -241,6 +241,22 @@ def safe_ratio(numerator: float, denominator: float | None) -> float:
     return numerator / denominator if denominator else 0.0
 
 
+def _function_label_rows(spans: list[tuple[float, float]], gap: float, n_rows: int) -> list[int | None]:
+    """Give each label span (left, right), in left-to-right order, the first row that has room.
+
+    A label keeps a row when it starts at least `gap` right of the previous label in that
+    row. A span that fits in none of the `n_rows` rows gets None.
+    """
+    right_edges = [float("-inf")] * n_rows
+    rows: list[int | None] = []
+    for left, right in spans:
+        row = next((index for index, edge in enumerate(right_edges) if left >= edge + gap), None)
+        if row is not None:
+            right_edges[row] = right
+        rows.append(row)
+    return rows
+
+
 def canon_family(profile: Mapping[str, object]) -> str:
     """Return one EVE profile's published taxonomy class.
 
@@ -462,6 +478,18 @@ if _proteome_path.exists():
 for scaffold_genes in proteome_genes_by_scaffold.values():
     scaffold_genes.sort(key=lambda gene: (gene["start"], gene["end"], gene["porf_id"]))
 print(f"Prodigal genes: {len(porf_strands):,} across {len(proteome_genes_by_scaffold):,} scaffolds")
+
+# 2c. Gene functions: one label per core gene, written for bundles of v1.2.0 and later
+gene_function_by_gene = {}
+gene_functions_path = SYNTHESIS / "gene_functions.tsv"
+if gene_functions_path.exists():
+    for row in pd.read_csv(gene_functions_path, sep="\t", dtype=str, keep_default_na=False).itertuples(index=False):
+        gene_function_by_gene[(row.eve_id, row.porf_id)] = {
+            "label": row.label,
+            "module": row.module,
+            "evidence": row.evidence,
+        }
+print(f"Gene functions: {len(gene_function_by_gene)} labelled core genes")
 
 # 3. MCP candidate classifications -> porf_id map
 mcp_classification_map = {}
@@ -1211,6 +1239,15 @@ else:
             "region": region,
         }
 
+    def _gene_function_fields(eve_id, porf_id):
+        """Return the function label of a core gene; flanking genes never get one."""
+        function = gene_function_by_gene.get((eve_id, porf_id), {})
+        return {
+            "function_label": function.get("label", ""),
+            "function_module": function.get("module", ""),
+            "function_evidence": function.get("evidence", ""),
+        }
+
     eve_genes_extended = {}
     for eve_id, profile in profiles.items():
         eve_start = int(profile.get("start", 0))
@@ -1266,7 +1303,10 @@ else:
             "confidence_tier": profile.get("confidence_tier", ""),
             "taxonomy_class": canon_family(profile),
             "left_flank_genes": [_make_gene_record(gene, "left_flank") for gene in left_genes],
-            "eve_genes": [_make_gene_record(gene, "eve") for gene in core_genes_for_eve],
+            "eve_genes": [
+                {**_make_gene_record(gene, "eve"), **_gene_function_fields(eve_id, gene["porf_id"])}
+                for gene in core_genes_for_eve
+            ],
             "right_flank_genes": [_make_gene_record(gene, "right_flank") for gene in right_genes],
         }
 
@@ -1593,6 +1633,67 @@ else:
     ax.legend(handles=legend_elements, loc="upper right", framealpha=0.95, fontsize=LEGEND_FONT, ncol=2)
 
     plt.tight_layout()
+
+    # ---- Function labels under the core genes ----
+    FUNCTION_LABEL_FONT = 5.5
+    FUNCTION_LABEL_TOP = 0.28  # below the gene row, in rows
+    FUNCTION_LABEL_ROOM = 0.47  # free space between a gene row and the next, in rows
+    FUNCTION_LABEL_MAX_LINES = 3
+
+    def _draw_function_labels(y, labels):
+        """Print `(x, label)` pairs under the gene row at `y` and return how many had no free line."""
+        if not labels:
+            return 0
+        renderer = fig.canvas.get_renderer()
+        to_data = ax.transData.inverted()
+        texts = [
+            ax.text(
+                x,
+                y - FUNCTION_LABEL_TOP,
+                label,
+                ha="center",
+                va="top",
+                fontsize=FUNCTION_LABEL_FONT,
+                color="#222222",
+                zorder=6,
+            )
+            for x, label in labels
+        ]
+        boxes = [
+            to_data.transform([(b.x0, b.y0), (b.x1, b.y1)]) for b in (t.get_window_extent(renderer) for t in texts)
+        ]
+        line_height = 1.15 * (boxes[0][1][1] - boxes[0][0][1])
+        n_lines = min(FUNCTION_LABEL_MAX_LINES, int(FUNCTION_LABEL_ROOM / line_height))
+        order = sorted(range(len(texts)), key=lambda k: boxes[k][0][0])
+        spans = [(boxes[k][0][0], boxes[k][1][0]) for k in order]
+        gap = (spans[0][1] - spans[0][0]) / max(len(labels[order[0]][1]), 1)
+        dropped = 0
+        for k, line in zip(order, _function_label_rows(spans, gap, n_lines), strict=True):
+            if line is None:
+                texts[k].remove()
+                dropped += 1
+            else:
+                texts[k].set_y(y - FUNCTION_LABEL_TOP - line * line_height)
+        return dropped
+
+    labels_dropped = 0
+    for i, (_, eve_info) in enumerate(all_sorted_eves):
+        window = eve_info["length"]
+        labels_dropped += _draw_function_labels(
+            n_all - 1 - i,
+            [
+                (
+                    (max(0, gene["start"] - eve_info["ext_start"]) + min(window, gene["end"] - eve_info["ext_start"]))
+                    / 2,
+                    gene["function_label"],
+                )
+                for gene in eve_info["eve_genes"]
+                if gene.get("function_label")
+            ],
+        )
+    if labels_dropped:
+        print(f"Gene map: {labels_dropped} function labels omitted for lack of room; see gene_functions.tsv")
+
     plt.savefig(BASE / "eve_gene_map_with_flanks.png", dpi=300, bbox_inches="tight", facecolor="white")
     plt.show()
 
@@ -1711,7 +1812,7 @@ def _syntviz_row(eve_id, info, sequences):
                 "placement": "placed",
                 "sequence_id": sequence_id,
                 "type": "CDS",
-                "name": "MCP" if gene["is_mcp"] else gene["porf_id"],
+                "name": gene.get("function_label") or ("MCP" if gene["is_mcp"] else gene["porf_id"]),
                 "segments": [{"start_bp": start - offset, "end_bp": end - offset, "strand": strand}],
                 "partial_start": start > gene["start"],
                 "partial_end": end < gene["end"],
@@ -1729,6 +1830,17 @@ def _syntviz_row(eve_id, info, sequences):
                 "run_id": SYNTVIZ_RUN,
             }
         )
+        if gene.get("function_label"):
+            annotations.append(
+                {
+                    "id": f"{feature_id}:function",
+                    "target": {"kind": "feature", "feature_id": feature_id},
+                    "namespace": "function",
+                    "value": gene["function_label"],
+                    "evidence_source": f"ViroSync gene function ({gene['function_evidence']})",
+                    "run_id": SYNTVIZ_RUN,
+                }
+            )
     return genome, row, features, annotations
 
 
@@ -1872,7 +1984,7 @@ else:
         "searched_pairs": [{"query_genome_id": a, "target_genome_id": b} for a in searched for b in searched if a != b],
     }
     row_order = [row["id"] for _, row, _, _ in parts]
-    mcp_ids = [feature["id"] for feature in features if feature["name"] == "MCP"]
+    mcp_ids = [f"{eve_id}:{gene['porf_id']}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "eve_genes", "right_flank_genes") for gene in info[key] if gene["is_mcp"]]  # fmt: skip
     flank_ids = {f"{eve_id}:{gene}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "right_flank_genes") for gene in (g["porf_id"] for g in info[key])}  # fmt: skip
     # Rows tighten so that a genome with hundreds of EVEs stays inside the size limit.
     row_spacing = min(64, (SYNTVIZ_MAX_HEIGHT_PX - 260) / len(parts))
@@ -1886,7 +1998,7 @@ else:
             markers += eve_markers
     if unmarked:
         print(f"Syntviz figure: markers omitted for {unmarked} EVEs; Syntviz draws at most {SYNTVIZ_MAX_MARKERS:,}.")
-    categories = {annotation["value"] for _, _, _, row_annotations in parts for annotation in row_annotations}
+    categories = {annotation["value"] for _, _, _, row_annotations in parts for annotation in row_annotations if annotation["namespace"] == "category"}  # fmt: skip
     syntviz_session = Session.model_validate(
         {
             "id": f"virosync-{GENOME_ID}-eves",
