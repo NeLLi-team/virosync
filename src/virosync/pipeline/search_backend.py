@@ -3,6 +3,11 @@
 Provides a single entry point for running protein sequence searches
 against Diamond databases. All Diamond call sites delegate to
 run_sequence_search(); Diamond is the sole supported backend (since v1.0.5).
+
+The reference databases repeat subject IDs, hold several near-identical proteins
+per genome, and list some proteins under both a cellular and a viral label. The
+wrapper therefore fetches TARGET_FETCH_MULTIPLIER times the requested hits and
+reduces them per query with select_target_hits() before returning.
 """
 
 import logging
@@ -11,7 +16,11 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
+from itertools import groupby
 from pathlib import Path
+
+from virosync.pipeline.phase3.gene_taxonomy import CELLULAR_NAMESPACES, VIRAL_PREFIXES
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +28,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_COLUMNS = ["qseqid", "sseqid", "evalue", "bitscore", "pident", "qcovhsp"]
 
 DEFAULT_SEARCH_TIMEOUT = 3600
+
+# DIAMOND is asked for this many times the requested targets so that duplicate
+# subjects and same-genome proteins cannot crowd viral references out of the
+# top hits.
+TARGET_FETCH_MULTIPLIER = 10
 
 
 def _env_int(name: str, default: int) -> int:
@@ -54,7 +68,11 @@ def run_sequence_search(
         threads: Number of CPU threads.
         backend: must be "diamond" (the only supported backend).
         evalue: E-value threshold.
-        max_target_seqs: Maximum hits per query.
+        max_target_seqs: Maximum distinct target genomes per query. DIAMOND
+            fetches TARGET_FETCH_MULTIPLIER times as many hits; the output keeps
+            the first max_target_seqs after the twin and per-genome rules of
+            select_target_hits(). A value of 0 means unlimited and skips the
+            filter.
         output_columns: Column names in Diamond outfmt 6 convention.
                         Default: qseqid sseqid evalue bitscore pident qcovhsp.
         extra_flags: Additional CLI flags passed verbatim to the tool.
@@ -70,17 +88,109 @@ def run_sequence_search(
 
     if backend != "diamond":
         raise ValueError(f"Unsupported search backend: {backend!r} (only 'diamond' is supported)")
-    return _run_diamond(
+    fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if max_target_seqs > 0 else 0
+    _run_diamond(
         query_fasta=query_fasta,
         db_path=db_path,
         output_tsv=output_tsv,
         threads=threads,
         evalue=evalue,
-        max_target_seqs=max_target_seqs,
+        max_target_seqs=fetch_limit,
         output_columns=output_columns,
         extra_flags=extra_flags,
         timeout=timeout,
     )
+    if max_target_seqs > 0:
+        filter_hits_file(output_tsv, output_columns, max_target_seqs)
+    return output_tsv
+
+
+def select_target_hits(subject_ids: Sequence[str], max_targets: int) -> list[int]:
+    """Choose the rows to keep from one query's hits, given in DIAMOND order.
+
+    Subject IDs look like ``<LABEL>__<genome>|<protein>``. Rules, in order:
+
+    1. Twin: a protein (``<genome>|<protein>``) listed under a cellular and a
+       viral label keeps the viral row, placed where the protein first occurs.
+       The cellular rows of that protein are dropped.
+    2. Genome: only the first row of each target genome (the ID up to ``|``,
+       label included) is kept.
+    3. Truncation: at most ``max_targets`` rows are kept.
+
+    Returns:
+        Indices into ``subject_ids`` of the kept rows, in output order.
+    """
+    labels_and_keys = [_split_subject_id(subject_id) for subject_id in subject_ids]
+    first_row: dict[str, int] = {}
+    viral_row: dict[str, int] = {}
+    cellular_keys: set[str] = set()
+    for idx, (label, key) in enumerate(labels_and_keys):
+        # Only the cellular and viral copies of a protein form a twin; a row
+        # under any other label keeps its own place.
+        if label in VIRAL_PREFIXES:
+            first_row.setdefault(key, idx)
+            viral_row.setdefault(key, idx)
+        elif label in CELLULAR_NAMESPACES:
+            first_row.setdefault(key, idx)
+            cellular_keys.add(key)
+    twin_keys = cellular_keys & viral_row.keys()
+    replacement = {first_row[key]: viral_row[key] for key in twin_keys}
+    moved_rows = set(replacement.values())
+
+    kept: list[int] = []
+    seen_genomes: set[str] = set()
+    for idx, (label, key) in enumerate(labels_and_keys):
+        if idx in replacement:
+            row = replacement[idx]
+        elif idx in moved_rows or (key in twin_keys and label in CELLULAR_NAMESPACES):
+            continue
+        else:
+            row = idx
+        genome = subject_ids[row].partition("|")[0]
+        if genome in seen_genomes:
+            continue
+        seen_genomes.add(genome)
+        kept.append(row)
+        if len(kept) == max_targets:
+            break
+    return kept
+
+
+def filter_hits_file(hits_tsv: Path, output_columns: Sequence[str], max_targets: int) -> None:
+    """Rewrite a DIAMOND table in place, keeping select_target_hits() rows per query.
+
+    The columns stay as DIAMOND wrote them. Rows of one query must be adjacent,
+    which DIAMOND guarantees.
+
+    Raises:
+        ValueError: If ``output_columns`` lacks ``qseqid`` or ``sseqid``.
+    """
+    for required in ("qseqid", "sseqid"):
+        if required not in output_columns:
+            raise ValueError(f"cannot filter hits without {required} in {list(output_columns)}")
+    query_idx = output_columns.index("qseqid")
+    subject_idx = output_columns.index("sseqid")
+
+    filtered_path = hits_tsv.with_name(hits_tsv.name + ".filtered")
+    with hits_tsv.open(encoding="utf-8") as src, filtered_path.open("w", encoding="utf-8") as dst:
+        lines = (line.rstrip("\n") + "\n" for line in src if line.strip())
+        for _, query_lines in groupby(lines, key=lambda line: line.split("\t", query_idx + 1)[query_idx]):
+            hits = list(query_lines)
+            subjects = [line.split("\t")[subject_idx] for line in hits]
+            dst.writelines(hits[idx] for idx in select_target_hits(subjects, max_targets))
+    os.replace(filtered_path, hits_tsv)
+
+
+def _split_subject_id(subject_id: str) -> tuple[str, str]:
+    """Split ``LABEL__genome|protein`` into ``(LABEL, "genome|protein")``.
+
+    An ID without a ``LABEL__`` head returns an empty label and itself as key.
+    """
+    head, bar, protein = subject_id.partition("|")
+    label, separator, genome = head.partition("__")
+    if not separator:
+        return "", subject_id
+    return label, genome + bar + protein
 
 
 # Diamond 2.1.21 occasionally hits a finalization-phase futex deadlock when

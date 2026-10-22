@@ -255,6 +255,28 @@ Optional InterProScan, TMVec2, and Boltz/Foldseek analyses annotate and score
 existing candidates. They do not create regions without marker-seeded
 candidates.
 
+### Reference hit selection
+
+Marker validation, host-signature seeding, boundary refinement and gene-level
+taxonomy read the top 10 DIAMOND hits of each protein. The reference databases
+hold the same subject ID several times, several near-identical proteins from one
+genome, and some proteins under both a cellular and a viral label. Taken
+directly, such copies fill the top 10 and push viral references out. ViroSync
+therefore asks DIAMOND for ten times the requested number of targets and then
+keeps, for each query and in DIAMOND's order:
+
+1. For a protein (`<genome>|<protein>`) that appears under a cellular label
+   (`EUK`, `BAC`, `ARC`, `MITO`, `PLASTID`) and under a viral label, the viral
+   row at the position of the first occurrence. The cellular row is dropped.
+2. The best hit of each target genome. The genome is the subject ID up to `|`
+   including its label, so `EUK__GCA-013389655-1` and `PPV__GCA-013389655-1`
+   count as different genomes.
+3. The first N hits, where N is the requested number of targets.
+
+The filter rewrites the DIAMOND table in place with the same columns. The
+all-against-all search among EVE core proteins in the Syntviz figure is not a
+top-hit search and uses no filter.
+
 ## Confidence and limitations
 
 `final_confidence` is a rule-based score, not a calibrated probability that a

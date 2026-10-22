@@ -81,6 +81,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
+- Stop duplicate reference entries from filling the top-k DIAMOND hits of
+  marker validation, host-signature seeding, boundary refinement, gene-level
+  taxonomy (top 10 each) and the Phase 3 DIAMOND check (top 5). The reference
+  databases hold some subject IDs up to seven times, several near-identical
+  proteins per genome, and some proteins under both a cellular and a viral
+  label, so a viral gene could show only host hits in its top 10. The search wrapper now fetches ten times the
+  requested hits, keeps the viral row when a protein has a cellular and a viral
+  label, keeps the best hit per target genome, and then truncates to the
+  requested number.
 - Reject unexpected keys in repeat-parameter and filter-count JSON cells during
   TSV validation, so those cells cannot replace the recorded evidence or pairs.
 - Deliver a pinned Prodigal-GV node-capacity correction through native setup.

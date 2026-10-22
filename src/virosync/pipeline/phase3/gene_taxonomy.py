@@ -30,6 +30,8 @@ from virosync.utils.path_safety import (
 logger = logging.getLogger(__name__)
 
 VIRAL_PREFIXES = {"NCLDV", "MIRUS", "VP", "PLV", "PPV", "CRESS", "GVMAG", "PHAGE"}
+# Reference namespaces of cellular origin, as folded to EUK/BAC/ARC by extract_prefix().
+CELLULAR_NAMESPACES = frozenset({"EUK", "BAC", "ARC", "MITO", "PLASTID"})
 MIN_VIRAL_HIT_PIDENT = 25.0
 
 # Reference namespaces that name a viral lineage. GVMAG and PHAGE are namespaces
