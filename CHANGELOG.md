@@ -33,6 +33,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   `SYNTVIZ_INTERACTIVE` notebook parameter embeds the interactive viewer
   instead. The environment adds `syntviz` 0.2 (PyPI) and Node.js 22.
 
+### Changed
+
+- Redraw the README workflow map from the current data flow, adding direct
+  repeats, acceptance with ANI class transfer and gene-function labels.
+  `scripts/plot_workflow_map.py` writes `docs/virosync_workflow.png` only when
+  each station touches exactly the lines it lists, no label, station or line
+  touches another, and all text renders at 12 px or more at README width.
+
 ## [1.0.2] - 2026-10-06
 
 ### Added
