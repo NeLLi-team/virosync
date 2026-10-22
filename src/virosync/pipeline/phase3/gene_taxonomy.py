@@ -392,11 +392,11 @@ def _run_single_diamond_blastp(
     fast: bool,
     search_backend: str = "diamond",
 ) -> None:
-    from virosync.pipeline.search_backend import run_sequence_search
+    from virosync.pipeline.search_backend import run_genome_filtered_search
 
     extra_flags = ["--fast"] if fast else None  # Diamond is the only backend
 
-    run_sequence_search(
+    run_genome_filtered_search(
         query_fasta=query_fasta,
         db_path=db_prefix,
         output_tsv=output_file,

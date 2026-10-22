@@ -22,7 +22,10 @@ import numpy as np
 from Bio import SeqIO
 from numpy.typing import NDArray
 
-from virosync.pipeline.phase1.viral_markers import get_region_classification_summary
+from virosync.pipeline.phase1.viral_markers import (
+    get_region_classification_summary,
+    is_seed_blocked_model,
+)
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     GenomeDiamondQuery,
@@ -78,6 +81,7 @@ class _MarkerGroup:
     start: int
     end: int
     marker_names: frozenset[str]
+    is_seed_eligible: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,6 +599,7 @@ def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_Ma
                 start=min(marker.start for marker in hits),
                 end=max(marker.end for marker in hits),
                 marker_names=frozenset(marker.hmm_target for marker in hits if getattr(marker, "hmm_target", "")),
+                is_seed_eligible=any(not is_seed_blocked_model(getattr(marker, "hmm_target", "")) for marker in hits),
             )
             for protein_id, hits in grouped.items()
         ),
@@ -910,6 +915,23 @@ def _groups_within(
     return [group for group in groups if start <= group.start and group.end <= end]
 
 
+def _is_independent_candidate(
+    candidate: TerminalRepeat,
+    groups: list[_MarkerGroup],
+    scaffold: str,
+    taxonomy_map: dict[str, GeneTaxonomy],
+) -> bool:
+    """Return whether a repeat pair may become a candidate of its own.
+
+    A pair whose only marker evidence comes from blocked kinase models, with no
+    identity-qualified viral gene inside, stays inside its parent instead.
+    """
+    inside = _groups_within(groups, candidate.left_start, candidate.right_end)
+    if not inside or any(group.is_seed_eligible for group in inside):
+        return True
+    return _has_viral_gene(scaffold, candidate.left_start, candidate.right_end, taxonomy_map)
+
+
 def _child_boundary(
     parent: RefinedBoundary,
     *,
@@ -981,9 +1003,23 @@ def _has_residual_evidence(
     groups: list[_MarkerGroup],
     taxonomy_map: dict[str, GeneTaxonomy],
 ) -> bool:
-    """Return whether a non-TIR slice retains local viral evidence."""
-    if any(group.start < end and group.end > start for group in groups):
+    """Return whether a non-TIR slice retains local viral evidence.
+
+    Marker groups from blocked kinase models do not count: they never start a
+    candidate, so a slice they alone support is dropped.
+    """
+    if any(group.is_seed_eligible and group.start < end and group.end > start for group in groups):
         return True
+    return _has_viral_gene(scaffold, start, end, taxonomy_map)
+
+
+def _has_viral_gene(
+    scaffold: str,
+    start: int,
+    end: int,
+    taxonomy_map: dict[str, GeneTaxonomy],
+) -> bool:
+    """Return whether a gene inside the interval has an identity-qualified viral hit."""
     return any(
         taxonomy.scaffold == scaffold
         and start <= taxonomy.start
@@ -1003,9 +1039,17 @@ def _partition_is_complete(
     taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
 ) -> bool:
-    """Return whether a split preserves markers and independent evidence."""
+    """Return whether a split preserves markers and independent evidence.
+
+    A blocked-only marker group outside every child is allowed: its slice was
+    dropped as non-independent. Every other group needs exactly one owner.
+    """
     for group in groups:
         owners = [child for child in children if child.start <= group.start and group.end <= child.end]
+        if not group.is_seed_eligible and not any(
+            child.start < group.end and group.start < child.end for child in children
+        ):
+            continue
         if len(owners) != 1:
             return False
 
@@ -1177,6 +1221,11 @@ def _plan_boundary_partition(
         scan_end=scan_end,
         groups=groups,
     )
+    candidates = [
+        candidate
+        for candidate in candidates
+        if _is_independent_candidate(candidate, groups, boundary.scaffold, boundary_taxonomy_map)
+    ]
     if not candidates:
         return [
             replace(

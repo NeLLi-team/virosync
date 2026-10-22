@@ -10,6 +10,7 @@ from virosync.pipeline.phase3.gene_taxonomy import parse_diamond_top10
 from virosync.pipeline.search_backend import (
     TARGET_FETCH_MULTIPLIER,
     filter_hits_file,
+    run_genome_filtered_search,
     run_sequence_search,
     select_target_hits,
 )
@@ -169,8 +170,8 @@ def fake_diamond(monkeypatch: pytest.MonkeyPatch) -> type[_FakeDiamond]:
     return _FakeDiamond
 
 
-def _search(tmp_path: Path, **kwargs: object) -> Path:
-    return run_sequence_search(
+def _filtered_search(tmp_path: Path, **kwargs: object) -> Path:
+    return run_genome_filtered_search(
         query_fasta=tmp_path / "q.faa",
         db_path=tmp_path / "db.dmnd",
         output_tsv=tmp_path / "out.tsv",
@@ -179,39 +180,41 @@ def _search(tmp_path: Path, **kwargs: object) -> Path:
     )
 
 
-def test_run_sequence_search_asks_diamond_for_a_multiple_of_the_targets(
+def test_genome_filtered_search_asks_diamond_for_a_multiple_of_the_targets(
     tmp_path: Path, fake_diamond: type[_FakeDiamond]
 ) -> None:
-    _search(tmp_path, max_target_seqs=10)
+    _filtered_search(tmp_path, max_target_seqs=10)
 
     cmd = fake_diamond.commands[0]
     assert cmd[cmd.index("--max-target-seqs") + 1] == str(10 * TARGET_FETCH_MULTIPLIER)
     assert TARGET_FETCH_MULTIPLIER == 10
 
 
-def test_run_sequence_search_truncates_the_filtered_hits_to_the_targets(
+def test_genome_filtered_search_truncates_the_filtered_hits_to_the_targets(
     tmp_path: Path, fake_diamond: type[_FakeDiamond]
 ) -> None:
     fake_diamond.rows = [("q1", f"EUK__G{n}|p{n}") for n in range(30)]
 
-    output = _search(tmp_path, max_target_seqs=10)
+    output = _filtered_search(tmp_path, max_target_seqs=10)
 
     assert len(output.read_text(encoding="utf-8").splitlines()) == 10
 
 
-def test_run_sequence_search_leaves_unlimited_search_unfiltered(
+def test_genome_filtered_search_leaves_unlimited_search_unfiltered(
     tmp_path: Path, fake_diamond: type[_FakeDiamond]
 ) -> None:
     fake_diamond.rows = [("q1", "EUK__G1|p1")] * 3
 
-    output = _search(tmp_path, max_target_seqs=0)
+    output = _filtered_search(tmp_path, max_target_seqs=0)
 
     cmd = fake_diamond.commands[0]
     assert cmd[cmd.index("--max-target-seqs") + 1] == "0"
     assert len(output.read_text(encoding="utf-8").splitlines()) == 3
 
 
-def test_run_sequence_search_output_still_parses_in_consumers(tmp_path: Path, fake_diamond: type[_FakeDiamond]) -> None:
+def test_genome_filtered_search_output_still_parses_in_consumers(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
     fake_diamond.rows = [
         ("q1", "EUK__G1|p1"),
         ("q1", "EUK__G1|p1"),
@@ -219,9 +222,25 @@ def test_run_sequence_search_output_still_parses_in_consumers(tmp_path: Path, fa
         ("q1", "NCLDV__V1|p3"),
     ]
 
-    output = _search(tmp_path, max_target_seqs=10)
+    output = _filtered_search(tmp_path, max_target_seqs=10)
 
     boundary_hits = parse_diamond_output(output)
     gene_hits = parse_diamond_top10(output)
     assert [hit.target for hit in boundary_hits["q1"]] == ["EUK__G1|p1", "NCLDV__V1|p3"]
     assert [hit.target for hit in gene_hits["q1"]] == ["EUK__G1|p1", "NCLDV__V1|p3"]
+
+
+def test_run_sequence_search_keeps_the_plain_diamond_top_k(tmp_path: Path, fake_diamond: type[_FakeDiamond]) -> None:
+    fake_diamond.rows = [("q1", "EUK__G1|p1")] * 3
+
+    output = run_sequence_search(
+        query_fasta=tmp_path / "q.faa",
+        db_path=tmp_path / "db.dmnd",
+        output_tsv=tmp_path / "out.tsv",
+        threads=1,
+        max_target_seqs=10,
+    )
+
+    cmd = fake_diamond.commands[0]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == "10"
+    assert len(output.read_text(encoding="utf-8").splitlines()) == 3

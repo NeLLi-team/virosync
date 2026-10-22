@@ -15,6 +15,7 @@ References:
 - Boratto et al. 2024: Mriyaviruses characterization
 """
 
+import re
 from dataclasses import dataclass, field
 
 CRESS_MARKER_MODELS = frozenset(f"VS{model_number:06d}" for model_number in range(792, 809))
@@ -356,6 +357,23 @@ def get_assembly_mode(mode_name: str) -> AssemblyMode:
 # =============================================================================
 # REGION CLASSIFICATION
 # =============================================================================
+
+# Host kinase families (protein kinase and ABC1 kinase) whose DIAMOND top 10 holds
+# distant NCLDV kinases, so host genes pass marker validation. They still count
+# as evidence inside a region but never start one. The IDs are the same in the
+# v1.0.7 and v1.1.0 resource bundles.
+SEED_BLOCKED_MARKER_MODELS = frozenset({"VS000084", "VS000087", "VS000094", "VS000191", "VS000319"})
+
+
+def is_seed_blocked_model(model_name: str) -> bool:
+    """Return whether an HMM model name belongs to SEED_BLOCKED_MARKER_MODELS.
+
+    The model ID is the text before the first ``_`` or ``.``, compared without
+    case, so ``vs000087_Pkinase`` and ``VS000087.hmm`` match ``VS000087``.
+    """
+    model_id = re.split(r"[_.]", model_name, maxsplit=1)[0]
+    return model_id.upper() in SEED_BLOCKED_MARKER_MODELS
+
 
 # Marker prefix patterns for classification (based on >95% purity seed allowlist)
 NCLDV_MARKER_PREFIXES = {"gvogm", "gamadvirusmcp"}

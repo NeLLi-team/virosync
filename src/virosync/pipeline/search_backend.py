@@ -4,10 +4,12 @@ Provides a single entry point for running protein sequence searches
 against Diamond databases. All Diamond call sites delegate to
 run_sequence_search(); Diamond is the sole supported backend (since v1.0.5).
 
-The reference databases repeat subject IDs, hold several near-identical proteins
-per genome, and list some proteins under both a cellular and a viral label. The
-wrapper therefore fetches TARGET_FETCH_MULTIPLIER times the requested hits and
-reduces them per query with select_target_hits() before returning.
+run_sequence_search() returns DIAMOND's top-k rows as they are. The combined
+proteome database repeats subject IDs, holds several near-identical proteins per
+genome, and lists some proteins under both a cellular and a viral label, so its
+gene-taxonomy callers use run_genome_filtered_search(), which fetches
+TARGET_FETCH_MULTIPLIER times the requested hits and reduces them per query with
+select_target_hits(). The marker database keeps the plain search.
 """
 
 import logging
@@ -68,11 +70,7 @@ def run_sequence_search(
         threads: Number of CPU threads.
         backend: must be "diamond" (the only supported backend).
         evalue: E-value threshold.
-        max_target_seqs: Maximum distinct target genomes per query. DIAMOND
-            fetches TARGET_FETCH_MULTIPLIER times as many hits; the output keeps
-            the first max_target_seqs after the twin and per-genome rules of
-            select_target_hits(). A value of 0 means unlimited and skips the
-            filter.
+        max_target_seqs: Maximum hits per query.
         output_columns: Column names in Diamond outfmt 6 convention.
                         Default: qseqid sseqid evalue bitscore pident qcovhsp.
         extra_flags: Additional CLI flags passed verbatim to the tool.
@@ -88,20 +86,55 @@ def run_sequence_search(
 
     if backend != "diamond":
         raise ValueError(f"Unsupported search backend: {backend!r} (only 'diamond' is supported)")
-    fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if max_target_seqs > 0 else 0
-    _run_diamond(
+    return _run_diamond(
         query_fasta=query_fasta,
         db_path=db_path,
         output_tsv=output_tsv,
         threads=threads,
         evalue=evalue,
-        max_target_seqs=fetch_limit,
+        max_target_seqs=max_target_seqs,
         output_columns=output_columns,
         extra_flags=extra_flags,
         timeout=timeout,
     )
+
+
+def run_genome_filtered_search(
+    query_fasta: Path,
+    db_path: Path,
+    output_tsv: Path,
+    threads: int,
+    backend: str = "diamond",
+    evalue: float = 1e-5,
+    max_target_seqs: int = 10,
+    output_columns: list[str] | None = None,
+    extra_flags: list[str] | None = None,
+    timeout: int = DEFAULT_SEARCH_TIMEOUT,
+) -> Path:
+    """Run a protein search that keeps one hit per target genome.
+
+    Takes the arguments of run_sequence_search(). DIAMOND fetches
+    TARGET_FETCH_MULTIPLIER times ``max_target_seqs`` hits per query; the output
+    keeps the first ``max_target_seqs`` after the twin and per-genome rules of
+    select_target_hits(). A ``max_target_seqs`` of 0 means unlimited and skips
+    the filter.
+    """
+    columns = list(DEFAULT_COLUMNS) if output_columns is None else output_columns
+    fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if max_target_seqs > 0 else 0
+    run_sequence_search(
+        query_fasta=query_fasta,
+        db_path=db_path,
+        output_tsv=output_tsv,
+        threads=threads,
+        backend=backend,
+        evalue=evalue,
+        max_target_seqs=fetch_limit,
+        output_columns=columns,
+        extra_flags=extra_flags,
+        timeout=timeout,
+    )
     if max_target_seqs > 0:
-        filter_hits_file(output_tsv, output_columns, max_target_seqs)
+        filter_hits_file(output_tsv, columns, max_target_seqs)
     return output_tsv
 
 

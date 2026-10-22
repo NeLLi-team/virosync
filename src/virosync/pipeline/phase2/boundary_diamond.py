@@ -877,9 +877,9 @@ def run_diamond_blastp(
         evalue: E-value cutoff
         search_backend: "diamond" (the only supported backend)
     """
-    from virosync.pipeline.search_backend import run_sequence_search
+    from virosync.pipeline.search_backend import run_genome_filtered_search
 
-    run_sequence_search(
+    run_genome_filtered_search(
         query_fasta=query,
         db_path=db,
         output_tsv=output,

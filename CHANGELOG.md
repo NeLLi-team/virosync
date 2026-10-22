@@ -81,15 +81,24 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
-- Stop duplicate reference entries from filling the top-k DIAMOND hits of
-  marker validation, host-signature seeding, boundary refinement, gene-level
-  taxonomy (top 10 each) and the Phase 3 DIAMOND check (top 5). The reference
-  databases hold some subject IDs up to seven times, several near-identical
-  proteins per genome, and some proteins under both a cellular and a viral
-  label, so a viral gene could show only host hits in its top 10. The search wrapper now fetches ten times the
-  requested hits, keeps the viral row when a protein has a cellular and a viral
-  label, keeps the best hit per target genome, and then truncates to the
-  requested number.
+- Stop duplicate reference entries from filling the top DIAMOND hits of
+  boundary refinement and gene-level taxonomy (top 10 each) and of the Phase 3
+  DIAMOND check (top 5). The
+  combined proteome holds some subject IDs up to seven times, several
+  near-identical proteins per genome, and some proteins under both a cellular and
+  a viral label, so a viral gene could show only host hits in its top 10. These
+  searches now fetch ten times the requested hits, keep the viral row when a
+  protein has a cellular and a viral label, keep the best hit per target genome,
+  and then truncate to the requested number. Marker validation and host-signature
+  seeding against the marker database keep DIAMOND's plain top hits.
+- Stop host protein kinases from seeding candidate regions. Markers from the
+  models `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319` have
+  distant NCLDV homologs in their top 10, so host kinases passed marker
+  validation and seeded regions. These models no longer start a region, and the
+  Phase 2 terminal-repeat step no longer cuts a repeat-bounded or residual
+  candidate that only they support. Model names match without case and without
+  a suffix after the first `_` or `.` (`vs000087_Pkinase`). The models still
+  count as markers inside a region that another marker seeded.
 - Reject unexpected keys in repeat-parameter and filter-count JSON cells during
   TSV validation, so those cells cannot replace the recorded evidence or pairs.
 - Deliver a pinned Prodigal-GV node-capacity correction through native setup.

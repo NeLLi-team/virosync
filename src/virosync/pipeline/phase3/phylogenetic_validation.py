@@ -652,13 +652,13 @@ class PhylogeneticValidator:
 
         # Run Diamond via the central hardened wrapper (per-call tempdir,
         # new session, env scrub, automatic retry on futex deadlock).
-        from virosync.pipeline.search_backend import run_sequence_search
+        from virosync.pipeline.search_backend import run_genome_filtered_search
 
         output_file = self.diamond_dir / f"{filename_component}.diamond.tsv"
         require_strict_child(self.diamond_dir, output_file)
         logger.debug(f"Running Diamond for {eve_id}")
         try:
-            run_sequence_search(
+            run_genome_filtered_search(
                 query_fasta=proteins_fasta,
                 db_path=self.diamond_db,
                 output_tsv=output_file,

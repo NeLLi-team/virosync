@@ -257,13 +257,16 @@ candidates.
 
 ### Reference hit selection
 
-Marker validation, host-signature seeding, boundary refinement and gene-level
-taxonomy read the top 10 DIAMOND hits of each protein. The reference databases
-hold the same subject ID several times, several near-identical proteins from one
-genome, and some proteins under both a cellular and a viral label. Taken
-directly, such copies fill the top 10 and push viral references out. ViroSync
-therefore asks DIAMOND for ten times the requested number of targets and then
-keeps, for each query and in DIAMOND's order:
+Marker validation and host-signature seeding read the top 10 DIAMOND hits of each
+protein against the marker database. They use DIAMOND's rows as they are.
+
+Boundary refinement, gene-level taxonomy and the Phase 3 DIAMOND check search the
+combined proteome. That database holds the same subject ID several times, several
+near-identical proteins from one genome, and some proteins under both a cellular
+and a viral label. Taken directly, such copies fill the top 10 and push viral
+references out. For these searches ViroSync asks DIAMOND for ten times the
+requested number of targets and then keeps, for each query and in DIAMOND's
+order:
 
 1. For a protein (`<genome>|<protein>`) that appears under a cellular label
    (`EUK`, `BAC`, `ARC`, `MITO`, `PLASTID`) and under a viral label, the viral
@@ -276,6 +279,21 @@ keeps, for each query and in DIAMOND's order:
 The filter rewrites the DIAMOND table in place with the same columns. The
 all-against-all search among EVE core proteins in the Syntviz figure is not a
 top-hit search and uses no filter.
+
+### Seed markers
+
+A validated marker can start a candidate region unless its HMM model is a host
+kinase family: `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`
+(protein kinase and ABC1 kinase models). These families share distant homologs
+with NCLDV kinases, so host kinases pass marker validation. A marker from one of
+these models never seeds a region. Model names match without case and without a
+suffix after the first `_` or `.`. The terminal-repeat step in Phase 2 follows the
+same rule: a repeat-bounded child, or a slice left between children, needs a
+marker from another model or an identity-qualified viral gene of its own. A slice
+that only blocked markers support is dropped, as a slice without any evidence
+already was. If no repeat pair has such support, the parent stays whole. A blocked
+marker still counts as a marker, in hallmark and marker counts and in scoring,
+when another marker seeded the region that contains it.
 
 ## Confidence and limitations
 
