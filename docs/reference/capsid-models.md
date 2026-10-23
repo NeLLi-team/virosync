@@ -1,6 +1,6 @@
 # Structure-derived candidate profiles
 
-Resource bundle v1.1.0 contains 33 candidate profiles built from
+Resource bundles v1.1.0 and later contain 33 candidate profiles built from
 structure-supported protein clusters returned by a capsid search of an EVE
 catalogue. The set includes profiles with non-capsid functional evidence. The
 profiles use 5,305 training proteins and belong to the 1,086-profile marker
@@ -208,8 +208,9 @@ training members; it is not evidence that a protein lacks domains.
 
 ## Pre-extracted marker references
 
-Pre-extraction yields 3,522 distinct reference proteins. Of these, 230 overlap
-the existing marker set and 3,292 extend it, giving 3,867,592 marker proteins.
+In resource bundle v1.1.0, pre-extraction yields 3,522 distinct reference
+proteins. Of these, 230 overlap the existing marker set and 3,292 extend it,
+giving 3,867,592 marker proteins.
 The additions comprise 2,997 EUK, 265 PPV, 12 NCLDV, 11 MIRUS, and seven
 PHAGE references. These are source groups, not model-specificity assignments.
 
@@ -229,6 +230,11 @@ Existing marker proteins are preserved. Legacy organism-name suffixes are
 resolved through the same taxonomy lookup used at runtime, and an existing
 organism/protein pair is reused only when its sequence matches. Identical
 proteins from distinct reference organisms remain separate.
+
+Resource bundle v1.2.0 dereplicates the marker database within each genome
+(see [Databases](../RESOURCE_BUNDLE.md)) and holds 2,917,745 proteins. Every
+pre-extracted reference remains, as itself or through the longest member of its
+cluster of at least 90% identity in the same genome.
 
 One reference, `PHAGE__IMGVR_UViG_8103388301_000001_163`, has no detailed
 lineage entry. It retains its source `PHAGE` label through the existing
