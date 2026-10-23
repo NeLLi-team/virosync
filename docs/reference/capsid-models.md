@@ -138,8 +138,9 @@ qualified viral reference, gets nothing from the class. For a hit that qualifies
   the gate.
 - The A1 seed export applies the same marker votes, with the same taxonomy
   lookup, to the validated markers, so A1 and Phase 3 publish the same class for
-  the same evidence. A1 keeps the seed family for the likely family unless every
-  qualified viral hit is `EUK-pEVE`.
+  the same evidence. Whenever those rules decide the class, A1 derives the likely
+  family with the Phase 3 function (`infer_likely_family`); otherwise it keeps the
+  seed family.
 
 Each protein counts once. When several profiles hit one protein, the one that wins
 the per-protein deduplication of the vote gives the class (an MCP that can vote as

@@ -187,10 +187,13 @@ other gene votes for a lineage, so it never dilutes the lineage majority. It vot
 that come from conflicting lineage hits do not change. The A1 seed export has no
 gene taxonomy. It applies the same marker votes to the top-10 hits of the seed's
 validated markers, so it publishes the class that Phase 3 gives for the same
-evidence. When all their qualified viral hits are `EUK-pEVE`, the likely family
-follows that class, which is `VIRAL_UNKNOWN` with the likely family `MIXED` when
-no profile supplies one. With a lineage hit on another marker, the likely family
-stays the family of the seed. The `taxonomy_best_hits` string counts each
+evidence. Whenever these rules decide the class (a profile class votes, or all
+qualified viral hits are `EUK-pEVE`), A1 derives the likely family with the Phase 3
+function, from the region family, the marker families and the class: a region
+whose viral hits are all `EUK-pEVE` without a profile class is `MIXED`, and in a
+mixed region one marker family must hold at least 70% of the family-bearing
+markers to name the family. Otherwise the likely family stays the family of the
+seed. The `taxonomy_best_hits` string counts each
 interior gene once, in the buckets `EUK`, `MITO`, `PLASTID`, `BAC`, `ARC`, `UNK`,
 `NO_HITS`, `NCLDV`, `MIRUS`, `PPV`, `CRESS`, `GVMAG`, `PHAGE` and `EUK-pEVE`.
 

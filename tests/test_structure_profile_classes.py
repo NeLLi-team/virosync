@@ -28,6 +28,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizerConfig,
     VerificationResult,
     consensus_taxonomy_class,
+    infer_likely_family,
     mcp_vote_classes,
     taxonomy_class_votes,
 )
@@ -688,3 +689,27 @@ def test_a1_breaks_an_equal_score_tie_between_profiles_of_one_protein_as_the_vot
     assert result.likely_family == "MIRUS"
     assert result.marker_dominant_family == "MIRUS"
     assert result.marker_family_hits == ["MIRUS"]
+
+
+@pytest.mark.parametrize(
+    ("numbers", "taxonomy_class", "likely_family"),
+    [
+        ((8, 9, 26), "PPV", "MIXED"),
+        ((8, 9, 10, 26), "PPV", "PPV"),
+    ],
+)
+def test_a1_and_phase_3_publish_the_same_likely_family_for_mixed_profile_classes(
+    numbers: tuple[int, ...], taxonomy_class: str, likely_family: str
+) -> None:
+    anchors = [_anchor(_name(number), "EUK-pEVE__", "80", porf_id=f"gene-{number}") for number in numbers]
+    markers = [_hit(_name(number), "EUK-pEVE__", "80", porf_id=f"gene-{number}") for number in numbers]
+    synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig())
+    phase3 = VerificationResult(eve_id="e", scaffold="sc", start=0, end=3000, region_classification="MIXED")
+    synthesizer._process_hallmark_hits(phase3, markers)
+    synthesizer._assign_taxonomy_class(phase3, markers, [])
+    phase3.likely_family = infer_likely_family(phase3)
+
+    a1 = _a1_result(*anchors, predicted_family="MIXED")
+
+    assert (phase3.taxonomy_class, phase3.likely_family) == (taxonomy_class, likely_family)
+    assert (a1.taxonomy_class, a1.likely_family) == (taxonomy_class, likely_family)

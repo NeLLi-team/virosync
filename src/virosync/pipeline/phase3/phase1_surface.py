@@ -24,6 +24,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     consensus_taxonomy_class,
     deduplicate_preferring_mcp,
     has_validated_capsid_hit,
+    infer_likely_family,
     infer_ppv_subtype,
     is_validated_marker,
     summarize_marker_hits,
@@ -93,40 +94,29 @@ def _eligible_anchors(anchors: Sequence[Anchor]) -> tuple[tuple[str, Anchor], ..
     return tuple(selected)
 
 
-def _published_class_and_family(
-    seed_family: str,
-    validated_anchors: Sequence[Anchor],
-) -> tuple[str, str]:
-    """Return the A1 taxonomy class and likely family for a seed.
+def _top10_records(anchors: Sequence[Anchor]) -> list[dict]:
+    """The top-10 taxonomy fields of anchors, as Phase 3 keeps them for its hallmark hits."""
+    return [{"top10_prefixes": anchor.top10_prefixes, "top10_pidents": anchor.top10_pidents} for anchor in anchors]
+
+
+def _profile_vote_class(validated_anchors: Sequence[Anchor]) -> str | None:
+    """Return the Phase 3 vote class when the EUK-pEVE rules decide it, else ``None``.
 
     A1 stops before the gene taxonomy, so the seed marker family is the only
     taxonomy it has, and without it the published class would be UNKNOWN for every
-    seed. The EUK-pEVE rules of Phase 3 apply on top of it, marker by marker:
-
-    - A structure-derived profile with a class votes it when its own references
-      are only EUK-pEVE. With such a marker present the class is the Phase 3 vote
-      (:func:`consensus_taxonomy_class`, with the same taxonomy lookup) over the
-      validated markers, whatever the other markers show.
-    - When every qualified viral hit of the validated markers is EUK-pEVE, the
-      likely family follows that class: the class itself, or MIXED when the vote
-      gives VIRAL_UNKNOWN. A class that the gate has no family for (PHAGE) gives
-      UNKNOWN.
-
-    Without either, the class and the likely family come from the seed family.
+    seed. The EUK-pEVE rules of Phase 3 apply on top of it, marker by marker. They
+    decide the class when a structure-derived profile has only EUK-pEVE references
+    (it then votes its class), or when every qualified viral hit of the validated
+    markers is EUK-pEVE. The class is then the Phase 3 vote
+    (:func:`consensus_taxonomy_class`, with the same taxonomy lookup) over the
+    validated markers, whatever the other markers show. Otherwise the class and the
+    likely family come from the seed family.
     """
-    records = [
-        {"top10_prefixes": anchor.top10_prefixes, "top10_pidents": anchor.top10_pidents} for anchor in validated_anchors
-    ]
-    peve_only = has_only_peve_viral_hits(records)
+    peve_only = has_only_peve_viral_hits(_top10_records(validated_anchors))
     has_profile_class = any(peve_profile_class(anchor.hallmark_gene, anchor) for anchor in validated_anchors)
     if not (peve_only or has_profile_class):
-        return normalize_effective_eve_class(seed_family), seed_family
-    taxonomy_class = consensus_taxonomy_class(validated_anchors, taxonomy_lookup=get_taxonomy_lookup())
-    if not peve_only:
-        return taxonomy_class, seed_family
-    if taxonomy_class in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
-        return taxonomy_class, taxonomy_class
-    return taxonomy_class, "MIXED" if taxonomy_class == "VIRAL_UNKNOWN" else "UNKNOWN"
+        return None
+    return consensus_taxonomy_class(validated_anchors, taxonomy_lookup=get_taxonomy_lookup())
 
 
 def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
@@ -145,9 +135,9 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     # Phase 1 has no CRESS marker family. Identity-qualified gene taxonomy may
     # assign CRESS later during evidence synthesis.
     likely_family = region_classification if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"} else "UNKNOWN"
-    taxonomy_class, likely_family = _published_class_and_family(likely_family, validated_anchors)
+    vote_class = _profile_vote_class(validated_anchors)
 
-    return VerificationResult(
+    result = VerificationResult(
         eve_id=eve_id,
         scaffold=seed.scaffold,
         start=seed.start,
@@ -179,7 +169,8 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
         ppv_subtype=infer_ppv_subtype(hallmark_genes),
         likely_family=likely_family,
-        taxonomy_class=taxonomy_class,
+        # The seed marker family is the published class, unless the EUK-pEVE rules below decide.
+        taxonomy_class=normalize_effective_eve_class(likely_family),
         seed_sources=sorted(set(seed.sources)),
         seed_confidence=seed.confidence,
         seed_hhg_score=seed.hhg_score,
@@ -189,6 +180,13 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         gc_deviation=seed.gc_deviation,
         cub_deviation=seed.cub_deviation,
     )
+    if vote_class is not None:
+        # The likely family follows the vote by the same rule as Phase 3, so the two
+        # agree on the marker dominance of a mixed region and on EUK-pEVE-only ones.
+        result.taxonomy_class = vote_class
+        result.hallmark_taxonomy_records = _top10_records(validated_anchors)
+        result.likely_family = infer_likely_family(result)
+    return result
 
 
 def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
