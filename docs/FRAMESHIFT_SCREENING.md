@@ -41,9 +41,12 @@ pixi run example-frameshift
 cat results/example-frameshift/batch_summary.tsv
 ```
 
-With resource bundle v1.1.0, the row must report `status=success`,
-`predictions=4`, and `accepted=2`. This example checks the rescue path. It is
-not a sensitivity benchmark.
+With resource bundle v1.2.0, the row must report `status=success`,
+`predictions=1`, and `accepted=1`. The example checks the Phase 1 rescue path:
+it must write confirmed frameshift markers and rescued proteins. Its rescued
+markers are hits of the kinase model `VS000087`, which validate but never start
+a region, so no rescued protein reaches Phase 3. It is not a sensitivity
+benchmark.
 
 ## Read the output
 
