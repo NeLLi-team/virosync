@@ -1274,6 +1274,8 @@ def _draw_gene_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gene_functio
             "Line2D": Line2D,
             "Counter": Counter,
             "COLORS": defaultdict(lambda: "#BBBBBB"),
+            "UNSEARCHED_EDGE": "#777777",
+            "UNSEARCHED_LINESTYLE": (0, (2.0, 1.2)),
             "HOST_GENUS": "",
         }
     )
