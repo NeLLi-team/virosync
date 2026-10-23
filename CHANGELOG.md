@@ -113,6 +113,26 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Recompute older Phase 2 checkpoint formats that lack candidate identifiers.
   Existing positional `RefinedBoundary` constructor arguments remain compatible.
 
+## Resource bundle v1.1.0 - 2026-09-15
+
+- Add all 33 structure-derived candidate HMMs and matched annotations,
+  bringing the marker library to 1,086 profiles. Their source clusters contain
+  5,305 proteins. The set comprises 20 penton, four putative adenain-like
+  protease, two minor capsid, two coat, one putative tail tube, one unresolved
+  protease-like, one capsid-domain, one general capsid, and one putative MCP
+  profile.
+- Retain original model identifiers, source captions, curated functions, and
+  curation evidence. Source captions do not override the curated function.
+- Recognize `EVE_CAPSID_NOVEL_0029` as a putative MCP with no assigned
+  marker family. Keep the other 32 added profiles outside the MCP role.
+- Correct the MCP flag for six existing VP penton profiles. Capsid-category
+  annotations alone do not confer MCP status or its scoring bonus.
+- Pre-extract full reference-protein hits for all 33 models, preserve their
+  source identifiers and taxonomy links, and rebuild the marker DIAMOND
+  database from the expanded FASTA.
+- Retain the 937 Pfam profiles, broad reference-proteome database, and
+  taxonomy labels. The ViroSync software version remains 1.0.1.
+
 ## [1.0.1] - 2026-09-08
 
 ### Added

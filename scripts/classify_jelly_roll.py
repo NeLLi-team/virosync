@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from Bio import SeqIO
 
 from virosync.config import get_config
+from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 from virosync.utils.path_safety import safe_filename_component
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -56,14 +57,6 @@ DJR_OPTIMAL_MIN = 450  # Optimal DJR range start
 DJR_OPTIMAL_MAX = 550  # Optimal DJR range end
 SJR_OPTIMAL_MIN = 250  # Optimal SJR range start
 SJR_OPTIMAL_MAX = 320  # Optimal SJR range end
-
-# MCP-related marker patterns (case-insensitive)
-MCP_MARKER_PATTERNS = [
-    "PLV_MCP",
-    "MCP",
-    "major_capsid",
-    "capsid_protein",
-]
 
 # InterProScan domains for jelly roll detection
 DJR_PFAM_DOMAINS = {
@@ -138,13 +131,7 @@ def is_hk97_marker(marker_name: str) -> bool:
 
 def is_mcp_marker(marker_name: str) -> bool:
     """Check if a marker name corresponds to an MCP marker."""
-    if is_hk97_marker(marker_name):
-        return True
-    marker_lower = marker_name.lower()
-    for pattern in MCP_MARKER_PATTERNS:
-        if pattern.lower() in marker_lower:
-            return True
-    return False
+    return is_hk97_marker(marker_name) or is_mcp_gene(marker_name)
 
 
 def calculate_djr_confidence(length: int) -> float:

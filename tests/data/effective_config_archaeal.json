@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "6002b0fc4c3e809fbe5a1c43d62e62687c64399dcdc6787acb4d711dda0ab5e1",
+  "effective_config_sha256": "5a956848bac81d6afe4ac3305566cd2c2a28a17fc4ba91e5bd35878380aefafe",
   "execution": {
     "masking": {
       "backend": "off",
@@ -113,10 +113,10 @@
     }
   },
   "orchestration": {
-    "core_resources_manifest_sha256": "f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3",
-    "core_resources_sha256": "57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2",
-    "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_0_7_runtime.tar.gz",
-    "core_resources_version": "v1.0.7",
+    "core_resources_manifest_sha256": "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9",
+    "core_resources_sha256": "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969",
+    "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz",
+    "core_resources_version": "v1.1.0",
     "database_root": null,
     "gpu_id": null,
     "interproscan_resources_sha256": null,
@@ -153,6 +153,7 @@
     "novel_marker_min_coverage": 0.5,
     "novel_marker_min_score": 30.0,
     "novel_marker_require_cluster": true,
+    "pfam_arbitration_enabled": true,
     "rebuild_db": false
   },
   "phase2": {
@@ -176,7 +177,8 @@
     "taxonomy_ml_model": "logreg",
     "taxonomy_ml_neighbor_window": 3,
     "taxonomy_ml_threshold": 0.5,
-    "taxonomy_weight_mode": "rank"
+    "taxonomy_weight_mode": "rank",
+    "terminal_repeat_enabled": true
   },
   "phase3": {
     "boltz_max_seq_len": 1000,

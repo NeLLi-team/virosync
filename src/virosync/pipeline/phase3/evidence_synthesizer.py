@@ -32,7 +32,6 @@ from virosync.pipeline.host_signatures import (
     host_signature_density_evalue_weighted,
 )
 from virosync.pipeline.phase1.viral_markers import (
-    CRESS_MARKER_MODELS,
     base_marker_gene_id,
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
@@ -70,6 +69,7 @@ MARKER_CATEGORY_KEYWORDS = {
     "packaging_atpase": ["packaging atpase", "a32", "packaging", "atpase"],
     "penton": ["penton"],
     "triplex": ["triplex"],
+    "tail_tube": ["tail tube"],
     "protease": ["protease", "peptidase"],
     "polymerase": ["polymerase", "polb", "dna polymerase"],
     "helicase": ["helicase", "primase", "d5"],
@@ -203,7 +203,10 @@ def load_marker_annotation_index(annotation_path: Path | None) -> dict[str, dict
             source = row.get("source") or ""
             description = row.get("description") or ""
             majority_annotation = row.get("majority_annotation") or ""
-            text = " ".join([model_name, description, majority_annotation])
+            text_fields = [description, majority_annotation]
+            if source != "EVE_structure_20260811":
+                text_fields.insert(0, model_name)
+            text = " ".join(text_fields)
             categories = _categorize_text(text)
             family = _infer_family_from_model(model_name, source, description)
             # capscan MCP markers carry their Bellas group in the description
@@ -232,14 +235,13 @@ def summarize_marker_hits(
 
     for gene in hallmark_genes:
         gene_key = gene.lower()
+        has_mcp = has_mcp or is_mcp_gene(gene_key)
         annotation = annotation_index.get(gene_key)
         if annotation:
             categories.update(annotation.get("categories", set()))
             family = annotation.get("family", "UNKNOWN")
             if family != "UNKNOWN":
                 families[family] += 1
-            if "capsid" in annotation.get("categories", set()) and gene.upper() not in CRESS_MARKER_MODELS:
-                has_mcp = True
             continue
 
         # Fallback: infer from gene name only
@@ -252,8 +254,6 @@ def summarize_marker_hits(
             families["MIRUS"] += 1
         elif gene_key.startswith(("gvogm", "gamadvirus")) or gene_key in {"og1352", "og484"}:
             families["NCLDV"] += 1
-        if is_mcp_gene(gene_key) or "capsid" in gene_key:
-            has_mcp = True
 
     group_hits = 0
     for group, group_categories in MARKER_CATEGORY_GROUPS.items():

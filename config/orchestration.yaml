@@ -1,10 +1,10 @@
 schema_version: 1
 orchestration:
   database_root: null
-  core_resources_url: https://dl.newlineages.com/virosync/resources_v1_0_7_runtime.tar.gz
-  core_resources_version: v1.0.7
-  core_resources_sha256: 57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2
-  core_resources_manifest_sha256: f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3
+  core_resources_url: https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz
+  core_resources_version: v1.1.0
+  core_resources_sha256: 9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969
+  core_resources_manifest_sha256: f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9
   tmvec_resources_url: https://dl.newlineages.com/virosync/virosync_tmvec2_resources_v1.0.0.tar.gz
   tmvec_resources_sha256: 2167621975719b607f8da9b9a9a6dcc03a18b5cedbb58a7dc6f9cf039757bba6
   interproscan_resources_url: null
@@ -81,7 +81,8 @@ phase2:
   host_trim_step_bp: 1000
   host_trim_max_host_fraction: 0.3
   host_trim_min_viral_fraction: 0.05
-  host_trim_score_threshold: 0.3
+  # Share of a gene's ten hits inside the host's own lineage, not a Jaccard.
+  host_trim_score_threshold: 0.35
   host_trim_buffer_kb: 5
   host_signature_min_token_len: 3
   host_trim_min_overlap_score: 0.4

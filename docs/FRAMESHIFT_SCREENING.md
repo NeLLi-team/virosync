@@ -41,7 +41,7 @@ pixi run example-frameshift
 cat results/example-frameshift/batch_summary.tsv
 ```
 
-With resource bundle v1.0.7, the row must report `status=success`,
+With resource bundle v1.1.0, the row must report `status=success`,
 `predictions=4`, and `accepted=2`. This example checks the rescue path. It is
 not a sensitivity benchmark.
 

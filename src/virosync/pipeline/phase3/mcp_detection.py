@@ -14,8 +14,10 @@ The canonical corpus is:
 
 - **Exact matches** (``MCP_HMM_EXACT``): the NCLDV MCP models
   (``OG1352``/``VS000086``, ``OG484``/``VS000309``, ``gamadvirusMCP``,
-  ``GVOGm0003``) plus the bare symbolic token ``"mcp"`` emitted by some
-  pipeline metadata.
+  ``GVOGm0003``), the curated structure-derived model
+  ``EVE_CAPSID_NOVEL_0029``, and the bare symbolic token ``"mcp"`` emitted
+  by some pipeline metadata. The structure-derived model carries no lineage
+  assignment.
 - **Prefix matches** (``MCP_HMM_PREFIXES``): family-scoped MCP HMM names
   such as ``plv_mcp_1``, ``vp_mcp_3``, ``mirus_mcp_2``, ``mcp_mirus``,
   ``mcp_poli``. The suffix after the prefix must be alphanumeric /
@@ -51,7 +53,7 @@ MCP_HMM_PREFIXES: tuple[str, ...] = (
 )
 
 
-MCP_HMM_EXACT: frozenset[str] = NCLDV_MCP_MODELS | frozenset({"mcp"})
+MCP_HMM_EXACT: frozenset[str] = NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
 
 
 _WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")

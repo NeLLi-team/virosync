@@ -13,7 +13,7 @@ eukaryotic genomes.
 
 ## Documentation scope
 
-ViroSync 1.0.2 uses resource bundle v1.0.7.
+ViroSync 1.0.2 uses resource bundle v1.1.0.
 
 ViroSync has a non-commercial license. Read the
 [license terms](https://github.com/NeLLi-team/virosync/blob/main/LICENSE) before

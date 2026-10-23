@@ -90,7 +90,7 @@ _REPORT_MCP_HMM_PREFIXES = (
     "plv_mcp",
     "vp_mcp",
 )
-_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"mcp"})
+_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
 _REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
 _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
 _REPORT_PREDICTION_COLOR = "#E3B341"
@@ -396,23 +396,33 @@ def _report_viral_category(taxonomy_record: Mapping[str, object] | None) -> str 
 
 
 # --- Colorblind-safe palette (Tol bright) ---
+# One palette with the published figures, so a report and a paper figure of the
+# same locus read the same way. Host lineage and other eukaryote are greys that
+# separate in print; they used to be two similar blues.
 COLORS = {
-    "PPV": "#EE7733",
-    "PLV": "#EE7733",
-    "VP": "#AA3377",
-    "CRESS": "#CCBB44",
-    "MIRUS": "#882255",
-    "NCLDV": "#009988",
+    "PPV": "#44AA99",
+    "PLV": "#6A3D9A",
+    "VP": "#33A02C",
+    "CRESS": "#E69F00",
+    "MIRUS": "#56B4E9",
+    "NCLDV": "#0B3D91",
     "GVMAG": "#332288",
-    "HOST": "#0077BB",
-    "EUK_HOST": "#0077BB",
-    "EUK": "#33BBEE",
-    "EUK_OTHER": "#33BBEE",
-    "BAC": "#CC3311",
-    "ARC": "#AA4499",
+    "HOST": "#737373",
+    "EUK_HOST": "#737373",
+    "EUK": "#BDBDBD",
+    "EUK_OTHER": "#BDBDBD",
+    "BAC": "#B15928",
+    "ARC": "#FDBF6F",
     "PHAGE": "#FF7F00",
-    "UNKNOWN": "#BBBBBB",
+    "MITO": "#999999",
+    # Searched and no hit, against a gene whose taxonomy was never searched.
+    "UNKNOWN": "#EDEDED",
+    "UNSEARCHED": "#FFFFFF",
 }
+# Genes outside the Phase 2 search envelope carry no taxonomy record at all,
+# which is not the same as a search that returned nothing.
+UNSEARCHED_EDGE = "#777777"
+UNSEARCHED_LINESTYLE = (0, (2.0, 1.2))
 
 TIER_COLORS = {"HIGH": "#333333", "MEDIUM": "#777777", "LOW": "#BBBBBB"}
 
@@ -1211,7 +1221,9 @@ else:
 
     def _make_gene_record(gene, region):
         porf_id = gene["porf_id"]
-        taxonomy_record = BOUNDARY_TAXONOMY.get(porf_id, {})
+        taxonomy_record = BOUNDARY_TAXONOMY.get(porf_id)
+        searched = taxonomy_record is not None
+        taxonomy_record = taxonomy_record or {}
         origin = _clean_text(taxonomy_record.get("top1_prefix")).rstrip("_")
         origin = origin if origin else "UNKNOWN"
         target = _clean_text(taxonomy_record.get("top1_target"))
@@ -1225,7 +1237,9 @@ else:
                 origin,
                 target,
                 taxonomy_record,
-            ),
+            )
+            if searched
+            else "UNSEARCHED",
             "best_hit_origin": origin,
             "best_hit_target": target,
             "is_mcp": is_mcp,
@@ -1440,11 +1454,14 @@ else:
                     (ge, y + half_height),
                     (gs, y + half_height),
                 ]
+            is_unsearched = gene["category"] == "UNSEARCHED"
             gene_arrow = mpatches.Polygon(
                 points,
                 closed=True,
                 facecolor=color,
-                edgecolor="none",
+                edgecolor=UNSEARCHED_EDGE if is_unsearched else "none",
+                linestyle=UNSEARCHED_LINESTYLE if is_unsearched else "solid",
+                linewidth=0.5 if is_unsearched else 0.0,
                 alpha=alpha,
                 zorder=5,
             )
@@ -1568,12 +1585,18 @@ else:
         mpatches.Patch(facecolor=COLORS["PHAGE"], label="Phage"),
         mpatches.Patch(
             facecolor=COLORS["HOST"],
-            label=f"Host lineage ({HOST_GENUS.title()})" if HOST_GENUS else "Host lineage",
+            label=(f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
         ),
-        mpatches.Patch(facecolor=COLORS["EUK"], label="Other Eukaryote"),
+        mpatches.Patch(facecolor=COLORS["EUK"], label="Other eukaryote"),
         mpatches.Patch(facecolor=COLORS["BAC"], label="Bacteria"),
         mpatches.Patch(facecolor=COLORS["ARC"], label="Archaea"),
-        mpatches.Patch(facecolor=COLORS["UNKNOWN"], label="Unknown"),
+        mpatches.Patch(facecolor=COLORS["UNKNOWN"], label="No hit"),
+        mpatches.Patch(
+            facecolor=COLORS["UNSEARCHED"],
+            edgecolor=UNSEARCHED_EDGE,
+            linestyle=UNSEARCHED_LINESTYLE,
+            label="Taxonomy not searched",
+        ),
     ]
     if mcp_porf_ids:
         legend_elements.append(
@@ -2159,7 +2182,8 @@ else:
                 strand = gene.get("strand", ".")
                 direction = width if strand == "+" else -width
                 x = start if strand == "+" else end
-                edge = "#555555" if gene["region"] != "eve" else "white"
+                unsearched = gene["category"] == "UNSEARCHED"
+                edge = UNSEARCHED_EDGE if unsearched else ("#555555" if gene["region"] != "eve" else "white")
                 detail_categories.add(gene["category"])
                 ax.add_patch(
                     mpatches.FancyArrow(
@@ -2173,6 +2197,7 @@ else:
                         length_includes_head=True,
                         facecolor=COLORS.get(gene["category"], COLORS["UNKNOWN"]),
                         edgecolor=edge,
+                        linestyle=UNSEARCHED_LINESTYLE if unsearched else "solid",
                         linewidth=0.45,
                         alpha=0.82 if gene["region"] != "eve" else 0.96,
                         zorder=4,
@@ -2238,6 +2263,7 @@ else:
             "GVMAG",
             "CRESS",
             "PHAGE",
+            "UNSEARCHED",
             "HOST",
             "EUK",
             "BAC",
@@ -2251,15 +2277,18 @@ else:
             "GVMAG": "Giant-virus MAG",
             "CRESS": "CRESS",
             "PHAGE": "Phage",
-            "HOST": f"Host lineage ({HOST_GENUS.title()})" if HOST_GENUS else "Host lineage",
+            "HOST": (f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
             "EUK": "Other eukaryote",
             "BAC": "Bacteria",
             "ARC": "Archaea",
-            "UNKNOWN": "Unknown",
+            "UNKNOWN": "No hit",
+            "UNSEARCHED": "Taxonomy not searched",
         }
         detail_handles = [
             mpatches.Patch(
                 facecolor=COLORS[category],
+                edgecolor=UNSEARCHED_EDGE if category == "UNSEARCHED" else "none",
+                linestyle=(UNSEARCHED_LINESTYLE if category == "UNSEARCHED" else "solid"),
                 label=detail_labels[category],
             )
             for category in detail_order

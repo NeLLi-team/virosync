@@ -35,6 +35,7 @@ nav:
       - Command line: reference/cli.md
       - Frameshift method: reference/frameshift-method.md
       - Databases: RESOURCE_BUNDLE.md
+      - Structure-derived capsids: reference/capsid-models.md
   - Performance: performance.md
 
 extra_css:

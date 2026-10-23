@@ -1079,7 +1079,12 @@ def _run_phase2_subflow(
     # Terminal repeats are read from the raw genome because Phase 0 hard-masks
     # repeats. Run this after every heuristic coordinate change and merge, but
     # before marker-floor metadata and coordinate-derived composition evidence.
-    if refined_boundaries and raw_genome_path is not None and boundary_diamond_query is not None:
+    if (
+        config.phase2.terminal_repeat_enabled
+        and refined_boundaries
+        and raw_genome_path is not None
+        and boundary_diamond_query is not None
+    ):
         from virosync.pipeline.phase2.terminal_repeats import (
             refine_boundaries_with_terminal_repeats,
         )

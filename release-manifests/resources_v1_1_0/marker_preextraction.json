@@ -1,0 +1,463 @@
+{
+  "schema_version": 1,
+  "resource_version": "v1.1.0",
+  "search": {
+    "tool": "HMMER",
+    "version": "3.4",
+    "models": 33,
+    "full_sequence_evalue_max": 1e-05,
+    "bit_score_floor": null,
+    "query_sequences": 46765751,
+    "searched_sequences": 46765750,
+    "maximum_protein_length": 100000,
+    "excluded_overlength_sequences": 1,
+    "whole_database_evalues": true
+  },
+  "inputs": {
+    "combined_proteome_dmnd": {
+      "path": "genomes/combined_proteome.dmnd",
+      "role": "proteome_diamond_database",
+      "sha256": "98f571603b6f71df1deb2a6e06f5b91b33ca1c7e692af3e4636a7b56b8cff2b9",
+      "size": 11269683342
+    },
+    "query_fasta_sha256": {
+      "combined_proteome.faa": "e95108c7f22e8d385decaa010c33e5c408184c86442058c19921503cd0caa129",
+      "combined_proteome.filt.faa": "b1206b9495a995e16cafe60abacbc627ed440a53d2657acf4c3d789d1002b58f"
+    },
+    "hmm_sha256": "c79ca857defd3da1d92eee5da707d001ad1a668faaac63327527702015e1432a"
+  },
+  "counts": {
+    "reported_hit_rows": 6152,
+    "unique_model_protein_pairs": 5920,
+    "source_fasta_records": 3676,
+    "unique_source_ids": 3522,
+    "duplicate_source_records": 154,
+    "existing_selected_proteins": 230,
+    "old_marker_proteins": 3864300,
+    "added_marker_proteins": 3292,
+    "final_marker_proteins": 3867592
+  },
+  "storage": {
+    "sequences": "full proteins",
+    "old_fasta_byte_prefix_preserved": true,
+    "canonical_sequence_conflicts": 0,
+    "fasta_diamond_roundtrip_byte_identical": true,
+    "marker_faa_sha256": "4644a610efd7e32bd68c59a4ea5b69757f7e705c5d5d28e8948378a526ec2ce8",
+    "marker_dmnd_sha256": "1c6bbe4748a31c497878f6968d38f69bc840acd9474e6e9e7bf840f99cf2b63c",
+    "runtime_payload": "marker/marker.dmnd",
+    "source_payload": "marker/marker.faa"
+  },
+  "added_source_groups": {
+    "EUK": 2997,
+    "PPV": 265,
+    "MIRUS": 11,
+    "NCLDV": 12,
+    "PHAGE": 7
+  },
+  "per_model": [
+    {
+      "model": "EVE_CAPSID_NOVEL_0001",
+      "reported_rows": 508,
+      "proteins": 426,
+      "existing": 22,
+      "added": 404
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0002",
+      "reported_rows": 10,
+      "proteins": 8,
+      "existing": 7,
+      "added": 1
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0003",
+      "reported_rows": 15,
+      "proteins": 15,
+      "existing": 0,
+      "added": 15
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0004",
+      "reported_rows": 13,
+      "proteins": 13,
+      "existing": 0,
+      "added": 13
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0005",
+      "reported_rows": 346,
+      "proteins": 322,
+      "existing": 3,
+      "added": 319
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0006",
+      "reported_rows": 258,
+      "proteins": 256,
+      "existing": 0,
+      "added": 256
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0007",
+      "reported_rows": 306,
+      "proteins": 283,
+      "existing": 1,
+      "added": 282
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0008",
+      "reported_rows": 271,
+      "proteins": 252,
+      "existing": 2,
+      "added": 250
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0009",
+      "reported_rows": 11,
+      "proteins": 11,
+      "existing": 0,
+      "added": 11
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0010",
+      "reported_rows": 30,
+      "proteins": 30,
+      "existing": 0,
+      "added": 30
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0011",
+      "reported_rows": 10,
+      "proteins": 10,
+      "existing": 0,
+      "added": 10
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0012",
+      "reported_rows": 12,
+      "proteins": 12,
+      "existing": 0,
+      "added": 12
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0013",
+      "reported_rows": 291,
+      "proteins": 275,
+      "existing": 2,
+      "added": 273
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0014",
+      "reported_rows": 22,
+      "proteins": 22,
+      "existing": 1,
+      "added": 21
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0015",
+      "reported_rows": 311,
+      "proteins": 298,
+      "existing": 1,
+      "added": 297
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0016",
+      "reported_rows": 171,
+      "proteins": 170,
+      "existing": 5,
+      "added": 165
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0017",
+      "reported_rows": 112,
+      "proteins": 104,
+      "existing": 55,
+      "added": 49
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0018",
+      "reported_rows": 7,
+      "proteins": 7,
+      "existing": 0,
+      "added": 7
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0019",
+      "reported_rows": 43,
+      "proteins": 40,
+      "existing": 0,
+      "added": 40
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0020",
+      "reported_rows": 4,
+      "proteins": 4,
+      "existing": 1,
+      "added": 3
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0021",
+      "reported_rows": 31,
+      "proteins": 30,
+      "existing": 0,
+      "added": 30
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0022",
+      "reported_rows": 28,
+      "proteins": 27,
+      "existing": 0,
+      "added": 27
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0023",
+      "reported_rows": 14,
+      "proteins": 14,
+      "existing": 0,
+      "added": 14
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0024",
+      "reported_rows": 48,
+      "proteins": 47,
+      "existing": 8,
+      "added": 39
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0025",
+      "reported_rows": 15,
+      "proteins": 15,
+      "existing": 1,
+      "added": 14
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0026",
+      "reported_rows": 91,
+      "proteins": 91,
+      "existing": 73,
+      "added": 18
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0027",
+      "reported_rows": 246,
+      "proteins": 243,
+      "existing": 4,
+      "added": 239
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0028",
+      "reported_rows": 878,
+      "proteins": 875,
+      "existing": 11,
+      "added": 864
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0029",
+      "reported_rows": 12,
+      "proteins": 12,
+      "existing": 3,
+      "added": 9
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0030",
+      "reported_rows": 43,
+      "proteins": 43,
+      "existing": 0,
+      "added": 43
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0031",
+      "reported_rows": 106,
+      "proteins": 102,
+      "existing": 32,
+      "added": 70
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0032",
+      "reported_rows": 1882,
+      "proteins": 1856,
+      "existing": 40,
+      "added": 1816
+    },
+    {
+      "model": "EVE_CAPSID_NOVEL_0033",
+      "reported_rows": 7,
+      "proteins": 7,
+      "existing": 0,
+      "added": 7
+    }
+  ],
+  "header_normalizations": [
+    {
+      "source_id": "PPV__IMGVR_UViG_3300046012|001089_9",
+      "original_header": "PPV__IMGVR_UViG_3300046012|001089_9",
+      "normalized_id": "PPV__IMGVR_UViG_3300046012_001089|001089_9",
+      "organism_id": "PPV__IMGVR_UViG_3300046012_001089",
+      "protein_component": "001089_9",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300046012__001089",
+      "sequence_sha256": "d016fedf2fa1b8cfdc3971dbc686b6d9277ea863a7aa778f5efb2cfea53c22d9",
+      "protein_length": "369",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300046012_001089|001089_9"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300043431|000483_12",
+      "original_header": "PPV__IMGVR_UViG_3300043431|000483_12",
+      "normalized_id": "PPV__IMGVR_UViG_3300043431_000483|000483_12",
+      "organism_id": "PPV__IMGVR_UViG_3300043431_000483",
+      "protein_component": "000483_12",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300043431__000483",
+      "sequence_sha256": "9dbef41d9583c0f373e7c8b996d12c0a64828348995174f8655f985bd6705d5a",
+      "protein_length": "323",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300043431_000483|000483_12"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300076256|003032_6",
+      "original_header": "PPV__IMGVR_UViG_3300076256|003032_6",
+      "normalized_id": "PPV__IMGVR_UViG_3300076256_003032|003032_6",
+      "organism_id": "PPV__IMGVR_UViG_3300076256_003032",
+      "protein_component": "003032_6",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300076256__003032",
+      "sequence_sha256": "2771978753ca0c2ea0e7f4bcb1babcd603b5732c584395008c678f69b2ee91ab",
+      "protein_length": "289",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300076256_003032|003032_6"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300047478|000391_2",
+      "original_header": "PPV__IMGVR_UViG_3300047478|000391_2",
+      "normalized_id": "PPV__IMGVR_UViG_3300047478_000391|000391_2",
+      "organism_id": "PPV__IMGVR_UViG_3300047478_000391",
+      "protein_component": "000391_2",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300047478__000391",
+      "sequence_sha256": "916b157f6db8925678e71d76d84b7de5d1164c273128894e8a887224b46e6772",
+      "protein_length": "136",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300047478_000391|000391_2"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300011973|000034_3",
+      "original_header": "PPV__IMGVR_UViG_3300011973|000034_3",
+      "normalized_id": "PPV__IMGVR_UViG_3300011973_000034|000034_3",
+      "organism_id": "PPV__IMGVR_UViG_3300011973_000034",
+      "protein_component": "000034_3",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300011973__000034",
+      "sequence_sha256": "4a9ad3201dae6ccf2c8788eaf9c65490f04ee096ed610bbf427862c1d0b59e17",
+      "protein_length": "238",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300011973_000034|000034_3"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300042624|000353_6",
+      "original_header": "PPV__IMGVR_UViG_3300042624|000353_6",
+      "normalized_id": "PPV__IMGVR_UViG_3300042624_000353|000353_6",
+      "organism_id": "PPV__IMGVR_UViG_3300042624_000353",
+      "protein_component": "000353_6",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300042624__000353",
+      "sequence_sha256": "f610f8b13f7dcc3586382cd58265d40a21a87a62d6e26fde035985da444310d1",
+      "protein_length": "251",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300042624_000353|000353_6"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300032252|000055_6",
+      "original_header": "PPV__IMGVR_UViG_3300032252|000055_6",
+      "normalized_id": "PPV__IMGVR_UViG_3300032252_000055|000055_6",
+      "organism_id": "PPV__IMGVR_UViG_3300032252_000055",
+      "protein_component": "000055_6",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300032252__000055",
+      "sequence_sha256": "8f70eed7c3a54785173ba569c5587c5e3938427a11ba37448fd118185e79dd42",
+      "protein_length": "189",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300032252_000055|000055_6"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300031541|000089_2",
+      "original_header": "PPV__IMGVR_UViG_3300031541|000089_2",
+      "normalized_id": "PPV__IMGVR_UViG_3300031541_000089|000089_2",
+      "organism_id": "PPV__IMGVR_UViG_3300031541_000089",
+      "protein_component": "000089_2",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Polintoviricetes|Orthopolintovirales|Adintoviridae|PLV_unclassified|PPV__IMGVR_UViG_3300031541__000089",
+      "sequence_sha256": "cde65a845f4c7e85e95ef28c41bd341ab22712d6f1f0ca894b6c9bc418336909",
+      "protein_length": "147",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300031541_000089|000089_2"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300054977|000450_6",
+      "original_header": "PPV__IMGVR_UViG_3300054977|000450_6",
+      "normalized_id": "PPV__IMGVR_UViG_3300054977_000450|000450_6",
+      "organism_id": "PPV__IMGVR_UViG_3300054977_000450",
+      "protein_component": "000450_6",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Virophaviricetes|Priklausovirales|VP_unclassified|VP_unclassified|PPV__IMGVR_UViG_3300054977__000450",
+      "sequence_sha256": "d14c912447d4b34251dd6b4af64ef8092cb479d63231605a5e468a8e46241efb",
+      "protein_length": "641",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300054977_000450|000450_6"
+    },
+    {
+      "source_id": "PPV__IMGVR_UViG_3300009476|001523_5",
+      "original_header": "PPV__IMGVR_UViG_3300009476|001523_5",
+      "normalized_id": "PPV__IMGVR_UViG_3300009476_001523|001523_5",
+      "organism_id": "PPV__IMGVR_UViG_3300009476_001523",
+      "protein_component": "001523_5",
+      "source_group": "PPV",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PPV|Preplasmiviricota|Virophaviricetes|Priklausovirales|VP_unclassified|VP_unclassified|PPV__IMGVR_UViG_3300009476__001523",
+      "sequence_sha256": "00d4340561086658fdc839909c27eb936da0d3f985ecb7b737c336f6afcbe644",
+      "protein_length": "370",
+      "action": "added",
+      "reference_id": "PPV__IMGVR_UViG_3300009476_001523|001523_5"
+    },
+    {
+      "source_id": "PHAGE__MONDNA__GCA-000954835-1_2",
+      "original_header": "PHAGE__MONDNA__GCA-000954835-1_2",
+      "normalized_id": "PHAGE__GCA-000954835-1|PHAGE__MONDNA__GCA-000954835-1_2",
+      "organism_id": "PHAGE__GCA-000954835-1",
+      "protein_component": "PHAGE__MONDNA__GCA-000954835-1_2",
+      "source_group": "PHAGE",
+      "taxonomy_status": "resolved",
+      "taxonomy_label": "PHAGE|Monodnaviria|Shotokuvirae|Cressdnaviricota|Arfiviricetes|Cirlivirales|Circoviridae|unclassified Circoviridae|Avon-Heathcote Estuary associated circular virus 17",
+      "sequence_sha256": "5001c7b7dc0486d5c4d4249970e2e25fd9c3b9803559a96e17bf70651b762390",
+      "protein_length": "233",
+      "action": "added",
+      "reference_id": "PHAGE__GCA-000954835-1|PHAGE__MONDNA__GCA-000954835-1_2"
+    }
+  ],
+  "source_prefix_only": [
+    {
+      "source_id": "PHAGE__IMGVR_UViG_8103388301_000001_163",
+      "original_header": "PHAGE__IMGVR_UViG_8103388301_000001_163",
+      "normalized_id": "PHAGE__IMGVR_UViG_8103388301_000001_163",
+      "organism_id": "PHAGE__IMGVR_UViG_8103388301_000001_163",
+      "protein_component": "PHAGE__IMGVR_UViG_8103388301_000001_163",
+      "source_group": "PHAGE",
+      "taxonomy_status": "source_prefix_only",
+      "taxonomy_label": "",
+      "sequence_sha256": "01547acad30dde600222f2c25ca2892d17144af812db987062c370212d7e1613",
+      "protein_length": "226",
+      "action": "added",
+      "reference_id": "PHAGE__IMGVR_UViG_8103388301_000001_163"
+    }
+  ],
+  "taxonomy_rows_added": 0
+}

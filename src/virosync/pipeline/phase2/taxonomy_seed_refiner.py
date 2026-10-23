@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass, replace
 
 from virosync.ablation import AblationID, InterventionCounts
-from virosync.pipeline.host_signatures import HostSignatureModel, score_host_signature_record
+from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import has_identity_qualified_viral_hit
 
@@ -75,7 +75,10 @@ def _is_host_like_gene(
     if host_signature_model is None:
         return True
 
-    host_score = score_host_signature_record(tax, host_signature_model)
+    # The share of the gene's ten hits that sits in the host's own lineage.
+    # The former weighted Jaccard against the aggregate model rejected host
+    # genes wherever the host clade is densely sequenced.
+    host_score = host_lineage_share(tax, host_signature_model)
     return host_score >= host_signature_threshold
 
 

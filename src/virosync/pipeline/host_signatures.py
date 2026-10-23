@@ -396,6 +396,67 @@ def _fingerprint_from_record(
     )
 
 
+def dominant_lineage_tokens(
+    model: HostSignatureModel,
+    lineages: Iterable[str] | None = None,
+) -> frozenset[str]:
+    """The host's own lineage, as the model's heaviest organism writes it.
+
+    The heaviest species-level token names the organism the host markers point
+    at; its lineage is then the host's own path. Taking a path rather than the
+    heaviest token at each depth keeps a foreign clade out of the set when the
+    host has no name at some rank.
+    """
+    if not model.token_weights:
+        return frozenset()
+    if lineages is None:
+        lookup = _TAXONOMY_LOOKUP
+        lineages = lookup.values() if lookup else ()
+    paths: dict[str, list[str]] = {}
+    for lineage in lineages:
+        levels = [level.strip().lower() for level in str(lineage).split("|")]
+        if len(levels) < 2:
+            continue
+        species = levels[-1]
+        if species and species not in ("na", "") and species in model.token_weights:
+            paths.setdefault(species, levels)
+    if not paths:
+        return frozenset()
+    best = max(paths, key=lambda token: model.token_weights.get(token, 0.0))
+    return frozenset(level for index, level in enumerate(paths[best]) if index and level and level not in ("na", ""))
+
+
+def host_lineage_share(record, model: HostSignatureModel) -> float:
+    """Rank-weighted share of a gene's ten hits that sit in the host lineage.
+
+    Each hit contributes the fraction of the host's dominant tokens that its
+    own lineage carries, so a hit on the host's own species counts fully, a
+    relative counts partly, and a viral or distant hit counts nothing. This
+    replaces the weighted Jaccard against the aggregate model, which rejected
+    host genes wherever the host clade is densely sequenced.
+    """
+    tokens = getattr(model, "_dominant_cache", None)
+    if tokens is None:
+        tokens = dominant_lineage_tokens(model)
+        object.__setattr__(model, "_dominant_cache", tokens)
+    if not tokens:
+        return 0.0
+    hits = _parse_top10_hits(record)
+    lookup = _TAXONOMY_LOOKUP
+    if not hits or not lookup:
+        return 0.0
+    total = weighted = 0.0
+    for rank, (target, bits, _pident, _evalue) in enumerate(hits):
+        weight = compute_hit_weight(rank, bits, model.weight_mode)
+        if weight <= 0:
+            continue
+        total += weight
+        lineage = lookup.get(resolve_org_id(str(target), lookup), "")
+        shared = {level.strip().lower() for level in str(lineage).split("|") if level.strip()} & tokens
+        weighted += weight * len(shared) / len(tokens)
+    return weighted / total if total else 0.0
+
+
 def score_host_signature_record(record, model: HostSignatureModel) -> float:
     """Score a gene record using its top-10 taxonomy distribution."""
     fingerprint = _fingerprint_from_record(record, model)

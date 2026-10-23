@@ -92,13 +92,13 @@ class ViroSyncDatabaseManager:
 
     DATABASE_SOURCES = [
         {
-            "version": "v1.0.7",
-            "source": "https://dl.newlineages.com/virosync/resources_v1_0_7_runtime.tar.gz",
-            "filename": "resources_v1_0_7_runtime.tar.gz",
-            "archive_size_bytes": 5_877_324_818,
-            "payload_size_bytes": 13_137_477_318,
-            "archive_sha256": ("57daed0b39bf2bc4c4f84ec3b612c6034a3d26ea38e7ec5fba4f4469da36e9a2"),
-            "manifest_sha256": ("f3aeed77045f4728207c6997f5986ed155056e2b4b2a297574d57686982a18b3"),
+            "version": "v1.1.0",
+            "source": "https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz",
+            "filename": "resources_v1_1_0_runtime.tar.gz",
+            "archive_size_bytes": 5_877_893_320,
+            "payload_size_bytes": 13_141_791_027,
+            "archive_sha256": ("9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969"),
+            "manifest_sha256": ("f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9"),
         },
     ]
     DATABASE_VERSION = DATABASE_SOURCES[0]["version"]

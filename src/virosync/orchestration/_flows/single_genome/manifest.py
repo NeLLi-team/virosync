@@ -188,6 +188,8 @@ _FINGERPRINT_SCALAR_FIELDS = (
     "boundary_taxonomy_ml_threshold",
     "boundary_taxonomy_ml_neighbor_window",
     "boundary_host_trim_enabled",
+    "boundary_terminal_repeat_enabled",
+    "pfam_arbitration_enabled",
     "boundary_host_trim_window_bp",
     "boundary_host_trim_step_bp",
     "boundary_host_trim_max_host_fraction",

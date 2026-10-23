@@ -3,8 +3,9 @@
 The September 19 benchmark used ViroSync 1.0.1 with GenomeTools seed indexing,
 shared repeat comparisons and development resources v1.1.0. Its source SHA-256 was
 `a19fe5516183507df1c5d16cf794670baef0dfa769fd78bf7f135ee53a2ec3e3`.
-Resource bundle v1.1.0 is an unreleased development bundle; the public default
-and the shipped examples use resource bundle v1.0.7.
+Resource bundle v1.1.0 is an unreleased development bundle. Public builds and
+their shipped examples use v1.0.7; this local development configuration uses
+v1.1.0.
 That campaign ran with one worker and 16 threads per input, at most two inputs
 at once, and no optional analyses. All figures below describe that campaign;
 the [paired repeat-annotation regression](#paired-repeat-annotation-regression)
