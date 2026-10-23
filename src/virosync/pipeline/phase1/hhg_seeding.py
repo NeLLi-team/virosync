@@ -89,6 +89,7 @@ class Anchor:
     validation_status: str = ""
     top10_prefixes: str = ""
     top10_pidents: str = ""
+    top10_targets: str = ""
 
 
 @dataclass

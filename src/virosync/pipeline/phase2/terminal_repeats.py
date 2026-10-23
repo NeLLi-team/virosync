@@ -36,6 +36,8 @@ from virosync.pipeline.phase2.boundary_diamond import (
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
+from virosync.pipeline.phase3.evidence_synthesizer import deduplicate_preferring_mcp
+from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
 MIN_TIR_ARM_BP = 50
@@ -82,6 +84,9 @@ class _MarkerGroup:
     end: int
     marker_names: frozenset[str]
     is_seed_eligible: bool = True
+    # (lower-case marker name, class) of structure-derived profiles whose hit has
+    # only EUK-pEVE references.
+    profile_classes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,6 +583,23 @@ def _base_protein_id(query_porf: str) -> str:
     return query_porf.split("|aa", 1)[0]
 
 
+def _profile_classes(protein_hits: list[object]) -> tuple[tuple[str, str], ...]:
+    """Return (lower-case profile name, class) for the one profile that counts for a protein.
+
+    The hits of one protein are deduplicated as the Phase 3 vote does, so a losing
+    profile of the same protein adds no class.
+    """
+    return tuple(
+        sorted(
+            {
+                (marker.hmm_target.lower(), profile_class)
+                for marker in deduplicate_preferring_mcp(protein_hits)
+                if (profile_class := peve_profile_class(marker.hmm_target, marker))
+            }
+        )
+    )
+
+
 def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_MarkerGroup]:
     """Group validated hits from the current and original parent span."""
     grouped: dict[str, list[object]] = defaultdict(list)
@@ -600,6 +622,7 @@ def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_Ma
                 end=max(marker.end for marker in hits),
                 marker_names=frozenset(marker.hmm_target for marker in hits if getattr(marker, "hmm_target", "")),
                 is_seed_eligible=any(not is_seed_blocked_model(getattr(marker, "hmm_target", "")) for marker in hits),
+                profile_classes=_profile_classes(hits),
             )
             for protein_id, hits in grouped.items()
         ),
@@ -943,7 +966,8 @@ def _child_boundary(
 ) -> RefinedBoundary:
     """Create a coordinate-local child without inherited aggregate evidence."""
     marker_names = set().union(*(group.marker_names for group in groups)) if groups else set()
-    classification = get_region_classification_summary(marker_names, None)
+    class_by_marker = dict(item for group in groups for item in group.profile_classes)
+    classification = get_region_classification_summary(marker_names, None, class_by_marker=class_by_marker)
     seed_sources = sorted(set(parent.seed_sources or []) & {"hhg", "marker_validation"}) if groups else []
     if "frameshift_rescue" in (parent.seed_sources or []):
         from virosync.pipeline.phase1.frameshift_screening import (

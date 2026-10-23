@@ -16,6 +16,8 @@ References:
 """
 
 import re
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 CRESS_MARKER_MODELS = frozenset(f"VS{model_number:06d}" for model_number in range(792, 809))
@@ -384,9 +386,28 @@ PLV_MARKER_PREFIXES = {"plv_"}
 MIRUS_MARKER_PREFIXES = {"mirus_"}
 
 
+def _marker_family(marker: str, class_by_marker: Mapping[str, str]) -> str:
+    """Return NCLDV, VP, PLV or MIRUS for one lower-case marker name, or ``""``.
+
+    The name decides first. A marker with no family in its name takes the class in
+    ``class_by_marker``: PPV counts as PLV, and CRESS and PHAGE name no region family.
+    """
+    if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
+        return "NCLDV"
+    if any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
+        return "VP"
+    if any(marker.startswith(prefix) for prefix in PLV_MARKER_PREFIXES):
+        return "PLV"
+    if any(marker.startswith(prefix) for prefix in MIRUS_MARKER_PREFIXES):
+        return "MIRUS"
+    return {"NCLDV": "NCLDV", "PPV": "PLV", "MIRUS": "MIRUS"}.get(class_by_marker.get(marker, ""), "")
+
+
 def classify_region_by_markers(
     marker_names: set[str],
     seed_marker_allowlist: list[str] | None = None,
+    *,
+    class_by_marker: Mapping[str, str] | None = None,
 ) -> str:
     """Classify a region as NCLDV, VP, PLV, MIRUS, or MIXED based on seed markers.
 
@@ -396,6 +417,9 @@ def classify_region_by_markers(
     Args:
         marker_names: Set of HMM marker target names found in the region
         seed_marker_allowlist: List of high-purity seed markers from config
+        class_by_marker: Lower-case marker name to the class of a structure-derived
+            profile whose hit has only EUK-pEVE references; it counts as a marker
+            of that class's family
 
     Returns:
         Classification string: "NCLDV", "VP", "PLV", "MIRUS", "MIXED", or "UNKNOWN"
@@ -410,25 +434,11 @@ def classify_region_by_markers(
     if not markers_lower:
         return "UNKNOWN"
 
-    # Count markers by category
-    ncldv_count = 0
-    vp_count = 0
-    plv_count = 0
-    mirus_count = 0
-
-    for marker in markers_lower:
-        # Check NCLDV markers
-        if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
-            ncldv_count += 1
-        # Check VP markers
-        elif any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
-            vp_count += 1
-        # Check PLV markers
-        elif any(marker.startswith(prefix) for prefix in PLV_MARKER_PREFIXES):
-            plv_count += 1
-        # Check MIRUS markers
-        elif any(marker.startswith(prefix) for prefix in MIRUS_MARKER_PREFIXES):
-            mirus_count += 1
+    families = Counter(_marker_family(marker, class_by_marker or {}) for marker in markers_lower)
+    ncldv_count = families["NCLDV"]
+    vp_count = families["VP"]
+    plv_count = families["PLV"]
+    mirus_count = families["MIRUS"]
 
     # Combine VP and PLV counts for threshold checks (they're related families)
     vp_plv_count = vp_count + plv_count
@@ -465,12 +475,15 @@ def classify_region_by_markers(
 def get_region_classification_summary(
     marker_names: set[str],
     seed_marker_allowlist: list[str] | None = None,
+    *,
+    class_by_marker: Mapping[str, str] | None = None,
 ) -> dict:
     """Get detailed classification summary for a region.
 
     Args:
         marker_names: Set of HMM marker target names found in the region
         seed_marker_allowlist: List of high-purity seed markers from config
+        class_by_marker: See :func:`classify_region_by_markers`
 
     Returns:
         Dictionary with classification details:
@@ -491,22 +504,13 @@ def get_region_classification_summary(
                 seed_markers_found.append(marker)
         markers_lower = {m.lower() for m in seed_markers_found}
 
-    ncldv_count = 0
-    vp_count = 0
-    plv_count = 0
-    mirus_count = 0
+    families = Counter(_marker_family(marker, class_by_marker or {}) for marker in markers_lower)
+    ncldv_count = families["NCLDV"]
+    vp_count = families["VP"]
+    plv_count = families["PLV"]
+    mirus_count = families["MIRUS"]
 
-    for marker in markers_lower:
-        if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
-            ncldv_count += 1
-        elif any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
-            vp_count += 1
-        elif any(marker.startswith(prefix) for prefix in PLV_MARKER_PREFIXES):
-            plv_count += 1
-        elif any(marker.startswith(prefix) for prefix in MIRUS_MARKER_PREFIXES):
-            mirus_count += 1
-
-    classification = classify_region_by_markers(marker_names, seed_marker_allowlist)
+    classification = classify_region_by_markers(marker_names, seed_marker_allowlist, class_by_marker=class_by_marker)
 
     return {
         "classification": classification,

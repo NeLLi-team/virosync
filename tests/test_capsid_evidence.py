@@ -265,7 +265,13 @@ def test_a1_capsid_anchor_outside_the_seed_gives_no_capsid_evidence() -> None:
 # --- Phase 1 seeding ---
 
 
-def _region_marker(model: str, status: str, prefixes: str = "NCLDV__", pidents: str = "") -> RegionMarkerHit:
+def _region_marker(
+    model: str,
+    status: str,
+    prefixes: str = "NCLDV__",
+    pidents: str = "",
+    targets: str = "",
+) -> RegionMarkerHit:
     return RegionMarkerHit(
         query_porf="ctgA_1",
         scaffold="ctgA",
@@ -286,6 +292,7 @@ def _region_marker(model: str, status: str, prefixes: str = "NCLDV__", pidents: 
         has_vp=0,
         has_viral=0,
         top10_pidents=pidents,
+        top10_targets=targets,
     )
 
 
@@ -310,21 +317,39 @@ def test_resumed_phase1_seeds_carry_the_marker_validation_status_on_their_anchor
 
 
 def test_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None:
-    marker = _region_marker(CAPSID_MODEL, "validated", prefixes="EUK-pEVE__,NCLDV__", pidents="80.0,45.5")
+    marker = _region_marker(
+        CAPSID_MODEL,
+        "validated",
+        prefixes="EUK-pEVE__,NCLDV__",
+        pidents="80.0,45.5",
+        targets="EUK-pEVE__a|p,NCLDV__b|q",
+    )
     region = SimpleNamespace(scaffold="ctgA", start=0, end=2000, markers=[marker], predicted_family="UNKNOWN")
 
     (seed,) = _candidate_regions_to_seeds([region], [marker], [], [])
 
     for anchor in (*seed.anchors, *seed.hhg_anchors):
-        assert (anchor.top10_prefixes, anchor.top10_pidents) == ("EUK-pEVE__,NCLDV__", "80.0,45.5")
+        assert (anchor.top10_prefixes, anchor.top10_pidents, anchor.top10_targets) == (
+            "EUK-pEVE__,NCLDV__",
+            "80.0,45.5",
+            "EUK-pEVE__a|p,NCLDV__b|q",
+        )
 
 
 def test_resumed_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None:
-    marker = _region_marker(CAPSID_MODEL, "validated", prefixes="EUK-pEVE__,NCLDV__", pidents="80.0,45.5")
+    marker = _region_marker(
+        CAPSID_MODEL,
+        "validated",
+        prefixes="EUK-pEVE__,NCLDV__",
+        pidents="80.0,45.5",
+        targets="EUK-pEVE__a|p,NCLDV__b|q",
+    )
 
     (seed,) = _build_merged_seeds_from_regions([{"scaffold": "ctgA", "start": 0, "end": 2000}], [marker])
 
-    assert [(a.top10_prefixes, a.top10_pidents) for a in seed.anchors] == [("EUK-pEVE__,NCLDV__", "80.0,45.5")]
+    assert [(a.top10_prefixes, a.top10_pidents, a.top10_targets) for a in seed.anchors] == [
+        ("EUK-pEVE__,NCLDV__", "80.0,45.5", "EUK-pEVE__a|p,NCLDV__b|q")
+    ]
 
 
 @pytest.mark.parametrize(

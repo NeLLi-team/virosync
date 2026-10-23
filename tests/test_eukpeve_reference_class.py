@@ -538,12 +538,12 @@ def test_mcp_marker_with_only_peve_hits_does_not_override_lineage_votes() -> Non
     assert consensus_taxonomy_class([mcp], gene_taxonomy_records=genes) == "NCLDV"
 
 
-def _lineage_markers_and_peve_capsid_markers() -> tuple[list[dict], list[dict]]:
-    """Two NCLDV markers and two capsid markers whose only hits are EUK-pEVE."""
+def _lineage_markers_and_classless_peve_markers() -> tuple[list[dict], list[dict]]:
+    """Two NCLDV markers and two markers with no profile class whose only hits are EUK-pEVE."""
     markers = [
         _marker("NCLDV", "40", gene="GVOGm0013", porf_id="sc|1"),
         _marker("NCLDV", "45", gene="GVOGm0022", porf_id="sc|2"),
-        _marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0008", porf_id="sc|3"),
+        _marker("EUK-pEVE", "60", gene="GVOGm0100", porf_id="sc|3"),
         _marker("EUK-pEVE", "55", gene="EVE_CAPSID_NOVEL_0002", porf_id="sc|4"),
     ]
     genes = [
@@ -556,7 +556,7 @@ def _lineage_markers_and_peve_capsid_markers() -> tuple[list[dict], list[dict]]:
 
 
 def test_peve_only_markers_cast_no_vote_beside_lineage_markers() -> None:
-    markers, genes = _lineage_markers_and_peve_capsid_markers()
+    markers, genes = _lineage_markers_and_classless_peve_markers()
 
     assert taxonomy_class_votes(markers, gene_taxonomy_records=genes) == {"NCLDV": 6}
     assert consensus_taxonomy_class(markers, gene_taxonomy_records=genes) == "NCLDV"
@@ -656,7 +656,7 @@ def _verify_markers_and_genes(markers: list[dict], genes: list[dict]) -> Verific
 
 
 def test_marker_database_peve_evidence_alone_takes_the_mixed_gate_path() -> None:
-    markers = [_marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0008", porf_id="sc|3")]
+    markers = [_marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0002", porf_id="sc|3")]
     genes = [_gene("sc|3", "EUK", "55")]
 
     result = _verify_markers_and_genes(markers, genes)
@@ -669,7 +669,7 @@ def test_marker_database_peve_evidence_alone_takes_the_mixed_gate_path() -> None
 
 
 def test_marker_and_gene_database_peve_evidence_together_take_the_mixed_gate_path() -> None:
-    markers = [_marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0008", porf_id="sc|3")]
+    markers = [_marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0002", porf_id="sc|3")]
     genes = [_gene("sc|3", "EUK", "55"), _gene("sc|5", "EUK-pEVE", "50")]
 
     assert _verify_markers_and_genes(markers, genes).likely_family == "MIXED"
@@ -677,8 +677,8 @@ def test_marker_and_gene_database_peve_evidence_together_take_the_mixed_gate_pat
 
 def test_peve_marker_beside_conflicting_lineage_markers_stays_without_a_family() -> None:
     markers = [
-        _marker("NCLDV,PPV", "80,70", gene="EVE_CAPSID_NOVEL_0002", porf_id="sc|1"),
-        _marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0008", porf_id="sc|3"),
+        _marker("NCLDV,PPV", "80,70", gene="EVE_CAPSID_NOVEL_0008", porf_id="sc|1"),
+        _marker("EUK-pEVE", "60", gene="EVE_CAPSID_NOVEL_0002", porf_id="sc|3"),
     ]
     genes = [_gene("sc|1", "EUK", "30"), _gene("sc|3", "EUK", "55")]
 

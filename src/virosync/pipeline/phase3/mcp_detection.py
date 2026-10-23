@@ -99,6 +99,25 @@ CAPSID_EVIDENCE_MODELS: frozenset[str] = frozenset(
 )
 
 
+# Class of the EVEs behind each structure-derived profile, from the screen of
+# 2026-08-08 (``context_*`` counts in capsid_model_curation.tsv). A profile is
+# listed when one class holds at least 80% of its training EVEs, with
+# VIRAL_UNKNOWN in the denominator. 0002 (NCLDV 9 of 15) has no class. The
+# class describes the training EVEs, not a hit: Phase 1 and Phase 3 use it only
+# for a hit whose qualified viral references are all EUK-pEVE, which names no
+# lineage. A test derives this table from the curation file.
+_PPV_PROFILE_NUMBERS = (
+    *(1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+    *(19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32),
+)
+STRUCTURE_PROFILE_CLASSES: dict[str, str] = {
+    **{f"eve_capsid_novel_{number:04d}": "PPV" for number in _PPV_PROFILE_NUMBERS},
+    "eve_capsid_novel_0018": "PHAGE",
+    "eve_capsid_novel_0026": "MIRUS",
+    "eve_capsid_novel_0033": "CRESS",
+}
+
+
 _WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
 
 
@@ -140,3 +159,13 @@ def is_capsid_evidence_gene(name: str | None) -> bool:
     if not name:
         return False
     return is_mcp_gene(name) or name.lower().strip() in CAPSID_EVIDENCE_MODELS
+
+
+def structure_profile_class(name: str | None) -> str:
+    """Return the class of a structure-derived profile's training EVEs, or ``""``.
+
+    The name is lower-cased and stripped, as in :func:`is_mcp_gene`.
+    """
+    if not name:
+        return ""
+    return STRUCTURE_PROFILE_CLASSES.get(name.lower().strip(), "")

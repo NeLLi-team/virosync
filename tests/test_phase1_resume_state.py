@@ -77,6 +77,7 @@ def _complete_seed() -> MergedSeed:
         validation_status="validated_novel",
         top10_prefixes="EUK-pEVE__,NCLDV__",
         top10_pidents="80.123456789,45.5",
+        top10_targets="EUK-pEVE__a|p,NCLDV__b|q",
     )
     second_anchor = Anchor(
         porf_id="scaffold/alpha_18",
@@ -222,6 +223,7 @@ def test_phase1_state_file_round_trip_preserves_every_consumed_field(
     assert payload["merged_seeds"][0]["hhg_anchors"][0]["validation_status"] == ""
     assert payload["merged_seeds"][0]["anchors"][0]["top10_prefixes"] == "EUK-pEVE__,NCLDV__"
     assert payload["merged_seeds"][0]["anchors"][0]["top10_pidents"] == "80.123456789,45.5"
+    assert payload["merged_seeds"][0]["anchors"][0]["top10_targets"] == "EUK-pEVE__a|p,NCLDV__b|q"
     assert payload["merged_seeds"][0]["hhg_anchors"][0]["top10_prefixes"] == ""
 
 

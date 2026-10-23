@@ -74,24 +74,32 @@ class MergedSeed:
         the classify_region_by_markers function.
 
         Deduplicates by gene (porf_id): when one gene hits multiple HMM
-        models, only the best-scoring model is counted.
+        models, only the best-scoring model is counted. A best model that is a
+        structure-derived profile with only EUK-pEVE references counts as a marker
+        of its training-EVE class.
 
         Args:
             seed_marker_allowlist: List of high-purity seed markers from config
         """
         from virosync.pipeline.phase1.viral_markers import get_region_classification_summary
+        from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
 
         # Deduplicate anchors by gene: keep best-scoring model per porf_id
         all_anchors = self.anchors + self.hhg_anchors
-        best_by_gene: dict[str, str] = {}
-        best_score_by_gene: dict[str, float] = {}
+        best_by_gene: dict[str, Anchor] = {}
         for anchor in all_anchors:
-            gene_id = anchor.porf_id
-            if gene_id not in best_by_gene or anchor.score > best_score_by_gene[gene_id]:
-                best_by_gene[gene_id] = anchor.hallmark_gene
-                best_score_by_gene[gene_id] = anchor.score
-        marker_names = set(best_by_gene.values())
-        summary = get_region_classification_summary(marker_names, seed_marker_allowlist)
+            best = best_by_gene.get(anchor.porf_id)
+            if best is None or anchor.score > best.score:
+                best_by_gene[anchor.porf_id] = anchor
+        marker_names = {anchor.hallmark_gene for anchor in best_by_gene.values()}
+        class_by_marker = {
+            anchor.hallmark_gene.lower(): profile_class
+            for anchor in best_by_gene.values()
+            if (profile_class := peve_profile_class(anchor.hallmark_gene, anchor))
+        }
+        summary = get_region_classification_summary(
+            marker_names, seed_marker_allowlist, class_by_marker=class_by_marker
+        )
 
         self.predicted_family = summary["classification"]
         self.region_classification_ncldv_markers = summary["ncldv_markers"]

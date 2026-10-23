@@ -113,6 +113,7 @@ def _candidate_regions_to_seeds(
                     validation_status=getattr(marker, "validation_status", ""),
                     top10_prefixes=getattr(marker, "top10_prefixes", ""),
                     top10_pidents=getattr(marker, "top10_pidents", ""),
+                    top10_targets=getattr(marker, "top10_targets", ""),
                 )
             )
         has_rescued_marker = any(is_rescued_protein_id(marker.query_porf) for marker in region.markers)

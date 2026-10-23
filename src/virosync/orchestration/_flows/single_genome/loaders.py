@@ -58,6 +58,7 @@ def _build_merged_seeds_from_regions(
                     validation_status=getattr(marker, "validation_status", ""),
                     top10_prefixes=getattr(marker, "top10_prefixes", ""),
                     top10_pidents=getattr(marker, "top10_pidents", ""),
+                    top10_targets=getattr(marker, "top10_targets", ""),
                 )
             )
 

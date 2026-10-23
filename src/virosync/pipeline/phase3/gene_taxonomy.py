@@ -22,6 +22,7 @@ from Bio import SeqIO
 
 from virosync.output_contract import canonical_family
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
+from virosync.pipeline.phase3.mcp_detection import structure_profile_class
 from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL, EUK_PEVE_PREFIX, resolve_org_id
 from virosync.utils.path_safety import (
     require_strict_child,
@@ -243,6 +244,24 @@ def has_only_peve_viral_hits(records: Iterable[dict]) -> bool:
     """Return True when the records hold identity-qualified viral hits and all are EUK-pEVE."""
     namespaces = {prefix for record in records for prefix, _target in qualified_viral_hits(record)}
     return namespaces == {EUK_PEVE_LABEL}
+
+
+def peve_profile_class(model_name: object, hit: object) -> str:
+    """Return the class a structure-derived profile gives a hit, or ``""``.
+
+    The class comes from the profile's training EVEs and applies only when every
+    qualified viral reference of the hit is EUK-pEVE, which names no lineage. A
+    lineage hit, or no qualified viral hit, gives no class. ``hit`` is a dict or an
+    object with ``top10_prefixes`` and ``top10_pidents``.
+    """
+    profile_class = structure_profile_class(model_name)
+    if not profile_class:
+        return ""
+    record = {
+        key: hit.get(key) if isinstance(hit, dict) else getattr(hit, key, None)
+        for key in ("top10_prefixes", "top10_pidents")
+    }
+    return profile_class if has_only_peve_viral_hits([record]) else ""
 
 
 def viral_hit_categories(

@@ -27,8 +27,10 @@ assignment remains putative. Its strongest structural reference is a
 [Pleurochrysis polinton-like-virus MCP](https://rest.uniprot.org/unisave/A0A2H4YBC6?format=txt&versions=6).
 Related matches reach NCLDV capsid proteins. These short proteins do not
 support an exclusive virus-family assignment, so the runtime annotation
-assigns no marker family. A detected protein can still contribute a taxonomic
-vote through its independent sequence matches.
+assigns no marker family by name. A detected protein can still contribute a
+taxonomic vote through its independent sequence matches. A hit whose references
+are only `EUK-pEVE` takes the class of the profile's training EVEs instead (see
+[Profile classes](#profile-classes)).
 
 The other 32 profiles are not MCPs. Their identifiers and source captions
 do not confer MCP status. Capsid-type profiles give capsid evidence instead,
@@ -88,17 +90,74 @@ ViroSync counts `EUK-pEVE` as viral and never as cellular or host:
   `EUK-pEVE` row wins the twin rule.
 - `EUK-pEVE` hits never enter the host-signature model or the host lineage share.
 - `EUK-pEVE` carries no viral family. It sets no NCLDV, MIRUS or PPV flag, joins
-  no dominant-family count and casts no family vote. A gene or region whose
-  viral hits are all `EUK-pEVE` has the class `VIRAL_UNKNOWN`. When a lineage
-  hit exists, the `EUK-pEVE` hit changes nothing: in the region vote, a gene
-  whose viral hits are all `EUK-pEVE` casts no vote while any other gene votes
-  for a lineage. A region whose viral hits are all `EUK-pEVE`, in the marker
-  database, the proteome database or both, has the likely family `MIXED` and
-  takes the mixed path of the v2 gate, whatever lineage its marker names or its
-  Phase 1 region class suggest. The A1 seed export applies the same rule to the
-  top-10 hits of the seed's validated markers. The `taxonomy_best_hits`
-  partition counts these genes in the bucket `EUK-pEVE`; no output class has
-  that name.
+  no dominant-family count and casts no family vote of its own. A marker hit
+  whose references are all `EUK-pEVE` votes the class of its profile when the
+  profile has one (see [Profile classes](#profile-classes)). Without a class
+  (`0002`, other markers such as `GVOGm0003`) the hit stays `VIRAL_UNKNOWN`, and
+  a region whose viral hits are all `EUK-pEVE`, in the marker database, the
+  proteome database or both, uses the `MIXED` rule: it has the likely family
+  `MIXED` and takes the mixed path of the v2 gate, whatever lineage its marker
+  names or its Phase 1 region class suggest. When a lineage hit exists, the
+  `EUK-pEVE` hit changes nothing: in the region vote, a gene whose viral hits are
+  all `EUK-pEVE` casts no vote while any other gene votes for a lineage, apart
+  from the marker vote of a profile class. The A1 seed export applies the same
+  marker votes to the top-10 hits of the seed's validated markers. The
+  `taxonomy_best_hits` partition counts these genes in the bucket `EUK-pEVE`; no
+  output class has that name.
+
+## Profile classes
+
+For 32 of the 33 profiles, one class holds at least 80% of the training EVEs.
+The counts are the `context_PPV`, `context_NCLDV`, `context_MIRUS`,
+`context_PHAGE`, `context_CRESS` and `context_VIRAL_UNKNOWN` columns of
+`release-manifests/resources_v1_1_0/capsid_model_curation.tsv`, with
+`VIRAL_UNKNOWN` in the denominator. The classes come from the 2026-08-08
+ViroSync screen of EVEs.
+
+| Class | Profiles |
+| --- | --- |
+| `PPV` | 29: every profile except `0002`, `0018`, `0026` and `0033` |
+| `MIRUS` | `0026` |
+| `CRESS` | `0033` |
+| `PHAGE` | `0018` |
+| none | `0002` (NCLDV 9 of 15) |
+
+`STRUCTURE_PROFILE_CLASSES` in `src/virosync/pipeline/phase3/mcp_detection.py`
+holds the table, and a test derives it from the curation file.
+
+The curation rows that say "EVE context is not a taxonomic assignment" still
+hold for the profile. The class is used only for a marker hit whose qualified
+viral references are all `EUK-pEVE`. A hit with a lineage reference, or with no
+qualified viral reference, gets nothing from the class. For a hit that qualifies:
+
+- The marker votes the class as an ordinary marker (weights 2 and 3), never as an
+  MCP (flat weight 5, override). This holds for `0029` as well.
+- The class is the marker family in Phase 3 and one marker of that family in the
+  Phase 1 region family. The likely family and the gate use it, so a 3 kb region
+  with only a validated `0008` hit and `EUK-pEVE` references takes the PPV path of
+  the gate.
+- The A1 seed export applies the same marker votes, with the same taxonomy
+  lookup, to the validated markers, so A1 and Phase 3 publish the same class for
+  the same evidence. A1 keeps the seed family for the likely family unless every
+  qualified viral hit is `EUK-pEVE`.
+
+Each protein counts once. When several profiles hit one protein, the one that wins
+the per-protein deduplication of the vote gives the class (an MCP that can vote as
+one first, then the higher score, then the first hit), in the marker family of
+Phase 3, in the Phase 1 terminal-repeat children and in A1.
+
+Exception: Phase 1 has no `CRESS` or `PHAGE` region family for any marker, so the
+`CRESS` class of `0033` and the `PHAGE` class of `0018` apply from Phase 3 on (the
+vote, the marker family and the gate). In Phase 1, in its terminal-repeat children
+and in the `region_classification` of the A1 export, a hit of either profile gives
+the region family `UNKNOWN`. The A1 `taxonomy_class` and likely family still follow
+the vote.
+
+Proteome gene records whose hits are only `EUK-pEVE` cast no class. Hits whose
+references are all `EUK-pEVE` vote the profile class when the profile has one.
+Without a class (`0002`, other markers such as `GVOGm0003`) they stay
+`VIRAL_UNKNOWN`, and a region whose viral hits are all `EUK-pEVE` uses the `MIXED`
+rule, with the likely family `MIXED`.
 
 ## Source groups
 
@@ -115,7 +174,7 @@ PPV combines polinton-like viruses, virophages, and unresolved PPV calls in
 the source catalogue. Contexts can overlap within a profile; the last
 column therefore does not sum to 33. These labels describe the surrounding
 EVE. They do not establish a profile's taxonomic specificity or functional
-assignment.
+assignment. ViroSync uses them only through the profile classes above.
 
 ## Curation and provenance
 

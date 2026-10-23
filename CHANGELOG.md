@@ -43,9 +43,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   row of the same protein. Host signatures and the host lineage share ignore
   it. The class carries no viral family: it sets no NCLDV, MIRUS or PPV flag,
   joins no dominant-family count and never overrides a lineage hit. A gene or
-  region whose viral hits are all `EUK-pEVE` is `VIRAL_UNKNOWN`, and the gate
-  accepts it through its mixed-class rule. The `taxonomy_best_hits` string gains
-  the bucket `EUK-pEVE` after `PHAGE`. No output class has that name.
+  region whose viral hits are all `EUK-pEVE` is `VIRAL_UNKNOWN` and uses the
+  gate's mixed-class rule, unless a structure-derived profile supplies a class
+  (see the profile-class entry below). The `taxonomy_best_hits` string gains the
+  bucket `EUK-pEVE` after `PHAGE`. No output class has that name.
 - Give the 27 capsid-type structure-derived profiles (penton, capsid and coat;
   `CAPSID_EVIDENCE_MODELS`) the role of capsid evidence. A `validated_novel`
   hit of such a profile can seed a region, and the new flag
@@ -59,11 +60,27 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   without capsid evidence. `evidence_profiles.json` reports
   `has_capsid_evidence`. This changes the v1.1.0 rule that only
   `EVE_CAPSID_NOVEL_0029` has MCP-style scoring.
+- Give 32 of the 33 structure-derived profiles the class of their training
+  EVEs (`STRUCTURE_PROFILE_CLASSES`: 29 `PPV`, `0026` `MIRUS`, `0033` `CRESS`,
+  `0018` `PHAGE`; the class holds at least 80% of the `context_*` counts of
+  `capsid_model_curation.tsv`, from the 2026-08-08 ViroSync EVE screen; `0002` has
+  none). A marker hit of such a profile whose qualified viral references are all
+  `EUK-pEVE` votes that class as an ordinary marker, never as an MCP, and the
+  class becomes its marker family in Phase 3 and in the Phase 1 region family
+  (Phase 1 has no `CRESS` or `PHAGE` region family, so those two classes apply
+  from Phase 3 on). A 3 kb region whose only marker is a validated
+  `EVE_CAPSID_NOVEL_0008` hit with `EUK-pEVE` references now publishes `PPV` and
+  takes the PPV path of the gate. Without a class (`0002`, other markers such as
+  `GVOGm0003`) such hits stay `VIRAL_UNKNOWN` and use the mixed-class rule. A hit
+  with a lineage reference gets nothing from its profile. An `EUK-pEVE`-only MCP
+  profile ranks by score in the per-protein deduplication of the vote. The A1 seed
+  export applies the same marker votes.
 - The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v2`: each seed
-  anchor records the validation status and the top-10 identity data of its marker
-  hit. The A1 seed export counts capsid evidence from validated hits only and
-  publishes `VIRAL_UNKNOWN` with the likely family `MIXED` for a seed whose
-  validated markers have only `EUK-pEVE` viral hits. Checkpoints of v1 cannot be
+  anchor records the validation status and the top-10 prefixes, identities and
+  targets of its marker hit. The A1 seed export counts capsid evidence from validated hits only and
+  publishes the class of the marker vote for a seed whose validated markers have
+  only `EUK-pEVE` viral hits: the profile class when a profile supplies one, else
+  `VIRAL_UNKNOWN` with the likely family `MIXED`. Checkpoints of v1 cannot be
   reused.
 - Show both changes in the report. A gene whose qualifying viral hits are all
   `EUK-pEVE` gets the category `EUK-pEVE` in the gene maps and the category

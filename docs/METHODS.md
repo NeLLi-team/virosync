@@ -179,17 +179,20 @@ evidence, in marker validation, boundary refinement, gene-level taxonomy and
 region scoring, and never as cellular or host evidence. The class names no
 lineage: it adds no vote for `NCLDV`, `MIRUS`, `PPV` or `CRESS`, and a lineage
 hit in the same top 10 always decides. A gene or region whose viral hits are all
-`EUK-pEVE` is `VIRAL_UNKNOWN`. In the region vote, a gene whose viral hits are
-all `EUK-pEVE` casts no vote when any other gene votes for a lineage, so it never
-dilutes the lineage majority. It votes `VIRAL_UNKNOWN` only when no gene votes for
-a lineage. Votes of `VIRAL_UNKNOWN` that come from conflicting lineage hits do not
-change. The A1 seed export has no gene taxonomy. It applies the same rule to the
-top-10 hits of the seed's validated markers: when all their qualified viral hits
-are `EUK-pEVE`, it publishes `VIRAL_UNKNOWN` with the likely family `MIXED`, and
-with any lineage hit it keeps the family of the seed. The `taxonomy_best_hits`
-string counts each interior gene once, in the buckets `EUK`, `MITO`, `PLASTID`,
-`BAC`, `ARC`, `UNK`, `NO_HITS`, `NCLDV`, `MIRUS`, `PPV`, `CRESS`, `GVMAG`, `PHAGE`
-and `EUK-pEVE`.
+`EUK-pEVE` is `VIRAL_UNKNOWN`, unless a structure-derived profile supplies a
+class (see [Profile classes](#profile-classes-for-euk-peve-only-hits)). In the
+region vote, a gene whose viral hits are all `EUK-pEVE` casts no vote when any
+other gene votes for a lineage, so it never dilutes the lineage majority. It votes
+`VIRAL_UNKNOWN` only when no gene votes for a lineage. Votes of `VIRAL_UNKNOWN`
+that come from conflicting lineage hits do not change. The A1 seed export has no
+gene taxonomy. It applies the same marker votes to the top-10 hits of the seed's
+validated markers, so it publishes the class that Phase 3 gives for the same
+evidence. When all their qualified viral hits are `EUK-pEVE`, the likely family
+follows that class, which is `VIRAL_UNKNOWN` with the likely family `MIXED` when
+no profile supplies one. With a lineage hit on another marker, the likely family
+stays the family of the seed. The `taxonomy_best_hits` string counts each
+interior gene once, in the buckets `EUK`, `MITO`, `PLASTID`, `BAC`, `ARC`, `UNK`,
+`NO_HITS`, `NCLDV`, `MIRUS`, `PPV`, `CRESS`, `GVMAG`, `PHAGE` and `EUK-pEVE`.
 
 The report gene maps put a gene in the category `EUK-pEVE` when its qualifying
 viral hits are all `EUK-pEVE`, or when no viral hit qualifies and its best hit is
@@ -236,12 +239,13 @@ they read an MCP: the MCP term of the marker score, the common bonus of 0.05, th
 exemption from the small-region penalty, the two confidence caps, the
 priority-marker floors, the non-HHG quality pass and the MCP shortcuts of the v2
 acceptance gate. A region whose viral hits are all `EUK-pEVE`, in the marker
-database, the proteome database or both, has the likely family `MIXED`. This
-holds whatever lineage the marker names or the Phase 1 region class suggest, and
-the gate reads a likely family of `MIXED` before the region class. The region
-passes the gate through the same rule as a `VIRAL_UNKNOWN` region of mixed
-markers: a length above 2,000 bp, and capsid evidence or two hallmarks with one
-non-ATPase hallmark. A region with any lineage viral hit keeps its family logic.
+database, the proteome database or both, and whose markers supply no profile
+class, has the likely family `MIXED`. This holds whatever lineage the marker names
+or the Phase 1 region class suggest, and the gate reads a likely family of `MIXED`
+before the region class. The region passes the gate through the same rule as a
+`VIRAL_UNKNOWN` region of mixed markers: a length above 2,000 bp, and capsid
+evidence or two hallmarks with one non-ATPase hallmark. A region with any lineage
+viral hit keeps its family logic.
 
 `has_mcp` and `mcp_gene_ids` name major capsid proteins only. The class-vote
 override, ANI class transfer, jelly-roll classification and Boltz input
@@ -254,6 +258,56 @@ of the 27 profiles, or when the jelly-roll table supports it as an MCP. A
 supported MCP also has a gold circle. In the Syntviz session, MCPs are in the
 style group `mcp` and the other genes with capsid evidence are in the style group
 `capsid`. Both groups draw the same outline.
+
+## Profile classes for EUK-pEVE-only hits
+
+The 33 structure-derived profiles come from EVEs of known classes. For 32 of
+them, one class holds at least 80% of the training EVEs, counted in the
+`context_*` columns of `release-manifests/resources_v1_1_0/capsid_model_curation.tsv`
+(`PPV`, `NCLDV`, `MIRUS`, `PHAGE`, `CRESS` and `VIRAL_UNKNOWN`, with
+`VIRAL_UNKNOWN` in the denominator). The classes come from the 2026-08-08 ViroSync
+screen of EVEs. Twenty-nine profiles are `PPV`, `EVE_CAPSID_NOVEL_0026` is
+`MIRUS`, `0033` is `CRESS` and `0018` is `PHAGE`. `0002` has no class (NCLDV 9 of
+15). `STRUCTURE_PROFILE_CLASSES` in `src/virosync/pipeline/phase3/mcp_detection.py`
+holds the table, and a test derives it from the curation file.
+
+The curation table states that an EVE context is not a taxonomic assignment of
+the profile. ViroSync therefore uses the class only for a marker hit whose
+qualified viral references are all `EUK-pEVE`, which names no lineage. A hit with
+any lineage reference, or with no qualified viral reference, gets nothing from its
+profile. For such a hit the class has three effects:
+
+- The marker votes the class in the region vote as an ordinary marker, with the
+  weights of 2 and 3. It never takes the flat weight of 5 of an MCP and never
+  overrides the other genes, also for `0029`. Proteome gene records whose hits are
+  only `EUK-pEVE` still cast no class.
+- The class is the marker family of the hit in Phase 3 (`marker_family_hits`,
+  `marker_dominant_family`) and counts as one marker of that family in the Phase 1
+  region family. The likely family and the acceptance gate then use the class: a
+  3 kb region whose only marker is a validated `EVE_CAPSID_NOVEL_0008` hit with
+  only `EUK-pEVE` references publishes `taxonomy_class` `PPV`, the likely family
+  `PPV` and takes the PPV path of the gate. A `PHAGE` class has no gate family, so
+  its likely family is `UNKNOWN`.
+- The A1 seed export applies the same marker votes, with the same taxonomy
+  lookup, so A1 and Phase 3 publish the same class for the same evidence.
+
+Each protein counts once. When several profiles hit one protein, the profile that
+wins the per-protein deduplication of the vote gives the class: an MCP that can
+vote as one first, then the higher score, then the first hit. The marker family
+in Phase 3, in the Phase 1 terminal-repeat children and in A1 follows the same
+winner.
+
+Exception: Phase 1 has no `CRESS` or `PHAGE` region family for any marker, so the
+`CRESS` class of `0033` and the `PHAGE` class of `0018` apply from Phase 3 on (the
+vote, the marker family and the gate). In Phase 1, in its terminal-repeat
+children and in the `region_classification` of the A1 export, a hit of either
+profile gives the region family `UNKNOWN`. The A1 `taxonomy_class` and likely
+family still follow the vote.
+
+Hits whose references are all `EUK-pEVE` vote the profile class when the profile
+has one. Without a class (`0002`, other markers such as `GVOGm0003`) they stay
+`VIRAL_UNKNOWN` and use the `MIXED` rule. Two classed profiles of different
+classes tie and leave the region `VIRAL_UNKNOWN` with the likely family `MIXED`.
 
 ## Gene-function labels
 

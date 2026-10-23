@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import logging
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -40,7 +41,11 @@ from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     boundary_candidate_id,
 )
-from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits, viral_hit_categories
+from virosync.pipeline.phase3.gene_taxonomy import (
+    has_only_peve_viral_hits,
+    peve_profile_class,
+    viral_hit_categories,
+)
 from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
@@ -480,12 +485,41 @@ def _hit_field(hit: object, name: str) -> object:
     return getattr(hit, name, None)
 
 
+def _hit_model_name(hit: object) -> str:
+    """The HMM profile name of a hit: a hallmark hit's ``hallmark_gene`` or a marker's ``hmm_target``."""
+    return str(_hit_field(hit, "hallmark_gene") or _hit_field(hit, "hmm_target") or "")
+
+
 def _top10_record(hit: object) -> dict:
     """The top-10 taxonomy fields of a hit, as the gene-taxonomy helpers read them."""
     return {
         "top10_prefixes": _hit_field(hit, "top10_prefixes"),
         "top10_pidents": _hit_field(hit, "top10_pidents"),
         "top10_targets": _hit_field(hit, "top10_targets"),
+    }
+
+
+def with_profile_class_families(marker_summary: dict, hits: Iterable[object]) -> dict:
+    """Add the class of each profile hit with only EUK-pEVE references as a marker family.
+
+    ``marker_summary`` comes from :func:`summarize_marker_hits`. A structure-derived
+    profile has no family in its annotation, so by name it adds none. Its training
+    EVEs give it a class (``STRUCTURE_PROFILE_CLASSES``), and that class becomes
+    the marker family when every qualified viral reference of the hit is EUK-pEVE.
+    A hit with a lineage reference gets no family from its profile. ``hits`` are
+    dicts or objects with ``hallmark_gene``, ``top10_prefixes`` and ``top10_pidents``.
+    """
+    classes = [profile_class for hit in hits if (profile_class := peve_profile_class(_hit_model_name(hit), hit))]
+    if not classes:
+        return marker_summary
+    counts = Counter(marker_summary["family_counts"]) + Counter(classes)
+    dominant_family, dominant_count = counts.most_common(1)[0]
+    return {
+        **marker_summary,
+        "families": sorted(counts),
+        "family_counts": dict(counts),
+        "dominant_family": dominant_family,
+        "dominant_fraction": dominant_count / sum(counts.values()),
     }
 
 
@@ -496,8 +530,7 @@ def _is_mcp_marker(hit: object) -> bool:
     It is viral and votes VIRAL_UNKNOWN, but it must not override the lineage
     votes of the other genes, so it counts as an ordinary marker.
     """
-    gene_name = str(_hit_field(hit, "hallmark_gene") or "")
-    return is_mcp_gene(gene_name) and not has_only_peve_viral_hits([_top10_record(hit)])
+    return is_mcp_gene(_hit_model_name(hit)) and not has_only_peve_viral_hits([_top10_record(hit)])
 
 
 def marker_taxonomy_category(
@@ -519,7 +552,7 @@ def marker_taxonomy_category(
     return "VIRAL_UNKNOWN"
 
 
-def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
+def deduplicate_preferring_mcp(hallmark_hits: list) -> list:
     """One hit per protein for the taxonomy vote, preferring an MCP profile.
 
     The gate's deduplication keeps the highest-scoring profile per protein, so a
@@ -532,11 +565,19 @@ def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
     Both hits on one protein carry that protein's own DIAMOND top-10, so this
     changes the weight and the override, never the category. The gate keeps its
     own deduplication, so which EVEs are accepted is unaffected.
+
+    Only an MCP that can vote as one outranks the score. An MCP profile whose
+    references are only EUK-pEVE votes as an ordinary marker (see
+    :func:`_is_mcp_marker`), so it ranks by score like any other profile. Among
+    equal ranks the first hit stays.
+
+    A hit is a dict or an object with ``hallmark_gene`` or ``hmm_target``, a
+    protein ID (``porf_id`` or ``query_porf``) and a score (``hmm_score`` or
+    ``score``).
     """
     by_gene: dict[str, dict] = {}
     for index, hit in enumerate(hallmark_hits):
-        gene_name = str(_hit_field(hit, "hallmark_gene") or "")
-        if not gene_name:
+        if not _hit_model_name(hit):
             continue
         porf_id = str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
         # Without a protein ID there is no evidence two hits share a protein, so
@@ -547,7 +588,7 @@ def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
         except (TypeError, ValueError):
             score = 0.0
         # An MCP outranks any score; among equals, the higher score wins.
-        rank = (is_mcp_gene(gene_name), score)
+        rank = (_is_mcp_marker(hit), score)
         current = by_gene.get(base_gene)
         if current is None or rank > current["rank"]:
             by_gene[base_gene] = {"hit": hit, "rank": rank}
@@ -564,6 +605,17 @@ def _vote_category(hit: object, taxonomy_lookup: dict | None = None) -> str:
     if has_only_peve_viral_hits([_top10_record(hit)]):
         return EUK_PEVE_LABEL
     return marker_taxonomy_category(hit, taxonomy_lookup)
+
+
+def _marker_vote_category(hit: object, taxonomy_lookup: dict | None = None) -> str:
+    """Return one marker hit's vote, adding the class of a profile with only EUK-pEVE hits.
+
+    A structure-derived profile with a class (see ``STRUCTURE_PROFILE_CLASSES``)
+    votes that class when every qualified viral reference of the hit is EUK-pEVE.
+    Any other hit votes as :func:`_vote_category` says.
+    """
+    profile_class = peve_profile_class(_hit_model_name(hit), hit)
+    return profile_class or _vote_category(hit, taxonomy_lookup)
 
 
 def mcp_vote_classes(
@@ -594,14 +646,16 @@ def taxonomy_class_votes(
 
     A gene whose viral hits are all EUK-pEVE names no lineage. It votes
     VIRAL_UNKNOWN only when no other gene votes for a lineage; beside a lineage
-    vote it adds no weight, so it never dilutes the lineage majority.
+    vote it adds no weight, so it never dilutes the lineage majority. The one
+    exception is a marker hit of a structure-derived profile with a class: it
+    votes that class as an ordinary marker, never as an MCP.
     """
     weights: Counter = Counter()
     marker_gene_ids: set[str] = set()
     # One vote per marker-bearing protein, and an MCP profile on that protein
     # outranks any higher-scoring non-MCP profile. Done here rather than in the
     # caller so the function is correct however it is called.
-    hallmark_hits = _deduplicate_preferring_mcp(list(hallmark_hits or []))
+    hallmark_hits = deduplicate_preferring_mcp(list(hallmark_hits or []))
 
     gene_category_by_id: dict[str, str] = {}
     for record in gene_taxonomy_records or []:
@@ -615,7 +669,7 @@ def taxonomy_class_votes(
         gene_id = base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""))
         if gene_id:
             marker_gene_ids.add(gene_id)
-        marker_category = _vote_category(hit, taxonomy_lookup)
+        marker_category = _marker_vote_category(hit, taxonomy_lookup)
         gene_category = gene_category_by_id.get(gene_id, "")
 
         if not marker_category:
@@ -2472,9 +2526,9 @@ class EvidenceSynthesizer:
 
         rescued = [info for info in by_gene.values() if is_rescued_protein_id(info["base_gene"])]
         result.frameshift_rescue_marker_ids = [info["base_gene"] for info in rescued]
-        marker_summary = summarize_marker_hits(
-            hallmark_genes,
-            annotation_index=self.marker_annotation_index,
+        marker_summary = with_profile_class_families(
+            summarize_marker_hits(hallmark_genes, annotation_index=self.marker_annotation_index),
+            deduped_hits,
         )
         (
             identity_qualified_cress_genes,

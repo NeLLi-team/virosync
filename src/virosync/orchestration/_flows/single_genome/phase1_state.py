@@ -80,6 +80,7 @@ _ANCHOR_STRING_FIELDS = (
     "validation_status",
     "top10_prefixes",
     "top10_pidents",
+    "top10_targets",
 )
 _ANCHOR_INTEGER_FIELDS = ("start", "end")
 _ANCHOR_FLOAT_FIELDS = ("score", "evalue")

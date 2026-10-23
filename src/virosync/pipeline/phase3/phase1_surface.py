@@ -10,6 +10,7 @@ from virosync.output_contract import (
     canonical_family,
     normalize_effective_eve_class,
 )
+from virosync.pipeline.host_signatures import get_taxonomy_lookup
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import (
@@ -20,12 +21,15 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
+    consensus_taxonomy_class,
+    deduplicate_preferring_mcp,
     has_validated_capsid_hit,
     infer_ppv_subtype,
     is_validated_marker,
     summarize_marker_hits,
+    with_profile_class_families,
 )
-from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits
+from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits, peve_profile_class
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
 
@@ -89,25 +93,59 @@ def _eligible_anchors(anchors: Sequence[Anchor]) -> tuple[tuple[str, Anchor], ..
     return tuple(selected)
 
 
+def _published_class_and_family(
+    seed_family: str,
+    validated_anchors: Sequence[Anchor],
+) -> tuple[str, str]:
+    """Return the A1 taxonomy class and likely family for a seed.
+
+    A1 stops before the gene taxonomy, so the seed marker family is the only
+    taxonomy it has, and without it the published class would be UNKNOWN for every
+    seed. The EUK-pEVE rules of Phase 3 apply on top of it, marker by marker:
+
+    - A structure-derived profile with a class votes it when its own references
+      are only EUK-pEVE. With such a marker present the class is the Phase 3 vote
+      (:func:`consensus_taxonomy_class`, with the same taxonomy lookup) over the
+      validated markers, whatever the other markers show.
+    - When every qualified viral hit of the validated markers is EUK-pEVE, the
+      likely family follows that class: the class itself, or MIXED when the vote
+      gives VIRAL_UNKNOWN. A class that the gate has no family for (PHAGE) gives
+      UNKNOWN.
+
+    Without either, the class and the likely family come from the seed family.
+    """
+    records = [
+        {"top10_prefixes": anchor.top10_prefixes, "top10_pidents": anchor.top10_pidents} for anchor in validated_anchors
+    ]
+    peve_only = has_only_peve_viral_hits(records)
+    has_profile_class = any(peve_profile_class(anchor.hallmark_gene, anchor) for anchor in validated_anchors)
+    if not (peve_only or has_profile_class):
+        return normalize_effective_eve_class(seed_family), seed_family
+    taxonomy_class = consensus_taxonomy_class(validated_anchors, taxonomy_lookup=get_taxonomy_lookup())
+    if not peve_only:
+        return taxonomy_class, seed_family
+    if taxonomy_class in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
+        return taxonomy_class, taxonomy_class
+    return taxonomy_class, "MIXED" if taxonomy_class == "VIRAL_UNKNOWN" else "UNKNOWN"
+
+
 def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     overlapping_anchors = _overlapping_anchors(seed)
     eligible_anchors = _eligible_anchors(overlapping_anchors)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
-    marker_summary = summarize_marker_hits(hallmark_genes)
+    validated_anchors = [anchor for anchor in overlapping_anchors if is_validated_marker(anchor)]
+    # The class family comes from the profile that wins each protein in the Phase 3
+    # vote, so family and class never disagree on a tie.
+    marker_summary = with_profile_class_families(
+        summarize_marker_hits(hallmark_genes),
+        deduplicate_preferring_mcp(validated_anchors),
+    )
     mcp_gene_ids = [gene_id for gene_id, anchor in eligible_anchors if is_mcp_gene(anchor.hallmark_gene)]
     region_classification = canonical_family(seed.predicted_family)
     # Phase 1 has no CRESS marker family. Identity-qualified gene taxonomy may
     # assign CRESS later during evidence synthesis.
     likely_family = region_classification if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"} else "UNKNOWN"
-    # Viral hits that all name no lineage (EUK-pEVE) leave the region without a
-    # family, as in Phase 3. Only validated markers count, as there.
-    marker_records = [
-        {"top10_prefixes": anchor.top10_prefixes, "top10_pidents": anchor.top10_pidents}
-        for anchor in overlapping_anchors
-        if is_validated_marker(anchor)
-    ]
-    if has_only_peve_viral_hits(marker_records):
-        likely_family = "MIXED"
+    taxonomy_class, likely_family = _published_class_and_family(likely_family, validated_anchors)
 
     return VerificationResult(
         eve_id=eve_id,
@@ -141,11 +179,7 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
         ppv_subtype=infer_ppv_subtype(hallmark_genes),
         likely_family=likely_family,
-        # A1 stops before the gene taxonomy, so there is no weighted vote to
-        # publish. The seed marker family is the only taxonomy this arm has, and
-        # without this the published class would be UNKNOWN for every A1 seed.
-        # MIXED folds onto VIRAL_UNKNOWN, the class of EUK-pEVE-only evidence.
-        taxonomy_class=normalize_effective_eve_class(likely_family),
+        taxonomy_class=taxonomy_class,
         seed_sources=sorted(set(seed.sources)),
         seed_confidence=seed.confidence,
         seed_hhg_score=seed.hhg_score,
