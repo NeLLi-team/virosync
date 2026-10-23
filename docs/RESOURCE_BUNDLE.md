@@ -1,17 +1,47 @@
 # ViroSync resource bundle
 
-The current core resource version is `v1.1.0`, supplied as
-`resources_v1_1_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
-marker and broad reference-proteome DIAMOND databases, taxonomy labels, and
-marker annotations used for EVE detection, boundary refinement, and
-classification.
+The current core resource version is `v1.2.0`, supplied as
+`resources_v1_2_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
+gene-function profiles, marker and broad reference-proteome DIAMOND databases,
+taxonomy labels, and marker annotations used for EVE detection, boundary
+refinement, classification, and gene labels.
 
-The bundle contains 3,867,592 marker proteins, 1,086 marker profiles, and 937 Pfam
-screening profiles. The marker profiles include 33
-[structure-derived candidates](reference/capsid-models.md). This set comes
-from a capsid search and includes candidates with adenain-like protease, tail-tube, or
-unresolved protease-like evidence. Only `EVE_CAPSID_NOVEL_0029` has a putative
-MCP role.
+The bundle contains 2,917,745 marker proteins, 44,069,720 reference-proteome
+proteins, 1,086 marker profiles, 937 Pfam screening profiles, 412 gene-function
+profiles, and 190,562 taxonomy labels. The marker profiles include 33
+[structure-derived candidates](reference/capsid-models.md). Of these, 27 have a
+capsid-type curated function and give capsid evidence; `EVE_CAPSID_NOVEL_0029`
+is the only putative MCP.
+
+Changes from v1.1.0:
+
+- Both DIAMOND databases are dereplicated within each genome. Exact repeats are
+  removed first. DIAMOND 2.2.1 `cluster --approx-id 90 --member-cover 80` then
+  groups the remaining proteins of each genome, and the longest member of each
+  cluster is kept. No proteins are merged across genomes. The marker database
+  falls from 3,867,592 to 2,917,745 proteins and the proteome database from
+  46,765,751 to 44,070,936.
+- 1,258 proteome entries that copy prokaryotic contaminants removed from
+  eukaryotic references in GVClass resource v2.1.0
+  ([Zenodo](https://doi.org/10.5281/zenodo.23381313)) are removed with their
+  clusters (1,216 representatives). A match needs at least 95% identity and 80%
+  coverage to an EUK-labelled entry of the same assembly. The marker database
+  holds none of them.
+- The 3,011 eukaryote-labelled reference hits of the 33 structure-derived
+  profiles move from `EUK__<assembly>` to `EUK-pEVE__<assembly>` in both
+  databases, each with its cluster (1,031 marker and 1,892 proteome
+  representatives). Their label is the lineage of the assembly with every named
+  rank suffixed `-pEVE`, for example `EUK-pEVE|Evosea-pEVE|...`, as in GVClass.
+  ViroSync counts `EUK-pEVE` as viral and never as host (see
+  [Methods](METHODS.md)).
+- Eukaryotic lineages are rewritten from NCBI ranks
+  (`scripts/harmonize_taxonomy_labels.py`, 2,839 rows changed), and 245
+  `EUK-pEVE` rows are added.
+- `models/gene_function.hmm` and `models/gene_function_labels.tsv` hold 412 Pfam
+  and VOGDB profiles that label core genes.
+
+`release-manifests/resources_v1_2_0/` holds the runtime manifest and the build
+record (`build_provenance.json`).
 
 Marker references contain full proteins with identifiers linked to reference
 genomes. The resource build tree stores these sequences in
@@ -19,14 +49,14 @@ genomes. The resource build tree stores these sequences in
 archive contains the DIAMOND database; the matching source companion contains
 the FASTA. Both encode the same marker reference set.
 
-Update your ViroSync checkout before installing v1.1.0. The resource update
-includes code changes for MCP roles and functional categories; checkouts
-from before the v1.1.0 resource commits lack them.
+Update your ViroSync checkout before installing v1.2.0. Older checkouts treat
+`EUK-pEVE` hits as unknown and give the 27 capsid-type profiles no capsid
+evidence.
 
-Setup downloads about 6 GB and installs about 13 GB. The archive and installed
-data can use about 19 GB at the same time. Allow extra space for the Pixi
-environment, results, filesystem overhead, optional resources, and retained
-older versions.
+Setup downloads about 5.3 GB and installs about 11.4 GB. The archive and
+installed data can use about 17 GB at the same time. Allow extra space for the
+Pixi environment, results, filesystem overhead, optional resources, and
+retained older versions.
 
 Install the core resources:
 

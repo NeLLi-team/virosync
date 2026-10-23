@@ -189,6 +189,27 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Recompute older Phase 2 checkpoint formats that lack candidate identifiers.
   Existing positional `RefinedBoundary` constructor arguments remain compatible.
 
+## Resource bundle v1.2.0 - 2026-10-22
+
+- Dereplicate the marker and reference-proteome DIAMOND databases within each
+  genome: exact repeats first, then DIAMOND 2.2.1 `cluster --approx-id 90
+  --member-cover 80`, keeping the longest member of each cluster. The marker
+  database holds 2,917,745 proteins (was 3,867,592) and the proteome database
+  44,069,720 (was 46,765,751).
+- Remove 1,258 proteome entries that copy prokaryotic contaminants removed from
+  eukaryotic references in GVClass resource v2.1.0, with their clusters (1,216
+  representatives).
+- Move the 3,011 eukaryote-labelled reference hits of the 33 structure-derived
+  profiles, with their clusters, to the new reference class `EUK-pEVE`
+  (`EUK-pEVE__<assembly>`; 1,031 marker and 1,892 proteome representatives, 245
+  label rows).
+- Rewrite eukaryotic lineages from NCBI ranks (2,839 rows) and add the
+  gene-function profiles `models/gene_function.hmm` and
+  `models/gene_function_labels.tsv` (412 Pfam and VOGDB profiles). The bundle
+  holds 190,562 taxonomy labels.
+- The archive is 5.3 GB (was 5.9 GB) and installs 11.4 GB (was 13.1 GB). The
+  build record is `release-manifests/resources_v1_2_0/build_provenance.json`.
+
 ## Resource bundle v1.1.0 - 2026-09-15
 
 - Add all 33 structure-derived candidate HMMs and matched annotations,

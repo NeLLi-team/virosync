@@ -40,7 +40,7 @@ jobs:
 
       - name: Fully verify provisioned resources
         env:
-          EXPECTED_DB_VERSION: v1.1.0
+          EXPECTED_DB_VERSION: v1.2.0
         run: |
           test -n "$VIROSYNC_CI_RESOURCES" || { echo "VIROSYNC_CI_RESOURCES not set on this runner"; exit 1; }
           test -f "$VIROSYNC_CI_RESOURCES/DB_VERSION" || { echo "resources not found at $VIROSYNC_CI_RESOURCES"; exit 1; }
@@ -51,7 +51,7 @@ jobs:
             --config config/orchestration.yaml \
             --db-root "$VIROSYNC_CI_RESOURCES" \
             --full
-          echo "Provisioned resources passed full v1.1.0 verification."
+          echo "Provisioned resources passed full v1.2.0 verification."
 
       - name: Run clean shipped example
         run: |

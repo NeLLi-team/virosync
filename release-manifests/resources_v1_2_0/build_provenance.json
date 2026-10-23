@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "resource_version": "v1.2.0",
+  "built": "2026-10-22",
+  "base_bundle": {
+    "resource_version": "v1.1.0",
+    "archive_sha256": "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969",
+    "manifest_sha256": "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9",
+    "marker_proteins": 3867592,
+    "proteome_proteins": 46765751,
+    "taxonomy_labels": 190317
+  },
+  "taxonomy_harmonization": {
+    "script": "scripts/harmonize_taxonomy_labels.py",
+    "rows_changed": 2839,
+    "labels_sha256": "19e8cb3f9585f80711b6eb45197fe6da4e0d606f3f7906d596aad2ea52d6e8b1"
+  },
+  "dereplication": {
+    "scope": "within each genome; the genome key is the protein ID text before the first '|'",
+    "steps": [
+      "remove exact repeated sequences (keep the first record)",
+      "DIAMOND 2.2.1 cluster --approx-id 90 --member-cover 80 --oid-output",
+      "keep the longest member of each cluster (first in table order on ties)",
+      "keep every protein of a genome with no alignment"
+    ],
+    "tool": {
+      "name": "DIAMOND",
+      "version": "2.2.1"
+    },
+    "marker": {
+      "before": 3867592,
+      "after": 2917745
+    },
+    "proteome": {
+      "before": 46765751,
+      "after": 44070936
+    }
+  },
+  "contaminant_removal": {
+    "source": "GVClass resource v2.1.0, 2,246 prokaryotic contaminant proteins removed from eukaryotic references (Zenodo 10.5281/zenodo.23381313)",
+    "match": "DIAMOND hit of at least 95% identity and 80% query and subject coverage to an EUK-labelled entry of the same assembly",
+    "matched_entries": 1258,
+    "genomes": 153,
+    "representatives_removed": 1216,
+    "marker_entries": 0,
+    "matched_entries_sha256": "2fb4c0a6f6b850a75058acc623b7e86e80e62fd4f5f3e0d3a54756bac707ad3c"
+  },
+  "euk_peve_relabel": {
+    "targets": "the 3,011 eukaryote-labelled reference hits of the 33 EVE_CAPSID_NOVEL profiles (marker_preextraction.json of v1.1.0, source_group EUK)",
+    "target_count": 3011,
+    "targets_sha256": "c17664a256b68dd83804aa2243ed28b3927fe2cae488efd7d8f7d06a901ac4a6",
+    "rule": "each dereplication cluster holding a target moves from EUK__<assembly> to EUK-pEVE__<assembly>",
+    "marker_representatives_moved": 1031,
+    "proteome_representatives_moved": 1892,
+    "label_rows_added": 245,
+    "lineage": "EUK lineage of the assembly with every named rank suffixed -pEVE; NA ranks stay NA"
+  },
+  "outputs": {
+    "marker_faa_sha256": "02ed721b2252856de4848195aa7546d7ce506aa311089b374ef0e04c5b53d18c",
+    "proteome_faa_sha256": "b26006e9dcb5de135e0adf22eabf32cac30f977fcb3e4de7828597596b653e85",
+    "marker_dmnd": {
+      "sha256": "c6ac97b444c82a6f39b1f05c004be15aac51d484f112ba72a1c82cd158b2718a",
+      "sequences": 2917745,
+      "letters": 1023024058
+    },
+    "proteome_dmnd": {
+      "sha256": "fbeb6788066e99b8598e0222ebc633737241b2baf950562681d02ee8a3958712",
+      "sequences": 44069720,
+      "letters": 7426244999
+    },
+    "labels_sha256": "61f7ddd2799541c383f8aaca66ddec22a6452dcecd36fbceaf454255b6e3ce2b",
+    "taxonomy_labels": 190562
+  },
+  "packaging": {
+    "command": "scripts/build_resource_bundle.py --split --version v1.2.0 --skip-marker-dmnd",
+    "diamond_makedb": "DIAMOND 2.2.1 makedb --threads 16",
+    "runtime_archive": {
+      "name": "resources_v1_2_0_runtime.tar.gz",
+      "bytes": 5267046975,
+      "sha256": "054c28445e179a74eeddd07fa73c9d137f7a0c7eeef5cbd2b2929e5e06f2fea9",
+      "manifest_sha256": "d8048752f355fd1cdfcf26b25ad233d5659c5a2e9544128befe67980ad41295b"
+    },
+    "source_archive": {
+      "name": "resources_v1_2_0_source.tar.gz",
+      "bytes": 657186084,
+      "sha256": "ed908606b82285add0fa3b0084f83f06a35664ad19dbfe1ee3864fd8d0acc62a",
+      "manifest_sha256": "83c5c78f791ed4623c3a09b529e987dcd734e63da74e3d3adf77bc52f8e7c4ac"
+    }
+  }
+}

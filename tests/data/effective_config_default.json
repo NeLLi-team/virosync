@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "0c5c9895342d45d77d7fb7350da2575c5bebcfabbca9967c93c42180a2dc2905",
+  "effective_config_sha256": "43e03be2799e377ec66a35efbaf39aa59861ba60b526dc766a8a251fd41e2bed",
   "execution": {
     "masking": {
       "backend": "off",
@@ -68,10 +68,10 @@
     }
   },
   "orchestration": {
-    "core_resources_manifest_sha256": "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9",
-    "core_resources_sha256": "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969",
-    "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_1_0_runtime.tar.gz",
-    "core_resources_version": "v1.1.0",
+    "core_resources_manifest_sha256": "d8048752f355fd1cdfcf26b25ad233d5659c5a2e9544128befe67980ad41295b",
+    "core_resources_sha256": "054c28445e179a74eeddd07fa73c9d137f7a0c7eeef5cbd2b2929e5e06f2fea9",
+    "core_resources_url": "https://dl.newlineages.com/virosync/resources_v1_2_0_runtime.tar.gz",
+    "core_resources_version": "v1.2.0",
     "database_root": null,
     "gpu_id": null,
     "interproscan_resources_sha256": null,

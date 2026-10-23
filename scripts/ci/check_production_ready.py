@@ -25,12 +25,12 @@ from virosync.utils.resource_manifest import (
 )
 
 SOFTWARE_VERSION = "1.0.2"
-DATABASE_VERSION = "v1.1.0"
-RESOURCE_ARCHIVE = "resources_v1_1_0_runtime.tar.gz"
+DATABASE_VERSION = "v1.2.0"
+RESOURCE_ARCHIVE = "resources_v1_2_0_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
-RESOURCE_ARCHIVE_SHA256 = "9e0e669b4527569aa71a132a0273b9316bbc868b7f1b2bd7f926457b9073e969"
-RESOURCE_MANIFEST_SHA256 = "f9fe4d4202e14dd8fe099b2bf06354c7110dd2b43075e1004d2f550303688eb9"
-RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_1_0/RESOURCE_MANIFEST.json")
+RESOURCE_ARCHIVE_SHA256 = "054c28445e179a74eeddd07fa73c9d137f7a0c7eeef5cbd2b2929e5e06f2fea9"
+RESOURCE_MANIFEST_SHA256 = "d8048752f355fd1cdfcf26b25ad233d5659c5a2e9544128befe67980ad41295b"
+RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_2_0/RESOURCE_MANIFEST.json")
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
     DATABASE_VERSION,
@@ -244,8 +244,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            len(manifest.files) == 9,
-            "tracked release manifest must authenticate 9 payload files",
+            len(manifest.files) == 11,
+            "tracked release manifest must authenticate 11 payload files",
             failures,
         )
         require(
@@ -254,8 +254,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("marker_proteins") == 3867592,
-            "tracked release manifest marker count must be 3867592",
+            manifest.semantic_counts.get("marker_proteins") == 2917745,
+            "tracked release manifest marker count must be 2917745",
             failures,
         )
         require(
@@ -264,8 +264,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("taxonomy_labels") == 190317,
-            "tracked release manifest taxonomy count must be 190317",
+            manifest.semantic_counts.get("taxonomy_labels") == 190562,
+            "tracked release manifest taxonomy count must be 190562",
             failures,
         )
 

@@ -45,14 +45,14 @@ native runtime or the other Pixi dependencies.
 
 ## Install the core resources
 
-Resources download about 6 GB, use about 13 GB when installed, and need about
-19 GB during setup. Allow more space for the Pixi environment and results.
+Resources download about 5.3 GB, use about 11.4 GB when installed, and need about
+17 GB during setup. Allow more space for the Pixi environment and results.
 
 ```bash
 pixi run setup-virosync-resources
 ```
 
-Setup installs resource bundle v1.1.0 in `resources/virosync` by default.
+Setup installs resource bundle v1.2.0 in `resources/virosync` by default.
 See [Databases](RESOURCE_BUNDLE.md) to use another location.
 
 Verify the install:
@@ -63,7 +63,7 @@ pixi run virosync orchestrate resources verify \
   --full
 ```
 
-The output must include `Version: v1.1.0`.
+The output must include `Version: v1.2.0`.
 
 ## Run the example
 

@@ -25,8 +25,8 @@ pixi run setup-prodigal-gv
 pixi run setup-virosync-resources
 ```
 
-Resources download about 6 GB, use about 13 GB when installed, and need about
-19 GB during setup. Allow more space for the Pixi environment and results.
+Resources download about 5.3 GB, use about 11.4 GB when installed, and need about
+17 GB during setup. Allow more space for the Pixi environment and results.
 Native setup builds the pinned Prodigal-GV capacity correction. The
 [installation guide](docs/getting-started.md) covers its runtime directory and
 direct Python or console use.
@@ -39,7 +39,7 @@ cat results/example/batch_summary.tsv
 ```
 
 The `test-1` row must report `status=success`, `predictions=6`, and
-`accepted=1` with resource bundle v1.1.0.
+`accepted=1` with resource bundle v1.2.0.
 
 ## Run your own genomes
 
@@ -75,6 +75,6 @@ Frameshift-sensitive marker detection is off by default. Add
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.0.2 uses resource bundle v1.1.0.
+ViroSync 1.0.2 uses resource bundle v1.2.0.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).
