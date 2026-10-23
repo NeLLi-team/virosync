@@ -5,6 +5,8 @@ import inspect
 import textwrap
 from types import SimpleNamespace
 
+import pytest
+
 from virosync.orchestration._flows.single_genome import phase1, phase2
 from virosync.orchestration._flows.single_genome.manifest import (
     _empty_prediction_summary,
@@ -116,6 +118,19 @@ def test_schema4_class_counts_fold_mixed_into_viral_unknown() -> None:
     }
 
 
+@pytest.mark.parametrize("tier", ["HIGH", "MEDIUM", "LOW"])
+@pytest.mark.parametrize("region_class", ["NCLDV", "MIRUS", "PPV", "CRESS", "UNKNOWN", ""])
+def test_resolver_gives_a_mixed_likely_family_precedence_over_the_region_class(tier: str, region_class: str) -> None:
+    resolved = resolve_effective_eve_class(
+        confidence_tier=tier,
+        region_classification=region_class,
+        classification="",
+        likely_family="MIXED",
+    )
+
+    assert resolved == "MIXED"
+
+
 def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
     labels = {
         "region_classification": "PPV",
@@ -132,7 +147,7 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
             end=6001,
             hallmark_count=2,
             hallmark_genes=["marker_a", "marker_b"],
-            has_mcp=False,
+            has_capsid_evidence=False,
             **labels,
         )
     )
@@ -149,7 +164,7 @@ def test_cress_without_identity_marker_support_is_rejected() -> None:
             hallmark_count=2,
             hallmark_genes=["marker_a", "marker_b"],
             marker_family_hits=[],
-            has_mcp=False,
+            has_capsid_evidence=False,
             region_classification="UNKNOWN",
             classification="",
             likely_family="CRESS",

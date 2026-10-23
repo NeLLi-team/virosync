@@ -34,7 +34,7 @@ _CLASS_LABELS = {
     "MIRUS": dict(region_classification="MIRUS", classification="MIRUS", likely_family="MIRUS"),
 }
 
-# (end, hallmark_count, hallmark_genes, has_mcp)
+# (end, hallmark_count, hallmark_genes, has_capsid_evidence)
 _EVIDENCE_VECTORS = [
     # The reported non-monotone vector: 3 kb, one non-ATPase hallmark, no MCP.
     (3000, 1, ["VP_Penton_1"], False),
@@ -73,7 +73,7 @@ def _region() -> VerificationResult:
 def test_v2_gate_is_monotone_in_confidence_tier() -> None:
     """Accepted at LOW must imply accepted at MEDIUM and at HIGH."""
     for eve_class, labels in _CLASS_LABELS.items():
-        for end, hallmark_count, hallmark_genes, has_mcp in _EVIDENCE_VECTORS:
+        for end, hallmark_count, hallmark_genes, has_capsid_evidence in _EVIDENCE_VECTORS:
             decisions = {
                 tier: evaluate_v2_quality_gate(
                     SimpleNamespace(
@@ -82,7 +82,7 @@ def test_v2_gate_is_monotone_in_confidence_tier() -> None:
                         end=end,
                         hallmark_count=hallmark_count,
                         hallmark_genes=hallmark_genes,
-                        has_mcp=has_mcp,
+                        has_capsid_evidence=has_capsid_evidence,
                         **labels,
                     )
                 )
@@ -90,7 +90,9 @@ def test_v2_gate_is_monotone_in_confidence_tier() -> None:
             }
             if not decisions["LOW"].kept:
                 continue
-            context = f"{eve_class} len={end} hallmark={hallmark_count} genes={hallmark_genes} mcp={has_mcp}"
+            context = (
+                f"{eve_class} len={end} hallmark={hallmark_count} genes={hallmark_genes} capsid={has_capsid_evidence}"
+            )
             for tier in ("MEDIUM", "HIGH"):
                 assert decisions[tier].kept, (
                     f"{context}: accepted at LOW ({decisions['LOW'].reason}) but "
@@ -102,7 +104,7 @@ def test_v2_gate_is_monotone_in_confidence_tier() -> None:
 def test_mcp_substring_does_not_earn_the_priority_marker_floor() -> None:
     """Only a canonical MCP name lifts a host-matching region off the floor.
 
-    ``has_mcp`` stays False in both cases so the hallmark name is the only
+    ``has_capsid_evidence`` stays False in both cases so the hallmark name is the only
     difference, isolating the token-matching path.
     """
     decoy = _region()

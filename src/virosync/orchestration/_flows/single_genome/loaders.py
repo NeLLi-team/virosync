@@ -55,6 +55,9 @@ def _build_merged_seeds_from_regions(
                     hallmark_gene=marker.hmm_target,
                     score=marker.hmm_score,
                     evalue=getattr(marker, "hmm_evalue", 0.0),
+                    validation_status=getattr(marker, "validation_status", ""),
+                    top10_prefixes=getattr(marker, "top10_prefixes", ""),
+                    top10_pidents=getattr(marker, "top10_pidents", ""),
                 )
             )
 

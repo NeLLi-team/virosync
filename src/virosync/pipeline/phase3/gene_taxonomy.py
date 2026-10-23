@@ -13,6 +13,7 @@ This is Step 9 from PIPELINE_HMM_GATED_PLAN.md.
 import logging
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +22,7 @@ from Bio import SeqIO
 
 from virosync.output_contract import canonical_family
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
-from virosync.pipeline.taxonomy_utils import resolve_org_id
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL, EUK_PEVE_PREFIX, resolve_org_id
 from virosync.utils.path_safety import (
     require_strict_child,
     safe_filename_components,
@@ -29,8 +30,11 @@ from virosync.utils.path_safety import (
 
 logger = logging.getLogger(__name__)
 
-VIRAL_PREFIXES = {"NCLDV", "MIRUS", "VP", "PLV", "PPV", "CRESS", "GVMAG", "PHAGE"}
+# EUK-pEVE is viral but names no lineage, so it is here and not in
+# PUBLISHED_VIRAL_PREFIXES.
+VIRAL_PREFIXES = {"NCLDV", "MIRUS", "VP", "PLV", "PPV", "CRESS", "GVMAG", "PHAGE", EUK_PEVE_LABEL}
 # Reference namespaces of cellular origin, as folded to EUK/BAC/ARC by extract_prefix().
+# EUK-pEVE never belongs here: it is viral, and a host test must not match it.
 CELLULAR_NAMESPACES = frozenset({"EUK", "BAC", "ARC", "MITO", "PLASTID"})
 MIN_VIRAL_HIT_PIDENT = 25.0
 
@@ -38,6 +42,8 @@ MIN_VIRAL_HIT_PIDENT = 25.0
 # rather than published classes, so callers that need a class fold them via
 # viral_hit_categories().
 PUBLISHED_VIRAL_PREFIXES = frozenset({"NCLDV", "MIRUS", "PPV", "CRESS", "GVMAG", "PHAGE"})
+# canonical_family() upper-cases, so EUK-pEVE reaches this module as EUK-PEVE.
+_PEVE_UPPERCASE = EUK_PEVE_LABEL.upper()
 _PREPLASMIVIRICOTA_TOKEN = "preplasmiviricota"
 
 
@@ -114,12 +120,16 @@ def extract_prefix(target_id: str) -> str:
     - VP__: Virophages
     - PLV__: Polinton-like viruses
     - CRESS__: CRESS/ssDNA viruses
+    - EUK-pEVE__: Viral-like proteins of eukaryotic assemblies (viral, no family)
 
     Returns:
-        Prefix string (e.g., "NCLDV", "EUK", "PLV", "VP", "CRESS", "UNKNOWN")
+        Prefix string (e.g., "NCLDV", "EUK", "PLV", "VP", "CRESS", "EUK-pEVE",
+        "UNKNOWN")
     """
     if target_id.startswith("EUK__"):
         return "EUK"
+    elif target_id.startswith(EUK_PEVE_PREFIX):
+        return EUK_PEVE_LABEL
     elif target_id.startswith("BAC__"):
         return "BAC"
     elif target_id.startswith("ARC__"):
@@ -189,18 +199,28 @@ def _split_top10_field(value: object) -> list[str]:
     return []
 
 
+def _viral_namespace(prefix: object) -> str:
+    """Return the canonical reference namespace of one top-10 prefix.
+
+    canonical_family() upper-cases, which would turn ``EUK-pEVE`` into a token no
+    set holds, so that one namespace gets its own spelling back.
+    """
+    namespace = canonical_family(str(prefix).rstrip("_"))
+    return EUK_PEVE_LABEL if namespace == _PEVE_UPPERCASE else namespace
+
+
 def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
     """Return ``(prefix, target)`` for identity-qualified viral top-10 hits.
 
     One place canonicalizes a top-10 hit list into viral reference namespaces:
     VP and PLV fold onto PPV, and a hit below ``MIN_VIRAL_HIT_PIDENT`` does not
-    qualify. ``record`` needs ``top10_prefixes`` and ``top10_pidents``;
+    qualify. EUK-pEVE qualifies as a viral namespace under its own spelling. It
+    names no lineage, so :func:`viral_hit_categories` keeps it out of every
+    class vote. ``record`` needs ``top10_prefixes`` and ``top10_pidents``;
     ``top10_targets`` is optional and yields ``""`` when absent.
     """
     prefixes = [
-        canonical_family(str(prefix).rstrip("_"))
-        for prefix in _split_top10_field(record.get("top10_prefixes"))
-        if str(prefix).strip()
+        _viral_namespace(prefix) for prefix in _split_top10_field(record.get("top10_prefixes")) if str(prefix).strip()
     ]
     pidents: list[float] = []
     for value in _split_top10_field(record.get("top10_pidents")):
@@ -211,12 +231,18 @@ def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
     targets = [str(target).strip() for target in _split_top10_field(record.get("top10_targets"))]
     hits: list[tuple[str, str]] = []
     for index, (prefix, pident) in enumerate(zip(prefixes, pidents)):
-        if prefix not in PUBLISHED_VIRAL_PREFIXES:
+        if prefix not in PUBLISHED_VIRAL_PREFIXES and prefix != EUK_PEVE_LABEL:
             continue
         if pident < MIN_VIRAL_HIT_PIDENT:
             continue
         hits.append((prefix, targets[index] if index < len(targets) else ""))
     return hits
+
+
+def has_only_peve_viral_hits(records: Iterable[dict]) -> bool:
+    """Return True when the records hold identity-qualified viral hits and all are EUK-pEVE."""
+    namespaces = {prefix for record in records for prefix, _target in qualified_viral_hits(record)}
+    return namespaces == {EUK_PEVE_LABEL}
 
 
 def viral_hit_categories(
@@ -230,16 +256,23 @@ def viral_hit_categories(
     PHAGE target reports PPV when its resolved lineage is Preplasmiviricota (the
     legacy ``PHAGE__VARDNA__`` namespace holds virophage-like genomes) and PHAGE
     otherwise. ``taxonomy_lookup`` of ``None`` skips lineage resolution.
+
+    EUK-pEVE carries no viral family. It adds no vote beside a lineage hit and
+    never overrides one. A record whose qualified hits are all EUK-pEVE reports
+    VIRAL_UNKNOWN once per hit: the gene is viral and no lineage wins.
     """
+    hits = qualified_viral_hits(record)
     categories: list[str] = []
-    for prefix, target in qualified_viral_hits(record):
+    for prefix, target in hits:
+        if prefix == EUK_PEVE_LABEL:
+            continue
         if prefix == "GVMAG":
             categories.append("NCLDV")
         elif prefix == "PHAGE":
             categories.append("PPV" if _is_preplasmiviricota(target, taxonomy_lookup) else "PHAGE")
         else:
             categories.append(prefix)
-    return categories
+    return categories or ["VIRAL_UNKNOWN"] * len(hits)
 
 
 def _is_preplasmiviricota(target: str, taxonomy_lookup: dict | None) -> bool:

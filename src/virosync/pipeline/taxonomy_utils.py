@@ -5,6 +5,14 @@ Used by both phase1 (marker validation) and phase2 (boundary refinement).
 
 from dataclasses import dataclass, field
 
+# Reference class of viral-like proteins that sit in eukaryotic genome assemblies
+# (resource bundle v1.2.0 and later). Every filter counts it as viral, none counts
+# it as cellular or host, and it names no viral family. The key prefix is
+# ``EUK-pEVE__<assembly>``. ``"EUK-pEVE__".startswith("EUK__")`` is False. Code
+# that upper-cases tokens sees ``EUK-PEVE``.
+EUK_PEVE_LABEL = "EUK-pEVE"
+EUK_PEVE_PREFIX = f"{EUK_PEVE_LABEL}__"
+
 
 @dataclass
 class TaxonomyFingerprint:

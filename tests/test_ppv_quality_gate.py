@@ -20,7 +20,7 @@ def _result(**overrides) -> SimpleNamespace:
         start=0,
         end=3000,  # 3 kb, above the 2 kb PLV/VP/PPV floor
         hallmark_count=2,
-        has_mcp=False,
+        has_capsid_evidence=False,
         hallmark_genes=[],
         region_classification="PPV",
         classification="PPV",
@@ -32,7 +32,7 @@ def _result(**overrides) -> SimpleNamespace:
 
 def test_ppv_mcp_high_medium_passes() -> None:
     decision = evaluate_v2_quality_gate(
-        _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_mcp=True)
+        _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_capsid_evidence=True)
     )
     assert decision.kept
     assert decision.reason == "small_dna_high_medium_pass"
@@ -56,7 +56,7 @@ def test_ppv_low_mcp_is_promoted() -> None:
             confidence_tier="LOW",
             hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"],
             hallmark_count=1,
-            has_mcp=True,
+            has_capsid_evidence=True,
         )
     )
     assert decision.kept

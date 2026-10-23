@@ -18,7 +18,7 @@ def _result(**overrides) -> SimpleNamespace:
         start=0,
         end=3000,  # 3 kb, above the 2 kb PLV/VP floor
         hallmark_count=2,
-        has_mcp=False,
+        has_capsid_evidence=False,
         hallmark_genes=[],
         region_classification="PLV",
         classification="PLV",
@@ -43,7 +43,7 @@ def test_non_atpase_hallmark_high_medium_plv_passes() -> None:
 def test_mcp_only_high_medium_plv_passes() -> None:
     # An MCP alone is sufficient even without a second hallmark.
     decision = evaluate_v2_quality_gate(
-        _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_mcp=True)
+        _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_capsid_evidence=True)
     )
     assert decision.kept
 
@@ -60,7 +60,7 @@ def test_mcp_low_plv_is_promoted() -> None:
             confidence_tier="LOW",
             hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"],
             hallmark_count=1,
-            has_mcp=True,
+            has_capsid_evidence=True,
         )
     )
     assert decision.kept

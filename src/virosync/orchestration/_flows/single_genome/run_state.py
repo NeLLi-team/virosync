@@ -162,7 +162,7 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase2/ablation_events.json": "virosync.ablation_events/v1",
     "phase3/ablation_events.json": "virosync.ablation_events/v1",
     "phase0/masking/masking_status.json": "masking-status-v1",
-    "phase1/resume_state.json": "virosync.phase1.resume_state/v1",
+    "phase1/resume_state.json": "virosync.phase1.resume_state/v2",
     "phase1/frameshift_screening/frameshift_hits.tsv": "frameshift-hits-v2",
     "phase1/frameshift_screening/frameshift_events.tsv": "frameshift-events-v1",
     "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": ("frameshift-rescued-proteins-v1"),

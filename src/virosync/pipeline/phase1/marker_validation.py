@@ -32,6 +32,7 @@ This reduces Phase 1 runtime from hours to minutes on large genomes.
 
 Taxonomy prefixes (from marker.dmnd database):
 - EUK__: Eukaryote (cellular)
+- EUK-pEVE__: Viral-like proteins of eukaryotic assemblies - VALIDATES marker
 - BAC__: Bacteria (cellular)
 - ARC__: Archaea (cellular)
 - NCLDV__: Giant viruses (Nucleocytoviricota) - VALIDATES marker
@@ -59,13 +60,14 @@ from pyhmmer.easel import SequenceFile
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase1.coordinates import aa_to_nt_coords, parse_frame_id
-from virosync.pipeline.taxonomy_utils import aggregate_taxonomy_substrings, resolve_org_id
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_PREFIX, aggregate_taxonomy_substrings, resolve_org_id
 
 logger = logging.getLogger(__name__)
 
 
-# Taxonomy prefix definitions
-VALIDATED_PREFIXES = {"NCLDV__", "MIRUS__", "PLV__", "VP__", "PPV__", "CRESS__"}
+# Taxonomy prefix definitions. EUK-pEVE is viral: it validates a marker like any
+# viral reference and is never in CELLULAR_PREFIXES.
+VALIDATED_PREFIXES = {"NCLDV__", "MIRUS__", "PLV__", "VP__", "PPV__", "CRESS__", EUK_PEVE_PREFIX}
 SUPPORTING_PREFIXES = {"GVMAG__", "PHAGE__"}
 CELLULAR_PREFIXES = {"EUK__", "BAC__", "ARC__"}
 VALIDATION_MIN_PIDENT = 25.0
@@ -411,7 +413,7 @@ def filter_validated_markers(
 
     Validation rules:
     1. "validated": at least one top-10 hit from a validated viral prefix
-       (NCLDV__, MIRUS__, VP__, PLV__, or CRESS__) with >=25% identity
+       (NCLDV__, MIRUS__, VP__, PLV__, CRESS__, or EUK-pEVE__) with >=25% identity
     2. "validated_novel": HMM hit with no Diamond match, meets gating criteria
     3. "supported": GVMAG__ top-10 support below the validation threshold
     4. "unvalidated": cellular only, unknown, or below thresholds
@@ -609,7 +611,8 @@ def filter_validated_markers(
         has_cress = any(p == "CRESS__" for p in top10_prefixes)
         has_gvmag = any(p == "GVMAG__" for p in top10_prefixes)
         has_phage = any(p == "PHAGE__" for p in top10_prefixes)
-        has_viral = int(has_ncldv or has_mirus or has_plv or has_vp or has_cress or has_gvmag or has_phage)
+        has_peve = any(p == EUK_PEVE_PREFIX for p in top10_prefixes)
+        has_viral = int(has_ncldv or has_mirus or has_plv or has_vp or has_cress or has_gvmag or has_phage or has_peve)
 
         max_validated_pident = max(
             (pident for (_, _, pident, _), p in zip(top10_hits, top10_prefixes) if p in VALIDATED_PREFIXES),
@@ -724,6 +727,7 @@ def filter_validated_markers(
         "CRESS__": 0,
         "GVMAG__": 0,
         "PHAGE__": 0,
+        EUK_PEVE_PREFIX: 0,
         "EUK__": 0,
         "BAC__": 0,
         "ARC__": 0,
@@ -788,6 +792,7 @@ def filter_validated_markers(
         "CRESS__",
         "GVMAG__",
         "PHAGE__",
+        EUK_PEVE_PREFIX,
         "EUK__",
         "BAC__",
         "ARC__",

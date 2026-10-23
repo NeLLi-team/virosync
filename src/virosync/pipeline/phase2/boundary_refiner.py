@@ -36,7 +36,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     missing_boundary_taxonomy_ids,
     pORF,
 )
-from virosync.pipeline.taxonomy_utils import calculate_fingerprint_overlap, compute_hit_weight
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_PREFIX, calculate_fingerprint_overlap, compute_hit_weight
 
 if TYPE_CHECKING:
     from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence
@@ -448,7 +448,7 @@ def annotate_boundaries_with_marker_floor(
     ``trim_boundary_by_host_taxonomy``) can collapse a marker-dense NCLDV/MIRUS
     seed below its validated-marker span, stripping the hallmark genes out of the
     final boundary so the v2 NCLDV/MIRUS output gate (``length > 5000 OR
-    has_mcp``) then rejects a genuine EVE.
+    has_capsid_evidence``) then rejects a genuine EVE.
 
     The earlier fix MUTATED the boundary here to contain the marker span. That
     regressed recall: extending an ALREADY-ACCEPTED region's boundary pulls host
@@ -730,8 +730,15 @@ def _viral_gap_merge_reason(
 
 
 def _has_viral_taxonomy(gene: GeneTaxonomy) -> bool:
-    """Return whether a gap gene has large-virus taxonomy support."""
-    return gene.has_ncldv_mirus or gene.has_vp_plv
+    """Return whether a gap gene has large-virus or EUK-pEVE taxonomy support.
+
+    EUK-pEVE sets neither family flag, so it is checked on the top-10 hits.
+    """
+    return (
+        gene.has_ncldv_mirus
+        or gene.has_vp_plv
+        or has_identity_qualified_viral_hit(gene.top10_prefixes, gene.top10_pidents, {EUK_PEVE_PREFIX})
+    )
 
 
 def should_trim_gene_as_host(

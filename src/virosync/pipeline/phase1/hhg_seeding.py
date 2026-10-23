@@ -36,6 +36,7 @@ from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase0.translation import PORF
 from virosync.pipeline.phase1.coordinates import aa_to_nt_coords, parse_frame_id
 from virosync.pipeline.phase1.marker_validation import (
+    VALIDATED_PREFIXES,
     ValidatedMarkerHit,
     extract_hmm_hit_sequences,
     filter_validated_markers,
@@ -82,6 +83,12 @@ class Anchor:
     hallmark_gene: str
     score: float
     evalue: float
+    # Status and top-10 DIAMOND taxonomy of the validated marker hit this anchor
+    # came from. All empty for an anchor taken straight from an HMM hit, which has
+    # not been validated or searched.
+    validation_status: str = ""
+    top10_prefixes: str = ""
+    top10_pidents: str = ""
 
 
 @dataclass
@@ -329,9 +336,7 @@ def validate_hmm_hits_with_markers(
                 hits_list.sort(key=lambda x: x[0], reverse=True)
                 top_targets = [t for _, t in hits_list[:top_k]]
                 for rank, (bits_val, target) in enumerate(hits_list[:top_k], start=1):
-                    is_validated = any(
-                        target.startswith(p) for p in ("NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__")
-                    )
+                    is_validated = any(target.startswith(p) for p in VALIDATED_PREFIXES)
                     diamond_top_hits.append(
                         (
                             marker,
@@ -342,11 +347,7 @@ def validate_hmm_hits_with_markers(
                             "1" if is_validated else "0",
                         )
                     )
-                if any(
-                    t.startswith(p)
-                    for t in top_targets
-                    for p in ("NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__")
-                ):
+                if any(t.startswith(p) for t in top_targets for p in VALIDATED_PREFIXES):
                     validated.add(query)
                     validated_marker[query] = marker
 

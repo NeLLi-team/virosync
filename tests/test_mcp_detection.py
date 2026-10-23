@@ -9,6 +9,7 @@ everything else is a negative, including names that contain the trigram
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pytest
@@ -19,12 +20,26 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     summarize_marker_hits,
 )
 from virosync.pipeline.phase3.mcp_detection import (
+    CAPSID_EVIDENCE_MODELS,
     MCP_HMM_EXACT,
     MCP_HMM_PREFIXES,
     NCLDV_MCP_MODELS,
+    is_capsid_evidence_gene,
     is_mcp_gene,
     is_mcp_model,
 )
+
+CURATION_TABLE = (
+    Path(__file__).resolve().parents[1] / "release-manifests" / "resources_v1_1_0" / "capsid_model_curation.tsv"
+)
+NON_CAPSID_PROFILES = [
+    "EVE_CAPSID_NOVEL_0001",
+    "EVE_CAPSID_NOVEL_0006",
+    "EVE_CAPSID_NOVEL_0015",
+    "EVE_CAPSID_NOVEL_0018",
+    "EVE_CAPSID_NOVEL_0020",
+    "EVE_CAPSID_NOVEL_0026",
+]
 
 POSITIVES = [
     # NCLDV MCP models (exact)
@@ -237,3 +252,52 @@ def test_structure_derived_mcp_votes_only_with_sequence_taxonomy() -> None:
     hit["top10_prefixes"] = "PPV"
     hit["top10_pidents"] = "80"
     assert mcp_vote_classes([hit]) == {"PPV"}
+
+
+def _curated_capsid_profiles() -> set[str]:
+    """Profiles whose curated function names a penton, capsid or coat protein."""
+    with CURATION_TABLE.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    return {
+        row["source_model"].lower()
+        for row in rows
+        if any(word in row["proposed_function"].lower() for word in ("penton", "capsid", "coat"))
+    }
+
+
+def test_capsid_evidence_models_match_the_curation_table() -> None:
+    assert isinstance(CAPSID_EVIDENCE_MODELS, frozenset)
+    assert len(CAPSID_EVIDENCE_MODELS) == 27
+    assert CAPSID_EVIDENCE_MODELS == _curated_capsid_profiles()
+    assert all(name == name.lower() for name in CAPSID_EVIDENCE_MODELS)
+
+
+@pytest.mark.parametrize("name", sorted(CAPSID_EVIDENCE_MODELS))
+def test_every_capsid_profile_is_capsid_evidence_in_any_case(name: str) -> None:
+    assert is_capsid_evidence_gene(name) is True
+    assert is_capsid_evidence_gene(name.upper()) is True
+
+
+@pytest.mark.parametrize("name", NON_CAPSID_PROFILES)
+def test_protease_and_tail_tube_profiles_give_no_capsid_evidence(name: str) -> None:
+    assert name.lower() not in CAPSID_EVIDENCE_MODELS
+    assert is_capsid_evidence_gene(name) is False
+    assert is_mcp_gene(name) is False
+
+
+@pytest.mark.parametrize("name", [name for name in POSITIVES if name])
+def test_every_mcp_is_capsid_evidence(name: str) -> None:
+    assert is_capsid_evidence_gene(name) is True
+
+
+@pytest.mark.parametrize("name", sorted(CAPSID_EVIDENCE_MODELS - {"eve_capsid_novel_0029"}))
+def test_capsid_profiles_other_than_the_mcp_are_not_mcps(name: str) -> None:
+    assert is_mcp_gene(name) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", None, "dmcp", "polb", "vp_penton_3", "OG1590", "hypothetical_protein", "EVE_CAPSID_NOVEL_0034"],
+)
+def test_other_names_are_not_capsid_evidence(name: str | None) -> None:
+    assert is_capsid_evidence_gene(name) is False

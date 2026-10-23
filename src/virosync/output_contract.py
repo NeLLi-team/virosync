@@ -39,6 +39,9 @@ LEGACY_EVE_CLASS_COUNT_KEYS = {
     "plv_count": "ppv_count",
 }
 
+# Buckets of the ``taxonomy_best_hits`` string. EUK-pEVE counts viral-like
+# reference proteins of eukaryotic assemblies. It is a reference bucket, not a
+# published class.
 DETAILED_TAXONOMY_PARTITION = (
     "EUK",
     "MITO",
@@ -53,6 +56,7 @@ DETAILED_TAXONOMY_PARTITION = (
     "CRESS",
     "GVMAG",
     "PHAGE",
+    "EUK-pEVE",
 )
 
 REPEAT_EVIDENCE_COLUMNS = (
@@ -276,6 +280,10 @@ def _resolve_non_low_effective_eve_class(
     region = _normalize_gate_eve_class(region_classification)
     classification_value = _normalize_gate_eve_class(classification)
     likely = _normalize_gate_eve_class(likely_family)
+    # A likely family of MIXED says the region's viral evidence names no lineage
+    # (only EUK-pEVE hits), which outranks the lineage a marker name suggested.
+    if likely == "MIXED":
+        return "MIXED"
     if region in CONCRETE_EVE_CLASSES:
         return region
     for value in (classification_value, likely):

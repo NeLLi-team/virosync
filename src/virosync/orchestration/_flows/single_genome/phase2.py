@@ -1109,7 +1109,7 @@ def _run_phase2_subflow(
     # === Validated-marker floor metadata (Phase-3 re-admit input) ===
     # Phase-2 host trimming can collapse a marker-dense NCLDV/MIRUS boundary below
     # its validated-marker span, stripping hallmark genes out so the v2 gate
-    # (length > 5000 OR has_mcp) rejects a genuine EVE. We do NOT mutate the
+    # (length > 5000 OR has_capsid_evidence) rejects a genuine EVE. We do NOT mutate the
     # boundary here (extending an accepted region pulls host genes in and regresses
     # its confidence/tier -> NCLDV loss;. Instead we
     # only record the floored-alternative span as metadata on each boundary; the

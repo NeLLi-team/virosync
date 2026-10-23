@@ -40,7 +40,8 @@ from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     boundary_candidate_id,
 )
-from virosync.pipeline.phase3.gene_taxonomy import viral_hit_categories
+from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits, viral_hit_categories
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
 from .evidence_graph import (
@@ -85,6 +86,7 @@ MARKER_CATEGORY_GROUPS = {
 }
 
 from virosync.pipeline.phase3.mcp_detection import (
+    is_capsid_evidence_gene,
     is_mcp_gene,
 )
 
@@ -478,6 +480,26 @@ def _hit_field(hit: object, name: str) -> object:
     return getattr(hit, name, None)
 
 
+def _top10_record(hit: object) -> dict:
+    """The top-10 taxonomy fields of a hit, as the gene-taxonomy helpers read them."""
+    return {
+        "top10_prefixes": _hit_field(hit, "top10_prefixes"),
+        "top10_pidents": _hit_field(hit, "top10_pidents"),
+        "top10_targets": _hit_field(hit, "top10_targets"),
+    }
+
+
+def _is_mcp_marker(hit: object) -> bool:
+    """Return whether a hit is an MCP marker whose vote can name a lineage.
+
+    A marker whose qualified hits are all EUK-pEVE has no lineage to vote for.
+    It is viral and votes VIRAL_UNKNOWN, but it must not override the lineage
+    votes of the other genes, so it counts as an ordinary marker.
+    """
+    gene_name = str(_hit_field(hit, "hallmark_gene") or "")
+    return is_mcp_gene(gene_name) and not has_only_peve_viral_hits([_top10_record(hit)])
+
+
 def marker_taxonomy_category(
     hit: object,
     taxonomy_lookup: dict | None = None,
@@ -489,16 +511,7 @@ def marker_taxonomy_category(
     marker VIRAL_UNKNOWN; no qualified viral hit at all is no vote, which is the
     HMM-only ``validated_novel`` case and is excluded from the denominator.
     """
-    categories = set(
-        viral_hit_categories(
-            {
-                "top10_prefixes": _hit_field(hit, "top10_prefixes"),
-                "top10_pidents": _hit_field(hit, "top10_pidents"),
-                "top10_targets": _hit_field(hit, "top10_targets"),
-            },
-            taxonomy_lookup,
-        )
-    )
+    categories = set(viral_hit_categories(_top10_record(hit), taxonomy_lookup))
     if not categories:
         return ""
     if len(categories) == 1:
@@ -541,6 +554,18 @@ def _deduplicate_preferring_mcp(hallmark_hits: list) -> list:
     return [info["hit"] for info in by_gene.values()]
 
 
+def _vote_category(hit: object, taxonomy_lookup: dict | None = None) -> str:
+    """Return one gene's vote, with an EUK-pEVE-only gene under its own label.
+
+    The label is not a published class. It marks a viral gene that names no
+    lineage, so :func:`taxonomy_class_votes` can drop its weight when a lineage
+    votes.
+    """
+    if has_only_peve_viral_hits([_top10_record(hit)]):
+        return EUK_PEVE_LABEL
+    return marker_taxonomy_category(hit, taxonomy_lookup)
+
+
 def mcp_vote_classes(
     hallmark_hits: list | None,
     taxonomy_lookup: dict | None = None,
@@ -549,8 +574,7 @@ def mcp_vote_classes(
     return {
         category
         for hit in (hallmark_hits or [])
-        if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or ""))
-        and (category := marker_taxonomy_category(hit, taxonomy_lookup))
+        if _is_mcp_marker(hit) and (category := marker_taxonomy_category(hit, taxonomy_lookup))
     }
 
 
@@ -567,6 +591,10 @@ def taxonomy_class_votes(
     defined above. A gene whose top-10 spans several viral classes votes
     VIRAL_UNKNOWN, which carries weight but can never win, and a gene with no
     identity-qualified viral hit does not vote at all.
+
+    A gene whose viral hits are all EUK-pEVE names no lineage. It votes
+    VIRAL_UNKNOWN only when no other gene votes for a lineage; beside a lineage
+    vote it adds no weight, so it never dilutes the lineage majority.
     """
     weights: Counter = Counter()
     marker_gene_ids: set[str] = set()
@@ -581,13 +609,13 @@ def taxonomy_class_votes(
             continue
         gene_id = base_marker_gene_id(str(_hit_field(record, "porf_id") or ""))
         if gene_id:
-            gene_category_by_id[gene_id] = marker_taxonomy_category(record, taxonomy_lookup)
+            gene_category_by_id[gene_id] = _vote_category(record, taxonomy_lookup)
 
     for hit in hallmark_hits or []:
         gene_id = base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""))
         if gene_id:
             marker_gene_ids.add(gene_id)
-        marker_category = marker_taxonomy_category(hit, taxonomy_lookup)
+        marker_category = _vote_category(hit, taxonomy_lookup)
         gene_category = gene_category_by_id.get(gene_id, "")
 
         if not marker_category:
@@ -597,7 +625,7 @@ def taxonomy_class_votes(
                 weights[gene_category] += _GENE_VOTE_WEIGHT
             continue
 
-        if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or "")):
+        if _is_mcp_marker(hit):
             # Flat 5, with no split when its own all-gene search disagrees.
             # Disagreeing MCP markers must meet at 5 each, or one MCP's second
             # search would break the tie its capsid call could not.
@@ -613,6 +641,10 @@ def taxonomy_class_votes(
     for gene_id, category in gene_category_by_id.items():
         if category and gene_id not in marker_gene_ids:
             weights[category] += _GENE_VOTE_WEIGHT
+
+    peve_only_weight = weights.pop(EUK_PEVE_LABEL, 0)
+    if peve_only_weight and not any(category != "VIRAL_UNKNOWN" for category in weights):
+        weights["VIRAL_UNKNOWN"] += peve_only_weight
     return weights
 
 
@@ -656,13 +688,43 @@ def consensus_taxonomy_class(
     return "VIRAL_UNKNOWN"
 
 
+def is_validated_marker(hit: object) -> bool:
+    """Return whether a marker hit, dict or object, has the status validated or validated_novel."""
+    return str(_hit_field(hit, "validation_status") or "").strip().lower() in _VALIDATED_MARKER_STATUSES
+
+
 def _has_validated_marker(hits: list) -> bool:
-    return any(
-        str(_hit_field(hit, "validation_status") or "").strip().lower() in _VALIDATED_MARKER_STATUSES for hit in hits
-    )
+    return any(is_validated_marker(hit) for hit in hits)
+
+
+def has_validated_capsid_hit(hits: list) -> bool:
+    """Return whether any validated hit is capsid evidence, whatever outscored it.
+
+    Reads every hit before deduplication: a stronger profile on the same protein
+    must neither hide a validated capsid hit nor lend its own name to a hit that
+    never validated. A hit is a dict or an object with ``hallmark_gene`` and
+    ``validation_status``.
+    """
+    capsid_hits = [hit for hit in hits if is_capsid_evidence_gene(str(_hit_field(hit, "hallmark_gene") or ""))]
+    return _has_validated_marker(capsid_hits)
+
+
+def _has_only_peve_viral_evidence(result: VerificationResult) -> bool:
+    """Return whether every viral hit of the region is EUK-pEVE, in either database."""
+    interior_records = [
+        _top10_record(record) for record in result.gene_taxonomy_records if not _hit_field(record, "is_flanking")
+    ]
+    viral_records = [*result.hallmark_taxonomy_records, *interior_records]
+    return result.taxonomy_class == "VIRAL_UNKNOWN" and has_only_peve_viral_hits(viral_records)
 
 
 def infer_likely_family(result: VerificationResult) -> str:
+    # Viral hits that all name no lineage (EUK-pEVE) make a viral region without a
+    # family, whatever its markers suggest. This rule leads so that the gate scores
+    # the region through its mixed-class rule, size limit included.
+    if _has_only_peve_viral_evidence(result):
+        return "MIXED"
+
     classification = result.region_classification or ""
     if canonical_family(classification) in {"NCLDV", "MIRUS", "PPV", "CRESS"}:
         return canonical_family(classification)
@@ -745,14 +807,15 @@ def assign_confidence_tier(result: VerificationResult, high: float = 0.7, low: f
 def compute_marker_score(result: VerificationResult) -> float:
     """Compute marker score from hallmark evidence."""
     # seed_sources records provenance, not marker identity. The authoritative
-    # has_mcp flag is populated in _process_hallmark_hits via is_mcp_gene.
-    has_mcp = result.has_mcp
+    # has_capsid_evidence flag is populated in _process_hallmark_hits via
+    # is_capsid_evidence_gene, which an MCP also satisfies.
+    capsid_term = 1.0 if result.has_capsid_evidence else 0.0
     total_markers = result.hallmark_count
     diversity_score = min(result.hallmark_diversity / 5.0, 1.0) if total_markers > 0 else 0.0
 
     if result.marker_category_hits:
-        return 0.45 * (1.0 if has_mcp else 0.0) + 0.35 * result.marker_complement_score + 0.20 * diversity_score
-    return 0.50 * (1.0 if has_mcp else 0.0) + 0.30 * diversity_score + 0.20 * min(total_markers / 8.0, 1.0)
+        return 0.45 * capsid_term + 0.35 * result.marker_complement_score + 0.20 * diversity_score
+    return 0.50 * capsid_term + 0.30 * diversity_score + 0.20 * min(total_markers / 8.0, 1.0)
 
 
 def compute_family_consistency_score(result: VerificationResult) -> float:
@@ -958,7 +1021,12 @@ class VerificationResult:
     gvclass_percent: float = 0.0
     diamond_domain: str = ""
     diamond_percent: float = 0.0
+    # Names a major capsid protein: the MCP output flag, the class vote and the
+    # ANI class donation read it.
     has_mcp: bool = False
+    # True when has_mcp is true or a hallmark gene is a capsid-type profile.
+    # Scoring and acceptance read it where they once read has_mcp.
+    has_capsid_evidence: bool = False
     mcp_gene_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_models: list[str] = field(default_factory=list)
@@ -979,6 +1047,10 @@ class VerificationResult:
     # Published class: the taxonomy consensus over the validated markers' own
     # top-10 hits. Additive; likely_family still feeds the acceptance gate.
     taxonomy_class: str = "UNKNOWN"
+    # Top-10 taxonomy fields of the region's hallmark hits (marker database).
+    # likely_family reads them beside the gene records to see viral evidence
+    # that only one of the two databases holds.
+    hallmark_taxonomy_records: list[dict] = field(default_factory=list)
     # True when an MCP marker's own vote decided taxonomy_class. Narrower than
     # has_mcp, which a capsid annotation, a structural jelly-roll call, or
     # phylogenetic evidence also raises. Only this entitles an EVE to hand its
@@ -1177,6 +1249,7 @@ class VerificationResult:
             "diamond_domain": self.diamond_domain,
             "diamond_percent": self.diamond_percent,
             "has_mcp": self.has_mcp,
+            "has_capsid_evidence": self.has_capsid_evidence,
             "mcp_gene_ids": self.mcp_gene_ids,
             "tier1_bypassed_marker_ids": self.tier1_bypassed_marker_ids,
             "tier1_bypassed_marker_models": self.tier1_bypassed_marker_models,
@@ -1437,7 +1510,7 @@ def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
 
 def _has_priority_marker(result: VerificationResult, priority_markers: list[str]) -> bool:
     marker_set = {m.lower() for m in priority_markers}
-    if result.has_mcp and "mcp" in marker_set:
+    if result.has_capsid_evidence and "mcp" in marker_set:
         return True
     # seed_sources intentionally excluded: it only carries
     # {"hhg","novelty","compositional"} source tags, never priority-marker
@@ -1731,7 +1804,8 @@ def _high_confidence_euk_gene_count(records: list[GeneTaxonomyRecord]) -> int:
         if len(top_prefixes) < 3 or len(top_identities) < 3:
             continue
         try:
-            all_euk = all(str(prefix).upper().startswith("EUK") for prefix in top_prefixes)
+            # Exact match: EUK-pEVE starts with "EUK" but is viral, never host.
+            all_euk = all(str(prefix).upper().rstrip("_") == "EUK" for prefix in top_prefixes)
             all_high_identity = all(float(identity) >= 70.0 for identity in top_identities)
         except (TypeError, ValueError):
             continue
@@ -1753,8 +1827,8 @@ def _seed_cluster_score(result: VerificationResult) -> float:
 
 
 def _size_penalty(result: VerificationResult) -> float:
-    """Penalize one-to-three-gene candidates without MCP support."""
-    if result.has_mcp:
+    """Penalize one-to-three-gene candidates without capsid evidence."""
+    if result.has_capsid_evidence:
         return 0.0
     if result.gene_count <= 1:
         return 0.15
@@ -1819,7 +1893,7 @@ def _calculate_confidence_bonuses(
         reference_bonus += composition_bonus
     if evidence.family_consistency_score > 0:
         add_common_bonus(min(evidence.family_consistency_score, 0.05))
-    if result.has_mcp:
+    if result.has_capsid_evidence:
         add_common_bonus(0.05)
 
     completeness_ratio = max(
@@ -2018,9 +2092,9 @@ def _assemble_confidence(
     confidence = min(confidence, cap)
     if bonuses.priority_floor > 0.0:
         confidence = max(confidence, bonuses.priority_floor)
-    if evidence.viral_evidence == 0 and not result.has_mcp:
+    if evidence.viral_evidence == 0 and not result.has_capsid_evidence:
         confidence = min(confidence, 0.05)
-    if evidence.gene_count > 0 and not result.has_mcp and evidence.viral_fraction < 0.05:
+    if evidence.gene_count > 0 and not result.has_capsid_evidence and evidence.viral_fraction < 0.05:
         confidence = min(confidence, 0.19)
 
     return _CalculatedConfidence(
@@ -2037,6 +2111,7 @@ def _assemble_confidence(
             "cap": float(cap),
             "family_consistency_bonus": float(evidence.family_consistency_score),
             "has_mcp": bool(result.has_mcp),
+            "has_capsid_evidence": bool(result.has_capsid_evidence),
             "priority_marker_active": bool(bonuses.has_priority_marker),
             "final_confidence_pre_clamp": float(confidence),
         },
@@ -2092,7 +2167,9 @@ def _evaluate_post_score_policy(
     non_hhg_demoted = False
     if tier in {"HIGH", "MEDIUM"} and result.seed_sources and "hhg" not in result.seed_sources:
         non_hhg_quality_pass = (
-            result.hallmark_count >= 3 or (result.hallmark_count >= 1 and result.has_mcp) or non_host_genes >= 5
+            result.hallmark_count >= 3
+            or (result.hallmark_count >= 1 and result.has_capsid_evidence)
+            or non_host_genes >= 5
         )
         if not non_hhg_quality_pass:
             non_hhg_demoted = True
@@ -2416,6 +2493,9 @@ class EvidenceSynthesizer:
         result.marker_dominant_family = marker_summary["dominant_family"]
         result.marker_dominant_fraction = marker_summary["dominant_fraction"]
         result.has_mcp = result.has_mcp or marker_summary["has_mcp"]
+        # Deduplication keeps one profile per protein, so a stronger non-capsid
+        # profile can hide a capsid-type hit. The raw hits decide capsid evidence.
+        result.has_capsid_evidence = result.has_mcp or has_validated_capsid_hit(hallmark_hits)
         scored_hallmarks = [(info["hallmark_gene"], info["score"]) for info in by_gene.values()]
         result.likely_group = infer_likely_group(scored_hallmarks, self.marker_annotation_index)
         completeness = compute_marker_completeness(
@@ -2455,6 +2535,7 @@ class EvidenceSynthesizer:
         # taxonomy_class_votes deduplicates internally, preferring an MCP
         # profile, so the raw boundary hits go in unchanged.
         taxonomy_lookup = get_taxonomy_lookup()
+        result.hallmark_taxonomy_records = [_top10_record(hit) for hit in hallmark_hits or []]
         result.taxonomy_class = consensus_taxonomy_class(
             hallmark_hits,
             gene_taxonomy_records=gene_taxonomy_records,
@@ -2621,6 +2702,7 @@ class EvidenceSynthesizer:
         result.jelly_roll_mcp_proteins = proteins if isinstance(proteins, list) else []
         if result.jelly_roll_supported_mcp_count > 0:
             result.has_mcp = True
+            result.has_capsid_evidence = True
 
     def _run_tmvec_database_scan(
         self,
@@ -2857,11 +2939,11 @@ class EvidenceSynthesizer:
         if selected_outcome.non_hhg_demoted:
             logger.info(
                 "%s: demoted to LOW — non-HHG seed (sources: %s) with insufficient quality "
-                "(hallmark=%d, has_mcp=%s, non_host_genes=%d)",
+                "(hallmark=%d, has_capsid_evidence=%s, non_host_genes=%d)",
                 result.eve_id,
                 result.seed_sources,
                 result.hallmark_count,
-                result.has_mcp,
+                result.has_capsid_evidence,
                 selected_outcome.non_host_genes,
             )
 
@@ -3029,6 +3111,7 @@ class EvidenceSynthesizer:
             # HMM/Diamond-based detection used upstream; the upstream True must
             # survive GVClass reporting False.
             result.has_mcp = result.has_mcp or phylo_result.has_mcp
+            result.has_capsid_evidence = result.has_capsid_evidence or result.has_mcp
             result.is_chimeric = phylo_result.is_chimeric
 
             # Extract GVClass details

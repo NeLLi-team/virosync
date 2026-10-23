@@ -101,6 +101,13 @@ class ValidatedMarkerHit:
         return is_mcp_gene(self.hmm_target)
 
     @property
+    def is_capsid_evidence(self) -> bool:
+        """Check if marker is an MCP or a capsid-type structure-derived profile."""
+        from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+        return is_capsid_evidence_gene(self.hmm_target)
+
+    @property
     def is_gvogm(self) -> bool:
         """Check if marker is GVOGm."""
         return self.hmm_target.lower().startswith("gvogm")
@@ -113,14 +120,15 @@ class ValidatedMarkerHit:
         with taxonomy-based expansion filtering false positives in Step 4.5.
 
         Seeding rules:
-        1. validation_status="validated" (NCLDV/MIRUS/PLV/VP in Diamond top-10) → CAN SEED
-        2. validation_status="validated_novel" (HMM-only, no Diamond hits) → CAN SEED ONLY IF MCP
+        1. validation_status="validated" (NCLDV/MIRUS/PLV/VP/EUK-pEVE in Diamond top-10) → CAN SEED
+        2. validation_status="validated_novel" (HMM-only, no Diamond hits) → CAN SEED ONLY IF
+           MCP OR CAPSID EVIDENCE (a capsid-type structure-derived profile)
         3. Models in SEED_BLOCKED_MARKER_MODELS → NEVER SEED (host kinase families)
 
         Rationale:
         - All HMM hits are validated via marker_validation.py (Diamond top-10 taxonomy)
         - validated_novel has InterProScan/TMVec support but no Diamond hits
-        - MCP markers are highly specific for viral detection
+        - MCP and capsid-type markers are highly specific for viral detection
         - Low-marker regions undergo taxonomy expansion validation (Step 4.5)
 
         Returns:
@@ -137,9 +145,9 @@ class ValidatedMarkerHit:
         if self.validation_status == "validated":
             return True
 
-        # validated_novel (HMM-only, no Diamond hits) → ONLY MCP can seed
+        # validated_novel (HMM-only, no Diamond hits) → ONLY MCP or capsid evidence can seed
         if self.validation_status == "validated_novel":
-            return self.is_mcp  # Use expanded MCP detection
+            return self.is_capsid_evidence
 
         # unvalidated or supported → cannot seed
         return False

@@ -35,6 +35,44 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- Count the reference class `EUK-pEVE` (viral-like proteins in eukaryotic
+  assemblies, resource bundle v1.2.0) as viral and never as cellular or host.
+  Both DIAMOND databases follow this rule: an `EUK-pEVE` hit with at least 25%
+  identity validates a marker, seeds a region, counts as a viral gene in
+  boundary refinement and region scoring, and wins the twin rule over an `EUK`
+  row of the same protein. Host signatures and the host lineage share ignore
+  it. The class carries no viral family: it sets no NCLDV, MIRUS or PPV flag,
+  joins no dominant-family count and never overrides a lineage hit. A gene or
+  region whose viral hits are all `EUK-pEVE` is `VIRAL_UNKNOWN`, and the gate
+  accepts it through its mixed-class rule. The `taxonomy_best_hits` string gains
+  the bucket `EUK-pEVE` after `PHAGE`. No output class has that name.
+- Give the 27 capsid-type structure-derived profiles (penton, capsid and coat;
+  `CAPSID_EVIDENCE_MODELS`) the role of capsid evidence. A `validated_novel`
+  hit of such a profile can seed a region, and the new flag
+  `has_capsid_evidence` replaces `has_mcp` in scoring and acceptance: the marker
+  score, the common bonus, the small-region penalty exemption, the confidence
+  caps, the priority-marker floors, the non-HHG quality pass and the v2 gate
+  shortcuts. `has_mcp`, `mcp_gene_ids`, the class vote, ANI class transfer,
+  jelly-roll classification and Boltz input selection still need an MCP, and
+  `EVE_CAPSID_NOVEL_0029` stays the only structure-derived MCP. The six other
+  profiles (`0001`, `0006`, `0015`, `0018`, `0020`, `0026`) stay viral markers
+  without capsid evidence. `evidence_profiles.json` reports
+  `has_capsid_evidence`. This changes the v1.1.0 rule that only
+  `EVE_CAPSID_NOVEL_0029` has MCP-style scoring.
+- The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v2`: each seed
+  anchor records the validation status and the top-10 identity data of its marker
+  hit. The A1 seed export counts capsid evidence from validated hits only and
+  publishes `VIRAL_UNKNOWN` with the likely family `MIXED` for a seed whose
+  validated markers have only `EUK-pEVE` viral hits. Checkpoints of v1 cannot be
+  reused.
+- Show both changes in the report. A gene whose qualifying viral hits are all
+  `EUK-pEVE` gets the category `EUK-pEVE` in the gene maps and the category
+  distribution, with its own color (`#882255`) and the legend entry "EUK-pEVE
+  (viral-like, eukaryotic genome)". A qualifying lineage hit still decides the
+  color, and the report never takes an `EUK-pEVE` hit or a `-pEVE` lineage rank
+  as host. A black outline marks each gene with capsid evidence in the
+  overview, the detailed contexts and the Syntviz figure, where the new style
+  group `capsid` sits beside `mcp`. The gold circle still marks a supported MCP.
 - Redraw the README workflow map from the current data flow, adding direct
   repeats, acceptance with ANI class transfer and gene-function labels.
   `scripts/plot_workflow_map.py` writes `docs/virosync_workflow.png` only when

@@ -109,3 +109,24 @@ def test_phylo_validation_keeps_false_when_both_false(tmp_path: Path) -> None:
     synth._run_phylogenetic_validation(result, _boundary())
 
     assert result.has_mcp is False
+
+
+def test_phylo_validation_promoted_mcp_is_also_capsid_evidence(tmp_path: Path) -> None:
+    synth = _build_synth(tmp_path)
+    synth._phylogenetic_validator.validate_eve.return_value = _phylo_result(has_mcp=True)
+
+    result = _verification_result(has_mcp=False)
+    synth._run_phylogenetic_validation(result, _boundary())
+
+    assert result.has_capsid_evidence is True
+
+
+def test_phylo_validation_does_not_clobber_capsid_evidence(tmp_path: Path) -> None:
+    synth = _build_synth(tmp_path)
+    synth._phylogenetic_validator.validate_eve.return_value = _phylo_result(has_mcp=False)
+
+    result = VerificationResult(eve_id="EVE_test", scaffold="ctg1", start=0, end=1000, has_capsid_evidence=True)
+    synth._run_phylogenetic_validation(result, _boundary())
+
+    assert result.has_mcp is False
+    assert result.has_capsid_evidence is True

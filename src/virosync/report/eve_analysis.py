@@ -91,8 +91,15 @@ _REPORT_MCP_HMM_PREFIXES = (
     "vp_mcp",
 )
 _REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
+# The 27 capsid-type structure-derived profiles: all 33 except the protease
+# (0001, 0006, 0015, 0020, 0026) and tail-tube (0018) profiles.
+_REPORT_CAPSID_EVIDENCE_MODELS = frozenset(
+    f"eve_capsid_novel_{number:04d}" for number in range(1, 34) if number not in {1, 6, 15, 18, 20, 26}
+)
 _REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
 _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
+# Viral-like proteins of eukaryotic genome assemblies: viral, never host, and of no viral lineage.
+_REPORT_EUK_PEVE = "EUK-pEVE"
 _REPORT_PREDICTION_COLOR = "#E3B341"
 
 
@@ -111,6 +118,13 @@ def _report_is_mcp_gene(name: object) -> bool:
             if _REPORT_MCP_WORD_CHARS_ONLY.match(suffix):
                 return True
     return False
+
+
+def _report_is_capsid_evidence_gene(name: object) -> bool:
+    """Mirror the pipeline capsid-evidence detector while keeping this notebook portable."""
+    if not name:
+        return False
+    return _report_is_mcp_gene(name) or str(name).lower().strip() in _REPORT_CAPSID_EVIDENCE_MODELS
 
 
 def _csv_values(value: object) -> list[str]:
@@ -166,6 +180,8 @@ def _report_canonical_viral_category(prefix: object, target: object, taxonomy_lo
         return "PPV" if "preplasmiviricota" in lineage_tokens else "PHAGE"
     if prefix in {"NCLDV", "MIRUS", "CRESS", "GVMAG"}:
         return prefix
+    if prefix == _REPORT_EUK_PEVE.upper():
+        return _REPORT_EUK_PEVE
     return None
 
 
@@ -173,12 +189,17 @@ def _report_identity_qualified_viral_category(
     taxonomy_record: Mapping[str, object] | None,
     taxonomy_lookup: Mapping[str, str],
 ) -> str | None:
-    """Return the highest-ranked identity-qualified viral class for one gene."""
+    """Return the highest-ranked identity-qualified viral class for one gene.
+
+    An EUK-pEVE hit names no viral lineage, so, as in the pipeline gene
+    taxonomy, it gives the class only when no hit of a viral lineage qualifies.
+    """
     if not taxonomy_record:
         return None
     prefixes = _csv_values(taxonomy_record.get("top10_prefixes"))
     targets = _csv_values(taxonomy_record.get("top10_targets"))
     pidents = _csv_values(taxonomy_record.get("top10_pidents"))
+    lineage_free_category = None
     for index, prefix in enumerate(prefixes):
         try:
             pident = float(pidents[index])
@@ -190,9 +211,12 @@ def _report_identity_qualified_viral_category(
             target,
             taxonomy_lookup,
         )
-        if category and pident >= _REPORT_MIN_VIRAL_HIT_PIDENT:
+        if not category or pident < _REPORT_MIN_VIRAL_HIT_PIDENT:
+            continue
+        if category != _REPORT_EUK_PEVE:
             return category
-    return None
+        lineage_free_category = category
+    return lineage_free_category
 
 
 class _ReportGene(TypedDict):
@@ -359,6 +383,9 @@ if _host_model_path.exists() and tax_labels:
     for _lineage in tax_labels.values():
         for _i, _level in enumerate(_lineage.split("|")):
             _token = _level.strip().lower()
+            # A rank ending in -pEVE names a viral-like EUK-pEVE reference, never the host.
+            if _token.endswith("-peve"):
+                continue
             if _token in _host_weights and _i < _tok_level.get(_token, 99):
                 _tok_level[_token] = _i
     _by_level = defaultdict(list)
@@ -414,6 +441,9 @@ COLORS = {
     "BAC": "#B15928",
     "ARC": "#FDBF6F",
     "PHAGE": "#FF7F00",
+    # Tol muted wine: of the unused candidates, the one farthest from every other
+    # gene-map color under simulated protan, deutan and tritan vision.
+    "EUK-pEVE": "#882255",
     "MITO": "#999999",
     # Searched and no hit, against a gene whose taxonomy was never searched.
     "UNKNOWN": "#EDEDED",
@@ -527,7 +557,10 @@ print(f"MCP classifier records: {len(mcp_classification_map)}")
 # 3b. MCP (major capsid protein) marker genes -> porf_id set.
 # Combine supported classifier records with validated HMM marker hits (for
 # example plv_MCP_* and vp_MCP_*). Candidate classifier rows do not set support.
+# Capsid evidence is wider: every MCP, and every gene with a validated hit of a
+# capsid-type structure-derived profile (penton, minor capsid, coat or capsid).
 mcp_porf_ids = set(classifier_supported_mcp_ids)
+capsid_porf_ids = set()
 _mh_path = BASE / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 if _mh_path.exists():
     with _mh_path.open(encoding="utf-8") as f:
@@ -540,12 +573,17 @@ if _mh_path.exists():
             _qi, _ti, _vi = 0, 5, 7
         for line in f:
             cols = line.rstrip("\n").split("\t")
-            if len(cols) <= max(_qi, _ti, _vi):
+            if len(cols) <= max(_qi, _ti, _vi) or cols[_vi] not in {"validated", "validated_novel"}:
                 continue
-            if _report_is_mcp_gene(cols[_ti]) and cols[_vi] in {"validated", "validated_novel"}:
-                _m = re.match(r"^(.+)\|aa\d+-\d+$", cols[_qi])
-                mcp_porf_ids.add(_m.group(1) if _m else cols[_qi])
+            _m = re.match(r"^(.+)\|aa\d+-\d+$", cols[_qi])
+            _porf_id = _m.group(1) if _m else cols[_qi]
+            if _report_is_mcp_gene(cols[_ti]):
+                mcp_porf_ids.add(_porf_id)
+            if _report_is_capsid_evidence_gene(cols[_ti]):
+                capsid_porf_ids.add(_porf_id)
+capsid_porf_ids |= mcp_porf_ids
 print(f"MCP marker genes: {len(mcp_porf_ids)}")
+print(f"Capsid-evidence genes: {len(capsid_porf_ids)}")
 
 # 4. RT genes from InterProScan PF00078
 rt_gene_ids = set()
@@ -802,7 +840,7 @@ else:
 # %% [markdown]
 # ## EVE Summary
 #
-# Counts and sizes of the canonical EVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by published taxonomy class and prints the tier total above each bar. Panel B shows the length distribution of each class as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. Every figure in this notebook colors EVEs by the same published class: PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, MIRUS (Mirusviricota), CRESS, PHAGE, VIRAL_UNKNOWN in blue for an EVE whose markers are viral but do not agree on a class, and UNKNOWN in gray for an EVE with no viral class evidence. That class comes from the taxonomy consensus over the validated marker genes' own top-10 hits, overridden by a major capsid protein marker where one is present, and inherited from an MCP-bearing relative in the same ANI cluster where the EVE has no MCP of its own.
+# Counts and sizes of the canonical EVE predictions for this genome, drawn from one call set across two panels. Panel A stacks each confidence tier (HIGH, MEDIUM, LOW) by published taxonomy class and prints the tier total above each bar. Panel B shows the length distribution of each class as a box plot with the individual EVEs overlaid as points. Confidence tiers come from Phase 3 evidence scoring. Every figure in this notebook colors EVEs by the same published class: PPV (Preplasmiviricota, covering Polinton-like viruses and virophages), NCLDV, MIRUS (Mirusviricota), CRESS, PHAGE, VIRAL_UNKNOWN in blue for an EVE whose markers are viral but do not agree on a class or whose only viral hits are EUK-pEVE references, and UNKNOWN in gray for an EVE with no viral class evidence. That class comes from the taxonomy consensus over the validated marker genes' own top-10 hits, overridden by a major capsid protein marker where one is present, and inherited from an MCP-bearing relative in the same ANI cluster where the EVE has no MCP of its own.
 
 # %%
 # ---- EVE summary stats ----
@@ -1183,11 +1221,17 @@ else:
 # colors use the highest-ranked viral top-10 hit with at least 25% amino-acid
 # identity, or the best protein hit if none qualifies. Eukaryotic hits that
 # share the dominant Phase 1 host lineage have a separate color.
-# Gold circles mark supported MCPs. White stars show DJR, SJR, or HK97 fold
-# classifications. Fold labels can use heuristic or domain evidence and do
-# not establish MCP support on their own. Legacy PHAGE targets with a resolved
-# Preplasmiviricota lineage appear as PPV. The white interval marks the final
-# ViroSync boundary.
+# EUK-pEVE references are viral-like proteins of eukaryotic genome assemblies.
+# They count as viral, never as host, and have a color of their own. They name
+# no viral lineage, so a qualifying hit of a viral lineage colors the gene
+# instead. A black outline marks capsid evidence: a validated or
+# validated_novel marker hit of an MCP model or of a capsid-type
+# structure-derived profile (penton, minor capsid, coat or capsid protein).
+# Gold circles mark supported MCPs, which also have the outline. White stars
+# show DJR, SJR, or HK97 fold classifications. Fold labels can use heuristic
+# or domain evidence and do not establish MCP support on their own. Legacy
+# PHAGE targets with a resolved Preplasmiviricota lineage appear as PPV. The
+# white interval marks the final ViroSync boundary.
 
 # %%
 if not profiles:
@@ -1243,6 +1287,7 @@ else:
             "best_hit_origin": origin,
             "best_hit_target": target,
             "is_mcp": is_mcp,
+            "is_capsid": porf_id in capsid_porf_ids,
             "is_rt": porf_id in rt_gene_ids,
             "porf_id": porf_id,
             "host_lineage_match": origin == "EUK" and is_host_gene(target),
@@ -1358,6 +1403,11 @@ else:
     MARKER_MCP = dict(
         marker="o", markersize=14, color="#FFD400", markeredgecolor="#000000", markeredgewidth=1.2, zorder=9
     )
+    # Capsid evidence, MCPs included: a black outline on the gene shape.
+    CAPSID_EDGE = "#000000"
+    CAPSID_EDGE_WIDTH = 1.0
+    CAPSID_LEGEND_LABEL = "Black outline: capsid evidence"
+    EUK_PEVE_LEGEND_LABEL = "EUK-pEVE (viral-like, eukaryotic genome)"
 
     TIER_COLORS = {"HIGH": "#333333", "MEDIUM": "#777777", "LOW": "#BBBBBB"}
     TIER_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -1455,13 +1505,16 @@ else:
                     (gs, y + half_height),
                 ]
             is_unsearched = gene["category"] == "UNSEARCHED"
+            edgecolor, linewidth = (UNSEARCHED_EDGE, 0.5) if is_unsearched else ("none", 0.0)
+            if gene.get("is_capsid"):
+                edgecolor, linewidth = CAPSID_EDGE, CAPSID_EDGE_WIDTH
             gene_arrow = mpatches.Polygon(
                 points,
                 closed=True,
                 facecolor=color,
-                edgecolor=UNSEARCHED_EDGE if is_unsearched else "none",
+                edgecolor=edgecolor,
                 linestyle=UNSEARCHED_LINESTYLE if is_unsearched else "solid",
-                linewidth=0.5 if is_unsearched else 0.0,
+                linewidth=linewidth,
                 alpha=alpha,
                 zorder=5,
             )
@@ -1583,6 +1636,7 @@ else:
         mpatches.Patch(facecolor=COLORS["NCLDV"], label="NCLDV"),
         mpatches.Patch(facecolor=COLORS["GVMAG"], label="Giant-virus MAG"),
         mpatches.Patch(facecolor=COLORS["PHAGE"], label="Phage"),
+        mpatches.Patch(facecolor=COLORS["EUK-pEVE"], label=EUK_PEVE_LEGEND_LABEL),
         mpatches.Patch(
             facecolor=COLORS["HOST"],
             label=(f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
@@ -1598,6 +1652,12 @@ else:
             label="Taxonomy not searched",
         ),
     ]
+    if capsid_porf_ids:
+        legend_elements.append(
+            mpatches.Patch(
+                facecolor="white", edgecolor=CAPSID_EDGE, linewidth=CAPSID_EDGE_WIDTH, label=CAPSID_LEGEND_LABEL
+            ),
+        )
     if mcp_porf_ids:
         legend_elements.append(
             Line2D([0], [0], **{k: v for k, v in MARKER_MCP.items() if k != "zorder"}, label="Supported MCP"),
@@ -1743,7 +1803,7 @@ else:
 # %% [markdown]
 # ## Gene Neighborhoods in Syntviz
 #
-# The same EVEs and flanks as the overview, drawn by [Syntviz](https://pypi.org/project/syntviz/). Each row is named by confidence tier (H, M or L for HIGH, MEDIUM or LOW), confidence score, shortened scaffold and EVE interval. Genes take the overview's category colors; flanking genes are faded, major capsid proteins are outlined, and dark diamonds on each rail mark the first and last base of the EVE. As in the overview, gold circles mark supported MCPs and stars mark DJR (black), SJR (blue) or HK97 (red) fold classifications. Grey ribbons join proteins of HIGH and MEDIUM EVE cores in adjacent rows that share a DIAMOND blastp hit (`--more-sensitive`, E ≤ 1e-5, identity ≥ 20%, best hit per protein pair), darker for higher identity; LOW EVEs are not searched, because their mostly host-like genes would link by host homology. Within each confidence tier, rows are ordered so that EVEs with similar proteins sit next to each other; each row is shown with its first MCP pointing right. Ribbons show protein similarity, not orthology or conserved gene order. This notebook shows `eve_gene_map_syntviz.png`; `eve_gene_map_syntviz.svg` is the same figure as vectors. The session is saved as `eve_gene_map.syntviz.json`: `syntviz view eve_gene_map.syntviz.json` opens it in the interactive viewer, where rows, filters and colors can be changed. Setting the `SYNTVIZ_INTERACTIVE` parameter to `True` embeds that viewer here instead, which adds several megabytes to the notebook. Without DIAMOND the figure has no ribbons; without Node.js rows keep their confidence order, no image files are written and the interactive view is shown.
+# The same EVEs and flanks as the overview, drawn by [Syntviz](https://pypi.org/project/syntviz/). Each row is named by confidence tier (H, M or L for HIGH, MEDIUM or LOW), confidence score, shortened scaffold and EVE interval. Genes take the overview's category colors; flanking genes are faded, genes with capsid evidence are outlined as in the overview, and dark diamonds on each rail mark the first and last base of the EVE. As in the overview, gold circles mark supported MCPs and stars mark DJR (black), SJR (blue) or HK97 (red) fold classifications. Grey ribbons join proteins of HIGH and MEDIUM EVE cores in adjacent rows that share a DIAMOND blastp hit (`--more-sensitive`, E ≤ 1e-5, identity ≥ 20%, best hit per protein pair), darker for higher identity; LOW EVEs are not searched, because their mostly host-like genes would link by host homology. Within each confidence tier, rows are ordered so that EVEs with similar proteins sit next to each other; each row is shown with its first MCP pointing right. Ribbons show protein similarity, not orthology or conserved gene order. This notebook shows `eve_gene_map_syntviz.png`; `eve_gene_map_syntviz.svg` is the same figure as vectors. The session is saved as `eve_gene_map.syntviz.json`: `syntviz view eve_gene_map.syntviz.json` opens it in the interactive viewer, where rows, filters and colors can be changed. Setting the `SYNTVIZ_INTERACTIVE` parameter to `True` embeds that viewer here instead, which adds several megabytes to the notebook. Without DIAMOND the figure has no ribbons; without Node.js rows keep their confidence order, no image files are written and the interactive view is shown.
 
 # %%
 # ---- Gene neighborhoods in Syntviz ----
@@ -1768,6 +1828,9 @@ SYNTVIZ_LINK_TIERS = ("HIGH", "MEDIUM")
 # Syntviz draws at most 1,000 markers.
 SYNTVIZ_MAX_MARKERS = 1_000
 SYNTVIZ_MCP_MARKER = {"glyph": "circle", "color": "#FFD400", "size_px": 10}
+# Capsid evidence is a style, not a marker: capsid-type profiles hit often and
+# would use up the marker budget.
+SYNTVIZ_CAPSID_OUTLINE = {"stroke": "#000000", "stroke_width_px": 1.6}
 SYNTVIZ_BOUNDARY_MARKER = {"glyph": "diamond", "color": "#333333", "size_px": 7}
 SYNTVIZ_FOLD_COLORS = {"DJR": "#000000", "SJR": "#0077BB", "HK97": "#CC3311"}
 DIAMOND_FIELDS = [
@@ -2008,6 +2071,8 @@ else:
     }
     row_order = [row["id"] for _, row, _, _ in parts]
     mcp_ids = [f"{eve_id}:{gene['porf_id']}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "eve_genes", "right_flank_genes") for gene in info[key] if gene["is_mcp"]]  # fmt: skip
+    # MCPs keep their own group, so each feature sits in one outline group.
+    capsid_ids = [f"{eve_id}:{gene['porf_id']}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "eve_genes", "right_flank_genes") for gene in info[key] if gene["is_capsid"] and not gene["is_mcp"]]  # fmt: skip
     flank_ids = {f"{eve_id}:{gene}" for eve_id, info in syntviz_eves for key in ("left_flank_genes", "right_flank_genes") for gene in (g["porf_id"] for g in info[key])}  # fmt: skip
     # Rows tighten so that a genome with hundreds of EVEs stays inside the size limit.
     row_spacing = min(64, (SYNTVIZ_MAX_HEIGHT_PX - 260) / len(parts))
@@ -2068,7 +2133,13 @@ else:
                         "id": "mcp",
                         "name": "Major capsid protein",
                         "feature_ids": mcp_ids,
-                        "style": {"stroke": "#000000", "stroke_width_px": 1.6},
+                        "style": SYNTVIZ_CAPSID_OUTLINE,
+                    },
+                    {
+                        "id": "capsid",
+                        "name": "Other capsid evidence",
+                        "feature_ids": capsid_ids,
+                        "style": SYNTVIZ_CAPSID_OUTLINE,
                     },
                     {
                         "id": "flanks",
@@ -2104,7 +2175,7 @@ else:
 # %% [markdown]
 # ## Detailed Gene Contexts
 #
-# The overview above uses one common horizontal scale, which makes short loci hard to inspect when a genome also contains long calls. This figure redraws up to six of the shortest calls from the highest available confidence tier on independent axes so that gene order remains visible. It uses HIGH calls when present, then MEDIUM or LOW. The plot is a report view, not an additional filtering step. Coordinates are relative to each predicted EVE start, yellow bands and dashed lines mark its boundaries, gray outlines mark flanking genes, and arrow direction follows the retained Prodigal strand.
+# The overview above uses one common horizontal scale, which makes short loci hard to inspect when a genome also contains long calls. This figure redraws up to six of the shortest calls from the highest available confidence tier on independent axes so that gene order remains visible. It uses HIGH calls when present, then MEDIUM or LOW. The plot is a report view, not an additional filtering step. Coordinates are relative to each predicted EVE start, yellow bands and dashed lines mark its boundaries, gray outlines mark flanking genes, black outlines mark capsid evidence as in the overview, and arrow direction follows the retained Prodigal strand.
 
 # %%
 if not eve_genes_extended:
@@ -2138,6 +2209,7 @@ else:
         detail_categories = set()
         detail_fold_types = set()
         detail_has_supported_mcp = False
+        detail_has_capsid = False
 
         for ax, (eve_id, eve_info) in zip(axes, detail_eves):
             eve_start = eve_info["eve_start"]
@@ -2183,7 +2255,11 @@ else:
                 direction = width if strand == "+" else -width
                 x = start if strand == "+" else end
                 unsearched = gene["category"] == "UNSEARCHED"
+                is_capsid = bool(gene.get("is_capsid"))
                 edge = UNSEARCHED_EDGE if unsearched else ("#555555" if gene["region"] != "eve" else "white")
+                if is_capsid:
+                    edge = CAPSID_EDGE
+                    detail_has_capsid = True
                 detail_categories.add(gene["category"])
                 ax.add_patch(
                     mpatches.FancyArrow(
@@ -2198,7 +2274,7 @@ else:
                         facecolor=COLORS.get(gene["category"], COLORS["UNKNOWN"]),
                         edgecolor=edge,
                         linestyle=UNSEARCHED_LINESTYLE if unsearched else "solid",
-                        linewidth=0.45,
+                        linewidth=CAPSID_EDGE_WIDTH if is_capsid else 0.45,
                         alpha=0.82 if gene["region"] != "eve" else 0.96,
                         zorder=4,
                     )
@@ -2263,6 +2339,7 @@ else:
             "GVMAG",
             "CRESS",
             "PHAGE",
+            "EUK-pEVE",
             "UNSEARCHED",
             "HOST",
             "EUK",
@@ -2277,6 +2354,7 @@ else:
             "GVMAG": "Giant-virus MAG",
             "CRESS": "CRESS",
             "PHAGE": "Phage",
+            "EUK-pEVE": EUK_PEVE_LEGEND_LABEL,
             "HOST": (f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
             "EUK": "Other eukaryote",
             "BAC": "Bacteria",
@@ -2301,6 +2379,12 @@ else:
                 label="Gray outline: flanking gene",
             )
         )
+        if detail_has_capsid:
+            detail_handles.append(
+                mpatches.Patch(
+                    facecolor="white", edgecolor=CAPSID_EDGE, linewidth=CAPSID_EDGE_WIDTH, label=CAPSID_LEGEND_LABEL
+                )
+            )
         if detail_has_supported_mcp:
             detail_handles.append(
                 Line2D(
@@ -2348,14 +2432,27 @@ else:
 # %% [markdown]
 # ## Gene Category Distribution: Core vs Flanking
 #
-# Summarizes the gene map as fractions rather than individual loci. Each bar is one region (left flank, EVE core, or right flank) split into the fraction of genes in each taxonomy category, with the gene count for that region printed on the axis. A core weighted toward viral categories (PPV, NCLDV, Mirusviricota) beside flanks weighted toward host and eukaryotic genes is consistent with a true integration. Viral genes reaching into the flanks, or host genes filling the core, mark a boundary worth a closer look.
+# Summarizes the gene map as fractions rather than individual loci. Each bar is one region (left flank, EVE core, or right flank) split into the fraction of genes in each taxonomy category, with the gene count for that region printed on the axis. A core weighted toward viral categories (PPV, NCLDV, Mirusviricota, EUK-pEVE) beside flanks weighted toward host and eukaryotic genes is consistent with a true integration. Viral genes reaching into the flanks, or host genes filling the core, mark a boundary worth a closer look.
 
 # %%
 if not eve_genes_extended:
     print("No data for gene distribution.")
 else:
     # ---- Stacked bar: core vs flank gene composition ----
-    categories_all = ["PPV", "NCLDV", "MIRUS", "GVMAG", "CRESS", "PHAGE", "HOST", "EUK", "BAC", "ARC", "UNKNOWN"]
+    categories_all = [
+        "PPV",
+        "NCLDV",
+        "MIRUS",
+        "GVMAG",
+        "CRESS",
+        "PHAGE",
+        "EUK-pEVE",
+        "HOST",
+        "EUK",
+        "BAC",
+        "ARC",
+        "UNKNOWN",
+    ]
     regions = ["Left Flank", "EVE Core", "Right Flank"]
     region_counters = [flank_cats_left, eve_cats, flank_cats_right]
     region_totals = [sum(rc.values()) for rc in region_counters]

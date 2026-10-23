@@ -55,6 +55,7 @@ def test_strong_viral_evidence_outscores_bare() -> None:
     strong.hallmark_diversity = 4
     strong.has_virus_specific_marker = True
     strong.has_mcp = True
+    strong.has_capsid_evidence = True
     strong.marker_complement_score = 1.0
     strong.marker_category_hits = ["ncldv", "mirus"]
     strong.marker_family_hits = ["NCLDV", "MIRUS"]
@@ -70,6 +71,7 @@ def test_priority_marker_floor_applies() -> None:
     """A priority marker (e.g. MCP) should lift confidence to at least the floor."""
     r = _bare()
     r.has_mcp = True
+    r.has_capsid_evidence = True
     r.has_virus_specific_marker = True
     r.hallmark_count = 2
     r.marker_category_hits = ["mcp"]

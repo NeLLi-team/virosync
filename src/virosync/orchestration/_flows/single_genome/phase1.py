@@ -110,6 +110,9 @@ def _candidate_regions_to_seeds(
                     hallmark_gene=marker.hmm_target,
                     score=marker.hmm_score,
                     evalue=getattr(marker, "hmm_evalue", 0.0),
+                    validation_status=getattr(marker, "validation_status", ""),
+                    top10_prefixes=getattr(marker, "top10_prefixes", ""),
+                    top10_pidents=getattr(marker, "top10_pidents", ""),
                 )
             )
         has_rescued_marker = any(is_rescued_protein_id(marker.query_porf) for marker in region.markers)

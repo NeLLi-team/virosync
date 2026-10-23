@@ -39,12 +39,13 @@ from pathlib import Path
 from Bio import SeqIO
 
 from virosync.pipeline.phase0.prodigal import GenePrediction
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_PREFIX
 
 logger = logging.getLogger(__name__)
 
 # Viral taxonomy prefixes for EVE detection
 # Updated to match marker_validation.py validated prefixes
-VALIDATED_PREFIXES = {"NCLDV__", "MIRUS__", "PLV__", "VP__", "PPV__", "CRESS__", "GVMAG__"}
+VALIDATED_PREFIXES = {"NCLDV__", "MIRUS__", "PLV__", "VP__", "PPV__", "CRESS__", "GVMAG__", EUK_PEVE_PREFIX}
 MIN_VIRAL_HIT_PIDENT = 25.0
 
 

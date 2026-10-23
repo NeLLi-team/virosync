@@ -78,6 +78,7 @@ class DatabaseConfig:
             "PHAGE__",
             "CRESS__",
             "VIRUS__",
+            "EUK-pEVE__",
         ]
     )
 

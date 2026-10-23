@@ -13,6 +13,8 @@ from math import log
 from pathlib import Path
 
 from virosync.pipeline.taxonomy_utils import (
+    EUK_PEVE_LABEL,
+    EUK_PEVE_PREFIX,
     TaxonomyFingerprint,
     aggregate_taxonomy_substrings,
     compute_hit_weight,
@@ -30,8 +32,12 @@ _LABEL_CACHE: dict = {}
 # Every eukaryotic gene shares "euk", so it dominates the model
 # without providing discriminative signal between host and viral.
 # Viral roots (ncldv, mirus, phage) are excluded to avoid
-# artificially inflating overlap between host and viral genes.
-DOMAIN_TOKENS = {"euk", "bac", "arc", "vir", "ncldv", "mirus", "phage"}
+# artificially inflating overlap between host and viral genes. So is the EUK-pEVE
+# root: it is viral-like and never part of a host's own lineage.
+_PEVE_ROOT = EUK_PEVE_LABEL.lower()
+DOMAIN_TOKENS = {"euk", "bac", "arc", "vir", "ncldv", "mirus", "phage", _PEVE_ROOT}
+# A pEVE lineage carries this suffix on every named rank.
+_PEVE_RANK_SUFFIX = "-peve"
 
 
 class TaxonomyLabelLookup(dict):
@@ -255,6 +261,7 @@ def build_host_signature_model(
         "VP__",
         "CRESS__",
         "PHAGE__",
+        EUK_PEVE_PREFIX,
     }
     supporting = supporting_prefixes or set()
     host_prefixes = host_prefixes or {"EUK__"}
@@ -415,7 +422,7 @@ def dominant_lineage_tokens(
     paths: dict[str, list[str]] = {}
     for lineage in lineages:
         levels = [level.strip().lower() for level in str(lineage).split("|")]
-        if len(levels) < 2:
+        if len(levels) < 2 or levels[0] == _PEVE_ROOT:
             continue
         species = levels[-1]
         if species and species not in ("na", "") and species in model.token_weights:
@@ -423,7 +430,11 @@ def dominant_lineage_tokens(
     if not paths:
         return frozenset()
     best = max(paths, key=lambda token: model.token_weights.get(token, 0.0))
-    return frozenset(level for index, level in enumerate(paths[best]) if index and level and level not in ("na", ""))
+    return frozenset(
+        level
+        for index, level in enumerate(paths[best])
+        if index and level and level not in ("na", "") and not level.endswith(_PEVE_RANK_SUFFIX)
+    )
 
 
 def host_lineage_share(record, model: HostSignatureModel) -> float:
@@ -434,6 +445,9 @@ def host_lineage_share(record, model: HostSignatureModel) -> float:
     relative counts partly, and a viral or distant hit counts nothing. This
     replaces the weighted Jaccard against the aggregate model, which rejected
     host genes wherever the host clade is densely sequenced.
+
+    An EUK-pEVE hit is viral-like and never host. It counts in the total and
+    adds no share.
     """
     tokens = getattr(model, "_dominant_cache", None)
     if tokens is None:
@@ -452,8 +466,12 @@ def host_lineage_share(record, model: HostSignatureModel) -> float:
             continue
         total += weight
         lineage = lookup.get(resolve_org_id(str(target), lookup), "")
-        shared = {level.strip().lower() for level in str(lineage).split("|") if level.strip()} & tokens
-        weighted += weight * len(shared) / len(tokens)
+        levels = [level.strip().lower() for level in str(lineage).split("|") if level.strip()]
+        if str(target).startswith(EUK_PEVE_PREFIX) or levels[:1] == [_PEVE_ROOT]:
+            # Viral-like, never host: counts in the denominator and adds no share,
+            # whatever rank names its lineage carries.
+            continue
+        weighted += weight * len(set(levels) & tokens) / len(tokens)
     return weighted / total if total else 0.0
 
 

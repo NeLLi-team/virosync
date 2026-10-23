@@ -148,6 +148,7 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
         synthesizer._apply_jelly_roll_summary(result, summary)
         score = calculate_eve_confidence(result, crf_confidence=0.0)
         assert result.has_mcp is promotes_mcp
+        assert result.has_capsid_evidence is promotes_mcp
         profile = result.to_dict()
         assert profile["jelly_roll_supported_mcp_count"] == int(promotes_mcp)
         assert profile["jelly_roll_hk97_count"] == int(fold == "HK97")

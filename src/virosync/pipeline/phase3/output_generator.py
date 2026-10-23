@@ -365,8 +365,8 @@ def _taxonomy_prefixes(value: object) -> list[str]:
 def _qualified_viral_prefixes(record: dict) -> list[str]:
     """Reference namespaces of a record's identity-qualified viral top-10 hits.
 
-    The taxonomy_best_hits partition reports GVMAG and PHAGE as their own
-    buckets, so it uses the raw namespaces rather than the published classes
+    The taxonomy_best_hits partition reports GVMAG, PHAGE and EUK-pEVE as their
+    own buckets, so it uses the raw namespaces rather than the published classes
     that ``viral_hit_categories`` folds them onto.
     """
     return [prefix for prefix, _target in qualified_viral_hits(record)]
@@ -413,7 +413,8 @@ def _resolve_eve_class(result: VerificationResult) -> str:
 
     Returns the effective EVE class for v2 filter evaluation, preferring a
     concrete family from ``region_classification`` (authoritative when it is a
-    known class), then ``classification`` / ``likely_family``. A ``MIXED``
+    known class), then ``classification`` / ``likely_family``. A likely family
+    of ``MIXED`` is the exception: it outranks the region class. A ``MIXED``
     region (multiple viral families seeded together) is surfaced as
     ``"MIXED"`` so the gate can score it under the normal viral rule instead of
     dropping it; anything else becomes ``"UNKNOWN"`` and is rejected.
@@ -453,9 +454,10 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
     tier = (getattr(result, "confidence_tier", "") or "").upper()
     length = max(0, int(getattr(result, "end", 0)) - int(getattr(result, "start", 0)))
     hallmark = int(getattr(result, "hallmark_count", 0) or 0)
-    has_mcp = bool(getattr(result, "has_mcp", False))
+    # Capsid evidence is an MCP or a capsid-type structure-derived profile hit.
+    has_capsid_evidence = bool(getattr(result, "has_capsid_evidence", False))
     # Non-ATPase hallmark count: a PLV/VP region supported only by the broad packaging
-    # ATPase (which cross-hits cellular NTPases) is unreliable. Require MCP or >=1
+    # ATPase (which cross-hits cellular NTPases) is unreliable. Require capsid evidence or >=1
     # non-ATPase hallmark for acceptance; ATPase-only stays discovery-only (gated out).
     hallmark_genes = getattr(result, "hallmark_genes", []) or []
     non_atpase_hallmark = sum(1 for g in hallmark_genes if not _is_atpase_marker(g))
@@ -476,7 +478,7 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             # the same rule as PLV/VP/PPV: an MCP is strong evidence but NOT
             # required -- >=2 hallmarks with >=1 non-ATPase also qualifies. A
             # high-scoring MIXED region is kept, not disqualified.
-            kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
+            kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "mixed_high_medium_pass" if kept else "mixed_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class not in _V2_EVE_CLASSES:
@@ -487,11 +489,11 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             reason = "cress_identity_high_medium_pass" if kept else "cress_identity_required"
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class == "PPV":
-            kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
+            kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "small_dna_high_medium_pass" if kept else "small_dna_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class in ("NCLDV", "MIRUS"):
-            kept = length > 5000 or has_mcp
+            kept = length > 5000 or has_capsid_evidence
             reason = "ncldv_mirus_high_medium_pass" if kept else "ncldv_mirus_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
 
@@ -520,11 +522,11 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
                 promoted_low=kept,
             )
         if family == "PPV":
-            kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
+            kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "small_dna_low_promoted" if kept else "small_dna_low_gate"
             return QualityGateDecision(kept, family, reason, promoted_low=kept)
         if family == "MIXED":
-            kept = length > 2000 and (has_mcp or (hallmark >= 2 and non_atpase_hallmark >= 1))
+            kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "mixed_low_promoted" if kept else "mixed_low_gate"
             return QualityGateDecision(kept, family, reason, promoted_low=kept)
         return QualityGateDecision(False, family, "low_unsupported_family")
@@ -1473,13 +1475,15 @@ class OutputGenerator:
                         promoted_low_count,
                     )
             else:
-                # Legacy behavior: keep LOW only if MCP or ≥3 hallmarks.
+                # Legacy behavior: keep LOW only if capsid evidence or ≥3 hallmarks.
                 n_before = len(results)
-                results = [r for r in results if r.confidence_tier != "LOW" or r.has_mcp or r.hallmark_count >= 3]
+                results = [
+                    r for r in results if r.confidence_tier != "LOW" or r.has_capsid_evidence or r.hallmark_count >= 3
+                ]
                 n_filtered = n_before - len(results)
                 if n_filtered > 0:
                     logger.info(
-                        "Filtered %d LOW-confidence predictions without MCP or >=3 hallmarks",
+                        "Filtered %d LOW-confidence predictions without capsid evidence or >=3 hallmarks",
                         n_filtered,
                     )
 

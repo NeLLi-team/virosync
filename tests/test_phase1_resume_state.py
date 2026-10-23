@@ -74,6 +74,9 @@ def _complete_seed() -> MergedSeed:
         hallmark_gene="GVOGm0003",
         score=123.456789012345,
         evalue=1.23456789012345e-87,
+        validation_status="validated_novel",
+        top10_prefixes="EUK-pEVE__,NCLDV__",
+        top10_pidents="80.123456789,45.5",
     )
     second_anchor = Anchor(
         porf_id="scaffold/alpha_18",
@@ -215,6 +218,11 @@ def test_phase1_state_file_round_trip_preserves_every_consumed_field(
     assert payload["validated_markers"][0]["hmm_score"] == 123.456789012345
     assert payload["validated_markers"][0]["has_plv"] == 1
     assert payload["validated_markers"][0]["has_vp"] == 1
+    assert payload["merged_seeds"][0]["anchors"][0]["validation_status"] == "validated_novel"
+    assert payload["merged_seeds"][0]["hhg_anchors"][0]["validation_status"] == ""
+    assert payload["merged_seeds"][0]["anchors"][0]["top10_prefixes"] == "EUK-pEVE__,NCLDV__"
+    assert payload["merged_seeds"][0]["anchors"][0]["top10_pidents"] == "80.123456789,45.5"
+    assert payload["merged_seeds"][0]["hhg_anchors"][0]["top10_prefixes"] == ""
 
 
 def test_phase1_state_rejects_schema_drift_and_lossy_values() -> None:
@@ -227,7 +235,7 @@ def test_phase1_state_rejects_schema_drift_and_lossy_values() -> None:
     )
 
     unknown_schema = copy.deepcopy(document)
-    unknown_schema["schema_version"] = 2
+    unknown_schema["schema_version"] = PHASE1_STATE_SCHEMA_VERSION + 1
     with pytest.raises(Phase1StateError, match="unsupported.*schema_version"):
         phase1_state_from_document(unknown_schema)
 

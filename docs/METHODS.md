@@ -115,6 +115,7 @@ artifact versions:
 | --- | --- |
 | Public output schema | 9 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
+| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v2` |
 | Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v4` |
 | Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v5` |
 | Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v7` |
@@ -171,6 +172,33 @@ supports that label. A dot means unresolved or not applicable. An accepted
 `UNKNOWN` region requires support from an ANI cluster with a marker-bearing
 EVE; this support alone does not prove viral origin.
 
+`EUK-pEVE` is a reference class, not a published class. It marks viral-like
+proteins that sit in eukaryotic genome assemblies (resource bundle v1.2.0 and
+later). ViroSync counts an `EUK-pEVE` hit with at least 25% identity as viral
+evidence, in marker validation, boundary refinement, gene-level taxonomy and
+region scoring, and never as cellular or host evidence. The class names no
+lineage: it adds no vote for `NCLDV`, `MIRUS`, `PPV` or `CRESS`, and a lineage
+hit in the same top 10 always decides. A gene or region whose viral hits are all
+`EUK-pEVE` is `VIRAL_UNKNOWN`. In the region vote, a gene whose viral hits are
+all `EUK-pEVE` casts no vote when any other gene votes for a lineage, so it never
+dilutes the lineage majority. It votes `VIRAL_UNKNOWN` only when no gene votes for
+a lineage. Votes of `VIRAL_UNKNOWN` that come from conflicting lineage hits do not
+change. The A1 seed export has no gene taxonomy. It applies the same rule to the
+top-10 hits of the seed's validated markers: when all their qualified viral hits
+are `EUK-pEVE`, it publishes `VIRAL_UNKNOWN` with the likely family `MIXED`, and
+with any lineage hit it keeps the family of the seed. The `taxonomy_best_hits`
+string counts each interior gene once, in the buckets `EUK`, `MITO`, `PLASTID`,
+`BAC`, `ARC`, `UNK`, `NO_HITS`, `NCLDV`, `MIRUS`, `PPV`, `CRESS`, `GVMAG`, `PHAGE`
+and `EUK-pEVE`.
+
+The report gene maps put a gene in the category `EUK-pEVE` when its qualifying
+viral hits are all `EUK-pEVE`, or when no viral hit qualifies and its best hit is
+`EUK-pEVE`. The category has a color of its own and the legend entry "EUK-pEVE
+(viral-like, eukaryotic genome)". A qualifying lineage hit gives the gene the
+color of that lineage instead. The category distribution shows `EUK-pEVE` genes
+as a segment of their own. The report never takes an `EUK-pEVE` hit, or a
+lineage rank that ends in `-pEVE`, as host.
+
 ## MCP fold classification
 
 `phase3_synthesis/virosync_jelly_roll_proteins.tsv` reports MCP support and
@@ -191,6 +219,41 @@ stronger optional fold evidence takes priority. This is a marker-family
 inference, not structural or experimental confirmation. The `confidence`
 column in the MCP table describes fold evidence; it is distinct from
 `final_confidence` for an EVE.
+
+## Capsid evidence
+
+A hit to one of the 27 capsid-type structure-derived profiles (penton, capsid and
+coat functions; see the
+[profile reference](reference/capsid-models.md)) counts as capsid evidence. The
+region flag `has_capsid_evidence` is true when `has_mcp` is true or any
+`validated` or `validated_novel` hallmark hit of the region is such a profile. The
+test reads every hit before deduplication, so a higher-scoring non-capsid profile
+on the same protein does not hide the capsid hit. A hit of any other status, such
+as `supported` or `unvalidated`, gives no capsid evidence, even when it outscores
+the other profiles on its protein. The A1 seed export applies the same rule to the
+anchors of each seed, which carry the status of their marker hit. Scoring and acceptance read this flag where
+they read an MCP: the MCP term of the marker score, the common bonus of 0.05, the
+exemption from the small-region penalty, the two confidence caps, the
+priority-marker floors, the non-HHG quality pass and the MCP shortcuts of the v2
+acceptance gate. A region whose viral hits are all `EUK-pEVE`, in the marker
+database, the proteome database or both, has the likely family `MIXED`. This
+holds whatever lineage the marker names or the Phase 1 region class suggest, and
+the gate reads a likely family of `MIXED` before the region class. The region
+passes the gate through the same rule as a `VIRAL_UNKNOWN` region of mixed
+markers: a length above 2,000 bp, and capsid evidence or two hallmarks with one
+non-ATPase hallmark. A region with any lineage viral hit keeps its family logic.
+
+`has_mcp` and `mcp_gene_ids` name major capsid proteins only. The class-vote
+override, ANI class transfer, jelly-roll classification and Boltz input
+selection still need an MCP. `evidence_profiles.json` reports both flags.
+
+The report gene maps (overview, detailed contexts and Syntviz) draw a black
+outline around each gene with capsid evidence. A gene has capsid evidence when
+it has a `validated` or `validated_novel` marker hit of an MCP model or of one
+of the 27 profiles, or when the jelly-roll table supports it as an MCP. A
+supported MCP also has a gold circle. In the Syntviz session, MCPs are in the
+style group `mcp` and the other genes with capsid evidence are in the style group
+`capsid`. Both groups draw the same outline.
 
 ## Gene-function labels
 
@@ -271,6 +334,8 @@ order:
 1. For a protein (`<genome>|<protein>`) that appears under a cellular label
    (`EUK`, `BAC`, `ARC`, `MITO`, `PLASTID`) and under a viral label, the viral
    row at the position of the first occurrence. The cellular row is dropped.
+   `EUK-pEVE` is a viral label here, so an `EUK-pEVE` row replaces the `EUK` row
+   of the same protein.
 2. The best hit of each target genome. The genome is the subject ID up to `|`
    including its label, so `EUK__GCA-013389655-1` and `PPV__GCA-013389655-1`
    count as different genomes.
@@ -281,6 +346,11 @@ all-against-all search among EVE core proteins in the Syntviz figure is not a
 top-hit search and uses no filter.
 
 ### Seed markers
+
+An `EUK-pEVE` reference hit with at least 25% identity validates a marker like a
+viral reference. A marker with no DIAMOND match (`validated_novel`) can start a
+region only when its model is an MCP or gives
+[capsid evidence](#capsid-evidence).
 
 A validated marker can start a candidate region unless its HMM model is a host
 kinase family: `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`

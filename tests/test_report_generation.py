@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -472,6 +473,38 @@ def test_notebook_mcp_helper_matches_canonical_detector() -> None:
     assert [report_is_mcp_gene(name) for name in corpus] == [is_mcp_gene(name) for name in corpus]
 
 
+def test_notebook_capsid_helper_matches_canonical_detector() -> None:
+    from virosync.pipeline.phase3.mcp_detection import (
+        CAPSID_EVIDENCE_MODELS,
+        is_capsid_evidence_gene,
+    )
+
+    namespace: dict[str, object] = {}
+    exec(_standalone_helper_cell(), namespace)
+
+    assert namespace["_REPORT_CAPSID_EVIDENCE_MODELS"] == CAPSID_EVIDENCE_MODELS
+    report_is_capsid_evidence_gene = namespace["_report_is_capsid_evidence_gene"]
+    corpus = [
+        "EVE_CAPSID_NOVEL_0002",
+        "eve_capsid_novel_0028",
+        " EVE_CAPSID_NOVEL_0033 ",
+        "EVE_CAPSID_NOVEL_0029",
+        "EVE_CAPSID_NOVEL_0001",
+        "EVE_CAPSID_NOVEL_0018",
+        "EVE_CAPSID_NOVEL_0026",
+        "EVE_CAPSID_NOVEL_0034",
+        "OG1352",
+        "plv_MCP_1",
+        "dmcp",
+        "polb",
+        "",
+        None,
+    ]
+    assert [report_is_capsid_evidence_gene(name) for name in corpus] == [
+        is_capsid_evidence_gene(name) for name in corpus
+    ]
+
+
 def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
     monkeypatch,
     tmp_path: Path,
@@ -530,6 +563,7 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         "re": re,
         "csv": csv,
         "_report_is_mcp_gene": helper_namespace["_report_is_mcp_gene"],
+        "_report_is_capsid_evidence_gene": helper_namespace["_report_is_capsid_evidence_gene"],
         "_report_prodigal_gene": helper_namespace["_report_prodigal_gene"],
     }
     exec(_notebook_cell("# ---- Load data ----"), namespace)
@@ -615,6 +649,7 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
                     "NCLDV",
                     "GVMAG",
                     "PHAGE",
+                    "EUK-pEVE",
                     "HOST",
                     "EUK",
                     "BAC",
@@ -732,6 +767,57 @@ def test_notebook_taxonomy_csv_and_display_helpers_cover_supported_values() -> N
     )
 
 
+PEVE_TARGET = "EUK-pEVE__EP00022|XP_1"
+NCLDV_TARGET = "NCLDV__GCA-000001234-1|YP_2"
+
+
+def test_notebook_euk_peve_label_matches_the_pipeline_in_any_case() -> None:
+    from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
+
+    namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_helper_cell(), namespace)
+    canonical = namespace["_report_canonical_viral_category"]
+
+    assert namespace["_REPORT_EUK_PEVE"] == EUK_PEVE_LABEL
+    # The taxonomy map stores the prefix with its separator; upper case is the token other code sees.
+    assert canonical("EUK-pEVE__", PEVE_TARGET, {}) == "EUK-pEVE"
+    assert canonical("EUK-PEVE", PEVE_TARGET, {}) == "EUK-pEVE"
+    assert canonical("EUK__", "EUK__EP00224|protein", {}) is None
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"top10_prefixes": "EUK-pEVE__", "top10_targets": PEVE_TARGET, "top10_pidents": "60.0"}, "EUK-pEVE"),
+        (
+            {
+                "top10_prefixes": "EUK-pEVE__,NCLDV__",
+                "top10_targets": f"{PEVE_TARGET},{NCLDV_TARGET}",
+                "top10_pidents": "90.0,30.0",
+            },
+            "NCLDV",
+        ),
+        (
+            {
+                "top10_prefixes": "NCLDV__,EUK-pEVE__",
+                "top10_targets": f"{NCLDV_TARGET},{PEVE_TARGET}",
+                "top10_pidents": "20.0,30.0",
+            },
+            "EUK-pEVE",
+        ),
+        ({"top10_prefixes": "EUK-pEVE__", "top10_targets": PEVE_TARGET, "top10_pidents": "24.9"}, None),
+    ],
+    ids=["only-euk-peve", "lineage-hit-wins", "lineage-hit-below-cutoff", "euk-peve-below-cutoff"],
+)
+def test_notebook_viral_category_takes_euk_peve_only_without_a_qualifying_lineage_hit(
+    record: dict[str, str], expected: str | None
+) -> None:
+    namespace: dict[str, object] = {"pd": pd}
+    exec(_standalone_helper_cell(), namespace)
+
+    assert namespace["_report_identity_qualified_viral_category"](record, {}) == expected
+
+
 CAPSID = (
     "MSNKVQLTPEFAAAIRKGLLDNGYTVEEIAKALGVSRQTVYNWLKGEGSLPDADLLLKLASIFGVSVDYLLGLESEEVRSHAQSLAEKLNRLSPEQRNAVIQLVEALAQTSVSH"
 )
@@ -751,6 +837,7 @@ def _syntviz_gene(
     strand: str = "+",
     *,
     is_mcp: bool = False,
+    is_capsid: bool = False,
     fold_type: str = "",
     function_label: str = "",
     function_evidence: str = "",
@@ -762,6 +849,7 @@ def _syntviz_gene(
         "strand": strand,
         "category": category,
         "is_mcp": is_mcp,
+        "is_capsid": is_capsid,
         "fold_type": fold_type,
         "function_label": function_label,
         "function_evidence": function_evidence,
@@ -804,6 +892,7 @@ def _syntviz_namespace(tmp_path: Path, eves: dict[str, dict], proteins: dict[str
         "COLORS": {
             "PPV": "#EE7733",
             "NCLDV": "#009988",
+            "EUK-pEVE": "#882255",
             "HOST": "#0077BB",
             "UNKNOWN": "#BBBBBB",
         },
@@ -1133,6 +1222,40 @@ def test_notebook_syntviz_figure_keeps_the_capsid_outline_when_a_capsid_has_a_fu
     assert groups["mcp"] == {"EVE_demo|contig_1_1000-2000:contig_1_2"}
 
 
+def test_notebook_syntviz_figure_outlines_capsid_evidence_with_a_style_group_not_markers(tmp_path: Path) -> None:
+    """An MCP keeps its group and circle; other capsid evidence, core or flank, gets the same outline."""
+    eve = _syntviz_eve(
+        "contig_1",
+        "HIGH",
+        0.9,
+        [
+            _syntviz_gene("contig_1_2", 1_100, 1_463, "EUK-pEVE", is_mcp=True, is_capsid=True),
+            _syntviz_gene("contig_1_3", 1_500, 1_800, "EUK-pEVE", is_capsid=True),
+            _syntviz_gene("contig_1_4", 1_850, 1_990, "PPV"),
+        ],
+    )
+    eve["right_flank_genes"] = [_syntviz_gene("contig_1_5", 2_100, 2_400, "HOST", is_capsid=True)]
+    proteins = {"contig_1_2": CAPSID, "contig_1_3": CAPSID, "contig_1_4": PRIMASE, "contig_1_5": FLANK}
+    namespace = _syntviz_namespace(tmp_path, {"EVE_demo|contig_1_1000-2000": eve}, proteins)
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    view = _syntviz_session(tmp_path).view
+    groups = {group.id: group for group in view.style_groups}
+    assert set(groups["mcp"].feature_ids) == {"EVE_demo|contig_1_1000-2000:contig_1_2"}
+    assert set(groups["capsid"].feature_ids) == {
+        "EVE_demo|contig_1_1000-2000:contig_1_3",
+        "EVE_demo|contig_1_1000-2000:contig_1_5",
+    }
+    assert groups["capsid"].style == groups["mcp"].style
+    assert groups["capsid"].style.stroke == "#000000"
+    gene_markers = {
+        (marker.anchor.feature_id, marker.glyph) for marker in view.markers if marker.anchor.kind == "feature_segment"
+    }
+    assert gene_markers == {("EVE_demo|contig_1_1000-2000:contig_1_2", "circle")}
+    assert view.colors.palette["EUK-pEVE"] == "#882255"
+
+
 def test_notebook_syntviz_palette_colors_categories_only(tmp_path: Path) -> None:
     eves = {
         "EVE_demo|contig_1_1000-2000": _syntviz_eve(
@@ -1213,6 +1336,7 @@ def _load_data_namespace(tmp_path: Path, gene_functions: str | None) -> dict[str
         "re": re,
         "csv": csv,
         "_report_is_mcp_gene": helpers["_report_is_mcp_gene"],
+        "_report_is_capsid_evidence_gene": helpers["_report_is_capsid_evidence_gene"],
         "_report_prodigal_gene": helpers["_report_prodigal_gene"],
         "_function_label_rows": helpers["_function_label_rows"],
     }
@@ -1343,3 +1467,221 @@ def test_notebook_gene_map_ignores_a_rescued_protein_that_no_drawn_gene_carries(
     assert [gene["function_label"] for gene in eve["eve_genes"] if gene["function_label"]] == ["PolB"]
     assert {text.get_text() for text in namespace["ax"].texts} & {"PolB", "Terminase"} == {"PolB"}
     plt.close(namespace["fig"])
+
+
+GENE_MAP_CELL = "# ---- Gene Map: all canonical EVEs with colored flanking genes ----"
+DETAIL_CELL = "DETAIL_MAX_EVES = 6"
+DISTRIBUTION_CELL = "# ---- Stacked bar: core vs flank gene composition ----"
+NOTEBOOK_CELLS_TO_GENE_RECORDS = (
+    "from IPython import get_ipython",
+    "def _report_is_mcp_gene(",
+    "# --- Style setup (beautiful-data-viz) ---",
+    "# ---- Load data ----",
+    "# ---- Build extended gene map data ----",
+)
+HOST_LINEAGE = "EUK|Amorphea|Amoebozoa|Evosea|Eumycetozoa|Dictyostelium|Dictyostelium discoideum"
+HOST_TOKENS = {"amorphea", "amoebozoa", "evosea", "eumycetozoa", "dictyostelium", "dictyostelium discoideum"}
+PEVE_LINEAGE = (
+    "EUK-pEVE|Amorphea-pEVE|Amoebozoa-pEVE|Evosea-pEVE|Eumycetozoa-pEVE|Cavenderia-pEVE|Cavenderia fasciculata-pEVE"
+)
+PEVE_TOKENS = {
+    "euk-peve",
+    "amorphea-peve",
+    "amoebozoa-peve",
+    "evosea-peve",
+    "eumycetozoa-peve",
+    "cavenderia-peve",
+    "cavenderia fasciculata-peve",
+}
+FIVE_GENES_30_BP_APART = "".join(
+    f">contig_{index} # {start} # {start + 29} # 1 # ID=contig_{index};partial=00\nM\n"
+    for index, start in enumerate(range(1, 151, 30), start=1)
+)
+
+
+@pytest.fixture
+def euk_peve_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Run the notebook through the gene records of one EVE with host, EUK-pEVE and capsid genes.
+
+    contig_1 is the left flank and contig_5 the right flank; contig_2 to contig_4 form the core.
+    The host model weighs every -pEVE rank above the host's own ranks.
+    """
+    labels = tmp_path / "labels.tsv"
+    labels.write_text(
+        f"EUK__EP00001\t{HOST_LINEAGE}\n"
+        "EUK__EP00099\tEUK|Sar|Alveolata|Ciliophora|Oligohymenophorea|Tetrahymena|Tetrahymena thermophila\n"
+        f"EUK-pEVE__EP00022\t{PEVE_LINEAGE}\n"
+        "NCLDV__GCA-000001234-1\tNCLDV|Nucleocytoviricota|Megaviricetes|Imitervirales|Mimiviridae\n"
+    )
+    marker_dir = tmp_path / "phase1" / "marker_validation"
+    marker_dir.mkdir(parents=True)
+    token_weights = dict.fromkeys(HOST_TOKENS, 50.0) | dict.fromkeys(PEVE_TOKENS, 90.0) | {"sar": 10.0}
+    (marker_dir / "host_signature_model.json").write_text(json.dumps({"token_weights": token_weights}))
+    (marker_dir / "validated_marker_hits.tsv").write_text(
+        "query_porf\thmm_target\tvalidation_status\n"
+        "contig_2\tEVE_CAPSID_NOVEL_0002\tvalidated\n"
+        "contig_3\tEVE_CAPSID_NOVEL_0001\tvalidated\n"
+        "contig_3\tEVE_CAPSID_NOVEL_0018\tvalidated_novel\n"
+        "contig_3\tEVE_CAPSID_NOVEL_0028\tunvalidated\n"
+        "contig_4|aa1-30\tEVE_CAPSID_NOVEL_0029\tvalidated_novel\n"
+    )
+    boundary_dir = tmp_path / "phase2" / "boundary_diamond"
+    boundary_dir.mkdir(parents=True)
+    (boundary_dir / "taxonomy_map.tsv").write_text(
+        "porf_id\ttop1_target\ttop1_prefix\ttop10_prefixes\ttop10_targets\ttop10_pidents\n"
+        "contig_1\tEUK__EP00001|XP_10\tEUK__\tEUK__\tEUK__EP00001|XP_10\t80.00\n"
+        f"contig_2\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t60.00\n"
+        f"contig_3\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__,NCLDV__\t{PEVE_TARGET},{NCLDV_TARGET}\t90.00,30.00\n"
+        f"contig_4\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t20.00\n"
+        "contig_5\tEUK__EP00099|XP_5\tEUK__\tEUK__\tEUK__EP00099|XP_5\t70.00\n"
+    )
+    synthesis = tmp_path / "phase3_synthesis"
+    synthesis.mkdir()
+    (synthesis / "evidence_profiles.json").write_text(
+        json.dumps(
+            {
+                "EVE_contig_30-120": {
+                    "scaffold": "contig",
+                    "start": 30,
+                    "end": 120,
+                    "status": "accepted",
+                    "final_confidence": 0.9,
+                    "confidence_tier": "HIGH",
+                    "taxonomy_class": "VIRAL_UNKNOWN",
+                }
+            }
+        )
+    )
+    (synthesis / "virosync_jelly_roll_proteins.tsv").write_text(
+        "protein_id\ttype\tconfidence\tlength\tmarker\tevidence\tmcp_support\tvalidation_status\n"
+        "contig_5\tDJR\t0.900\t300\tMCP\tlength\tsequence_supported\tvalidated\n"
+    )
+    (tmp_path / "phase0").mkdir()
+    (tmp_path / "phase0" / "proteome.fasta").write_text(FIVE_GENES_30_BP_APART)
+    monkeypatch.setattr(plt, "savefig", lambda *args, **kwargs: None)
+    monkeypatch.setattr(plt, "show", lambda: None)
+    monkeypatch.setattr(plt, "tight_layout", lambda *args, **kwargs: None)
+    namespace = _parameter_defaults() | {
+        "RESULTS_DIR": str(tmp_path),
+        "TAX_LABELS_PATH": str(labels),
+        "SHOW_TIERS": ["HIGH"],
+        "FLANK_SIZE": 0,
+    }
+    # The style cell sets global rcParams; keep them from leaking into other tests.
+    with plt.rc_context():
+        for needle in NOTEBOOK_CELLS_TO_GENE_RECORDS:
+            exec(_notebook_cell(needle), namespace)
+        yield namespace
+    plt.close("all")
+
+
+def _report_genes(namespace: dict[str, object]) -> dict[str, dict]:
+    eve = namespace["eve_genes_extended"]["EVE_contig_30-120"]
+    regions = ("left_flank_genes", "eve_genes", "right_flank_genes")
+    return {gene["porf_id"]: gene for region in regions for gene in eve[region]}
+
+
+def test_notebook_counts_euk_peve_genes_as_viral_and_never_as_host(euk_peve_report: dict[str, object]) -> None:
+    genes = _report_genes(euk_peve_report)
+
+    assert {porf_id: gene["category"] for porf_id, gene in genes.items()} == {
+        "contig_1": "HOST",
+        "contig_2": "EUK-pEVE",
+        "contig_3": "NCLDV",
+        "contig_4": "EUK-pEVE",
+        "contig_5": "EUK",
+    }
+    assert {porf_id: gene["host_lineage_match"] for porf_id, gene in genes.items()} == {
+        "contig_1": True,
+        "contig_2": False,
+        "contig_3": False,
+        "contig_4": False,
+        "contig_5": False,
+    }
+
+
+def test_notebook_host_lineage_drops_euk_peve_ranks(euk_peve_report: dict[str, object]) -> None:
+    is_host_gene = euk_peve_report["is_host_gene"]
+
+    assert euk_peve_report["HOST_TAXA"] == HOST_TOKENS
+    assert euk_peve_report["HOST_GENUS"] == "dictyostelium"
+    assert is_host_gene(PEVE_TARGET) is False
+    assert is_host_gene("EUK__EP00001|XP_10") is True
+
+
+def test_notebook_gives_euk_peve_a_color_no_other_category_uses(euk_peve_report: dict[str, object]) -> None:
+    colors = euk_peve_report["COLORS"]
+
+    assert list(colors.values()).count(colors["EUK-pEVE"]) == 1
+
+
+def test_notebook_marks_capsid_evidence_apart_from_mcp(euk_peve_report: dict[str, object]) -> None:
+    genes = _report_genes(euk_peve_report)
+
+    assert euk_peve_report["capsid_porf_ids"] == {"contig_2", "contig_4", "contig_5"}
+    assert euk_peve_report["mcp_porf_ids"] == {"contig_4", "contig_5"}
+    assert {porf_id: (gene["is_capsid"], gene["is_mcp"]) for porf_id, gene in genes.items()} == {
+        "contig_1": (False, False),
+        "contig_2": (True, False),
+        "contig_3": (False, False),
+        "contig_4": (True, True),
+        "contig_5": (True, True),
+    }
+
+
+def test_notebook_gene_map_outlines_capsid_evidence_and_keeps_the_mcp_circle(
+    euk_peve_report: dict[str, object],
+) -> None:
+    colors = euk_peve_report["COLORS"]
+
+    exec(_notebook_cell(GENE_MAP_CELL), euk_peve_report)
+
+    ax = euk_peve_report["ax"]
+    arrows = {
+        round(min(x for x, _ in patch.get_xy())): patch for patch in ax.patches if isinstance(patch, mpatches.Polygon)
+    }
+    outlined = {start for start, arrow in arrows.items() if arrow.get_linewidth() > 0}
+    assert outlined == {30, 90, 120}
+    assert {mcolors.to_hex(arrows[start].get_edgecolor()) for start in outlined} == {"#000000"}
+    assert mcolors.to_hex(arrows[30].get_facecolor()) == colors["EUK-pEVE"]
+    assert {float(line.get_xdata()[0]) for line in ax.lines if line.get_marker() == "o"} == {105.0, 135.0}
+    legend = ax.get_legend()
+    handles = {text.get_text(): handle for text, handle in zip(legend.get_texts(), legend.legend_handles, strict=True)}
+    assert mcolors.to_hex(handles["EUK-pEVE (viral-like, eukaryotic genome)"].get_facecolor()) == colors["EUK-pEVE"]
+    assert mcolors.to_hex(handles["Black outline: capsid evidence"].get_edgecolor()) == "#000000"
+    assert "Supported MCP" in handles
+
+
+def test_notebook_detail_map_outlines_capsid_evidence_and_lists_euk_peve(
+    euk_peve_report: dict[str, object],
+) -> None:
+    exec(_notebook_cell(DETAIL_CELL), euk_peve_report)
+
+    fig = euk_peve_report["fig"]
+    arrows = {
+        round(min(x for x, _ in patch.get_xy()), 2): patch
+        for patch in fig.axes[0].patches
+        if isinstance(patch, mpatches.FancyArrow)
+    }
+    black = {start for start, arrow in arrows.items() if mcolors.to_hex(arrow.get_edgecolor()) == "#000000"}
+    assert black == {0.0, 0.06, 0.09}
+    assert min(arrows[start].get_linewidth() for start in black) > max(
+        arrows[start].get_linewidth() for start in arrows.keys() - black
+    )
+    labels = [text.get_text() for text in fig.legends[0].get_texts()]
+    assert "EUK-pEVE (viral-like, eukaryotic genome)" in labels
+    assert "Black outline: capsid evidence" in labels
+    assert "Supported MCP" in labels
+
+
+def test_notebook_category_distribution_counts_euk_peve_and_sums_to_one(
+    euk_peve_report: dict[str, object],
+) -> None:
+    exec(_notebook_cell(GENE_MAP_CELL), euk_peve_report)
+    exec(_notebook_cell(DISTRIBUTION_CELL), euk_peve_report)
+
+    containers = {container.get_label(): container for container in euk_peve_report["ax"].containers}
+    heights = {label: [bar.get_height() for bar in container] for label, container in containers.items()}
+    assert heights["EUK-pEVE"] == pytest.approx([0.0, 2 / 3, 0.0])
+    assert [sum(region) for region in zip(*heights.values(), strict=True)] == pytest.approx([1.0, 1.0, 1.0])
+    assert mcolors.to_hex(containers["EUK-pEVE"][1].get_facecolor()) == euk_peve_report["COLORS"]["EUK-pEVE"]

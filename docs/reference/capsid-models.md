@@ -30,8 +30,75 @@ support an exclusive virus-family assignment, so the runtime annotation
 assigns no marker family. A detected protein can still contribute a taxonomic
 vote through its independent sequence matches.
 
-The other 32 profiles remain non-MCP markers. Their identifiers and source
-captions do not confer MCP status or its scoring bonus.
+The other 32 profiles are not MCPs. Their identifiers and source captions
+do not confer MCP status. Capsid-type profiles give capsid evidence instead,
+as described next.
+
+## Capsid evidence
+
+Twenty-seven profiles count as capsid evidence. They are the 20 penton, two
+minor-capsid, two coat, one picornavirus-like capsid-domain, one capsid and
+one major-capsid profiles: `0002` to `0005`, `0007` to `0014`, `0016`, `0017`,
+`0019`, `0021` to `0025` and `0027` to `0033`. The curated function decides
+membership; the curation table lists a penton, capsid or coat function for each.
+`CAPSID_EVIDENCE_MODELS` in `src/virosync/pipeline/phase3/mcp_detection.py`
+holds the list, and a test checks it against the curation table.
+
+A hit to one of these profiles is treated as a viral capsid hit:
+
+- Phase 1 lets it seed a candidate region when it validates on a viral or
+  EUK-pEVE reference, and when it has no DIAMOND match and passes the HMM-only
+  gates (`validated_novel`). Only MCP profiles seeded in that second case before.
+- Phase 3 sets `has_capsid_evidence` on the region when `has_mcp` is true or
+  any `validated` or `validated_novel` hit of the region is such a profile, even
+  if a higher-scoring non-capsid profile on the same protein hides it from the
+  marker count. A hit of another status (`supported`, `unvalidated`) gives none,
+  even when it outscores the other profiles. The A1 seed export applies the same
+  rule to the anchors of each seed. The flag feeds every scoring and acceptance rule that an MCP
+  feeds: the MCP term of the marker score, the common bonus, the exemption from
+  the small-region penalty, the confidence caps, the priority-marker floors, the
+  non-HHG quality pass and the shortcuts of the v2 acceptance gate. The
+  re-admit pass inherits the gate change.
+
+`has_mcp` and `mcp_gene_ids` still name major capsid proteins only. The
+class-vote override, ANI class transfer, jelly-roll classification, Boltz input
+selection and the Phase 1 `high` seed confidence still need an MCP. The profile
+`0029` remains the only structure-derived MCP.
+
+The six other profiles (`0001`, `0006`, `0015`, `0020`, `0026` and `0018`) stay
+viral markers. They validate and seed like any marker, but they give no capsid
+evidence.
+
+## EUK-pEVE references
+
+Resource bundle v1.2.0 relabels the eukaryote-labelled reference hits of the 33
+profiles from `EUK` to `EUK-pEVE`. These are 3,011 proteins, of which the marker
+database holds 1,031 and the proteome database 1,892 after dereplication per
+genome. The key of an affected genome is `EUK-pEVE__<assembly>`, and its
+lineage in `taxonomy/labels.tsv` starts with `EUK-pEVE` and carries the suffix
+`-pEVE` on every named rank. Viral labels on eukaryotic assemblies, such as
+`PPV`, keep their class.
+
+ViroSync counts `EUK-pEVE` as viral and never as cellular or host:
+
+- A top-10 hit on an `EUK-pEVE` reference with at least 25% identity validates a
+  marker and counts as a viral hit in boundary refinement, gene-level taxonomy
+  and region scoring.
+- When an `EUK__` and an `EUK-pEVE__` entry share one `<genome>|<protein>`, the
+  `EUK-pEVE` row wins the twin rule.
+- `EUK-pEVE` hits never enter the host-signature model or the host lineage share.
+- `EUK-pEVE` carries no viral family. It sets no NCLDV, MIRUS or PPV flag, joins
+  no dominant-family count and casts no family vote. A gene or region whose
+  viral hits are all `EUK-pEVE` has the class `VIRAL_UNKNOWN`. When a lineage
+  hit exists, the `EUK-pEVE` hit changes nothing: in the region vote, a gene
+  whose viral hits are all `EUK-pEVE` casts no vote while any other gene votes
+  for a lineage. A region whose viral hits are all `EUK-pEVE`, in the marker
+  database, the proteome database or both, has the likely family `MIXED` and
+  takes the mixed path of the v2 gate, whatever lineage its marker names or its
+  Phase 1 region class suggest. The A1 seed export applies the same rule to the
+  top-10 hits of the seed's validated markers. The `taxonomy_best_hits`
+  partition counts these genes in the bucket `EUK-pEVE`; no output class has
+  that name.
 
 ## Source groups
 
@@ -130,7 +197,7 @@ does not provide an independent genome-wide validation set.
 The combined library retains new-profile hits for all 5,305 training proteins
 after Pfam arbitration. Eight proteins from minor-capsid cluster `0027`
 score best against penton profile `0028`; these functional labels overlap
-in the current profile set. Both profiles remain non-MCP markers.
+in the current profile set. Both profiles give capsid evidence but are not MCPs.
 
 In a tested source locus, `0029` produces a strong profile match, but its
 viral sequence-reference hits fall below the validation identity cutoff.

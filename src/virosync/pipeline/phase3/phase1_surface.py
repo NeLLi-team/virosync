@@ -20,9 +20,12 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
+    has_validated_capsid_hit,
     infer_ppv_subtype,
+    is_validated_marker,
     summarize_marker_hits,
 )
+from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
 
@@ -51,16 +54,22 @@ def _base_gene_id(anchor: Anchor) -> str:
     return f"{anchor.scaffold}:{anchor.start}-{anchor.end}:{anchor.strand}:{anchor.hallmark_gene}"
 
 
-def _eligible_anchors(seed: MergedSeed) -> tuple[tuple[str, Anchor], ...]:
-    """Return one deterministic best marker hit per seed-overlapping protein."""
+def _overlapping_anchors(seed: MergedSeed) -> tuple[Anchor, ...]:
+    """Return every marker anchor that sits on the seed, before deduplication."""
+    return tuple(
+        anchor
+        for anchor in (*seed.anchors, *seed.hhg_anchors)
+        if anchor.hallmark_gene
+        and anchor.scaffold == seed.scaffold
+        and anchor.end > seed.start
+        and anchor.start < seed.end
+    )
+
+
+def _eligible_anchors(anchors: Sequence[Anchor]) -> tuple[tuple[str, Anchor], ...]:
+    """Return one deterministic best marker hit per protein."""
     grouped: dict[str, list[Anchor]] = {}
-    for anchor in (*seed.anchors, *seed.hhg_anchors):
-        if not anchor.hallmark_gene:
-            continue
-        if anchor.scaffold != seed.scaffold:
-            continue
-        if anchor.end <= seed.start or anchor.start >= seed.end:
-            continue
+    for anchor in anchors:
         grouped.setdefault(_base_gene_id(anchor), []).append(anchor)
 
     selected: list[tuple[str, Anchor]] = []
@@ -81,7 +90,8 @@ def _eligible_anchors(seed: MergedSeed) -> tuple[tuple[str, Anchor], ...]:
 
 
 def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
-    eligible_anchors = _eligible_anchors(seed)
+    overlapping_anchors = _overlapping_anchors(seed)
+    eligible_anchors = _eligible_anchors(overlapping_anchors)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
     marker_summary = summarize_marker_hits(hallmark_genes)
     mcp_gene_ids = [gene_id for gene_id, anchor in eligible_anchors if is_mcp_gene(anchor.hallmark_gene)]
@@ -89,6 +99,15 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     # Phase 1 has no CRESS marker family. Identity-qualified gene taxonomy may
     # assign CRESS later during evidence synthesis.
     likely_family = region_classification if region_classification in {"NCLDV", "MIRUS", "PPV", "MIXED"} else "UNKNOWN"
+    # Viral hits that all name no lineage (EUK-pEVE) leave the region without a
+    # family, as in Phase 3. Only validated markers count, as there.
+    marker_records = [
+        {"top10_prefixes": anchor.top10_prefixes, "top10_pidents": anchor.top10_pidents}
+        for anchor in overlapping_anchors
+        if is_validated_marker(anchor)
+    ]
+    if has_only_peve_viral_hits(marker_records):
+        likely_family = "MIXED"
 
     return VerificationResult(
         eve_id=eve_id,
@@ -113,6 +132,8 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         marker_dominant_family=marker_summary["dominant_family"],
         marker_dominant_fraction=marker_summary["dominant_fraction"],
         has_mcp=bool(mcp_gene_ids),
+        # Every overlapping anchor decides, not only the best profile per protein.
+        has_capsid_evidence=bool(mcp_gene_ids) or has_validated_capsid_hit(overlapping_anchors),
         mcp_gene_ids=mcp_gene_ids,
         region_classification=region_classification,
         region_classification_ncldv_markers=seed.region_classification_ncldv_markers,
@@ -123,6 +144,7 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         # A1 stops before the gene taxonomy, so there is no weighted vote to
         # publish. The seed marker family is the only taxonomy this arm has, and
         # without this the published class would be UNKNOWN for every A1 seed.
+        # MIXED folds onto VIRAL_UNKNOWN, the class of EUK-pEVE-only evidence.
         taxonomy_class=normalize_effective_eve_class(likely_family),
         seed_sources=sorted(set(seed.sources)),
         seed_confidence=seed.confidence,

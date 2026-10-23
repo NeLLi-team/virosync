@@ -21,7 +21,7 @@ from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.utils.atomic_write import atomic_write
 
 PHASE1_STATE_FILENAME = "resume_state.json"
-PHASE1_STATE_SCHEMA_VERSION = 1
+PHASE1_STATE_SCHEMA_VERSION = 2
 PHASE1_STATE_ARTIFACT_TYPE = "virosync.phase1.resume_state"
 PHASE1_STATE_SCHEMA = f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
 
@@ -77,6 +77,9 @@ _ANCHOR_STRING_FIELDS = (
     "scaffold",
     "strand",
     "hallmark_gene",
+    "validation_status",
+    "top10_prefixes",
+    "top10_pidents",
 )
 _ANCHOR_INTEGER_FIELDS = ("start", "end")
 _ANCHOR_FLOAT_FIELDS = ("score", "evalue")

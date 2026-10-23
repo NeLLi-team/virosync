@@ -24,6 +24,7 @@ from pathlib import Path
 from Bio import SeqIO
 from Bio.Seq import Seq
 
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL, EUK_PEVE_PREFIX
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
 logger = logging.getLogger(__name__)
@@ -40,10 +41,12 @@ class EvidenceToolError(RuntimeError):
     """
 
 
-# Domain classifications
-VIRAL_DOMAINS = {"NCLDV", "MIRUS", "NCLDV/MIRUS"}
+# Domain classifications. EUK-pEVE is viral and never in NON_VIRAL_DOMAINS.
+VIRAL_DOMAINS = {"NCLDV", "MIRUS", "NCLDV/MIRUS", EUK_PEVE_LABEL}
 NON_VIRAL_DOMAINS = {"EUK", "BAC", "ARC"}  # PHAGE can be considered viral-like
 UNCERTAIN_DOMAINS = {"UNKNOWN", "PHAGE"}  # UNKNOWN = novel/uncertain, not non-viral
+# Domains of the DIAMOND subject prefixes that count as viral.
+DIAMOND_VIRAL_DOMAINS = frozenset({"NCLDV", "PHAGE", EUK_PEVE_LABEL})
 
 
 class PhylogeneticVerdict(Enum):
@@ -170,7 +173,7 @@ class DiamondValidation:
     @property
     def is_viral(self) -> bool:
         """Whether majority of proteins classify as viral."""
-        return self.best_domain in {"NCLDV", "PHAGE"} and self.best_domain_percent >= 50.0
+        return self.best_domain in DIAMOND_VIRAL_DOMAINS and self.best_domain_percent >= 50.0
 
     @property
     def confidence_score(self) -> float:
@@ -214,21 +217,20 @@ class DiamondValidation:
 
     @property
     def has_viral_in_neighbors(self) -> bool:
-        """Whether ANY of the top 5 hits for any protein is viral (NCLDV or PHAGE).
+        """Whether ANY of the top 5 hits for any protein is viral (NCLDV, PHAGE or EUK-pEVE).
 
         This is used to avoid rejecting regions where the best domain is cellular
         but viral domains are present among the top hits.
         """
-        viral_domains = {"NCLDV", "PHAGE"}
         # Check all_hits_per_query if available
         if self.all_hits_per_query:
             for hits in self.all_hits_per_query.values():
                 for domain, _ in hits:
-                    if domain in viral_domains:
+                    if domain in DIAMOND_VIRAL_DOMAINS:
                         return True
             return False
         # Fall back to domain_counts
-        return any(dom in viral_domains for dom in self.domain_counts.keys())
+        return any(dom in DIAMOND_VIRAL_DOMAINS for dom in self.domain_counts.keys())
 
 
 @dataclass
@@ -703,6 +705,7 @@ class PhylogeneticValidator:
             "PHAGE__": "PHAGE",
             "CRESS__": "CRESS",
             "EUK__": "EUK",
+            EUK_PEVE_PREFIX: EUK_PEVE_LABEL,
         }
 
         # Track ALL hits per query (up to 5 from -k 5)
@@ -750,10 +753,9 @@ class PhylogeneticValidator:
             best_domain_percent = 0.0
 
         # Count viral vs non-viral
-        viral_domains = {"NCLDV", "PHAGE"}
         non_viral_domains = {"BAC", "ARC", "EUK"}
 
-        viral_count = sum(domain_counts.get(d, 0) for d in viral_domains)
+        viral_count = sum(domain_counts.get(d, 0) for d in DIAMOND_VIRAL_DOMAINS)
         non_viral_count = sum(domain_counts.get(d, 0) for d in non_viral_domains)
 
         return DiamondValidation(

@@ -129,6 +129,7 @@ def test_a5_removes_composition_driven_top_cap() -> None:
     def strong_candidate() -> VerificationResult:
         result = _candidate()
         result.has_mcp = True
+        result.has_capsid_evidence = True
         result.hallmark_count = 5
         result.hallmark_diversity = 5
         result.marker_category_hits = ["mcp"]
@@ -264,6 +265,7 @@ def _configure_override_path(result: VerificationResult, path: str) -> None:
         result.region_classification_mirus_markers = 1
     elif path == "mcp":
         result.has_mcp = True
+        result.has_capsid_evidence = True
         result.hallmark_count = 1
         result.region_classification = "NCLDV"
         result.region_classification_ncldv_markers = 1

@@ -25,6 +25,11 @@ The canonical corpus is:
 
 Any other name — even one containing the substring ``"mcp"`` — is
 rejected.
+
+Capsid evidence is a wider decision. A hit to one of the capsid-type
+structure-derived profiles (:data:`CAPSID_EVIDENCE_MODELS`) is capsid evidence
+without being an MCP: scoring and acceptance treat it like an MCP, while
+everything that names a major capsid protein still asks :func:`is_mcp_gene`.
 """
 
 from __future__ import annotations
@@ -54,6 +59,44 @@ MCP_HMM_PREFIXES: tuple[str, ...] = (
 
 
 MCP_HMM_EXACT: frozenset[str] = NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
+
+
+# The 27 capsid-type structure-derived profiles: those whose curated function in
+# release-manifests/resources_v1_1_0/capsid_model_curation.tsv is a penton, capsid
+# or coat protein. The adenain-like and unresolved protease profiles (0001, 0006,
+# 0015, 0020, 0026) and the tail-tube profile (0018) stay viral markers without
+# capsid evidence. A test checks this set against the curation table.
+CAPSID_EVIDENCE_MODELS: frozenset[str] = frozenset(
+    {
+        "eve_capsid_novel_0002",
+        "eve_capsid_novel_0003",
+        "eve_capsid_novel_0004",
+        "eve_capsid_novel_0005",
+        "eve_capsid_novel_0007",
+        "eve_capsid_novel_0008",
+        "eve_capsid_novel_0009",
+        "eve_capsid_novel_0010",
+        "eve_capsid_novel_0011",
+        "eve_capsid_novel_0012",
+        "eve_capsid_novel_0013",
+        "eve_capsid_novel_0014",
+        "eve_capsid_novel_0016",
+        "eve_capsid_novel_0017",
+        "eve_capsid_novel_0019",
+        "eve_capsid_novel_0021",
+        "eve_capsid_novel_0022",
+        "eve_capsid_novel_0023",
+        "eve_capsid_novel_0024",
+        "eve_capsid_novel_0025",
+        "eve_capsid_novel_0027",
+        "eve_capsid_novel_0028",
+        "eve_capsid_novel_0029",
+        "eve_capsid_novel_0030",
+        "eve_capsid_novel_0031",
+        "eve_capsid_novel_0032",
+        "eve_capsid_novel_0033",
+    }
+)
 
 
 _WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
@@ -87,3 +130,13 @@ def is_mcp_gene(name: str | None) -> bool:
 
 # Semantic alias: same decision, different caller intent.
 is_mcp_model = is_mcp_gene
+
+
+def is_capsid_evidence_gene(name: str | None) -> bool:
+    """Return True when ``name`` is an MCP or a capsid-type structure-derived profile.
+
+    The profile name is lower-cased and stripped, as in :func:`is_mcp_gene`.
+    """
+    if not name:
+        return False
+    return is_mcp_gene(name) or name.lower().strip() in CAPSID_EVIDENCE_MODELS

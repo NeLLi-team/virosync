@@ -29,7 +29,7 @@ def _result(**overrides) -> SimpleNamespace:
         start=0,
         end=21077,  # ds27 length; well above the 2 kb floor
         hallmark_count=3,
-        has_mcp=True,
+        has_capsid_evidence=True,
         hallmark_genes=["plv_mcp_caps_SP_Aquinto", "COG0532", "VS000001"],
         region_classification="MIXED",
         likely_family="UNKNOWN",
@@ -58,7 +58,7 @@ def test_mixed_with_mcp_medium_passes() -> None:
 def test_mixed_no_mcp_but_strong_hallmarks_passes() -> None:
     # MCP is NOT required: >=2 hallmarks with >=1 non-ATPase qualifies.
     decision = evaluate_v2_quality_gate(
-        _result(has_mcp=False, hallmark_count=2, hallmark_genes=["COG0532", "VS000001"])
+        _result(has_capsid_evidence=False, hallmark_count=2, hallmark_genes=["COG0532", "VS000001"])
     )
     assert decision.kept
     assert decision.reason == "mixed_high_medium_pass"
@@ -67,14 +67,16 @@ def test_mixed_no_mcp_but_strong_hallmarks_passes() -> None:
 def test_mixed_no_mcp_atpase_only_is_gated_out() -> None:
     # ATPase-only support (no MCP) is too weak -> gated out (non_atpase == 0).
     decision = evaluate_v2_quality_gate(
-        _result(has_mcp=False, hallmark_count=2, hallmark_genes=["PLV_PC_054", "GVOGm0760"])
+        _result(has_capsid_evidence=False, hallmark_count=2, hallmark_genes=["PLV_PC_054", "GVOGm0760"])
     )
     assert not decision.kept
     assert decision.reason == "mixed_high_medium_gate"
 
 
 def test_mixed_no_mcp_single_hallmark_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(_result(has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"]))
+    decision = evaluate_v2_quality_gate(
+        _result(has_capsid_evidence=False, hallmark_count=1, hallmark_genes=["COG0532"])
+    )
     assert not decision.kept
     assert decision.reason == "mixed_high_medium_gate"
 
@@ -102,7 +104,7 @@ def test_mixed_low_no_mcp_one_non_atpase_is_gated_out() -> None:
     # applies the same rule as the tiers above it. See
     # tests/test_v2_gate_monotonicity.py for the general property.
     decision = evaluate_v2_quality_gate(
-        _result(confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["COG0532"])
+        _result(confidence_tier="LOW", has_capsid_evidence=False, hallmark_count=1, hallmark_genes=["COG0532"])
     )
     assert not decision.kept
     assert decision.reason == "mixed_low_gate"
@@ -110,7 +112,7 @@ def test_mixed_low_no_mcp_one_non_atpase_is_gated_out() -> None:
 
 def test_mixed_low_atpase_only_is_gated_out() -> None:
     decision = evaluate_v2_quality_gate(
-        _result(confidence_tier="LOW", has_mcp=False, hallmark_count=1, hallmark_genes=["GVOGm0760"])
+        _result(confidence_tier="LOW", has_capsid_evidence=False, hallmark_count=1, hallmark_genes=["GVOGm0760"])
     )
     assert not decision.kept
     assert decision.reason == "mixed_low_gate"
@@ -125,7 +127,7 @@ def test_mixed_low_bridge_promotes_when_only_region_is_mixed() -> None:
             region_classification="",
             classification="MIXED",
             likely_family="UNKNOWN",
-            has_mcp=True,
+            has_capsid_evidence=True,
         )
     )
     assert decision.kept

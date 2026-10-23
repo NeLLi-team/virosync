@@ -40,6 +40,7 @@ from Bio import SeqIO
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.taxonomy_utils import (
+    EUK_PEVE_PREFIX,
     TaxonomyFingerprint,
     aggregate_taxonomy_substrings,
     compute_hit_weight,
@@ -54,8 +55,9 @@ def _get_logger() -> logging.Logger:
     return logger
 
 
-# Taxonomy prefix definitions with consistent __ suffix
-VIRAL_PREFIXES = {"NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__", "GVMAG__", "PHAGE__"}
+# Taxonomy prefix definitions with consistent __ suffix. EUK-pEVE is viral and
+# never cellular; it is not a prefix of EUK__, so the two cannot be confused.
+VIRAL_PREFIXES = {"NCLDV__", "MIRUS__", "VP__", "PLV__", "PPV__", "CRESS__", "GVMAG__", "PHAGE__", EUK_PEVE_PREFIX}
 CELLULAR_PREFIXES = {"EUK__", "BAC__", "ARC__"}
 
 # Minimum identity for a viral top-10 hit to count as viral evidence.
@@ -383,6 +385,8 @@ def extract_prefix(target_id: str) -> str:
         'NCLDV__'
         >>> extract_prefix("EUK__Arabidopsis_thaliana|protein123")
         'EUK__'
+        >>> extract_prefix("EUK-pEVE__EP00022|protein123")
+        'EUK-pEVE__'
         >>> extract_prefix("unknown_protein")
         'UNKNOWN'
     """
