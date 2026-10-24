@@ -1,11 +1,8 @@
 # Performance
 
-The September 19 benchmark used ViroSync 1.0.1 with GenomeTools seed indexing,
-shared repeat comparisons and development resources v1.1.0. Its source SHA-256 was
-`a19fe5516183507df1c5d16cf794670baef0dfa769fd78bf7f135ee53a2ec3e3`.
-Resource bundle v1.1.0 is an unreleased development bundle. Public builds and
-their shipped examples use v1.0.7; this local development configuration uses
-v1.1.0.
+The October 23 benchmark used ViroSync 1.0.2 at commit `ec60050` with resource
+bundle v1.2.0, the bundle that public builds install. Its source SHA-256 was
+`79d53ca1b507d5a9e099661b85fdb12ee660d5993a35b0e3f4085d38e8797bbc`.
 That campaign ran with one worker and 16 threads per input, at most two inputs
 at once, and no optional analyses. All figures below describe that campaign;
 the [paired repeat-annotation regression](#paired-repeat-annotation-regression)
@@ -14,7 +11,7 @@ is reported separately. Select a figure to open the full-size image.
 ## Synthetic boundary recovery
 
 The synthetic set contains 60 loci and 3,365.2 kb of inserted sequence. Mean
-best-call boundary recall was 0.777 for ViroSync, 0.596 for ViralRecall v3.1.0,
+best-call boundary recall was 0.774 for ViroSync, 0.596 for ViralRecall v3.1.0,
 0.307 for ViralRecall v2, 0.056 for DetectEVE v1.4.0, and 0.066 for EEfinder
 v1.1.1.
 
@@ -31,9 +28,9 @@ so the plot does not report specificity or accuracy.*
 
 ## Runtime and peak memory
 
-Mean wall time across 30 SynEVEs-2 inputs was 100.5 seconds for ViroSync and
+Mean wall time across 30 SynEVEs-2 inputs was 102.0 seconds for ViroSync and
 12.3 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
-were 600.0 and 1,705.5 seconds. Campaign concurrency differed, so these values
+were 529.9 and 1,705.5 seconds. Campaign concurrency differed, so these values
 do not give a general speed ranking.
 
 [![Runtime and peak resident memory](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)
@@ -41,14 +38,14 @@ do not give a general speed ranking.
 *Per-input wall time and peak resident memory for 30 SynEVEs-2 inputs and five
 real-genome inputs. All tools used 16 threads or cores on the same 64-core
 host, but campaign concurrency differed. All ViroSync timings come from the
-September 19 campaign. Wall time includes contention and database caching.
+October 23 campaign. Wall time includes contention and database caching.
 Peak RSS is shown in decimal GB for the largest single
 process, not the process tree. EEfinder is absent because its campaign used
 different load and concurrency.*
 
 ## Real-genome output
 
-ViroSync accepted 524 regions across the five real genomes. These inputs have
+ViroSync accepted 527 regions across the five real genomes. These inputs have
 no complete region-level truth set. The figure describes output burden and
 gene content, not detection accuracy.
 
@@ -65,8 +62,8 @@ See [Outputs](METHODS.md) for the result files and their interpretation.
 The paired run compared baseline commit `1ceea9d` with repeat-evidence commit
 `8a64514` on 155 frozen inputs. Both source snapshots reported ViroSync 1.0.1 at
 the time of testing. Each variant used the same input bytes, runtime,
-configuration and development resource bundle v1.1.0. This bundle is distinct
-from the public default, v1.0.7. The source content SHA-256 values were:
+configuration and development resource bundle v1.1.0. The source content SHA-256
+values were:
 
 - Baseline: `35f948433846ade725845b4b4f332b18aa3229186292df852d222c154ac93966`.
 - Repeat evidence: `2df54f21cd8fedb68895a46b54407e1f4adbc96e6e3b570ebf120366d3b2f893`.
