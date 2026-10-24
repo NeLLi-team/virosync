@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -647,6 +648,17 @@ def test_info_honors_environment_database_root(
 
     assert result.exit_code == 0, result.output
     assert "Database version v9.9.9" in result.output
+
+
+def test_info_without_optional_torch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "torch", None)
+
+    result = CliRunner().invoke(cli, ["info", "--config", str(tmp_path / "missing.yaml")])
+
+    assert result.exit_code == 0, result.output
+    assert "PyTorch: not installed (optional)" in result.output
+    assert "CPU cores:" in result.output
+    assert "RAM:" in result.output
 
 
 def test_setup_writes_null_when_runtime_bundle_has_no_marker_source(

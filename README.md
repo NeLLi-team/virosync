@@ -12,6 +12,9 @@ accepted regions with their evidence.
 ![ViroSync workflow](docs/virosync_workflow.png)
 
 ViroSync runs on CPUs by default. A GPU is not required for the core workflow.
+The default environment includes the executed notebook reports and their figures.
+Development tools, masking, machine-learning taxonomy, and structural analysis
+use [separate environments](docs/getting-started.md#environments).
 
 ## Install ViroSync
 

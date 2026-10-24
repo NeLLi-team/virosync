@@ -22,10 +22,10 @@ jobs:
         run: bash scripts/ci/install_pixi.sh
 
       - name: Install locked environment
-        run: pixi install --locked
+        run: pixi install --locked -e dev
 
       - name: Run locked lint
-        run: pixi run lint
+        run: pixi run -e dev lint
 
   pytest:
     runs-on: ubuntu-24.04
@@ -40,16 +40,16 @@ jobs:
         run: bash scripts/ci/install_pixi.sh
 
       - name: Install locked environment
-        run: pixi install --locked
+        run: pixi install --locked -e dev
 
       - name: Run tests
-        run: pixi run python -m pytest
+        run: pixi run -e dev python -m pytest
 
       - name: Compile Python sources
-        run: pixi run python -m compileall -q src tests scripts
+        run: pixi run -e dev python -m compileall -q src tests scripts
 
       - name: Check production release surfaces
-        run: pixi run check-production-ready
+        run: pixi run -e dev check-production-ready
 
       - name: Check CLI version
-        run: pixi run virosync --version
+        run: pixi run -e dev virosync --version

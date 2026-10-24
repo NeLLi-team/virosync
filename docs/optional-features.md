@@ -10,6 +10,15 @@ Enable it with `--frameshift-screening`. See the
 [frameshift screening guide](FRAMESHIFT_SCREENING.md) for an example and
 the method's limits.
 
+## Masking and taxonomy models
+
+Install `pixi install --locked -e optional` and run ViroSync with
+`pixi run -e optional virosync` when enabling these analyses.
+Masking requires `--no-skip-masking` and exactly one
+`execution.masking.repeatmasker_species` or `repeatmasker_library` setting.
+For taxonomy models, set `phase2.taxonomy_ml_enabled: true` and choose
+`phase2.taxonomy_ml_model: logreg` or `xgboost`. These analyses are off by default.
+
 ## TMVec2
 
 TMVec2 adds BFVD protein-embedding evidence. It can use a CPU; a GPU is
@@ -35,9 +44,10 @@ in the config.
 
 ## Boltz and Foldseek
 
-Install the isolated Boltz runtime:
+Install the structural environment and isolated Boltz runtime:
 
 ```bash
+pixi install --locked -e structural
 pixi install --locked --manifest-path tools/boltz_runtime/pixi.toml
 ```
 
@@ -54,8 +64,8 @@ This sends query protein sequences to an online MSA service.
 Check and run the analysis:
 
 ```bash
-pixi run check-structural-runtime --require-boltz
-pixi run virosync \
+pixi run -e structural check-structural-runtime --require-boltz
+pixi run -e structural virosync \
   -i genome.fna -o results/boltz \
   --config config/orchestration.yaml \
   --boltz

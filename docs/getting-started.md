@@ -43,6 +43,24 @@ The source distribution and wheel include the recipe, patch, build lock, and
 upstream license. Installing the Python package alone does not provision the
 native runtime or the other Pixi dependencies.
 
+## Environments
+
+The default environment includes the CPU pipeline, frameshift screening, and
+executed notebook reports with their figures. Select an environment with
+`pixi install --locked -e NAME` and `pixi run -e NAME COMMAND`.
+
+| Environment | Purpose |
+| --- | --- |
+| `optional` | Core runtime plus RepeatMasker and TRF masking; scikit-learn and XGBoost taxonomy models. |
+| `structural` | All `optional` tools plus Foldseek and the TMVec2 runtime with GPU support. Boltz uses its own runtime. |
+| `dev` | Core runtime plus optional CPU tools, CPU PyTorch, pytest, Ruff, mypy, and pre-commit. |
+| `docs` | Isolated documentation build tools, without the pipeline runtime. |
+
+Run development checks with `pixi run -e dev lint` and
+`pixi run -e dev python -m pytest`. PyTorch is optional in the default
+environment; `virosync info` reports whether it is installed.
+See [optional analyses](optional-features.md) for configuration and data setup.
+
 ## Install the core resources
 
 Resources download about 5.3 GB, use about 11.4 GB when installed, and need about

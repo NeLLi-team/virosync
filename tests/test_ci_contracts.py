@@ -4,6 +4,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = (
     ROOT / ".github/workflows/tests.yml",
@@ -21,13 +23,13 @@ def test_ruff_version_and_local_ci_command_are_locked() -> None:
     with (ROOT / "pixi.toml").open("rb") as handle:
         manifest = tomllib.load(handle)
     assert manifest["feature"]["dev"]["dependencies"]["ruff"] == "==0.15.21"
-    assert manifest["tasks"]["lint"] == (
+    assert manifest["feature"]["dev"]["tasks"]["lint"] == (
         "ruff check src tests scripts && ruff format --check src tests scripts src/virosync/report/eve_analysis.py"
     )
     lock = _text(ROOT / "pixi.lock")
     assert lock.count("/ruff-0.15.21-") >= 2
     tests_workflow = _text(ROOT / ".github/workflows/tests.yml")
-    assert "run: pixi run lint" in tests_workflow
+    assert "run: pixi run -e dev lint" in tests_workflow
     assert "ruff-action" not in tests_workflow
 
 
@@ -36,6 +38,14 @@ def test_ci_pixi_binary_url_and_checksum_are_exact() -> None:
     assert ("https://github.com/prefix-dev/pixi/releases/download/v0.72.0/pixi-x86_64-unknown-linux-musl") in installer
     assert "6304fe3178f3036e2c95151bbb318592fae5c31a77f5a6f4319bb023a479d4b9" in installer
     assert "sha256sum" in installer
+
+
+def test_structural_environment_includes_masking_tools() -> None:
+    lock = yaml.safe_load(_text(ROOT / "pixi.lock"))
+    packages = lock["environments"]["structural"]["packages"]["linux-64"]
+    conda_names = {Path(package["conda"]).name.rsplit("-", 2)[0] for package in packages if "conda" in package}
+
+    assert {"repeatmasker", "trf", "foldseek"} <= conda_names
 
 
 def test_workflow_permissions_actions_and_installs_are_pinned() -> None:

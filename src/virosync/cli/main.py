@@ -91,10 +91,16 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool) -> None:
 def info(config_path: Path) -> None:
     """Show ViroSync configuration and system info."""
     import psutil
-    import torch
     import yaml
 
     from virosync.utils.database_manager import ViroSyncDatabaseManager
+
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch":
+            raise
+        torch = None
 
     configured_root = None
     if config_path.is_file():
@@ -114,10 +120,11 @@ def info(config_path: Path) -> None:
 
     click.echo("System Information:")
     click.echo(f"  Python: {sys.version.split()[0]}")
-    click.echo(f"  PyTorch: {torch.__version__}")
-    click.echo(f"  CUDA available: {torch.cuda.is_available()}")
+    click.echo(f"  PyTorch: {torch.__version__ if torch is not None else 'not installed (optional)'}")
+    cuda_available = torch is not None and torch.cuda.is_available()
+    click.echo(f"  CUDA available: {cuda_available}")
 
-    if torch.cuda.is_available():
+    if cuda_available:
         click.echo(f"  CUDA version: {torch.version.cuda}")
         click.echo(f"  GPU: {torch.cuda.get_device_name(0)}")
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
