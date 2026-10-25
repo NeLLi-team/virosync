@@ -27,6 +27,26 @@ The main per-genome files are:
 | `eve_gene_map.syntviz.json` | Report figure: the shown EVEs with their flanks, gene categories, gene functions and DIAMOND protein hits between EVE cores, as a [Syntviz](https://pypi.org/project/syntviz/) session. `syntviz view` opens it in the interactive viewer. Written when the report shows at least one EVE. |
 | `eve_gene_map_syntviz.png`, `eve_gene_map_syntviz.svg` | The same figure as images. Written only when Node.js is available. |
 
+The Syntviz report retains every shown EVE row, gene and annotation. Its
+all-versus-all DIAMOND search compares available core proteins from HIGH and
+MEDIUM EVEs with `--more-sensitive`, E-value ≤ 1e-5 and identity ≥ 20%. LOW
+EVEs and genes without protein sequences are not searched. The report streams
+the hits and retains each query protein's best hit to another EVE, ranked by
+descending bitscore, ascending E-value, then stable feature IDs and alignment
+coordinates. Reciprocal hits collapse to one record. These sparse hits support
+ribbons and similarity ordering; they do not alter predictions or gene content.
+The absence of a ribbon does not establish the absence of homology.
+
+When Node.js and retained hits are available, confidence tiers with 3–500 rows
+are ordered by protein similarity. Larger tiers retain confidence order.
+The display shows at most 20,000 links. The saved session records whether the
+search ran, the number of searched EVEs and eligible core proteins, qualifying
+input rows (including reciprocal hits and multiple alignments), retained hits,
+and the retention policy. Explicit search coverage records only searched EVE
+pairs adjacent in the final row order, in both directions, including pairs
+with zero hits. A later interactive reorder can therefore show an unknown
+coverage warning for a newly adjacent pair.
+
 A run that ends before Phase 3, for example because no marker hits or seeds
 remain, writes its empty `virosync_predictions.tsv`,
 `virosync_predictions_detailed.tsv`, `virosync_predictions.bed`,

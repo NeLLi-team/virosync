@@ -110,7 +110,8 @@ def _notebook_cell(needle: str) -> str:
     notebook = jupytext.read(report_generate._SOURCE)
     cells = [cell.source for cell in notebook.cells if needle in cell.source]
     assert len(cells) == 1, f"{needle!r} matched {len(cells)} cells"
-    return cells[0]
+    # Keep report-only DIAMOND searches inside the test runner's single-CPU budget.
+    return cells[0].replace("SYNTVIZ_DIAMOND_THREADS = 4", "SYNTVIZ_DIAMOND_THREADS = 1")
 
 
 def _notebook_code() -> str:
@@ -968,7 +969,7 @@ def test_notebook_syntviz_figure_links_shared_proteins_and_groups_tiers(
     hit = session.homology_hits[0]
     assert {hit.query_feature_id, hit.target_feature_id} == capsids
     assert hit.identity_fraction == 1.0
-    assert len(session.runs[0].searched_pairs) == 6
+    assert len(session.runs[0].searched_pairs) == 4
     assert session.view.link_filters.hit_color == "identity"
     # The source range stays in the tooltip of each row.
     assert session.view.row_coordinates == "none"
@@ -1039,6 +1040,143 @@ def test_notebook_syntviz_figure_orders_similar_rows_and_flips_reverse_capsids(
     assert session.view.orientations["EVE_demo|contig_a_1000-2000:window"] == 1
 
 
+@pytest.mark.parametrize("reverse_hits", [False, True])
+def test_notebook_syntviz_figure_bounds_hits_ordering_and_final_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reverse_hits: bool,
+) -> None:
+    from syntviz import runtime
+    from syntviz.models import Session
+
+    eves = {
+        f"{tier}_{index:03}": _syntviz_eve(
+            f"{tier}_{index:03}",
+            tier,
+            1 - index / 1_000,
+            [
+                _syntviz_gene(
+                    f"{tier}_{index:03}_2",
+                    1_100,
+                    1_463,
+                    "PPV",
+                    "-" if index == 0 else "+",
+                    is_mcp=True,
+                    function_label="PolB",
+                    function_evidence="Pfam:DNA_pol_B",
+                )
+            ],
+        )
+        for tier, count in (("HIGH", 501), ("MEDIUM", 500), ("LOW", 1))
+        for index in range(count)
+    }
+    proteins = {f"{eve_id}_2": CAPSID for eve_id in eves if eve_id != "HIGH_500"}
+    namespace = _syntviz_namespace(tmp_path, eves, proteins)
+    namespace["SYNTVIZ_INTERACTIVE"] = True
+    # Score, E-value, stable target ID and alignment coordinates each break a tie.
+    # Rows 1/0 and 3/2 also test reciprocal collapse with equal and unequal scores.
+    hit_rows = [
+        "0\t1\t80\t5\t104\t5\t104\t1e-30\t100",
+        "0\t1\t80\t1\t99\t1\t99\t1e-20\t150",
+        "0\t1\t80\t3\t102\t3\t102\t1e-25\t150",
+        "0\t1\t80\t1\t100\t1\t100\t1e-25\t150",
+        "0\t2\t80\t1\t100\t1\t100\t1e-25\t150",
+        "1\t0\t80\t1\t100\t1\t100\t1e-25\t150",
+        "2\t4\t70\t1\t100\t1\t100\t1e-20\t90",
+        "2\t3\t90\t1\t100\t1\t100\t1e-20\t100",
+        "3\t2\t90\t1\t100\t1\t100\t1e-20\t120",
+        "4\t0\t19\t1\t100\t1\t100\t1e-20\t200",
+        "0\t0\t100\t1\t100\t1\t100\t1e-30\t200",
+    ]
+    hit_text = "\n".join(reversed(hit_rows) if reverse_hits else hit_rows) + "\n"
+    diamond = tmp_path / "diamond"
+    diamond.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib\n"
+        "import sys\n"
+        "assert sys.argv[sys.argv.index('--threads') + 1] == '1'\n"
+        "if sys.argv[1] == 'blastp':\n"
+        f"    pathlib.Path(sys.argv[sys.argv.index('-o') + 1]).write_text({hit_text!r})\n"
+    )
+    diamond.chmod(0o755)
+    node = tmp_path / "node"
+    node.touch()
+    node.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    high_rows = [f"HIGH_{index:03}:window" for index in range(501)]
+    medium_rows = [f"MEDIUM_{index:03}:window" for index in range(500)]
+    reordered_medium = medium_rows[-1:] + medium_rows[:-1]
+    ordered_inputs = []
+    rendered = []
+
+    def order_rows(session: Session, operations: list[dict]) -> Session:
+        assert operations == [{"op": "orderRowsBySimilarity", "sequence_ids": medium_rows}]
+        ordered_inputs.append(session.model_dump())
+        updated = session.model_dump()
+        updated["view"]["row_order"] = high_rows + reordered_medium + ["LOW_000:window"]
+        return Session.model_validate(updated)
+
+    def render_figure(session: Session, output: Path) -> None:
+        # Attribute access requires validated GenomePair models at both renders.
+        assert session.runs[0].searched_pairs[0].query_genome_id == "HIGH_000"
+        rendered.append((output.suffix, session.model_dump()))
+        output.write_text("render spy")
+
+    monkeypatch.setattr(runtime, "execute", order_rows)
+    monkeypatch.setattr(runtime, "render", render_figure)
+
+    exec(_notebook_cell(SYNTVIZ_CELL), namespace)
+
+    session = _syntviz_session(tmp_path)
+    assert len(ordered_inputs) == 1
+    assert session.view.row_order == high_rows + reordered_medium + ["LOW_000:window"]
+    assert {row.id for row in session.sequences} == {f"{eve_id}:window" for eve_id in eves}
+    assert {feature.id for feature in session.features} == {
+        f"{eve_id}:{eve_id}_{suffix}" for eve_id in eves for suffix in (1, 2)
+    }
+    assert {annotation.id for annotation in session.annotations} == {
+        f"{eve_id}:{eve_id}_{suffix}:{kind}"
+        for eve_id in eves
+        for suffix, kind in ((1, "category"), (2, "category"), (2, "function"))
+    }
+    assert session.view.orientations == {f"{eve_id}:window": -1 if eve_id.endswith("_000") else 1 for eve_id in eves}
+    saved = session.model_dump()
+    assert {key: saved[key] for key in ("genomes", "sequences", "features", "annotations")} == {
+        key: ordered_inputs[0][key] for key in ("genomes", "sequences", "features", "annotations")
+    }
+    assert rendered == [(".svg", saved), (".png", saved)]
+    assert session.runs[0].parameters == {
+        "link_evalue": 1e-5,
+        "link_min_pident": 20.0,
+        "search_ran": True,
+        "searched_eve_count": 1_000,
+        "core_protein_count": 1_000,
+        "qualifying_rows": 9,
+        "retained_hits": 2,
+        "retention_policy": "best cross-EVE hit per query protein, then reciprocal collapse",
+    }
+    assert [
+        (hit.query_feature_id, hit.target_feature_id, hit.score, hit.evalue, hit.query_interval.start_aa)
+        for hit in session.homology_hits
+    ] == [
+        ("HIGH_000:HIGH_000_2", "HIGH_001:HIGH_001_2", 150.0, 1e-25, 0),
+        ("HIGH_003:HIGH_003_2", "HIGH_002:HIGH_002_2", 120.0, 1e-20, 0),
+    ]
+    pairs = {(pair.query_genome_id, pair.target_genome_id) for pair in session.runs[0].searched_pairs}
+    # Include searched neighbours with zero hits, but neither LOW nor absent-protein rows.
+    assert ("MEDIUM_499", "MEDIUM_000") in pairs
+    assert ("MEDIUM_499", "MEDIUM_498") not in pairs
+    assert ("HIGH_499", "MEDIUM_499") not in pairs
+    assert not any("HIGH_500" in pair or "LOW_000" in pair for pair in pairs)
+    expected_pairs = {
+        (f"{tier}_{index:03}", f"{tier}_{index + 1:03}")
+        for tier, count in (("HIGH", 499), ("MEDIUM", 498))
+        for index in range(count)
+    } | {("MEDIUM_499", "MEDIUM_000")}
+    assert pairs == expected_pairs | {(target, query) for query, target in expected_pairs}
+    assert len(session.runs[0].searched_pairs) == 1_996 <= 2 * (len(eves) - 1)
+
+
 def test_notebook_syntviz_figure_clips_genes_at_the_window_edges(
     tmp_path: Path,
 ) -> None:
@@ -1069,6 +1207,9 @@ def test_notebook_syntviz_figure_links_no_low_confidence_eves(tmp_path: Path) ->
     session = _syntviz_session(tmp_path)
     assert session.homology_hits == []
     assert session.runs[0].searched_pairs == []
+    assert session.runs[0].parameters["search_ran"] is False
+    assert session.runs[0].parameters["searched_eve_count"] == 0
+    assert session.runs[0].parameters["core_protein_count"] == 0
 
 
 def test_notebook_syntviz_figure_keeps_proteins_that_a_low_eve_shares(tmp_path: Path) -> None:
@@ -1107,6 +1248,9 @@ def test_notebook_syntviz_figure_records_searches_without_hits(tmp_path: Path) -
     session = _syntviz_session(tmp_path)
     assert session.homology_hits == []
     assert len(session.runs[0].searched_pairs) == 2
+    assert session.runs[0].parameters["search_ran"] is True
+    assert session.runs[0].parameters["qualifying_rows"] == 0
+    assert session.runs[0].parameters["retained_hits"] == 0
 
 
 def test_notebook_syntviz_figure_fits_many_rows_in_the_renderer_limit(
@@ -1160,6 +1304,9 @@ def test_notebook_syntviz_figure_needs_neither_diamond_nor_node(
     assert session.homology_hits == []
     assert session.runs[0].searched_pairs == []
     assert not (tmp_path / "eve_gene_map_syntviz.svg").exists()
+    assert session.runs[0].parameters["search_ran"] is False
+    assert session.runs[0].parameters["searched_eve_count"] == 0
+    assert session.runs[0].parameters["core_protein_count"] == 3
     assert _displayed_types(namespace) == ["Figure"]
 
 
