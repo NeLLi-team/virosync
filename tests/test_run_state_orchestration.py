@@ -422,6 +422,10 @@ class _MockPipeline:
                 (output_dir / "gene_functions.tsv").write_text(
                     "eve_id\tporf_id\tlabel\tmodule\tevidence\tevalue\nEVE_1\tg1\tPolB\treplication\tGVOGm0054\t1e-20\n"
                 )
+                (output_dir / "gene_function_length_exclusions.tsv").write_text(
+                    "eve_id\tporf_id\tstatus\treason\tlength_aa\tlimit_aa\n"
+                    "EVE_1\tg2\tunsearched\tsequence_length_limit\t100001\t100000\n"
+                )
             return {
                 "predictions_tsv": output_dir / "virosync_predictions.tsv",
                 "predictions_detailed_tsv": (output_dir / "virosync_predictions_detailed.tsv"),
@@ -1021,14 +1025,15 @@ def test_phase3_outputs_receive_the_hmm_database_and_the_phase1_hits(
     assert inputs.model_hits == mocked_pipeline.output_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv"
 
 
-def test_gene_function_table_is_content_authenticated(mocked_pipeline: _MockPipeline) -> None:
+@pytest.mark.parametrize("filename", ["gene_functions.tsv", "gene_function_length_exclusions.tsv"])
+def test_gene_function_table_is_content_authenticated(mocked_pipeline: _MockPipeline, filename: str) -> None:
     mocked_pipeline.write_gene_functions = True
     mocked_pipeline.run()
 
     recorded = {artifact.relative_path for artifact in load_run_state(mocked_pipeline.output_dir).artifacts}
-    assert "phase3_synthesis/gene_functions.tsv" in recorded
+    assert f"phase3_synthesis/{filename}" in recorded
     _assert_mutations_invalidate_at_phase(
-        path=mocked_pipeline.output_dir / "phase3_synthesis" / "gene_functions.tsv",
+        path=mocked_pipeline.output_dir / "phase3_synthesis" / filename,
         expected_phase=3,
         mocked_pipeline=mocked_pipeline,
     )

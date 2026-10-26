@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from unittest.mock import Mock
 
 import pyhmmer
 import pytest
 
 from virosync.orchestration._flows.single_genome import orchestrator
 from virosync.orchestration.tasks import generate_outputs_task
+from virosync.pipeline.phase3 import gene_functions
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
@@ -39,6 +41,7 @@ LABELS_HEADER = "profile\tsource\tlabel\tmodule\tmax_evalue\tdescription\n"
 ANNOTATIONS_HEADER = (
     "model_name\tsource\tdescription\tmajority_annotation\tpfam_signature\tpfam_top_domains\tpfam_n_sampled\n"
 )
+LENGTH_EXCLUSIONS_HEADER = "eve_id\tporf_id\tstatus\treason\tlength_aa\tlimit_aa\n"
 
 
 def _write_profile_library(path: Path, name: str, seed: str) -> None:
@@ -199,7 +202,7 @@ def test_label_core_genes_labels_genes_from_pfam_hits_and_curated_models(tmp_pat
         model_hits=_write_model_hits(tmp_path / "hits.tsv"),
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [(row.porf_id, row.label, row.module, row.evidence) for row in rows] == [
         ("core_pol", "PolB", "replication", "Pfam:DNA_pol_B"),
@@ -220,7 +223,7 @@ def test_label_core_genes_works_without_a_model_hit_table(tmp_path: Path) -> Non
         model_hits=tmp_path / "absent.tsv",
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [row.porf_id for row in rows] == ["core_pol"]
 
@@ -236,7 +239,7 @@ def test_label_core_genes_keeps_one_row_per_eve_for_a_gene_that_two_eves_share(t
         model_hits=tmp_path / "absent.tsv",
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [(row.eve_id, row.porf_id) for row in rows] == [("EVE_1", "core_pol"), ("EVE_2", "core_pol")]
 
@@ -255,7 +258,7 @@ def test_label_core_genes_leaves_a_gene_missing_from_the_proteome_unlabelled_and
             model_hits=tmp_path / "absent.tsv",
             proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
             threads=1,
-        )
+        ).labels
 
     assert [row.porf_id for row in rows] == ["core_pol"]
     assert "ghost" in caplog.text
@@ -284,7 +287,7 @@ def _label_core_pol_with_other_genes(tmp_path: Path, n_other_genes: int) -> Gene
         model_hits=tmp_path / "absent.tsv",
         proteomes=[_write_crowded_proteome(tmp_path / "proteome.fasta", n_other_genes)],
         threads=1,
-    )
+    ).labels
     return next(row for row in rows if row.porf_id == "core_pol")
 
 
@@ -312,7 +315,7 @@ def test_label_core_genes_scales_evalues_by_the_number_of_profiles_in_the_librar
         model_hits=tmp_path / "absent.tsv",
         proteomes=[proteome],
         threads=1,
-    )
+    ).labels
 
     assert three_profiles[0].evalue / one_profile.evalue == pytest.approx(3)
 
@@ -336,6 +339,83 @@ def test_write_gene_functions_labels_the_core_genes_of_the_output_eves_only(tmp_
         ("EVE_1", "core_pol", "PolB"),
         ("EVE_1", "core_curated", "PolB"),
     ]
+
+
+def test_gene_function_length_exclusions_preserve_labels_and_first_file_sequences(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
+    baseline_files = generator.write_gene_functions([_eve_with_one_flank()])
+    baseline = {row.porf_id: row for row in read_gene_functions(baseline_files["gene_functions"])}
+    proteins = {
+        "core_pol": SEED_POLYMERASE,
+        "core_other": UNRELATED,
+        "core_curated": "M" * 100_001,
+        "long_unknown": "M" * 100_002,
+    }
+    proteome = tmp_path / "proteome.fasta"
+    proteome.write_text(
+        "".join(f">{name} # 1 # 480 # 1 # ID=1_1;partial=00\n{sequence}*\n" for name, sequence in proteins.items())
+    )
+    rescue = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
+    rescue.parent.mkdir(parents=True)
+    rescue.write_text(
+        f">core_curated # 1 # 480 # 1 # ID=1_1\n{SEED_POLYMERASE}\n"
+        f">long_unknown # 1 # 480 # 1 # ID=1_1\n{SEED_POLYMERASE}\n"
+    )
+    original_proteome, original_rescue = proteome.read_bytes(), rescue.read_bytes()
+    eves = [
+        _result("EVE_1", [(name, False) for name in proteins]),
+        _result("EVE_2", [("long_unknown", False)]),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="virosync.pipeline.phase3.gene_functions"):
+        output_files = generator.generate_all(eves)
+
+    assert read_gene_functions(Path(output_files["gene_functions"])) == [
+        baseline["core_pol"],
+        baseline["core_curated"],
+    ]
+    assert Path(output_files["gene_function_length_exclusions"]).read_text() == (
+        LENGTH_EXCLUSIONS_HEADER
+        + "EVE_1\tcore_curated\tunsearched\tsequence_length_limit\t100001\t100000\n"
+        + "EVE_1\tlong_unknown\tunsearched\tsequence_length_limit\t100002\t100000\n"
+        + "EVE_2\tlong_unknown\tunsearched\tsequence_length_limit\t100002\t100000\n"
+    )
+    assert "have no sequence" not in caplog.text
+    assert proteome.read_bytes() == original_proteome
+    assert rescue.read_bytes() == original_rescue
+
+
+@pytest.mark.parametrize("length_aa", [100_000, 100_001])
+@pytest.mark.parametrize("terminal_stop", ["", "*"])
+def test_gene_function_length_limit_follows_stop_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length_aa: int, terminal_stop: str
+) -> None:
+    generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
+    (tmp_path / "proteome.fasta").write_text(f">core_other\n{'M' * length_aa}{terminal_stop}\n")
+    search = Mock(wraps=pyhmmer.hmmsearch)
+    monkeypatch.setattr(gene_functions.pyhmmer, "hmmsearch", search)
+
+    output_files = generator.write_gene_functions([_result("EVE_1", [("core_other", False)])])
+
+    assert read_gene_functions(output_files["gene_functions"]) == []
+    excluded = "EVE_1\tcore_other\tunsearched\tsequence_length_limit\t100001\t100000\n" if length_aa > 100_000 else ""
+    assert output_files["gene_function_length_exclusions"].read_text() == LENGTH_EXCLUSIONS_HEADER + excluded
+    assert search.call_count == (0 if excluded else 1)
+    if not excluded:
+        assert len(search.call_args.args[1][0]) == 100_000
+        assert search.call_args.kwargs == {"cpus": 1, "E": 1e-5, "Z": 1, "domZ": 1}
+
+
+def test_gene_function_length_handling_propagates_unrelated_search_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
+    monkeypatch.setattr(gene_functions.pyhmmer, "hmmsearch", Mock(side_effect=ValueError("unrelated profile failure")))
+
+    with pytest.raises(ValueError, match="unrelated profile failure"):
+        generator.write_gene_functions([_eve_with_one_flank()])
 
 
 def _write_rescue_protein(tmp_path: Path, start: int, end: int) -> Path:
@@ -395,7 +475,7 @@ def test_label_core_genes_skips_a_proteome_file_without_sequences(tmp_path: Path
         model_hits=tmp_path / "absent.tsv",
         proteomes=[_write_proteome(tmp_path / "proteome.fasta"), empty],
         threads=1,
-    )
+    ).labels
 
     assert [row.porf_id for row in rows] == ["core_pol"]
 
@@ -457,7 +537,7 @@ def test_label_core_genes_ignores_an_unused_annotation_row_with_a_malformed_samp
         model_hits=_write_model_hits(tmp_path / "hits.tsv"),
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [row.porf_id for row in rows] == ["core_pol", "core_curated"]
 
@@ -474,7 +554,7 @@ def test_label_core_genes_ignores_an_unused_annotation_row_without_a_sample_coun
         model_hits=_write_model_hits(tmp_path / "hits.tsv"),
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [row.porf_id for row in rows] == ["core_pol", "core_curated"]
 
@@ -512,7 +592,7 @@ def test_label_core_genes_falls_back_to_profile_evidence_for_an_og_model_with_a_
         model_hits=hits,
         proteomes=[_write_proteome(tmp_path / "proteome.fasta")],
         threads=1,
-    )
+    ).labels
 
     assert [(row.label, row.evidence) for row in rows] == [("PolB", "Pfam:DNA_pol_B")]
 
@@ -536,6 +616,7 @@ def test_write_gene_functions_skips_a_bundle_before_v1_2_0_with_one_info_line(
 
     assert output_files == {}
     assert not (tmp_path / "phase3_synthesis" / "gene_functions.tsv").exists()
+    assert not (tmp_path / "phase3_synthesis" / "gene_function_length_exclusions.tsv").exists()
     messages = [record.getMessage() for record in caplog.records if "gene-function" in record.getMessage()]
     assert len(messages) == 1
     assert caplog.records[-1].levelno == logging.INFO
@@ -545,15 +626,23 @@ def test_write_gene_functions_does_nothing_without_gene_function_inputs(tmp_path
     generator = OutputGenerator(output_dir=tmp_path / "out", proteome_fasta=_write_proteome(tmp_path / "p.fasta"))
 
     assert generator.write_gene_functions([_eve_with_one_flank()]) == {}
+    assert not (tmp_path / "out" / "gene_functions.tsv").exists()
+    assert not (tmp_path / "out" / "gene_function_length_exclusions.tsv").exists()
 
 
-def test_generate_all_registers_the_gene_function_table_among_the_output_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize("empty", [False, True])
+def test_generate_all_registers_the_gene_function_table_among_the_output_files(tmp_path: Path, empty: bool) -> None:
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
 
-    output_files = generator.generate_all([_eve_with_one_flank()])
+    output_files = generator.generate_all([] if empty else [_eve_with_one_flank()])
 
-    assert Path(output_files["gene_functions"]).name == "gene_functions.tsv"
-    assert "gene_taxonomy_all" in output_files
+    expected = set() if empty else {"gene_functions", "gene_function_length_exclusions"}
+    assert set(output_files) & {"gene_functions", "gene_function_length_exclusions"} == expected
+    assert (tmp_path / "phase3_synthesis" / "gene_functions.tsv").exists() is not empty
+    assert (tmp_path / "phase3_synthesis" / "gene_function_length_exclusions.tsv").exists() is not empty
+    if not empty:
+        assert Path(output_files["gene_function_length_exclusions"]).read_text() == LENGTH_EXCLUSIONS_HEADER
+        assert "gene_taxonomy_all" in output_files
 
 
 def test_generate_all_keeps_every_other_output_byte_identical(tmp_path: Path) -> None:
@@ -562,7 +651,7 @@ def test_generate_all_keeps_every_other_output_byte_identical(tmp_path: Path) ->
     labelled = _generator(tmp_path, hmm_database).generate_all([_eve_with_one_flank()])
     unlabelled = OutputGenerator(output_dir=tmp_path / "plain").generate_all([_eve_with_one_flank()])
 
-    assert set(labelled) - set(unlabelled) == {"gene_functions"}
+    assert set(labelled) - set(unlabelled) == {"gene_functions", "gene_function_length_exclusions"}
     for key in ("predictions_tsv", "predictions_detailed_tsv", "gene_taxonomy_all", "evidence_json"):
         assert Path(labelled[key]).read_bytes() == Path(unlabelled[key]).read_bytes()
 

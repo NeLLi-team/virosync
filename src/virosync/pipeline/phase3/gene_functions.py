@@ -31,16 +31,20 @@ __all__ = [
     "DESCRIPTION_RULES",
     "DOMAIN_LABELS",
     "GENE_FUNCTION_COLUMNS",
+    "GENE_FUNCTION_LENGTH_EXCLUSION_COLUMNS",
     "LABEL_MODULES",
     "MAX_MODEL_EVALUE",
     "MAX_PFAM_EVALUE",
+    "MAX_PROFILE_PROTEIN_LENGTH",
     "MAX_VOG_EVALUE",
     "MODEL_LABELS",
     "PROFILE_COLUMNS",
     "VOG_DESCRIPTION_RULES",
     "GeneFunction",
     "GeneFunctionInputs",
+    "GeneFunctionLengthExclusion",
     "GeneFunctionResources",
+    "GeneFunctionResult",
     "ModelAnnotation",
     "ModelHit",
     "Profile",
@@ -53,6 +57,7 @@ __all__ = [
     "read_model_annotations",
     "vog_label",
     "write_gene_function_profiles",
+    "write_gene_function_length_exclusions",
     "write_gene_functions",
 ]
 
@@ -63,6 +68,7 @@ KeywordRules: TypeAlias = tuple[tuple[tuple[str, ...], str], ...]
 MAX_MODEL_EVALUE = 1e-5
 MAX_PFAM_EVALUE = 1e-5
 MAX_VOG_EVALUE = 1e-9
+MAX_PROFILE_PROTEIN_LENGTH = 100_000
 
 # A renamed OG-backed model names a gene only when its top Pfam domain occurs in at
 # least this fraction of the sampled members of the model.
@@ -76,6 +82,7 @@ _SOURCE_DATABASES = {"Pfam": PFAM_DATABASE, "VOGDB": VOG_DATABASE}
 
 PROFILE_COLUMNS = ("profile", "source", "label", "module", "max_evalue", "description")
 GENE_FUNCTION_COLUMNS = ("eve_id", "porf_id", "label", "module", "evidence", "evalue")
+GENE_FUNCTION_LENGTH_EXCLUSION_COLUMNS = ("eve_id", "porf_id", "status", "reason", "length_aa", "limit_aa")
 _MODEL_HIT_COLUMNS = ("query", "target", "score", "evalue")
 _MODEL_ANNOTATION_COLUMNS = (
     "model_name",
@@ -219,6 +226,23 @@ class GeneFunction:
     module: str
     evidence: str
     evalue: float
+
+
+@dataclass(frozen=True, slots=True)
+class GeneFunctionLengthExclusion:
+    """A core protein whose processed length prevents a profile search in one EVE."""
+
+    eve_id: str
+    porf_id: str
+    length_aa: int
+
+
+@dataclass(frozen=True, slots=True)
+class GeneFunctionResult:
+    """Keep positive function evidence separate from missing profile assessment."""
+
+    labels: list[GeneFunction]
+    length_exclusions: list[GeneFunctionLengthExclusion]
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +419,22 @@ def write_gene_functions(rows: Iterable[GeneFunction], path: Path) -> None:
     _write_rows(path, GENE_FUNCTION_COLUMNS, cells)
 
 
+def write_gene_function_length_exclusions(rows: Iterable[GeneFunctionLengthExclusion], path: Path) -> None:
+    """Write length exclusions, including a header for an empty selection, atomically."""
+    cells = (
+        (
+            row.eve_id,
+            row.porf_id,
+            "unsearched",
+            "sequence_length_limit",
+            str(row.length_aa),
+            str(MAX_PROFILE_PROTEIN_LENGTH),
+        )
+        for row in rows
+    )
+    _write_rows(path, GENE_FUNCTION_LENGTH_EXCLUSION_COLUMNS, cells)
+
+
 def read_model_annotations(path: Path) -> dict[str, ModelAnnotation]:
     """Read the fields of ``model_annotations_with_interpro.tsv`` that decide a label.
 
@@ -451,21 +491,37 @@ def label_core_genes(
     model_hits: Path,
     proteomes: Sequence[Path],
     threads: int,
-) -> list[GeneFunction]:
-    """Label the genes given as ``(eve_id, porf_id)`` pairs and return the labelled ones.
+) -> GeneFunctionResult:
+    """Return function labels and length exclusions for ``(eve_id, porf_id)`` pairs.
 
     The rows keep the order of *genes*. The profile search reports hits down to E 1e-5
     and each profile's own cut-off then applies. E-values follow the hmmscan convention:
     the database size is the number of profiles in the library, so a gene's E-value and
     label do not depend on how many other genes the run searches. A gene without a
     sequence in *proteomes* stays unlabelled and is logged. A missing *model_hits* table
-    means no gene has a Phase 1 model hit.
+    means no gene has a Phase 1 model hit. Proteins above the profile search's length
+    limit retain any curated model label and are recorded separately as unsearched.
     """
     profiles = read_gene_function_profiles(resources.profiles_table)
     annotations = read_model_annotations(resources.model_annotations)
     wanted = {porf_id for _, porf_id in genes}
     model_hits_by_gene = _read_model_hits(model_hits, wanted)
-    profile_hits_by_gene = _search_profiles(resources.profiles_hmm, proteomes, wanted, profiles, threads)
+    proteins = _read_proteins(proteomes, wanted)
+    supported = pyhmmer.easel.DigitalSequenceBlock(proteins.alphabet)
+    excluded_lengths: dict[str, int] = {}
+    # Resolve file precedence and remove terminal stops before measuring length.
+    for protein in proteins:
+        if len(protein) > MAX_PROFILE_PROTEIN_LENGTH:
+            excluded_lengths[protein.name.decode()] = len(protein)
+        else:
+            supported.append(protein)
+    if excluded_lengths:
+        logger.warning(
+            "Gene-function profile search excluded %d proteins longer than %d amino acids",
+            len(excluded_lengths),
+            MAX_PROFILE_PROTEIN_LENGTH,
+        )
+    profile_hits_by_gene = _search_profiles(resources.profiles_hmm, supported, profiles, threads)
     labelled = (
         label_gene(
             eve_id,
@@ -477,7 +533,14 @@ def label_core_genes(
         )
         for eve_id, porf_id in genes
     )
-    return [row for row in labelled if row is not None]
+    return GeneFunctionResult(
+        labels=[row for row in labelled if row is not None],
+        length_exclusions=[
+            GeneFunctionLengthExclusion(eve_id, porf_id, excluded_lengths[porf_id])
+            for eve_id, porf_id in genes
+            if porf_id in excluded_lengths
+        ],
+    )
 
 
 def _database_of(source: str) -> str:
@@ -641,17 +704,15 @@ def _read_proteins(proteomes: Sequence[Path], wanted: Collection[str]) -> pyhmme
 
 def _search_profiles(
     profiles_hmm: Path,
-    proteomes: Sequence[Path],
-    wanted: Collection[str],
+    proteins: pyhmmer.easel.DigitalSequenceBlock,
     profiles: Mapping[str, Profile],
     threads: int,
 ) -> dict[str, list[ProfileHit]]:
-    """Search the *wanted* genes against the profile set and group the hits by gene.
+    """Search supported proteins against the profile set and group the hits by gene.
 
     The effective database size ``Z`` (and ``domZ``) is the number of profiles, as in
     ``hmmscan``, instead of HMMER's ``hmmsearch`` default of the number of searched genes.
     """
-    proteins = _read_proteins(proteomes, wanted)
     hits: dict[str, list[ProfileHit]] = defaultdict(list)
     if len(proteins) == 0 or not profiles:
         return hits

@@ -23,6 +23,7 @@ The main per-genome files are:
 | `phase3_synthesis/eve_ani_edges.tsv` | ANI comparisons used for clustering. Can include candidates removed from the final accepted set. |
 | `phase3_synthesis/gene_taxonomy/` | Per-candidate gene taxonomy tables. Written when at least one EVE is accepted. |
 | `phase3_synthesis/gene_functions.tsv` | Function labels of core genes in the accepted EVEs. Columns: `eve_id`, `porf_id`, `label`, `module`, `evidence`, `evalue`; one row per labelled gene. Written when at least one EVE is accepted and the resource bundle is v1.2.0 or later. See [gene-function labels](#gene-function-labels). |
+| `phase3_synthesis/gene_function_length_exclusions.tsv` | Core proteins excluded from the gene-function profile search by its length limit, one row per EVE/protein pair. Columns: `eve_id`, `porf_id`, `status`, `reason`, `length_aa`, `limit_aa`. Written with `gene_functions.tsv`; a header-only table records no length exclusions. |
 | `notebooks/jupyter/eve_analysis.ipynb` | Per-genome report, including repeat-assessment summaries for accepted EVEs. Use the detailed table and repeat sidecar for rejected candidates. |
 | `eve_gene_map.syntviz.json` | Report figure: the shown EVEs with their flanks, gene categories, gene functions and DIAMOND protein hits between EVE cores, as a [Syntviz](https://pypi.org/project/syntviz/) session. `syntviz view` opens it in the interactive viewer. Written when the report shows at least one EVE. |
 | `eve_gene_map_syntviz.png`, `eve_gene_map_syntviz.svg` | The same figure as images. Written only when Node.js is available. |
@@ -368,13 +369,25 @@ gene gets the same E-value and label whether the run searches it alone or with
 thousands of other genes. The profile files and their selection are described in the
 [resource bundle](RESOURCE_BUNDLE.md#gene-function-profiles-bundle-v120-and-later).
 
+The profile search supports proteins of at most 100,000 amino acids, measured
+after terminal `*` symbols are removed. The first proteome file containing a
+protein supplies its sequence; a duplicate in the rescue FASTA cannot replace
+an overlength original. Longer proteins remain in the input and EVE gene
+content but are excluded from this profile search. The length-exclusion table
+records `status=unsearched`, `reason=sequence_length_limit`, the processed
+length and the limit for each affected EVE/protein pair. This is missing
+assessment, not evidence that a protein lacks a function. Supported proteins
+are searched with the same profile-count normalization, and existing curated
+model evidence can still label an excluded protein. Both gene-function tables
+are included in the completed run's artifact hashes.
+
 Core genes include confirmed frameshift-rescued proteins inside the EVE, which
 have no gene-taxonomy record. ViroSync searches them from the rescue FASTA of
 Phase 1. Labels of rescued proteins appear in `gene_functions.tsv`; the report
 gene maps draw the Phase 0 genes only.
 
-On a bundle before v1.2.0, ViroSync logs one INFO line and writes no
-`gene_functions.tsv`, and the report draws the gene map as before. A bundle
+On a bundle before v1.2.0, ViroSync logs one INFO line and writes neither
+gene-function table, and the report draws the gene map as before. A bundle
 with only one of the two gene-function files is corrupt, and the run stops with
 an error that names the missing file. With the table, the static gene map
 prints each label under its core gene and drops a label that has no free line,

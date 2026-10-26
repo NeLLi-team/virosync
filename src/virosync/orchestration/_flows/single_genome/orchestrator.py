@@ -575,6 +575,8 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
         return "eve-ani-edges-v1"
     if path.name == "gene_functions.tsv":
         return "gene-functions-v1"
+    if path.name == "gene_function_length_exclusions.tsv":
+        return "gene-function-length-exclusions-v1"
     if path.name == "virosync_summary.json":
         return "virosync-summary-v3"
     if path.name == "masking_status.json":
@@ -758,6 +760,7 @@ def _final_artifacts(
             "virosync_summary.json",
             "eve_ani_edges.tsv",
             "gene_functions.tsv",
+            "gene_function_length_exclusions.tsv",
         )
         if (candidate := synthesis / name).is_file()
     )

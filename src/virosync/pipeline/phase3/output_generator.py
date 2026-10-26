@@ -45,6 +45,7 @@ from .gene_functions import (
     GeneFunctionInputs,
     find_gene_function_resources,
     label_core_genes,
+    write_gene_function_length_exclusions,
     write_gene_functions,
 )
 from .gene_taxonomy import qualified_viral_hits
@@ -2116,10 +2117,10 @@ class OutputGenerator:
         return output_files
 
     def write_gene_functions(self, results: list[VerificationResult]) -> dict[str, Path]:
-        """Label the core genes of *results* and write ``gene_functions.tsv``.
+        """Write core-gene labels and explicit profile-search length exclusions.
 
         Flanking genes get no label. Labels never change another output. A resource
-        bundle before v1.2.0 has no gene-function profiles, so it gets no table.
+        bundle before v1.2.0 has no gene-function profiles, so it gets neither table.
         """
         inputs = self.gene_function_inputs
         if inputs is None or self.proteome_fasta is None:
@@ -2141,7 +2142,7 @@ class OutputGenerator:
         )
         genes += [(result.eve_id, porf_id) for result in results for porf_id in self._rescued_core_porf_ids(result)]
         rescue_fasta = self._find_confirmed_frameshift_proteins()
-        rows = label_core_genes(
+        labelled = label_core_genes(
             genes,
             resources,
             model_hits=inputs.model_hits,
@@ -2149,9 +2150,11 @@ class OutputGenerator:
             threads=inputs.threads,
         )
         output_path = self.output_dir / "gene_functions.tsv"
-        write_gene_functions(rows, output_path)
-        logger.info("Labelled %d of %d core genes; wrote %s", len(rows), len(genes), output_path)
-        return {"gene_functions": output_path}
+        exclusion_path = self.output_dir / "gene_function_length_exclusions.tsv"
+        write_gene_functions(labelled.labels, output_path)
+        write_gene_function_length_exclusions(labelled.length_exclusions, exclusion_path)
+        logger.info("Labelled %d of %d core genes; wrote %s", len(labelled.labels), len(genes), output_path)
+        return {"gene_functions": output_path, "gene_function_length_exclusions": exclusion_path}
 
     def _rescued_core_porf_ids(self, result: VerificationResult) -> list[str]:
         """Return confirmed frameshift-rescued proteins inside the EVE, which have no taxonomy record."""
