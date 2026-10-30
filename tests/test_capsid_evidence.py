@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from virosync.orchestration._flows.single_genome.loaders import _build_merged_seeds_from_regions
 from virosync.orchestration._flows.single_genome.phase1 import _candidate_regions_to_seeds
 from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit as MarkerHit
@@ -22,7 +21,7 @@ from virosync.pipeline.phase1.region_assembly import (
     ValidatedMarkerHit as RegionMarkerHit,
 )
 from virosync.pipeline.phase1.region_assembly import assemble_candidate_regions
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
@@ -179,6 +178,7 @@ def _seed(*anchors: Anchor) -> MergedSeed:
         start=0,
         end=100,
         seed_id="seed",
+        confirmed_seeds=(ConfirmedSeed("seed", "ctg", 0, 100),),
         sources=["marker_validation"],
         hhg_score=0.0,
         novelty_score=0.0,
@@ -307,15 +307,6 @@ def test_phase1_seeds_carry_the_marker_validation_status_on_their_anchors(status
     assert [anchor.validation_status for anchor in seed.hhg_anchors] == [status]
 
 
-@pytest.mark.parametrize("status", ["validated", "validated_novel", "supported"])
-def test_resumed_phase1_seeds_carry_the_marker_validation_status_on_their_anchors(status: str) -> None:
-    marker = _region_marker(CAPSID_MODEL, status)
-
-    (seed,) = _build_merged_seeds_from_regions([{"scaffold": "ctgA", "start": 0, "end": 2000}], [marker])
-
-    assert [anchor.validation_status for anchor in seed.anchors] == [status]
-
-
 def test_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None:
     marker = _region_marker(
         CAPSID_MODEL,
@@ -334,22 +325,6 @@ def test_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None
             "80.0,45.5",
             "EUK-pEVE__a|p,NCLDV__b|q",
         )
-
-
-def test_resumed_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None:
-    marker = _region_marker(
-        CAPSID_MODEL,
-        "validated",
-        prefixes="EUK-pEVE__,NCLDV__",
-        pidents="80.0,45.5",
-        targets="EUK-pEVE__a|p,NCLDV__b|q",
-    )
-
-    (seed,) = _build_merged_seeds_from_regions([{"scaffold": "ctgA", "start": 0, "end": 2000}], [marker])
-
-    assert [(a.top10_prefixes, a.top10_pidents, a.top10_targets) for a in seed.anchors] == [
-        ("EUK-pEVE__,NCLDV__", "80.0,45.5", "EUK-pEVE__a|p,NCLDV__b|q")
-    ]
 
 
 @pytest.mark.parametrize(

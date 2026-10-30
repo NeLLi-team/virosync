@@ -19,7 +19,7 @@ import csv
 import logging
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -32,6 +32,7 @@ from virosync.pipeline.host_signatures import (
     get_taxonomy_lookup,
     host_signature_density_evalue_weighted,
 )
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, validate_confirmed_seed_containment
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
     is_cress_specific_top1_marker,
@@ -1020,6 +1021,13 @@ class VerificationResult:
     start: int
     end: int
 
+    confirmed_seeds: tuple[ConfirmedSeed, ...] = field(default=(), kw_only=True)
+    left_stop_reason: str = field(default="", kw_only=True)
+    right_stop_reason: str = field(default="", kw_only=True)
+    left_stop: int | None = field(default=None, kw_only=True)
+    right_stop: int | None = field(default=None, kw_only=True)
+    host_stop_available: bool = field(default=False, kw_only=True)
+
     # Status
     status: VerificationStatus = VerificationStatus.AMBIGUOUS
     final_confidence: float = 0.0
@@ -1112,8 +1120,6 @@ class VerificationResult:
     taxonomy_class_from_mcp: bool = False
     likely_group: str = ""  # capscan Bellas2026 group (Trimcap/PgVV/...) below the class
     confidence_tier: str = "LOW"  # HIGH, MEDIUM, or LOW
-    candidate_start: int | None = None
-    candidate_end: int | None = None
 
     # Integration evidence is descriptive and does not add a confidence bonus.
     tir_present: bool = False
@@ -1150,10 +1156,6 @@ class VerificationResult:
     # cluster member, so every propagated class stays attributable.
     taxonomy_class_before_ani: str = ""
     taxonomy_class_propagated_from: str = ""
-    candidate_length: int = 0
-    candidate_reduction_bp: int = 0
-    candidate_reduction_reason: str = ""
-    candidate_common_euk_taxonomy: str = ""
     phase1_host_signature_host_prefixes: str = ""
     phase1_host_signature_top_tokens: str = ""
     phase1_host_signature_token_count: int = 0
@@ -1201,7 +1203,7 @@ class VerificationResult:
     host_signature_gene_count: int = 0
     host_signature_fraction: float = 0.0
     host_signature_weighted_mean: float = 0.0
-    host_signature_evalue_weighted: float = 0.0  # ISSUE 4: E-value weighted penalty
+    host_signature_evalue_weighted: float = 0.0  # E-value weighted diagnostic
 
     # Taxonomy distribution analysis (EVE vs host gene discrimination)
     taxonomy_distribution_viral_score: float = 0.0  # Overall viral likelihood (0-1)
@@ -1264,6 +1266,12 @@ class VerificationResult:
 
         return {
             "eve_id": self.eve_id,
+            "confirmed_seeds": [asdict(seed) for seed in self.confirmed_seeds],
+            "left_stop_reason": self.left_stop_reason,
+            "right_stop_reason": self.right_stop_reason,
+            "left_stop": self.left_stop,
+            "right_stop": self.right_stop,
+            "host_stop_available": self.host_stop_available,
             "scaffold": self.scaffold,
             "start": self.start,
             "end": self.end,
@@ -1341,8 +1349,6 @@ class VerificationResult:
             "max_cluster_ani": self.max_cluster_ani,
             "likely_group": self.likely_group,
             "confidence_tier": self.confidence_tier,
-            "candidate_start": self.candidate_start,
-            "candidate_end": self.candidate_end,
             "tir_present": self.tir_present,
             "tir_status": self.tir_status,
             "tir_candidate_count": self.tir_candidate_count,
@@ -1363,10 +1369,6 @@ class VerificationResult:
             "integration_gene_hits": self.integration_gene_hits,
             "integration_hmm_status": self.integration_hmm_status,
             "integration_hmm_unsearched": self.integration_hmm_unsearched,
-            "candidate_length": self.candidate_length,
-            "candidate_reduction_bp": self.candidate_reduction_bp,
-            "candidate_reduction_reason": self.candidate_reduction_reason,
-            "candidate_common_euk_taxonomy": self.candidate_common_euk_taxonomy,
             "phase1_host_signature_host_prefixes": self.phase1_host_signature_host_prefixes,
             "phase1_host_signature_top_tokens": self.phase1_host_signature_top_tokens,
             "phase1_host_signature_token_count": self.phase1_host_signature_token_count,
@@ -1421,6 +1423,26 @@ class VerificationResult:
         }
 
 
+def validate_result_seed_containment(result: VerificationResult) -> None:
+    """Reject lost seed provenance or growth beyond a recorded host stop."""
+    validate_confirmed_seed_containment(result.scaffold, result.start, result.end, result.confirmed_seeds)
+    if result.left_stop is not None and result.start < result.left_stop:
+        raise ValueError(f"{result.eve_id}: boundary crosses left host stop")
+    if result.right_stop is not None and result.end > result.right_stop:
+        raise ValueError(f"{result.eve_id}: boundary crosses right host stop")
+
+
+def validate_results_seed_containment(results: Iterable[VerificationResult]) -> None:
+    """Validate complete cores and unique source membership across candidates."""
+    seen: set[str] = set()
+    for result in results:
+        validate_result_seed_containment(result)
+        identities = {seed.seed_id for seed in result.confirmed_seeds}
+        if seen & identities:
+            raise ValueError(f"confirmed seed assigned to multiple candidates: {sorted(seen & identities)}")
+        seen.update(identities)
+
+
 @dataclass
 class EvidenceSynthesizerConfig:
     """Configuration for evidence synthesis.
@@ -1446,7 +1468,7 @@ class EvidenceSynthesizerConfig:
     marker_family_bonus_per_family: float = 0.06
     marker_multi_family_bonus: float = 0.08
 
-    # Optional host signature strings for host-like penalty
+    # Optional host signature strings for diagnostics
     euk_host_signatures: set[str] | None = None
     # Weighted host signature model
     host_signature_model: dict | None = None
@@ -1599,7 +1621,6 @@ def calculate_eve_confidence(
     marker_floor_priority_multi_family: float = 0.80,
     marker_family_bonus_per_family: float = 0.06,
     marker_multi_family_bonus: float = 0.08,
-    host_signature_score_threshold: float = 0.3,
     ablation_id: AblationID = AblationID.A0,
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
@@ -1627,7 +1648,6 @@ def calculate_eve_confidence(
 
     Penalties:
     - High-identity EUK (max -0.12): Fraction of genes with >=70% EUK identity
-    - Host-signature excess (max -0.18)
     - Small non-MCP region (max -0.15)
 
     Args:
@@ -1646,7 +1666,6 @@ def calculate_eve_confidence(
         crf_confidence=crf_confidence,
         tmvec_score=tmvec_score,
         use_crf_score=use_crf_score,
-        host_signature_score_threshold=host_signature_score_threshold,
     )
     bonuses = _calculate_confidence_bonuses(
         result,
@@ -1698,7 +1717,6 @@ class _ConfidenceEvidence:
     family_consistency_score: float
     high_confidence_euk_genes: int
     euk_penalty: float
-    host_signature_penalty: float
     size_penalty: float
     use_crf_score: bool
 
@@ -1731,7 +1749,6 @@ def _collect_confidence_evidence(
     crf_confidence: float,
     tmvec_score: float | None,
     use_crf_score: bool,
-    host_signature_score_threshold: float,
 ) -> _ConfidenceEvidence:
     """Normalize all score components and penalties without mutating the result."""
     marker_score = compute_marker_score(result)
@@ -1741,11 +1758,9 @@ def _collect_confidence_evidence(
     structural_score = _structural_score(result, tmvec_score)
     high_confidence_euk_genes = _high_confidence_euk_gene_count(result.gene_taxonomy_records)
     euk_penalty = _euk_penalty(result, high_confidence_euk_genes, viral_fraction)
-    host_signature_penalty = _host_signature_penalty(result, host_signature_score_threshold)
     if result.taxonomy_distribution_viral_score >= 0.4:
         reduction_factor = min(result.taxonomy_distribution_viral_score, 0.8)
         euk_penalty *= 1.0 - reduction_factor
-        host_signature_penalty *= 1.0 - reduction_factor * 0.5
     interproscan_score = result.interproscan_score or 0.0
     seed_cluster_score = _seed_cluster_score(result)
     family_consistency_score = compute_family_consistency_score(result)
@@ -1766,7 +1781,6 @@ def _collect_confidence_evidence(
         family_consistency_score=family_consistency_score,
         high_confidence_euk_genes=high_confidence_euk_genes,
         euk_penalty=euk_penalty,
-        host_signature_penalty=host_signature_penalty,
         size_penalty=_size_penalty(result),
         use_crf_score=use_crf_score,
     )
@@ -1823,14 +1837,6 @@ def _euk_penalty(
             broad_euk_penalty = min(broad_euk_fraction * 0.12, 0.12)
             euk_penalty = max(euk_penalty, broad_euk_penalty)
     return euk_penalty
-
-
-def _host_signature_penalty(result: VerificationResult, score_threshold: float) -> float:
-    """Return the excess host-signature penalty above its score threshold."""
-    if result.host_signature_gene_count > 0 and result.host_signature_fraction >= score_threshold:
-        host_excess = result.host_signature_fraction - score_threshold
-        return min(host_excess * 0.60, 0.18)
-    return 0.0
 
 
 def _high_confidence_euk_gene_count(records: list[GeneTaxonomyRecord]) -> int:
@@ -1988,7 +1994,7 @@ def _calculate_confidence_bonuses(
     viral_enrichment_bonus = 0.0
     if evidence.gene_count > 0:
         viral_fraction_for_bonus = (result.gene_taxonomy_viral_top10 or 0) / evidence.gene_count
-        if viral_fraction_for_bonus >= 0.15 and result.host_signature_fraction < 0.10:
+        if viral_fraction_for_bonus >= 0.15:
             viral_enrichment_bonus = min(0.12, viral_fraction_for_bonus * 0.4)
             add_common_bonus(viral_enrichment_bonus)
 
@@ -2136,12 +2142,7 @@ def _assemble_confidence(
         cap = 1.0
 
     confidence = (
-        weighted_base
-        + bonus_total
-        + (0.15 * evidence.structural_score)
-        - evidence.euk_penalty
-        - evidence.host_signature_penalty
-        - evidence.size_penalty
+        weighted_base + bonus_total + (0.15 * evidence.structural_score) - evidence.euk_penalty - evidence.size_penalty
     )
     confidence = min(confidence, cap)
     if bonuses.priority_floor > 0.0:
@@ -2195,7 +2196,6 @@ class _PostScoreOutcome:
     tier: str
     priority_promoted: bool
     non_hhg_demoted: bool
-    non_host_genes: int
 
 
 def _evaluate_post_score_policy(
@@ -2217,14 +2217,9 @@ def _evaluate_post_score_policy(
         tier = "MEDIUM"
         confidence = max(confidence, low_threshold)
 
-    non_host_genes = result.gene_count - result.host_signature_gene_count
     non_hhg_demoted = False
     if tier in {"HIGH", "MEDIUM"} and result.seed_sources and "hhg" not in result.seed_sources:
-        non_hhg_quality_pass = (
-            result.hallmark_count >= 3
-            or (result.hallmark_count >= 1 and result.has_capsid_evidence)
-            or non_host_genes >= 5
-        )
+        non_hhg_quality_pass = result.hallmark_count >= 3 or (result.hallmark_count >= 1 and result.has_capsid_evidence)
         if not non_hhg_quality_pass:
             non_hhg_demoted = True
             tier = "LOW"
@@ -2235,7 +2230,6 @@ def _evaluate_post_score_policy(
         tier=tier,
         priority_promoted=priority_promoted,
         non_hhg_demoted=non_hhg_demoted,
-        non_host_genes=non_host_genes,
     )
 
 
@@ -2381,6 +2375,12 @@ class EvidenceSynthesizer:
             scaffold=refined_boundary.scaffold,
             start=refined_boundary.start,
             end=refined_boundary.end,
+            confirmed_seeds=refined_boundary.confirmed_seeds,
+            left_stop_reason=refined_boundary.left_stop_reason,
+            right_stop_reason=refined_boundary.right_stop_reason,
+            left_stop=refined_boundary.left_stop,
+            right_stop=refined_boundary.right_stop,
+            host_stop_available=refined_boundary.host_stop_available,
             ablation_id=self.config.ablation_id,
             crf_confidence=refined_boundary.confidence,
             crf_posterior=refined_boundary.posterior_probability,
@@ -2414,14 +2414,7 @@ class EvidenceSynthesizer:
             tsd_sequence=getattr(refined_boundary, "tsd_sequence", ""),
             repeat_evidence=refined_boundary.repeat_evidence,
         )
-        candidate_start = getattr(refined_boundary, "candidate_start", None)
-        candidate_end = getattr(refined_boundary, "candidate_end", None)
-        if candidate_start is not None and candidate_end is not None:
-            result.candidate_start = candidate_start
-            result.candidate_end = candidate_end
-            result.candidate_length = max(0, candidate_end - candidate_start)
-            result.candidate_reduction_bp = max(0, result.candidate_length - (result.end - result.start))
-            result.candidate_reduction_reason = getattr(refined_boundary, "host_trim_reason", "")
+        validate_result_seed_containment(result)
         result.phase1_host_signature_host_prefixes = self._phase1_host_signature_host_prefixes
         result.phase1_host_signature_top_tokens = self._phase1_host_signature_top_tokens
         result.phase1_host_signature_token_count = self._phase1_host_signature_token_count
@@ -2664,9 +2657,7 @@ class EvidenceSynthesizer:
             )
         if gene_taxonomy_records:
             result.gene_taxonomy_records = [getattr(r, "__dict__", r) for r in gene_taxonomy_records]
-            # Filter out flanking genes for host signature calculation
-            # Flanking genes should not affect the host signature penalty since
-            # they are outside the EVE boundary and gene_count only counts interior genes
+            # Model diagnostics describe the retained interval, as does gene_count.
             interior_records = [
                 r
                 for r in gene_taxonomy_records
@@ -2688,7 +2679,7 @@ class EvidenceSynthesizer:
                 if host_like == 0 and mean_score > 0 and result.genes_with_high_pident_euk > 0:
                     logger.debug(
                         "%s: host_signature_gene_count=0 despite %d high-pident EUK genes "
-                        "(mean_score=%.4f, threshold=%.2f) — EUK/host penalties disabled",
+                        "(mean_score=%.4f, threshold=%.2f); model diagnostics do not alter confidence",
                         result.eve_id,
                         result.genes_with_high_pident_euk,
                         mean_score,
@@ -2950,7 +2941,6 @@ class EvidenceSynthesizer:
             marker_floor_priority_multi_family=self.config.marker_floor_priority_multi_family,
             marker_family_bonus_per_family=self.config.marker_family_bonus_per_family,
             marker_multi_family_bonus=self.config.marker_multi_family_bonus,
-            host_signature_score_threshold=self.config.host_signature_score_threshold,
             ablation_id=self.config.ablation_id,
             high_tier_threshold=self.config.high_tier_threshold,
             low_tier_threshold=self.config.low_tier_threshold,
@@ -2993,12 +2983,11 @@ class EvidenceSynthesizer:
         if selected_outcome.non_hhg_demoted:
             logger.info(
                 "%s: demoted to LOW — non-HHG seed (sources: %s) with insufficient quality "
-                "(hallmark=%d, has_capsid_evidence=%s, non_host_genes=%d)",
+                "(hallmark=%d, has_capsid_evidence=%s)",
                 result.eve_id,
                 result.seed_sources,
                 result.hallmark_count,
                 result.has_capsid_evidence,
-                selected_outcome.non_host_genes,
             )
 
         # Set status for backward compatibility with existing code

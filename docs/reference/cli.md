@@ -106,8 +106,8 @@ All path overrides in this table must exist.
 | `--tmvec`, `--no-tmvec` | Enable or disable TMVec2 BFVD search. An enabled search fails before analysis when its runtime or resources do not pass validation. |
 | `--tmvec-gpu`, `--no-tmvec-gpu` | Require or do not require TMVec2 on CUDA. `--tmvec-gpu` also enables TMVec2 and selects CUDA. It cannot be combined with `--device cpu` or `--no-tmvec`. |
 | `--interproscan`, `--no-interproscan` | Enable or disable InterProScan. Missing runtime or data disables the layer with a warning. |
-| `--use-taxonomy-ml`, `--no-taxonomy-ml` | Enable or disable Phase 2 taxonomy-boundary machine learning. |
-| `--taxonomy-ml-model MODEL` | Select `logreg`, `gbdt`, or `xgboost` for taxonomy-boundary refinement. |
+| `--use-taxonomy-ml`, `--no-taxonomy-ml` | Enable or disable per-gene ML support for seed-preserving outward extension. |
+| `--taxonomy-ml-model MODEL` | Select `logreg`, `gbdt`, or `xgboost` for that support model. Host stops and seed containment still apply. |
 
 The core [direct-repeat assessment](../METHODS.md#direct-repeat-assessment) runs
 by default and has no separate enable flag. It reads unmasked host sequence;

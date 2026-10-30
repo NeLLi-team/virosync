@@ -9,8 +9,6 @@ import csv
 import json
 from pathlib import Path
 
-from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 from virosync.utils.atomic_write import atomic_write_context
 
 
@@ -22,68 +20,6 @@ def _count_fasta_records(fasta_path: Path) -> int:
             if line.startswith(">"):
                 count += 1
     return count
-
-
-def _build_merged_seeds_from_regions(
-    regions: list[dict[str, int | str]],
-    validated_markers: list,
-) -> list:
-    """Rebuild MergedSeed list from saved Phase 1 regions and validated markers."""
-    from virosync.pipeline.phase1.seed_merger import MergedSeed
-
-    markers_by_scaffold: dict[str, list] = {}
-    for marker in validated_markers:
-        markers_by_scaffold.setdefault(marker.scaffold, []).append(marker)
-
-    merged_seeds = []
-    for idx, region in enumerate(regions):
-        scaffold = str(region["scaffold"])
-        start = int(region["start"])
-        end = int(region["end"])
-        anchors: list[Anchor] = []
-        for marker in markers_by_scaffold.get(scaffold, []):
-            if marker.start >= end or marker.end <= start:
-                continue
-            porf_id = getattr(marker, "porf_id", None) or getattr(marker, "query_porf", "")
-            anchors.append(
-                Anchor(
-                    porf_id=porf_id,
-                    scaffold=marker.scaffold,
-                    start=marker.start,
-                    end=marker.end,
-                    strand=getattr(marker, "strand", "+"),
-                    hallmark_gene=marker.hmm_target,
-                    score=marker.hmm_score,
-                    evalue=getattr(marker, "hmm_evalue", 0.0),
-                    validation_status=getattr(marker, "validation_status", ""),
-                    top10_prefixes=getattr(marker, "top10_prefixes", ""),
-                    top10_pidents=getattr(marker, "top10_pidents", ""),
-                    top10_targets=getattr(marker, "top10_targets", ""),
-                )
-            )
-
-        seed = MergedSeed(
-            scaffold=scaffold,
-            start=start,
-            end=end,
-            seed_id=f"seed_{idx}_{scaffold}_{start}",
-            sources=["hhg", "marker_validation"],
-            confidence="high" if any(is_mcp_gene(a.hallmark_gene) for a in anchors) else "medium",
-            hhg_score=len(anchors) * 10.0,
-            novelty_score=0.0,
-            compositional_score=0.0,
-            mean_kfd=0.0,
-            max_kfd=0.0,
-            mean_composite=0.0,
-            max_composite=0.0,
-            gc_deviation=0.0,
-            n_windows=0,
-            cluster_ids=[],
-            anchors=anchors,
-            hhg_anchors=anchors,
-        )
-        merged_seeds.append(seed)
-    return merged_seeds
 
 
 def _load_interproscan_summary(summary_path: Path) -> dict[str, dict]:

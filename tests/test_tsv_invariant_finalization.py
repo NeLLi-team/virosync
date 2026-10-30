@@ -34,7 +34,7 @@ from virosync.orchestration._flows.single_genome.run_state import load_run_state
 from virosync.output_contract import REPEAT_CANDIDATE_COLUMNS
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
@@ -348,6 +348,7 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
                 start=0,
                 end=4,
                 seed_id="seed-0-scaffold-0",
+                confirmed_seeds=(ConfirmedSeed("seed-0-scaffold-0", "scaffold", 0, 4),),
                 sources=["test"],
             )
         ]
@@ -376,6 +377,7 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
             start=0,
             end=4,
             seed_id="seed-0-scaffold-0",
+            confirmed_seeds=(ConfirmedSeed("seed-0-scaffold-0", "scaffold", 0, 4),),
             seed_sources=["test"],
             confidence=0.9,
         )

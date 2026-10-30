@@ -18,6 +18,10 @@ Masking requires `--no-skip-masking` and exactly one
 `execution.masking.repeatmasker_species` or `repeatmasker_library` setting.
 For taxonomy models, set `phase2.taxonomy_ml_enabled: true` and choose
 `phase2.taxonomy_ml_model: logreg` or `xgboost`. These analyses are off by default.
+Taxonomy ML supplies per-gene support to the outward extension controller.
+It cannot replace the confirmed seed, cross a host stop or move a boundary to
+isolated positive genes in a distant flank. If model fitting fails, extension
+uses the same deterministic evidence path as a run with taxonomy ML disabled.
 
 ## TMVec2
 

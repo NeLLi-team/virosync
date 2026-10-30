@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.prodigal import GenePrediction
 from virosync.pipeline.phase1.region_assembly import (
     ValidatedMarkerHit,
     assemble_compact_cress_regions,
 )
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase1.viral_markers import (
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
@@ -14,12 +13,8 @@ from virosync.pipeline.phase1.viral_markers import (
 from virosync.pipeline.phase2.boundary_diamond import pORF
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
-    extend_seeds_by_genes,
-    merge_adjacent_viral_boundaries,
 )
-from virosync.pipeline.phase2.host_signature_trim import (
-    trim_seed_by_host_signature,
-)
+from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed, merge_reachable_boundaries
 
 
 def _marker(
@@ -178,12 +173,16 @@ def test_phase2_does_not_pad_or_cross_merge_cress_seed() -> None:
         start=0,
         end=100,
         predicted_family="NCLDV",
+        seed_id="initial-seed-171",
+        confirmed_seeds=(ConfirmedSeed("initial-seed-171", "ctg", 0, 100),),
     )
     cress = MergedSeed(
         scaffold="ctg",
         start=100,
         end=400,
         predicted_family="CRESS",
+        seed_id="initial-seed-177",
+        confirmed_seeds=(ConfirmedSeed("initial-seed-177", "ctg", 100, 400),),
     )
     proteome_index = {
         "ctg": [
@@ -193,11 +192,10 @@ def test_phase2_does_not_pad_or_cross_merge_cress_seed() -> None:
         ]
     }
 
-    observed = extend_seeds_by_genes(
-        [generic, cress],
-        proteome_index,
-        extension_genes=5,
-    )
+    observed = [
+        extend_confirmed_seed(seed, proteome_index["ctg"], {}, (seed.start, seed.end), None, 0.35)
+        for seed in [generic, cress]
+    ]
 
     cress_observed = next(seed for seed in observed if seed.predicted_family == "CRESS")
     assert (cress_observed.start, cress_observed.end) == (100, 400)
@@ -210,6 +208,8 @@ def test_phase2_does_not_recompute_cress_bounds_from_overlapping_porfs() -> None
         start=100,
         end=400,
         predicted_family="CRESS",
+        seed_id="initial-seed-202",
+        confirmed_seeds=(ConfirmedSeed("initial-seed-202", "ctg", 100, 400),),
     )
     proteome_index = {
         "ctg": [
@@ -217,11 +217,9 @@ def test_phase2_does_not_recompute_cress_bounds_from_overlapping_porfs() -> None
         ]
     }
 
-    observed = extend_seeds_by_genes(
-        [cress],
-        proteome_index,
-        extension_genes=5,
-    )
+    observed = [
+        extend_confirmed_seed(seed, proteome_index["ctg"], {}, (seed.start, seed.end), None, 0.35) for seed in [cress]
+    ]
 
     assert [(seed.start, seed.end) for seed in observed] == [(100, 400)]
 
@@ -233,12 +231,16 @@ def test_phase2_does_not_merge_overlapping_cress_seeds() -> None:
             start=100,
             end=400,
             predicted_family="CRESS",
+            seed_id="initial-seed-223",
+            confirmed_seeds=(ConfirmedSeed("initial-seed-223", "ctg", 100, 400),),
         ),
         MergedSeed(
             scaffold="ctg",
             start=350,
             end=700,
             predicted_family="CRESS",
+            seed_id="initial-seed-229",
+            confirmed_seeds=(ConfirmedSeed("initial-seed-229", "ctg", 350, 700),),
         ),
     ]
     proteome_index = {
@@ -248,36 +250,14 @@ def test_phase2_does_not_merge_overlapping_cress_seeds() -> None:
         ]
     }
 
-    observed = extend_seeds_by_genes(
-        seeds,
-        proteome_index,
-        extension_genes=5,
-    )
+    observed = [
+        extend_confirmed_seed(seed, proteome_index["ctg"], {}, (seed.start, seed.end), None, 0.35) for seed in seeds
+    ]
 
     assert [(seed.start, seed.end) for seed in observed] == [
         (100, 400),
         (350, 700),
     ]
-
-
-def test_host_signature_trim_preserves_cress_bounds() -> None:
-    cress = MergedSeed(
-        scaffold="ctg",
-        start=100,
-        end=400,
-        predicted_family="CRESS",
-    )
-
-    observed, summary = trim_seed_by_host_signature(
-        seed=cress,
-        gene_records=[],
-        host_model=HostSignatureModel(),
-    )
-
-    assert observed is cress
-    assert (observed.start, observed.end) == (100, 400)
-    assert summary["reason"] == "cress_exact_boundary"
-    assert summary["host_coordinate_change_opportunities"] == 0
 
 
 def test_post_taxonomy_merge_preserves_cress_boundary() -> None:
@@ -286,21 +266,19 @@ def test_post_taxonomy_merge_preserves_cress_boundary() -> None:
             scaffold="ctg",
             start=0,
             end=250,
+            confirmed_seeds=(ConfirmedSeed("ncldv", "ctg", 20, 80),),
             predicted_family="NCLDV",
         ),
         RefinedBoundary(
             scaffold="ctg",
             start=100,
             end=400,
+            confirmed_seeds=(ConfirmedSeed("cress", "ctg", 100, 400),),
             predicted_family="CRESS",
         ),
     ]
 
-    observed = merge_adjacent_viral_boundaries(
-        boundaries,
-        taxonomy_map={},
-        proteome_index={},
-    )
+    observed = merge_reachable_boundaries(boundaries)
 
     assert [(boundary.start, boundary.end, boundary.predicted_family) for boundary in observed] == [
         (0, 250, "NCLDV"),

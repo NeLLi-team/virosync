@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "43e03be2799e377ec66a35efbaf39aa59861ba60b526dc766a8a251fd41e2bed",
+  "effective_config_sha256": "7b93efcc769d63c5c6af0545836df4ce5b0d71887e28ffe3049505e48bbd2714",
   "execution": {
     "masking": {
       "backend": "off",
@@ -120,14 +120,8 @@
     "diamond_superset_prototype_enabled": false,
     "diamond_top_k": 10,
     "host_signature_min_token_len": 3,
-    "host_trim_buffer_kb": 5,
     "host_trim_enabled": true,
-    "host_trim_max_host_fraction": 0.3,
-    "host_trim_min_overlap_score": 0.4,
-    "host_trim_min_viral_fraction": 0.05,
     "host_trim_score_threshold": 0.35,
-    "host_trim_step_bp": 1000,
-    "host_trim_window_bp": 5000,
     "taxonomy_ml_enabled": false,
     "taxonomy_ml_model": "logreg",
     "taxonomy_ml_neighbor_window": 3,

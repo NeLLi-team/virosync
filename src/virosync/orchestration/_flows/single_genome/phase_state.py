@@ -18,12 +18,15 @@ from pathlib import Path
 import numpy as np
 
 from virosync.features.compositional import WindowFeatures
+from virosync.pipeline.phase1.seed_merger import validate_confirmed_seed_containment
 from virosync.pipeline.phase2.boundary_refiner import TIR_STATUSES, RefinedBoundary
 from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence, evidence_from_dict, evidence_to_dict
 from virosync.utils.atomic_write import atomic_write
 
+from .phase1_state import Phase1StateError, confirmed_seeds_from_document, confirmed_seeds_to_document
+
 PHASE2_STATE_FILENAME = "refined_state.json"
-PHASE2_STATE_SCHEMA_VERSION = 5
+PHASE2_STATE_SCHEMA_VERSION = 6
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
 PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 
@@ -35,8 +38,8 @@ _BOUNDARY_STRING_FIELDS = (
     "scaffold",
     "candidate_id",
     "seed_id",
-    "host_trim_reason",
-    "host_trim_common_euk_taxonomy",
+    "left_stop_reason",
+    "right_stop_reason",
     "tir_status",
     "tsd_sequence",
     "seed_confidence",
@@ -54,16 +57,14 @@ _BOUNDARY_INTEGER_FIELDS = (
     "region_classification_mirus_markers",
 )
 _BOUNDARY_OPTIONAL_INTEGER_FIELDS = (
-    "candidate_start",
-    "candidate_end",
+    "left_stop",
+    "right_stop",
     "core_viral_start",
     "core_viral_end",
     "flank_5_start",
     "flank_5_end",
     "flank_3_start",
     "flank_3_end",
-    "marker_floor_start",
-    "marker_floor_end",
     "pre_tir_start",
     "pre_tir_end",
     "tir_left_start",
@@ -88,12 +89,13 @@ _BOUNDARY_FLOAT_FIELDS = (
 _BOUNDARY_STRING_LIST_FIELDS = ("seed_sources", "hallmark_genes")
 _BOUNDARY_INTEGER_LIST_FIELDS = ("state_sequence",)
 _BOUNDARY_BOOLEAN_FIELDS = (
+    "host_stop_available",
     "seed_has_mcp",
     "tir_present",
     "tir_boundary_override",
     "tir_alignment_capped",
 )
-_BOUNDARY_SPECIAL_FIELDS = ("state_posteriors", "window_features", "repeat_evidence")
+_BOUNDARY_SPECIAL_FIELDS = ("state_posteriors", "window_features", "repeat_evidence", "confirmed_seeds")
 _BOUNDARY_FIELDS = (
     *_BOUNDARY_STRING_FIELDS,
     *_BOUNDARY_INTEGER_FIELDS,
@@ -389,6 +391,8 @@ def _boundary_to_document(boundary: object, index: int) -> dict[str, object]:
     )
     _repeat_evidence_from_document(document, context)
     _validate_tir_contract(document, context)
+    document["confirmed_seeds"] = confirmed_seeds_to_document(boundary.confirmed_seeds)
+    _validate_seed_contract(boundary, context)
     return document
 
 
@@ -423,7 +427,26 @@ def _boundary_from_document(value: object, index: int) -> RefinedBoundary:
     ]
     kwargs["repeat_evidence"] = _repeat_evidence_from_document(document, context)
     _validate_tir_contract(kwargs, context)
-    return RefinedBoundary(**kwargs)
+    try:
+        kwargs["confirmed_seeds"] = confirmed_seeds_from_document(
+            document["confirmed_seeds"], f"{context}.confirmed_seeds"
+        )
+    except Phase1StateError as error:
+        raise Phase2StateError(str(error)) from error
+    boundary = RefinedBoundary(**kwargs)
+    _validate_seed_contract(boundary, context)
+    return boundary
+
+
+def _validate_seed_contract(boundary: RefinedBoundary, context: str) -> None:
+    try:
+        validate_confirmed_seed_containment(boundary.scaffold, boundary.start, boundary.end, boundary.confirmed_seeds)
+        if boundary.left_stop is not None and boundary.start < boundary.left_stop:
+            raise ValueError("boundary crosses left host stop")
+        if boundary.right_stop is not None and boundary.end > boundary.right_stop:
+            raise ValueError("boundary crosses right host stop")
+    except ValueError as error:
+        raise Phase2StateError(f"{context}: {error}") from error
 
 
 def _repeat_evidence_from_document(boundary: dict[str, object], context: str) -> RepeatEvidence | None:
@@ -444,6 +467,15 @@ def _repeat_evidence_from_document(boundary: dict[str, object], context: str) ->
     return evidence
 
 
+def _validate_unique_seed_membership(boundaries: Sequence[RefinedBoundary]) -> None:
+    seen: set[str] = set()
+    for boundary in boundaries:
+        identities = {seed.seed_id for seed in boundary.confirmed_seeds}
+        if seen & identities:
+            raise Phase2StateError(f"confirmed seed assigned to multiple boundaries: {sorted(seen & identities)}")
+        seen.update(identities)
+
+
 def phase2_state_to_document(
     boundaries: Sequence[RefinedBoundary],
 ) -> dict[str, object]:
@@ -451,10 +483,12 @@ def phase2_state_to_document(
     _validate_model_fields()
     if isinstance(boundaries, (str, bytes)) or not isinstance(boundaries, Sequence):
         raise Phase2StateError("boundaries must be a sequence")
+    documents = [_boundary_to_document(boundary, index) for index, boundary in enumerate(boundaries)]
+    _validate_unique_seed_membership(boundaries)
     return {
         "artifact_type": PHASE2_STATE_ARTIFACT_TYPE,
         "schema_version": PHASE2_STATE_SCHEMA_VERSION,
-        "boundaries": [_boundary_to_document(boundary, index) for index, boundary in enumerate(boundaries)],
+        "boundaries": documents,
     }
 
 
@@ -475,7 +509,9 @@ def phase2_state_from_document(document: object) -> list[RefinedBoundary]:
     raw_boundaries = payload["boundaries"]
     if not isinstance(raw_boundaries, list):
         raise Phase2StateError("phase2 state.boundaries must be a list")
-    return [_boundary_from_document(boundary, index) for index, boundary in enumerate(raw_boundaries)]
+    boundaries = [_boundary_from_document(boundary, index) for index, boundary in enumerate(raw_boundaries)]
+    _validate_unique_seed_membership(boundaries)
+    return boundaries
 
 
 def _object_without_duplicate_keys(

@@ -8,11 +8,6 @@ from virosync.pipeline.phase1.taxonomy_expansion import (
     parse_diamond_top10,
 )
 from virosync.pipeline.phase2.boundary_diamond import has_identity_qualified_viral_hit
-from virosync.pipeline.phase2.boundary_refiner import (
-    _classify_gene_label,
-    should_trim_gene_as_host,
-)
-from virosync.pipeline.phase2.taxonomy_seed_refiner import _has_strong_viral_signal
 from virosync.pipeline.phase3.gene_taxonomy import GeneDiamondHit, classify_gene_taxonomy
 
 
@@ -36,7 +31,6 @@ def test_single_identity_qualified_cress_hit_counts_as_strong_viral() -> None:
     )
 
     assert has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents)
-    assert _has_strong_viral_signal(tax)
 
 
 def test_single_low_identity_viral_hit_does_not_count() -> None:
@@ -46,65 +40,6 @@ def test_single_low_identity_viral_hit_does_not_count() -> None:
     )
 
     assert not has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents)
-    assert not _has_strong_viral_signal(tax)
-
-
-def test_boundary_density_label_uses_one_qualified_viral_hit() -> None:
-    tax = _tax(
-        top10_prefixes=["CRESS__"],
-        top10_pidents=[25.0],
-    )
-
-    label = _classify_gene_label(
-        tax=tax,
-        control_stats=None,
-        host_prefix="EUK__",
-        host_baseline_fingerprint={},
-        min_overlap_score=0.40,
-        neighbor_context=None,
-        unknown_host_penalty=2.0,
-        unknown_viral_bonus=2.0,
-        host_signature_model=None,
-        host_signature_threshold=0.5,
-    )
-
-    assert label == "V"
-
-
-def test_identity_qualified_viral_hit_protects_host_like_gene_from_trimming() -> None:
-    tax = _tax(
-        top1_prefix="EUK__",
-        top10_prefixes=["EUK__", "VP__"],
-        top10_pidents=[92.0, 45.0],
-    )
-
-    trim, score = should_trim_gene_as_host(
-        gene_taxonomy=tax,
-        control_stats=None,
-        host_prefix="EUK__",
-        host_baseline_fingerprint={},
-    )
-
-    assert trim is False
-    assert score == 0.0
-
-
-def test_low_identity_viral_hit_does_not_protect_host_like_gene() -> None:
-    tax = _tax(
-        top1_prefix="EUK__",
-        top10_prefixes=["EUK__", "VP__"],
-        top10_pidents=[92.0, 24.9],
-    )
-
-    trim, score = should_trim_gene_as_host(
-        gene_taxonomy=tax,
-        control_stats=None,
-        host_prefix="EUK__",
-        host_baseline_fingerprint={},
-    )
-
-    assert trim is True
-    assert score == 1.0
 
 
 def test_taxonomy_expansion_viral_positive_uses_pident_threshold() -> None:

@@ -19,7 +19,7 @@ from virosync.orchestration._flows.single_genome.phase2_resume_state import (
 from virosync.orchestration._flows.single_genome.phase_state import (
     load_phase2_state,
 )
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
 
 def _run_a3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> phase2.Phase2Result:
@@ -32,6 +32,7 @@ def _run_a3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> phase2.Phase2Res
         start=20,
         end=220,
         seed_id="seed-1",
+        confirmed_seeds=(ConfirmedSeed("seed-1", "scaffold", 20, 220),),
         sources=["hhg", "marker_validation"],
         confidence="high",
         gc_deviation=0.99,

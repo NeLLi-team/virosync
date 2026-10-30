@@ -43,7 +43,7 @@ from virosync.pipeline.phase1.marker_validation import (
     parse_taxonomy_prefix,
     validate_hmm_hit,
 )
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase1.taxonomy_expansion import is_gene_viral_positive
 from virosync.pipeline.phase2.boundary_diamond import (
     DiamondHit,
@@ -57,10 +57,8 @@ from virosync.pipeline.phase2.boundary_diamond import (
 )
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
-    _classify_gene_label,
-    _has_viral_taxonomy,
-    should_trim_gene_as_host,
 )
+from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed
 from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
@@ -247,36 +245,22 @@ def _tax(**overrides):
     return SimpleNamespace(**values)
 
 
-def test_peve_gene_counts_as_viral_for_gap_merging() -> None:
-    assert _has_viral_taxonomy(_tax()) is True
-    assert _has_viral_taxonomy(_tax(top10_pidents=[24.9], has_viral=False)) is False
-
-
-def test_peve_gene_is_labelled_viral_and_never_trimmed_as_host() -> None:
-    tax = _tax(top1_prefix="EUK__", top10_prefixes=["EUK__", "EUK-pEVE__"], top10_pidents=[92.0, 45.0])
-
-    trim, score = should_trim_gene_as_host(
-        gene_taxonomy=tax,
-        control_stats=None,
-        host_prefix="EUK__",
-        host_baseline_fingerprint={},
+@pytest.mark.parametrize("pident,expected_end", [(80.0, 400), (24.9, 100)])
+def test_peve_gene_supports_connected_extension_at_the_identity_cutoff(pident: float, expected_end: int) -> None:
+    seed = MergedSeed(
+        scaffold="ctg",
+        start=0,
+        end=100,
+        seed_id="original",
+        confirmed_seeds=(ConfirmedSeed("original", "ctg", 0, 100),),
     )
-    label = _classify_gene_label(
-        tax=_tax(),
-        control_stats=None,
-        host_prefix="EUK__",
-        host_baseline_fingerprint={},
-        min_overlap_score=0.40,
-        neighbor_context=None,
-        unknown_host_penalty=2.0,
-        unknown_viral_bonus=2.0,
-        host_signature_model=None,
-        host_signature_threshold=0.5,
-    )
+    gene = pORF("flank", "ctg", 200, 400)
+    taxonomy = _tax(top1_prefix="EUK__", top10_prefixes=["EUK__", "EUK-pEVE__"], top10_pidents=[92.0, pident])
 
-    assert trim is False
-    assert score == 0.0
-    assert label == "V"
+    boundary = extend_confirmed_seed(seed, [gene], {"flank": taxonomy}, (0, 500), None, 0.35)
+
+    assert (boundary.start, boundary.end) == (0, expected_end)
+    assert boundary.confirmed_seeds == seed.confirmed_seeds
 
 
 # --- Phase 1 marker validation ---
@@ -722,7 +706,14 @@ def _verify_one_marker_region(
     synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig())
     monkeypatch.setattr(synthesizer, "_run_tiebreakers", lambda *args, **kwargs: None)
     hit = {**_marker(prefixes, pidents, gene=gene, porf_id="sc|1"), "hmm_score": 100.0}
-    boundary = RefinedBoundary(scaffold="sc", start=0, end=end, confidence=0.95, predicted_family=region_class)
+    boundary = RefinedBoundary(
+        scaffold="sc",
+        start=0,
+        end=end,
+        confidence=0.95,
+        predicted_family=region_class,
+        confirmed_seeds=(ConfirmedSeed("marker-core", "sc", 0, 900),),
+    )
     return synthesizer.verify_eve(
         boundary,
         window_features=[],
@@ -827,6 +818,7 @@ def _a1_result(region_class: str, *anchors: Anchor) -> VerificationResult:
         region_classification_mirus_markers=0,
         anchors=list(anchors),
         hhg_anchors=[],
+        confirmed_seeds=(ConfirmedSeed("seed", "ctg", 0, 3000),),
     )
     return build_phase1_seed_surface([seed]).results[0]
 

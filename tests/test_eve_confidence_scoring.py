@@ -10,8 +10,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from virosync.ablation import AblationID
 from virosync.pipeline.phase3.evidence_synthesizer import (
+    EvidenceSynthesizer,
+    EvidenceSynthesizerConfig,
     VerificationResult,
+    VerificationStatus,
     assign_confidence_tier,
     calculate_eve_confidence,
 )
@@ -107,3 +113,71 @@ def test_taxonomy_object_and_dictionary_records_score_identically() -> None:
     assert object_score == dictionary_score
     assert object_result.high_confidence_euk_genes == dictionary_result.high_confidence_euk_genes == 1
     assert object_result.score_components == dictionary_result.score_components
+
+
+@pytest.mark.parametrize("ablation_id", [AblationID.A0, AblationID.A5])
+@pytest.mark.parametrize("viral_genes", [1, 3])
+def test_host_model_diagnostics_do_not_change_score_or_tier(ablation_id: AblationID, viral_genes: int) -> None:
+    """Hold coordinates and independent evidence fixed across model outputs."""
+    candidate = VerificationResult(
+        eve_id="seed",
+        scaffold="scaf",
+        start=100,
+        end=10100,
+        gene_count=10,
+        gene_taxonomy_viral_interior=viral_genes,
+        gene_taxonomy_viral_top10=viral_genes,
+        seed_sources=["hhg"],
+        kfd=0.3,
+        gc_deviation=0.15,
+    )
+    synthesizer = EvidenceSynthesizer(EvidenceSynthesizerConfig(ablation_id=ablation_id))
+    boundary = SimpleNamespace(confidence=0.0)
+    synthesizer._calculate_final_decision(candidate, boundary, has_hhg_evidence=True)
+    original = (candidate.final_confidence, candidate.confidence_tier, candidate.status)
+    original_components = candidate.score_components.copy()
+
+    candidate.host_signature_gene_count = 9
+    candidate.host_signature_fraction = 0.9
+    candidate.host_signature_weighted_mean = 0.95
+    candidate.host_signature_evalue_weighted = 0.99
+    synthesizer._calculate_final_decision(candidate, boundary, has_hhg_evidence=True)
+
+    assert (candidate.final_confidence, candidate.confidence_tier, candidate.status) == original
+    assert candidate.score_components == original_components
+    assert (candidate.start, candidate.end) == (100, 10100)
+    assert candidate.to_dict()["host_signature_gene_count"] == 9
+    assert candidate.to_dict()["host_signature_fraction"] == 0.9
+    assert candidate.to_dict()["host_signature_weighted_mean"] == 0.95
+    assert candidate.host_signature_evalue_weighted == 0.99
+
+
+@pytest.mark.parametrize("host_gene_count", [0, 9])
+@pytest.mark.parametrize(
+    "hallmarks,capsid,expected_tier", [(0, False, "LOW"), (3, False, "MEDIUM"), (1, True, "MEDIUM")]
+)
+def test_non_hhg_acceptance_requires_independent_marker_evidence(
+    host_gene_count: int, hallmarks: int, capsid: bool, expected_tier: str
+) -> None:
+    """Gene count cannot rescue a non-HHG seed without marker support."""
+    candidate = VerificationResult(
+        eve_id="seed",
+        scaffold="scaf",
+        start=100,
+        end=10100,
+        gene_count=10,
+        gene_taxonomy_viral_interior=3,
+        gene_taxonomy_viral_top10=3,
+        seed_sources=["novelty"],
+        hallmark_count=hallmarks,
+        has_capsid_evidence=capsid,
+        host_signature_gene_count=host_gene_count,
+        host_signature_fraction=host_gene_count / 10,
+        kfd=0.3,
+        gc_deviation=0.15,
+    )
+
+    EvidenceSynthesizer()._calculate_final_decision(candidate, SimpleNamespace(confidence=0.0), has_hhg_evidence=False)
+
+    assert candidate.confidence_tier == expected_tier
+    assert (candidate.status is VerificationStatus.LOW_CONFIDENCE_TIEBREAKER) == (expected_tier == "LOW")

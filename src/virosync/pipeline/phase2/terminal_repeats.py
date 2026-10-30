@@ -35,6 +35,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.seed_extension import accept_seed_partition
 from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
 from virosync.pipeline.phase3.evidence_synthesizer import deduplicate_preferring_mcp
 from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
@@ -881,14 +882,8 @@ def _scan_bounds(
     """Return the requested flank interval clipped to Phase-2b coverage."""
     if not mappings:
         return None
-    starts = [boundary.start, boundary.original_start]
-    ends = [boundary.end, boundary.original_end]
-    if boundary.candidate_start is not None:
-        starts.append(boundary.candidate_start)
-    if boundary.candidate_end is not None:
-        ends.append(boundary.candidate_end)
-    requested_start = max(0, min(starts) - extension_bp)
-    requested_end = min(sequence_length, max(ends) + extension_bp)
+    requested_start = max(0, min(boundary.start, boundary.original_start) - extension_bp)
+    requested_end = min(sequence_length, max(boundary.end, boundary.original_end) + extension_bp)
     coverage_start = min(mapping.flank_start_bp for mapping in mappings)
     coverage_end = max(mapping.flank_end_bp for mapping in mappings)
     scan_start = max(requested_start, coverage_start)
@@ -992,7 +987,7 @@ def _child_boundary(
         seed_sources=seed_sources,
         seed_confidence="low",
         seed_has_mcp=any(is_mcp_gene(marker_name) for marker_name in marker_names),
-        predicted_family=classification["classification"],
+        predicted_family="CRESS" if parent.predicted_family == "CRESS" else classification["classification"],
         region_classification_ncldv_markers=classification["ncldv_markers"],
         region_classification_vp_plv_markers=classification["vp_plv_markers"],
         region_classification_mirus_markers=classification["mirus_markers"],
@@ -1318,6 +1313,7 @@ def _plan_boundary_partition(
         taxonomy_map=boundary_taxonomy_map,
         proteome_index=proteome_index,
     )
+    partition = accept_seed_partition(boundary, partition) if partition is not None else None
     if partition is None:
         return [
             _candidate_evidence_parent(

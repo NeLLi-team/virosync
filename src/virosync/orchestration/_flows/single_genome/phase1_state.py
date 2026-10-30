@@ -17,11 +17,11 @@ from pathlib import Path
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed, validate_confirmed_seed_containment
 from virosync.utils.atomic_write import atomic_write
 
 PHASE1_STATE_FILENAME = "resume_state.json"
-PHASE1_STATE_SCHEMA_VERSION = 2
+PHASE1_STATE_SCHEMA_VERSION = 3
 PHASE1_STATE_ARTIFACT_TYPE = "virosync.phase1.resume_state"
 PHASE1_STATE_SCHEMA = f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
 
@@ -96,8 +96,6 @@ _SEED_STRING_FIELDS = (
     "seed_id",
     "confidence",
     "predicted_family",
-    "host_trim_reason",
-    "host_trim_common_euk_taxonomy",
 )
 _SEED_INTEGER_FIELDS = (
     "start",
@@ -107,12 +105,7 @@ _SEED_INTEGER_FIELDS = (
     "region_classification_vp_plv_markers",
     "region_classification_mirus_markers",
 )
-_SEED_OPTIONAL_INTEGER_FIELDS = (
-    "host_trim_original_start",
-    "host_trim_original_end",
-    "host_trimmed_start",
-    "host_trimmed_end",
-)
+_SEED_OPTIONAL_INTEGER_FIELDS: tuple[str, ...] = ()
 _SEED_FLOAT_FIELDS = (
     "hhg_score",
     "novelty_score",
@@ -137,6 +130,7 @@ _SEED_FIELDS = (
     *_SEED_STRING_LIST_FIELDS,
     *_SEED_INTEGER_LIST_FIELDS,
     *_SEED_ANCHOR_LIST_FIELDS,
+    "confirmed_seeds",
 )
 _SEED_FIELD_SET = set(_SEED_FIELDS)
 
@@ -330,6 +324,34 @@ def _anchor_from_document(value: object, context: str) -> Anchor:
     return Anchor(**kwargs)
 
 
+def confirmed_seeds_from_document(value: object, context: str) -> tuple[ConfirmedSeed, ...]:
+    """Read exact immutable seed identities and intervals from a checkpoint."""
+    if not isinstance(value, list):
+        raise Phase1StateError(f"{context} must be a list")
+    seeds = []
+    for index, item in enumerate(value):
+        name = f"{context}[{index}]"
+        document = _require_exact_fields(item, {"seed_id", "scaffold", "start", "end"}, name)
+        seeds.append(
+            ConfirmedSeed(
+                seed_id=_require_string(document["seed_id"], f"{name}.seed_id"),
+                scaffold=_require_string(document["scaffold"], f"{name}.scaffold"),
+                start=_require_integer(document["start"], f"{name}.start"),
+                end=_require_integer(document["end"], f"{name}.end"),
+            )
+        )
+    return tuple(seeds)
+
+
+def confirmed_seeds_to_document(seeds: tuple[ConfirmedSeed, ...]) -> list[dict[str, object]]:
+    """Serialize frozen seed membership without inferring missing provenance."""
+    if not isinstance(seeds, tuple) or any(type(seed) is not ConfirmedSeed for seed in seeds):
+        raise Phase1StateError("confirmed_seeds must be a tuple of ConfirmedSeed records")
+    return [
+        {"seed_id": seed.seed_id, "scaffold": seed.scaffold, "start": seed.start, "end": seed.end} for seed in seeds
+    ]
+
+
 def _seed_to_document(seed: object, index: int) -> dict[str, object]:
     context = f"merged_seeds[{index}]"
     if type(seed) is not MergedSeed:
@@ -369,6 +391,11 @@ def _seed_to_document(seed: object, index: int) -> dict[str, object]:
             _anchor_to_document(anchor, f"{context}.{name}[{anchor_index}]")
             for anchor_index, anchor in enumerate(anchors)
         ]
+    document["confirmed_seeds"] = confirmed_seeds_to_document(seed.confirmed_seeds)
+    try:
+        _validate_phase1_source(seed)
+    except ValueError as error:
+        raise Phase1StateError(f"{context}: {error}") from error
     return document
 
 
@@ -402,7 +429,13 @@ def _seed_from_document(value: object, index: int) -> MergedSeed:
             )
             for anchor_index, anchor in enumerate(raw_anchors)
         ]
-    return MergedSeed(**kwargs)
+    kwargs["confirmed_seeds"] = confirmed_seeds_from_document(document["confirmed_seeds"], f"{context}.confirmed_seeds")
+    seed = MergedSeed(**kwargs)
+    try:
+        _validate_phase1_source(seed)
+    except ValueError as error:
+        raise Phase1StateError(f"{context}: {error}") from error
+    return seed
 
 
 def _host_model_to_document(model: object) -> dict[str, object]:
@@ -678,3 +711,11 @@ def load_phase1_state(path: str | Path) -> Phase1ResumeState:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise Phase1StateError(f"invalid Phase-1 state {state_path}: {exc}") from exc
     return phase1_state_from_document(document)
+
+
+def _validate_phase1_source(seed: MergedSeed) -> None:
+    """Phase1 creates one original record, with no changed container coordinates."""
+    validate_confirmed_seed_containment(seed.scaffold, seed.start, seed.end, seed.confirmed_seeds)
+    expected = ConfirmedSeed(seed.seed_id, seed.scaffold, seed.start, seed.end)
+    if seed.confirmed_seeds != (expected,):
+        raise ValueError("Phase1 source container must exactly match its single confirmed seed")

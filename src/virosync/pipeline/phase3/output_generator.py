@@ -40,7 +40,7 @@ from virosync.output_contract import (
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
-from .evidence_synthesizer import VerificationResult
+from .evidence_synthesizer import VerificationResult, validate_results_seed_containment
 from .gene_functions import (
     GeneFunctionInputs,
     find_gene_function_resources,
@@ -1416,6 +1416,7 @@ class OutputGenerator:
 
         # Keep full list - all candidates are reported with confidence tiers
         all_results = list(results)
+        validate_results_seed_containment(all_results)
 
         # Build caches ONCE for all results (not subsets) to avoid incomplete caches
         all_regions = [(r.scaffold, r.start, r.end) for r in all_results]
@@ -1645,11 +1646,6 @@ class OutputGenerator:
             str(result.interproscan_total_hits),
             str(result.interproscan_viral_hits),
             "|".join(result.interproscan_keyword_hits) if result.interproscan_keyword_hits else ".",
-            str(result.candidate_start) if result.candidate_start is not None else ".",
-            str(result.candidate_end) if result.candidate_end is not None else ".",
-            str(result.candidate_length or 0),
-            str(result.candidate_reduction_bp or 0),
-            result.candidate_reduction_reason or ".",
         ]
         integration = _integration_evidence_row(result)
         row.extend(integration[column] for column in INTEGRATION_EVIDENCE_COLUMNS)
@@ -1748,11 +1744,6 @@ class OutputGenerator:
             "interproscan_total_hits",
             "interproscan_viral_hits",
             "interproscan_keyword_hits",
-            "candidate_start",
-            "candidate_end",
-            "candidate_length",
-            "candidate_reduction_bp",
-            "candidate_reduction_reason",
         ]
         columns.extend(INTEGRATION_EVIDENCE_COLUMNS)
         if self.extended_output:
@@ -1899,11 +1890,6 @@ class OutputGenerator:
             "likely_family": normalize_effective_eve_class(result.likely_family),
             "ppv_subtype": ppv_subtype,
             "likely_group": getattr(result, "likely_group", "") or ".",
-            "candidate_start": str(result.candidate_start) if result.candidate_start is not None else ".",
-            "candidate_end": str(result.candidate_end) if result.candidate_end is not None else ".",
-            "candidate_length": str(result.candidate_length or 0),
-            "candidate_reduction_bp": str(result.candidate_reduction_bp or 0),
-            "candidate_reduction_reason": result.candidate_reduction_reason or ".",
             "seed_sources": "|".join(sorted(result.seed_sources)) if result.seed_sources else ".",
             "canonical_selection_outcome": result.canonical_selection_outcome or ".",
             **_integration_evidence_row(result),

@@ -75,13 +75,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   with a lineage reference gets nothing from its profile. An `EUK-pEVE`-only MCP
   profile ranks by score in the per-protein deduplication of the vote. The A1 seed
   export applies the same marker votes.
-- The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v2`: each seed
+- The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v3`: each seed
   anchor records the validation status and the top-10 prefixes, identities and
   targets of its marker hit. The A1 seed export counts capsid evidence from validated hits only and
   publishes the class of the marker vote for a seed whose validated markers have
   only `EUK-pEVE` viral hits: the profile class when a profile supplies one, else
-  `VIRAL_UNKNOWN` with the likely family `MIXED`. Checkpoints of v1 cannot be
-  reused.
+  `VIRAL_UNKNOWN` with the likely family `MIXED`. Each seed also retains its
+  original identity and complete confirmed interval. Earlier checkpoint
+  schemas cannot be reused.
+- Public output schema 10 records the seed-preserving boundary results and
+  removes unused candidate-coordinate fields. The full Phase 2 checkpoint is
+  `virosync.phase2.resume_state/v5`; the refined-boundary checkpoint is
+  `virosync.phase2.refined_boundaries/v6`. Coordinate schema 2 is unchanged.
 - Show both changes in the report. A gene whose qualifying viral hits are all
   `EUK-pEVE` gets the category `EUK-pEVE` in the gene maps and the category
   distribution, with its own color (`#882255`) and the legend entry "EUK-pEVE
@@ -98,6 +103,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Fixed
 
+- Preserve every complete confirmed Phase 1 seed through outward extension,
+  merging, repeat partitioning, rescue and resume. The host model only stops
+  extension: the default stop requires three consecutive exterior genes with
+  host-lineage share at least 0.35 and no qualifying viral support. A single
+  eukaryotic best hit does not stop extension. Final evidence and confidence
+  use the retained interval. The three-gene default still needs biological
+  calibration.
 - Stop duplicate reference entries from filling the top DIAMOND hits of
   boundary refinement and gene-level taxonomy (top 10 each) and of the Phase 3
   DIAMOND check (top 5). The combined proteome holds some subject IDs up to

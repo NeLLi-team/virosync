@@ -7,6 +7,38 @@ from pathlib import Path
 import pytest
 
 from virosync.orchestration._flows.single_genome import run_state
+from virosync.orchestration._flows.single_genome.phase1_state import PHASE1_STATE_SCHEMA
+from virosync.orchestration._flows.single_genome.phase2_resume_state import PHASE2_RESUME_STATE_SCHEMA
+from virosync.orchestration._flows.single_genome.phase_state import PHASE2_STATE_SCHEMA
+
+
+@pytest.mark.parametrize(
+    "path,schema",
+    [
+        ("phase1/resume_state.json", PHASE1_STATE_SCHEMA),
+        ("phase2/refined_state.json", PHASE2_STATE_SCHEMA),
+        ("phase2/resume_state.json", PHASE2_RESUME_STATE_SCHEMA),
+    ],
+)
+def test_native_registry_accepts_current_checkpoint_writer_schema(path: str, schema: str) -> None:
+    artifact = run_state.ArtifactIdentity(relative_path=path, size=1, sha256="0" * 64, schema=schema, row_count=None)
+
+    run_state._require_known_artifact_schemas({path: artifact})
+
+
+@pytest.mark.parametrize(
+    "path,schema",
+    [
+        ("phase1/resume_state.json", "virosync.phase1.resume_state/v2"),
+        ("phase2/refined_state.json", "virosync.phase2.refined_boundaries/v5"),
+        ("phase2/resume_state.json", "virosync.phase2.resume_state/v4"),
+    ],
+)
+def test_native_registry_rejects_checkpoint_without_immutable_seed_provenance(path: str, schema: str) -> None:
+    artifact = run_state.ArtifactIdentity(relative_path=path, size=1, sha256="0" * 64, schema=schema, row_count=None)
+
+    with pytest.raises(ValueError, match="must use schema"):
+        run_state._require_known_artifact_schemas({path: artifact})
 
 
 def _payload(value: str) -> dict[str, object]:

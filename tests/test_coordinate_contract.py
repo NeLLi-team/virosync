@@ -25,7 +25,7 @@ from virosync.orchestration._flows.single_genome.phase3 import (
     _query_boundary_coordinate_records,
 )
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
     collect_query_proteins,
@@ -36,9 +36,8 @@ from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
     assign_boundary_candidate_ids,
     boundary_candidate_id,
-    extend_seeds_by_genes,
-    merge_adjacent_viral_boundaries,
 )
+from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed, merge_reachable_boundaries
 
 CODING_DNA = "ATG" + ("GCT" * 143)
 EXPECTED_PROTEIN = "M" + ("A" * 143)
@@ -369,6 +368,7 @@ def test_one_base_internal_bed_gff_fasta_round_trip() -> None:
         scaffold=scaffold,
         start=start,
         end=end,
+        confirmed_seeds=(ConfirmedSeed("single-base", scaffold, 0, 1),),
         core_viral_start=start,
         core_viral_end=end,
     )
@@ -398,15 +398,27 @@ def test_coordinate_convention_is_versioned_in_output_contract() -> None:
     contract = importlib.import_module("virosync.output_contract")
 
     assert contract.COORDINATE_SCHEMA_VERSION == 2
-    assert contract.OUTPUT_SCHEMA_VERSION == 9
+    assert contract.OUTPUT_SCHEMA_VERSION == 10
     assert "0-based" in contract.COORDINATE_CONVENTION.lower()
     assert "half-open" in contract.COORDINATE_CONVENTION.lower()
 
 
 def test_touching_extended_seeds_remain_distinct() -> None:
     seeds = [
-        MergedSeed(scaffold="scaffold", start=0, end=10, seed_id="left"),
-        MergedSeed(scaffold="scaffold", start=10, end=20, seed_id="right"),
+        MergedSeed(
+            scaffold="scaffold",
+            start=0,
+            end=10,
+            seed_id="left",
+            confirmed_seeds=(ConfirmedSeed("left", "scaffold", 0, 10),),
+        ),
+        MergedSeed(
+            scaffold="scaffold",
+            start=10,
+            end=20,
+            seed_id="right",
+            confirmed_seeds=(ConfirmedSeed("right", "scaffold", 10, 20),),
+        ),
     ]
     proteome_index = {
         "scaffold": [
@@ -415,7 +427,10 @@ def test_touching_extended_seeds_remain_distinct() -> None:
         ]
     }
 
-    observed = extend_seeds_by_genes(seeds, proteome_index, extension_genes=0)
+    observed = [
+        extend_confirmed_seed(seed, proteome_index["scaffold"], {}, (seed.start, seed.end), None, 0.35)
+        for seed in seeds
+    ]
 
     assert [(seed.start, seed.end) for seed in observed] == [(0, 10), (10, 20)]
 
@@ -427,12 +442,16 @@ def test_gene_extension_does_not_merge_mixed_rescue_and_ordinary_seeds() -> None
             start=0,
             end=20,
             sources=["hhg", "marker_validation"],
+            seed_id="initial-seed-428",
+            confirmed_seeds=(ConfirmedSeed("initial-seed-428", "scaffold", 0, 20),),
         ),
         MergedSeed(
             scaffold="scaffold",
             start=10,
             end=30,
             sources=["hhg", "marker_validation", "frameshift_rescue"],
+            seed_id="initial-seed-434",
+            confirmed_seeds=(ConfirmedSeed("initial-seed-434", "scaffold", 10, 30),),
         ),
     ]
     proteome_index = {
@@ -442,10 +461,13 @@ def test_gene_extension_does_not_merge_mixed_rescue_and_ordinary_seeds() -> None
         ]
     }
 
-    observed = extend_seeds_by_genes(seeds, proteome_index, extension_genes=0)
+    observed = [
+        extend_confirmed_seed(seed, proteome_index["scaffold"], {}, (seed.start, seed.end), None, 0.35)
+        for seed in seeds
+    ]
 
-    assert [(seed.start, seed.end) for seed in observed] == [(0, 30), (0, 30)]
-    assert ["frameshift_rescue" in seed.sources for seed in observed] == [False, True]
+    assert [(seed.start, seed.end) for seed in observed] == [(0, 20), (10, 30)]
+    assert ["frameshift_rescue" in seed.seed_sources for seed in observed] == [False, True]
 
 
 def test_candidate_id_preserves_singleton_public_id() -> None:
@@ -454,6 +476,7 @@ def test_candidate_id_preserves_singleton_public_id() -> None:
         start=10,
         end=30,
         seed_id="ordinary",
+        confirmed_seeds=(ConfirmedSeed("ordinary", "scaffold", 12, 28),),
     )
 
     assigned = assign_boundary_candidate_ids([boundary])
@@ -468,14 +491,15 @@ def test_candidate_id_preserves_refined_boundary_positional_signature() -> None:
         10,
         30,
         "seed-from-existing-caller",
-        5,
-        35,
+        12,
+        28,
+        confirmed_seeds=(ConfirmedSeed("seed-from-existing-caller", "scaffold", 12, 28),),
         candidate_id="EVE_scaffold_10-30",
     )
 
     assert boundary.seed_id == "seed-from-existing-caller"
-    assert boundary.original_start == 5
-    assert boundary.original_end == 35
+    assert boundary.original_start == 12
+    assert boundary.original_end == 28
     assert boundary.candidate_id == "EVE_scaffold_10-30"
 
 
@@ -487,12 +511,14 @@ def test_candidate_ids_disambiguate_same_coordinates_independent_of_order() -> N
             end=30,
             seed_id="ordinary",
             seed_sources=["hhg", "marker_validation"],
+            confirmed_seeds=(ConfirmedSeed("ordinary", "scaffold", 12, 18),),
         ),
         RefinedBoundary(
             scaffold="scaffold",
             start=10,
             end=30,
             seed_id="rescue",
+            confirmed_seeds=(ConfirmedSeed("rescue", "scaffold", 22, 28),),
             seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
         ),
     ]
@@ -513,6 +539,7 @@ def test_candidate_ids_reject_indistinguishable_same_seed_duplicates() -> None:
         start=10,
         end=30,
         seed_id="same-seed",
+        confirmed_seeds=(ConfirmedSeed("same-seed", "scaffold", 12, 28),),
     )
 
     with pytest.raises(ValueError, match="same coordinates and seed_id"):
@@ -521,14 +548,16 @@ def test_candidate_ids_reject_indistinguishable_same_seed_duplicates() -> None:
 
 def test_touching_refined_boundaries_are_not_unconditional_overlaps() -> None:
     boundaries = [
-        RefinedBoundary(scaffold="scaffold", start=0, end=10),
-        RefinedBoundary(scaffold="scaffold", start=10, end=20),
+        RefinedBoundary(
+            scaffold="scaffold", start=0, end=10, confirmed_seeds=(ConfirmedSeed("left", "scaffold", 2, 8),)
+        ),
+        RefinedBoundary(
+            scaffold="scaffold", start=10, end=20, confirmed_seeds=(ConfirmedSeed("right", "scaffold", 12, 18),)
+        ),
     ]
 
-    observed = merge_adjacent_viral_boundaries(
+    observed = merge_reachable_boundaries(
         boundaries,
-        taxonomy_map={},
-        proteome_index={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
@@ -544,19 +573,19 @@ def test_post_taxonomy_merge_keeps_overlapping_mixed_rescue_boundaries_separate(
             start=0,
             end=20,
             seed_sources=["hhg", "marker_validation"],
+            confirmed_seeds=(ConfirmedSeed("ordinary", "scaffold", 2, 18),),
         ),
         RefinedBoundary(
             scaffold="scaffold",
             start=10,
             end=30,
             seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+            confirmed_seeds=(ConfirmedSeed("rescue", "scaffold", 12, 28),),
         ),
     ]
 
-    observed = merge_adjacent_viral_boundaries(
+    observed = merge_reachable_boundaries(
         boundaries,
-        taxonomy_map={},
-        proteome_index={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
@@ -572,28 +601,18 @@ def test_post_taxonomy_merge_keeps_viral_gap_mixed_rescue_boundaries_separate() 
             start=0,
             end=100,
             seed_sources=["hhg", "marker_validation"],
+            confirmed_seeds=(ConfirmedSeed("ordinary", "scaffold", 2, 18),),
         ),
         RefinedBoundary(
             scaffold="scaffold",
             start=200,
             end=300,
             seed_sources=["hhg", "marker_validation", "frameshift_rescue"],
+            confirmed_seeds=(ConfirmedSeed("rescue", "scaffold", 220, 280),),
         ),
     ]
-    taxonomy_map = {
-        "gap_gene": SimpleNamespace(
-            scaffold="scaffold",
-            start=120,
-            end=180,
-            has_ncldv_mirus=True,
-            has_vp_plv=False,
-        )
-    }
-
-    observed = merge_adjacent_viral_boundaries(
+    observed = merge_reachable_boundaries(
         boundaries,
-        taxonomy_map,
-        proteome_index={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in observed] == [
@@ -608,6 +627,7 @@ def test_nested_gene_end_sets_extension_and_taxonomy_flank_bound() -> None:
         start=100,
         end=3000,
         seed_id="seed",
+        confirmed_seeds=(ConfirmedSeed("seed", "scaffold", 100, 3000),),
     )
     proteome_index = {
         "scaffold": [
@@ -628,11 +648,7 @@ def test_nested_gene_end_sets_extension_and_taxonomy_flank_bound() -> None:
         ]
     }
 
-    extended = extend_seeds_by_genes(
-        [seed],
-        proteome_index,
-        extension_genes=0,
-    )
+    extended = [extend_confirmed_seed(seed, proteome_index["scaffold"], {}, (seed.start, seed.end), None, 0.35)]
     query = collect_query_proteins(
         [seed],
         proteome_index,
@@ -644,7 +660,9 @@ def test_nested_gene_end_sets_extension_and_taxonomy_flank_bound() -> None:
 
 
 def test_taxonomy_query_covers_fixed_flank_envelope_and_excludes_controls() -> None:
-    seed = MergedSeed(scaffold="s", start=1000, end=1100, seed_id="seed")
+    seed = MergedSeed(
+        scaffold="s", start=1000, end=1100, seed_id="seed", confirmed_seeds=(ConfirmedSeed("seed", "s", 1000, 1100),)
+    )
     spans = [
         ("left_touch", 0, 500),
         ("left_overlap", 100, 600),
@@ -687,105 +705,6 @@ def test_taxonomy_query_covers_fixed_flank_envelope_and_excludes_controls() -> N
     assert mapping.flank_genes_config == 1
 
 
-def test_overlap_merge_keeps_nested_interval_and_original_span_union() -> None:
-    boundaries = [
-        RefinedBoundary(
-            scaffold="scaffold",
-            start=100,
-            end=500,
-            original_start=300,
-            original_end=600,
-        ),
-        RefinedBoundary(
-            scaffold="scaffold",
-            start=200,
-            end=300,
-            original_start=50,
-            original_end=900,
-        ),
-    ]
-
-    observed = merge_adjacent_viral_boundaries(
-        boundaries,
-        taxonomy_map={},
-        proteome_index={},
-    )
-
-    assert len(observed) == 1
-    assert (observed[0].start, observed[0].end) == (100, 500)
-    assert (observed[0].original_start, observed[0].original_end) == (50, 900)
-
-
-def test_merge_requires_taxonomy_for_all_100_gene_interval_queries() -> None:
-    proteome = [
-        pORF(
-            id=f"gene_{index}",
-            scaffold="scaffold",
-            start=index * 100,
-            end=index * 100 + 80,
-        )
-        for index in range(100)
-    ]
-    boundaries = [
-        RefinedBoundary(scaffold="scaffold", start=1000, end=2000),
-        RefinedBoundary(scaffold="scaffold", start=7000, end=8000),
-    ]
-    searched_indices = set(range(0, 30)) | set(range(60, 90))
-    taxonomy_map = {
-        porf.id: SimpleNamespace(
-            scaffold=porf.scaffold,
-            start=porf.start,
-            end=porf.end,
-            has_ncldv_mirus=True,
-            has_vp_plv=False,
-        )
-        for index, porf in enumerate(proteome)
-        if index in searched_indices
-    }
-
-    observed = merge_adjacent_viral_boundaries(
-        boundaries,
-        taxonomy_map,
-        proteome_index={"scaffold": proteome},
-    )
-
-    assert len(observed) == 2
-    assert sum(1 for porf in proteome if 1000 <= porf.start < 8000 and porf.id not in taxonomy_map) == 30
-
-
-def test_fully_searched_100_gene_interval_still_merges() -> None:
-    proteome = [
-        pORF(
-            id=f"gene_{index}",
-            scaffold="scaffold",
-            start=index * 100,
-            end=index * 100 + 80,
-        )
-        for index in range(100)
-    ]
-    taxonomy_map = {
-        porf.id: SimpleNamespace(
-            scaffold=porf.scaffold,
-            start=porf.start,
-            end=porf.end,
-            has_ncldv_mirus=True,
-            has_vp_plv=False,
-        )
-        for porf in proteome
-    }
-
-    observed = merge_adjacent_viral_boundaries(
-        [
-            RefinedBoundary(scaffold="scaffold", start=1000, end=2000),
-            RefinedBoundary(scaffold="scaffold", start=7000, end=8000),
-        ],
-        taxonomy_map,
-        proteome_index={"scaffold": proteome},
-    )
-
-    assert [(boundary.start, boundary.end) for boundary in observed] == [(1000, 8000)]
-
-
 def test_final_merged_interval_composition_matches_direct_calculation(
     tmp_path: Path,
 ) -> None:
@@ -797,6 +716,7 @@ def test_final_merged_interval_composition_matches_direct_calculation(
             scaffold="scaffold",
             start=50,
             end=300,
+            confirmed_seeds=(ConfirmedSeed("left", "scaffold", 100, 200),),
             gc_deviation=0.9,
             max_kfd=0.9,
         ),
@@ -804,14 +724,13 @@ def test_final_merged_interval_composition_matches_direct_calculation(
             scaffold="scaffold",
             start=250,
             end=500,
+            confirmed_seeds=(ConfirmedSeed("right", "scaffold", 300, 400),),
             gc_deviation=0.8,
             max_kfd=0.8,
         ),
     ]
-    merged = merge_adjacent_viral_boundaries(
+    merged = merge_reachable_boundaries(
         boundaries,
-        taxonomy_map={},
-        proteome_index={},
     )
 
     _recalculate_boundary_composition(merged, masked_path=masked_path)
@@ -830,9 +749,43 @@ def test_boundary_conversion_does_not_reuse_cached_seed_composition() -> None:
         end=100,
         gc_deviation=0.99,
         max_kfd=0.98,
+        seed_id="initial-seed-727",
+        confirmed_seeds=(ConfirmedSeed("initial-seed-727", "scaffold", 0, 100),),
     )
 
     boundary = _seeds_to_refined_boundaries([seed])[0]
 
     assert boundary.gc_deviation == 0.0
     assert boundary.max_kfd == 0.0
+
+
+def test_overlap_merge_preserves_complete_nested_source_membership() -> None:
+    outer_core = ConfirmedSeed("outer", "scaffold", 150, 450)
+    inner_core = ConfirmedSeed("inner", "scaffold", 220, 280)
+    boundaries = [
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=100,
+            end=500,
+            seed_id="outer",
+            original_start=150,
+            original_end=450,
+            confirmed_seeds=(outer_core,),
+        ),
+        RefinedBoundary(
+            scaffold="scaffold",
+            start=200,
+            end=300,
+            seed_id="inner",
+            original_start=220,
+            original_end=280,
+            confirmed_seeds=(inner_core,),
+        ),
+    ]
+
+    merged = merge_reachable_boundaries(boundaries)
+
+    assert len(merged) == 1
+    assert (merged[0].start, merged[0].end) == (100, 500)
+    assert merged[0].confirmed_seeds == (outer_core, inner_core)
+    assert (merged[0].original_start, merged[0].original_end) == (150, 450)

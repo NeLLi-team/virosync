@@ -1,4 +1,4 @@
-"""Phase 2 subflow: boundary refinement (host-trim, taxonomy, Diamond)."""
+"""Phase 2 subflow: bounded, seed-preserving growth from gene evidence."""
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -8,6 +8,7 @@ from virosync.ablation import AblationID, InterventionCounts
 from virosync.config import PipelineConfig
 from virosync.orchestration.runtime import call_task
 from virosync.orchestration.tasks import generate_outputs_task
+from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
     ControlStats,
@@ -28,6 +29,13 @@ from virosync.pipeline.phase2.boundary_refiner import (
     boundary_candidate_id,
 )
 from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase2.seed_extension import (
+    confirmed_seed_core,
+    extend_confirmed_seed,
+    merge_reachable_boundaries,
+    refresh_boundary_classification,
+    validate_source_membership,
+)
 from virosync.pipeline.phase2.terminal_repeats import TerminalRepeat
 from virosync.utils.atomic_write import atomic_write_context
 
@@ -103,6 +111,7 @@ def _seeds_to_refined_boundaries(
             start=seed.start,
             end=seed.end,
             seed_id=seed.seed_id,
+            confirmed_seeds=seed.confirmed_seeds,
             original_start=seed.start,
             original_end=seed.end,
             confidence=0.0,
@@ -131,14 +140,6 @@ def _seeds_to_refined_boundaries(
                 seed,
                 "region_classification_mirus_markers",
                 0,
-            ),
-            candidate_start=getattr(seed, "host_trim_original_start", None),
-            candidate_end=getattr(seed, "host_trim_original_end", None),
-            host_trim_reason=getattr(seed, "host_trim_reason", ""),
-            host_trim_common_euk_taxonomy=getattr(
-                seed,
-                "host_trim_common_euk_taxonomy",
-                "",
             ),
         )
         for seed in merged_seeds
@@ -409,15 +410,10 @@ def _run_phase2_subflow(
     threads: int | None = None,
     raw_genome_path: Path | None = None,
 ) -> Phase2Result | Phase2Terminal:
-    """Phase 2: Boundary refinement (gene extension, Diamond taxonomy, host trimming).
+    """Search bounded gene context and extend complete confirmed seeds outward.
 
-    This phase refines seed boundaries through:
-    - Gene-based seed extension (±5 genes, merge overlapping)
-    - Phase 2a: Host-signature trimming (optional)
-    - Phase 2b: Batched Diamond for gene taxonomy
-    - Phase 2c: Taxonomy-based seed refinement
-    - Phase 2f: Host taxonomy trimming (density-aware walk)
-    - Post-processing: boundary constraints, adjacent region merging
+    The shared controller applies connected support and permanent host stops.
+    Repeat partitions must retain whole source seeds within the reachable span.
 
     Args:
         masked_path: Path to masked genome FASTA
@@ -445,22 +441,13 @@ def _run_phase2_subflow(
     gene_taxonomy_faa_db = databases.gene_taxonomy_faa_db
     taxonomy_labels_file = databases.taxonomy_labels_file
     host_label = host.label
-    high_pident_host_threshold = host.high_pident_threshold
     boundary_host_trim_enabled = phase2.host_trim_enabled
-    boundary_host_trim_window_bp = phase2.host_trim_window_bp
-    boundary_host_trim_step_bp = phase2.host_trim_step_bp
-    boundary_host_trim_max_host_fraction = phase2.host_trim_max_host_fraction
-    boundary_host_trim_min_viral_fraction = phase2.host_trim_min_viral_fraction
     boundary_host_trim_score_threshold = phase2.host_trim_score_threshold
-    boundary_host_trim_buffer_kb = phase2.host_trim_buffer_kb
-    boundary_host_trim_min_overlap_score = phase2.host_trim_min_overlap_score
-    boundary_host_signature_min_token_len = phase2.host_signature_min_token_len
     taxonomy_weight_mode = phase2.taxonomy_weight_mode
     boundary_taxonomy_ml_enabled = phase2.taxonomy_ml_enabled
     boundary_taxonomy_ml_model = phase2.taxonomy_ml_model
     boundary_taxonomy_ml_threshold = phase2.taxonomy_ml_threshold
     boundary_taxonomy_ml_neighbor_window = phase2.taxonomy_ml_neighbor_window
-    boundary_diamond_flank_genes = phase2.diamond_flank_genes
     boundary_diamond_top_k = phase2.diamond_top_k
     boundary_diamond_random_seed = phase2.diamond_random_seed
     boundary_diamond_superset_prototype_enabled = phase2.diamond_superset_prototype_enabled
@@ -471,8 +458,9 @@ def _run_phase2_subflow(
 
     phase2_start = time.time()
     host_coordinate_counts = InterventionCounts()
+    merged_seeds = [confirmed_seed_core(seed) for seed in merged_seeds]
 
-    # === PHASE 2a: Host-signature trimming (optional) ===
+    # Authenticated state is the only resume source.
     phase2_state_path = output_dir / "phase2" / PHASE2_STATE_FILENAME
     phase2_resume_state_path = output_dir / "phase2" / PHASE2_RESUME_STATE_FILENAME
     if ablation_id is AblationID.A3 and merged_seeds and not (resume and resume_authorized):
@@ -482,6 +470,13 @@ def _run_phase2_subflow(
         )
         proteome_index = build_proteome_index(proteome_path)
         refined_boundaries = _seeds_to_refined_boundaries(merged_seeds)
+        validate_source_membership(merged_seeds, refined_boundaries)
+        refresh_boundary_classification(
+            refined_boundaries,
+            validated_markers,
+            ablation_id=ablation_id,
+            single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+        )
         _recalculate_boundary_composition(
             refined_boundaries,
             masked_path=masked_path,
@@ -538,119 +533,9 @@ def _run_phase2_subflow(
                 "authenticated Phase 2 is missing lossless resume state: "
                 + ", ".join(str(path) for path in missing_state)
             )
-        logger.info("Phase 2a: host trim skipped (verified schema-v3 resume)")
-    elif boundary_host_trim_enabled and host_signature_model and host_signature_model.token_weights:
-        gene_taxonomy_db = Path(gene_taxonomy_faa_db) if gene_taxonomy_faa_db else None
-        if gene_taxonomy_db and merged_seeds:
-            from virosync.orchestration.tasks import gene_taxonomy_batch_task
-            from virosync.pipeline.phase2.host_signature_trim import (
-                HostTrimParams,
-                trim_seeds_by_host_signature,
-            )
+        logger.info("Phase 2: using authenticated seed-preserving resume state")
 
-            host_trim_dir = output_dir / "phase2" / "host_trim"
-            host_trim_dir.mkdir(parents=True, exist_ok=True)
-            regions_payload = []
-            seen_coordinates: set[tuple[str, int, int]] = set()
-            for seed in merged_seeds:
-                coordinates = (seed.scaffold, seed.start, seed.end)
-                if coordinates in seen_coordinates:
-                    continue
-                seen_coordinates.add(coordinates)
-                regions_payload.append(
-                    {
-                        "eve_id": f"EVE_{seed.scaffold}_{seed.start}-{seed.end}",
-                        "scaffold": seed.scaffold,
-                        "start": seed.start,
-                        "end": seed.end,
-                    }
-                )
-            host_trim_threads = gene_taxonomy_threads or threads
-            logger.info(
-                "Phase 2a: Running gene taxonomy for host-trim (%d regions)",
-                len(regions_payload),
-            )
-            # Pass Phase 1 marker_validation dir for taxonomy distribution analysis
-            marker_validation_dir = output_dir / "phase1" / "marker_validation"
-            # Pass HMM hits file for building genome-specific host baseline from COG/BUSCO markers
-            hmm_hits_file = output_dir / "phase1" / "hmm" / "hmm_hits.tsv"
-            if superset_diamond_hits is not None:
-                from virosync.pipeline.phase3.gene_taxonomy import (
-                    materialize_gene_taxonomy_batch_from_cached_hits,
-                )
-
-                gene_tax_map = materialize_gene_taxonomy_batch_from_cached_hits(
-                    regions=regions_payload,
-                    proteome_fasta=proteome_path,
-                    diamond_hits=superset_diamond_hits,
-                    output_dir=host_trim_dir / "gene_taxonomy",
-                    high_pident_euk_threshold=high_pident_host_threshold,
-                )
-            else:
-                gene_tax_map = call_task(
-                    gene_taxonomy_batch_task,
-                    regions=regions_payload,
-                    proteome_path=proteome_path,
-                    gene_taxonomy_db=gene_taxonomy_db,
-                    output_dir=host_trim_dir / "gene_taxonomy",
-                    threads=host_trim_threads,
-                    high_pident_host_threshold=high_pident_host_threshold,
-                    host_label=host_label,
-                    marker_validation_dir=marker_validation_dir if marker_validation_dir.exists() else None,
-                    hmm_hits_file=hmm_hits_file if hmm_hits_file.exists() else None,
-                    search_backend=search_backend,
-                )
-            trim_params = HostTrimParams(
-                window_bp=boundary_host_trim_window_bp,
-                step_bp=boundary_host_trim_step_bp,
-                max_host_fraction=boundary_host_trim_max_host_fraction,
-                min_viral_fraction=boundary_host_trim_min_viral_fraction,
-                host_score_threshold=boundary_host_trim_score_threshold,
-                buffer_kb=boundary_host_trim_buffer_kb,
-            )
-            merged_seeds, trim_summaries = trim_seeds_by_host_signature(
-                seeds=merged_seeds,
-                gene_taxonomy_map=gene_tax_map or {},
-                host_model=host_signature_model,
-                validated_markers=validated_markers,
-                params=trim_params,
-                ablation_id=ablation_id,
-            )
-            host_coordinate_counts = _sum_intervention_counts(
-                host_coordinate_counts,
-                InterventionCounts(
-                    opportunities=sum(int(row["host_coordinate_change_opportunities"]) for row in trim_summaries),
-                    interventions=sum(int(row["host_coordinate_change_interventions"]) for row in trim_summaries),
-                    changed=sum(int(row["host_coordinate_change_changed"]) for row in trim_summaries),
-                ),
-            )
-            if trim_summaries and len(trim_summaries) == len(merged_seeds):
-                for seed, summary in zip(merged_seeds, trim_summaries):
-                    seed.host_trim_original_start = summary.get("start")
-                    seed.host_trim_original_end = summary.get("end")
-                    seed.host_trimmed_start = summary.get("trimmed_start")
-                    seed.host_trimmed_end = summary.get("trimmed_end")
-                    seed.host_trim_reason = summary.get("reason", "")
-                    seed.host_trim_common_euk_taxonomy = ""
-            summary_path = host_trim_dir / "host_signature_trim.tsv"
-            with atomic_write_context(summary_path, "w") as handle:
-                handle.write(
-                    "scaffold\tstart\tend\ttrimmed_start\ttrimmed_end\treason\t"
-                    "window_count\tgood_windows\tgood_marker_windows\thost_consensus_taxonomy\n"
-                )
-                for row in trim_summaries:
-                    handle.write(
-                        f"{row['scaffold']}\t{row['start']}\t{row['end']}\t"
-                        f"{row['trimmed_start']}\t{row['trimmed_end']}\t{row['reason']}\t"
-                        f"{row.get('window_count', 0)}\t{row.get('good_windows', 0)}\t"
-                        f"{row.get('good_marker_windows', 0)}\t"
-                        f"{row.get('host_consensus_taxonomy', '.')}\n"
-                    )
-            logger.info("Phase 2a: wrote host trim summary %s", summary_path)
-        else:
-            logger.info("Phase 2a: host trim skipped (no gene taxonomy DB or seeds)")
-
-    if not merged_seeds:
+    if not merged_seeds and not (resume and resume_authorized):
         logger.warning("No seeds found - pipeline complete with 0 predictions")
         output_files_empty = call_task(
             generate_outputs_task,
@@ -699,6 +584,7 @@ def _run_phase2_subflow(
             raise ValueError("authenticated Phase 2 boundary and resume checkpoints disagree")
 
         refined_boundaries = resume_state.refined_boundaries
+        validate_source_membership(merged_seeds, refined_boundaries)
         boundary_taxonomy_map = resume_state.boundary_taxonomy_map
         boundary_control_stats = resume_state.boundary_control_stats
         boundary_diamond_query = resume_state.boundary_diamond_query
@@ -722,26 +608,9 @@ def _run_phase2_subflow(
             elapsed=phase2_elapsed,
         )
 
-    # === Gene-based seed extension ===
-    # Extend each seed by ±5 genes and merge overlapping seeds BEFORE Diamond.
-    # Seeds are now gene-anchored before taxonomy refinement.
-    if merged_seeds:
-        from virosync.pipeline.phase2.boundary_refiner import extend_seeds_by_genes
-
-        proteome_index = (
-            superset_proteome_index if superset_proteome_index is not None else build_proteome_index(proteome_path)
-        )
-        pre_extend_count = len(merged_seeds)
-        merged_seeds = extend_seeds_by_genes(
-            merged_seeds,
-            proteome_index,
-            extension_genes=5,
-        )
-        logger.info(
-            "Phase 2: Extended seeds by ±5 genes and merged overlapping: %d -> %d seeds",
-            pre_extend_count,
-            len(merged_seeds),
-        )
+    proteome_index = (
+        superset_proteome_index if superset_proteome_index is not None else build_proteome_index(proteome_path)
+    )
 
     # === PHASE 2b: Batched Diamond for boundary refinement ===
     # Run Diamond ONCE per genome on ALL seeds + flanking genes + control genes
@@ -778,307 +647,58 @@ def _run_phase2_subflow(
         boundary_control_stats = boundary_evidence.control_stats
         boundary_diamond_query = boundary_evidence.query
 
-    # === PHASE 2c: Taxonomy-based seed refinement ===
-    if merged_seeds and boundary_taxonomy_map and boundary_diamond_query:
-        from virosync.pipeline.phase2 import taxonomy_seed_refiner
-        from virosync.pipeline.phase2.taxonomy_ml_refiner import (
-            refine_seeds_by_taxonomy_ml,
-        )
+    ml_support: dict[str, frozenset[str]] = {}
+    if boundary_taxonomy_ml_enabled and boundary_diamond_query is not None:
+        from virosync.pipeline.phase2.taxonomy_ml_refiner import predict_taxonomy_support
 
-        logger.info("-" * 60)
-        logger.info("Phase 2c: Taxonomy-based seed refinement")
-        logger.info("-" * 60)
-
-        def _count_boundary_updates(original, refined) -> int:
-            if not isinstance(refined, list) or len(refined) != len(original):
-                return 0
-            updated = 0
-            for old_seed, new_seed in zip(original, refined):
-                if old_seed.start != new_seed.start or old_seed.end != new_seed.end:
-                    updated += 1
-            return updated
-
-        heuristic_kwargs = {
-            "merged_seeds": merged_seeds,
-            "taxonomy_map": boundary_taxonomy_map,
-            "seed_gene_mappings": boundary_diamond_query.seed_gene_mappings,
-            "host_prefix": f"{host_label}__",
-            "expansion_kb": 5,
-            "host_signature_model": host_signature_model,
-            "host_signature_threshold": boundary_host_trim_score_threshold,
-        }
-        taxonomy_refined_seeds = None
-
-        taxonomy_seed_refiner.validate_taxonomy_refinement_mode(
-            ablation_id=ablation_id,
-            taxonomy_ml_enabled=boundary_taxonomy_ml_enabled,
-        )
-        if boundary_taxonomy_ml_enabled:
-            try:
-                ml_result = refine_seeds_by_taxonomy_ml(
-                    merged_seeds=merged_seeds,
-                    taxonomy_map=boundary_taxonomy_map,
-                    boundary_query=boundary_diamond_query,
-                    host_signature_model=host_signature_model,
-                    model_type=boundary_taxonomy_ml_model,
-                    host_prefix=f"{host_label}__",
-                    probability_threshold=boundary_taxonomy_ml_threshold,
-                    neighbor_window=boundary_taxonomy_ml_neighbor_window,
-                    output_dir=output_dir / "phase2" / "taxonomy_ml",
-                    random_state=boundary_diamond_random_seed,
-                    taxonomy_weight_mode=taxonomy_weight_mode,
-                    host_signature_threshold=boundary_host_trim_score_threshold,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Phase 2c: Taxonomy ML refinement failed (%s); using heuristic fallback",
-                    exc,
-                )
-            else:
-                ml_updates = _count_boundary_updates(merged_seeds, ml_result)
-                if ml_updates > 0:
-                    taxonomy_refined_seeds = ml_result
-                    logger.info(
-                        "Phase 2c: Taxonomy ML refinement updated %d/%d seeds "
-                        "(model=%s, threshold=%.3f, neighbor_window=%d)",
-                        ml_updates,
-                        len(merged_seeds),
-                        boundary_taxonomy_ml_model,
-                        boundary_taxonomy_ml_threshold,
-                        boundary_taxonomy_ml_neighbor_window,
-                    )
-                else:
-                    logger.info(
-                        "Phase 2c: Taxonomy ML refinement produced no boundary updates; using heuristic fallback"
-                    )
-
-        if taxonomy_refined_seeds is None:
-            taxonomy_evaluation = taxonomy_seed_refiner.evaluate_taxonomy_seed_refinement(
-                **heuristic_kwargs,
-                ablation_id=ablation_id,
+        try:
+            ml_support = predict_taxonomy_support(
+                taxonomy_map=boundary_taxonomy_map,
+                boundary_query=boundary_diamond_query,
+                model_type=boundary_taxonomy_ml_model,
+                host_prefix=f"{host_label}__",
+                probability_threshold=boundary_taxonomy_ml_threshold,
+                neighbor_window=boundary_taxonomy_ml_neighbor_window,
+                output_dir=output_dir / "phase2" / "taxonomy_ml",
+                random_state=boundary_diamond_random_seed,
+                taxonomy_weight_mode=taxonomy_weight_mode,
             )
-            taxonomy_refined_seeds = list(taxonomy_evaluation.selected_seeds)
+        except Exception as exc:
+            logger.warning("Taxonomy ML failed (%s); using deterministic extension", exc)
+
+    refined_boundaries = []
+    extension_bp = config.phase1.extension_kb * 1000
+    for seed in merged_seeds:
+        mapping = boundary_diamond_query.seed_gene_mappings.get(seed.seed_id) if boundary_diamond_query else None
+        envelope = (seed.start, seed.end)
+        if mapping is not None and seed.predicted_family != "CRESS":
+            envelope = (
+                max(0, seed.start - extension_bp, min(seed.start, mapping.flank_start_bp)),
+                min(seed.end + extension_bp, max(seed.end, mapping.flank_end_bp)),
+            )
+        kwargs = dict(
+            seed=seed,
+            genes=proteome_index.get(seed.scaffold, []),
+            taxonomy=boundary_taxonomy_map,
+            envelope=envelope,
+            host_model=host_signature_model if boundary_host_trim_enabled else None,
+            host_threshold=boundary_host_trim_score_threshold,
+            ml_support=ml_support.get(seed.seed_id, frozenset()),
+        )
+        boundary = extend_confirmed_seed(**kwargs, disable_host_stop=ablation_id is AblationID.A4)
+        if ablation_id is AblationID.A4:
+            normal = extend_confirmed_seed(**kwargs)
+            affected = (normal.start, normal.end) != (boundary.start, boundary.end)
             host_coordinate_counts = _sum_intervention_counts(
                 host_coordinate_counts,
-                taxonomy_evaluation.intervention_counts,
+                InterventionCounts(opportunities=int(affected), interventions=int(affected), changed=int(affected)),
             )
-            heuristic_updates = _count_boundary_updates(merged_seeds, taxonomy_refined_seeds)
-            logger.info(
-                "Phase 2c: Heuristic taxonomy refinement updated %d/%d seeds",
-                heuristic_updates,
-                len(merged_seeds),
-            )
-
-        # Use taxonomy-refined seeds for downstream steps
-        merged_seeds = taxonomy_refined_seeds
-    else:
-        logger.warning("Skipping taxonomy-based seed refinement (missing Diamond data)")
-
-    # Initialize Phase 2 output variables
-    boundaries_bed_path = refined_bed
-    refined_boundaries = []
-
-    # === Convert seeds directly to RefinedBoundary ===
-    # Boundaries are gene-anchored from extension above.
-    # Boundary confidence fields remain available for output compatibility.
-
-    if merged_seeds:
-        refined_boundaries = _seeds_to_refined_boundaries(merged_seeds)
-        logger.info(
-            "Phase 2: Converted %d gene-extended seeds to RefinedBoundary",
-            len(refined_boundaries),
-        )
-
-    # Phase 2f: Host Taxonomy Trimming
-    if refined_boundaries and boundary_taxonomy_map and boundary_control_stats and boundary_diamond_query:
-        from virosync.pipeline.phase2.boundary_diamond import build_taxonomy_consensus
-        from virosync.pipeline.phase2.boundary_refiner import trim_boundary_by_host_taxonomy
-
-        logger.info("-" * 60)
-        logger.info("Phase 2c: Host Taxonomy Trimming")
-        logger.info("-" * 60)
-
-        # Build taxonomic consensus from control genes using full taxonomy lookup
-        control_taxonomy = [
-            boundary_taxonomy_map[pid]
-            for pid in boundary_diamond_query.control_porf_ids
-            if pid in boundary_taxonomy_map
-        ]
-
-        # Build host baseline fingerprint from control genes
-        from virosync.pipeline.host_signatures import TaxonomyLabelLookup
-        from virosync.pipeline.phase2.boundary_diamond import build_host_baseline_fingerprint
-
-        host_baseline_fingerprint = {}
-        taxonomy_consensus = "unknown"
-        if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
-            tax_lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
-            taxonomy_consensus = build_taxonomy_consensus(
-                control_taxonomy,
-                taxonomy_lookup=tax_lookup,
-                host_prefix=f"{host_label}__",
-                min_token_length=boundary_host_signature_min_token_len,
-                weight_mode=taxonomy_weight_mode,
-            )
-
-            # Build host baseline fingerprint
-            host_baseline_fingerprint = build_host_baseline_fingerprint(
-                control_taxonomy,
-                host_prefix=f"{host_label}__",
-                min_token_count=3,
-                min_weight_fraction=0.10,
-            )
-
-            if host_baseline_fingerprint:
-                logger.info(
-                    "Phase 2c: Host baseline fingerprint built (%d tokens)",
-                    len(host_baseline_fingerprint),
-                )
-            else:
-                logger.warning("Phase 2c: Host baseline fingerprint empty - using fallback prefix matching")
-
-        # Log host taxonomy consensus with full lineage
-        logger.info(f"Host Taxonomy Consensus (from {boundary_control_stats.n_genes} control genes):")
-        logger.info(f"  Lineage: {taxonomy_consensus}")
-        logger.info(f"  Host frequency: {boundary_control_stats.host_frequency:.2%}")
-        logger.info(f"  No-hit frequency: {boundary_control_stats.no_hit_frequency:.2%}")
-        logger.info(f"  Mean pident (host hits): {boundary_control_stats.mean_pident:.1f}%")
-        logger.info(f"  Dominant organism: {boundary_control_stats.dominant_organism}")
-
-        # Apply trimming to each boundary
-        trimmed_boundaries = []
-        n_trimmed = 0
-        total_upstream_bp = 0
-        total_downstream_bp = 0
-
-        # Get min_overlap_score from config
-        min_overlap = boundary_host_trim_min_overlap_score
-
-        _n_no_seed_id = 0
-        _n_no_mapping = 0
-        for boundary in refined_boundaries:
-            if boundary.predicted_family == "CRESS":
-                trimmed_boundaries.append(boundary)
-                continue
-            seed_mapping = None
-            if boundary.seed_id:
-                seed_mapping = boundary_diamond_query.seed_gene_mappings.get(boundary.seed_id)
-            if not boundary.seed_id:
-                _n_no_seed_id += 1
-            elif not seed_mapping:
-                _n_no_mapping += 1
-
-            if seed_mapping:
-                new_start, new_end, stats = trim_boundary_by_host_taxonomy(
-                    boundary=boundary,
-                    seed_mapping=seed_mapping,
-                    taxonomy_map=boundary_taxonomy_map,
-                    control_stats=boundary_control_stats,
-                    host_prefix=f"{host_label}__",
-                    host_baseline_fingerprint=host_baseline_fingerprint,
-                    host_signature_model=host_signature_model,
-                    host_signature_threshold=boundary_host_trim_score_threshold,
-                    min_overlap_score=min_overlap,
-                    taxonomy_weight_mode=taxonomy_weight_mode,
-                    unknown_neighbor_window=1,
-                    unknown_host_penalty=2.0,
-                    unknown_viral_bonus=2.0,
-                    ablation_id=ablation_id,
-                )
-                host_coordinate_counts = _sum_intervention_counts(
-                    host_coordinate_counts,
-                    InterventionCounts(
-                        opportunities=int(stats["host_coordinate_change_opportunities"]),
-                        interventions=int(stats["host_coordinate_change_interventions"]),
-                        changed=int(stats["host_coordinate_change_changed"]),
-                    ),
-                )
-
-                if stats.get("trimmed"):
-                    n_trimmed += 1
-                    total_upstream_bp += stats.get("upstream_bp", 0)
-                    total_downstream_bp += stats.get("downstream_bp", 0)
-
-                    logger.info(
-                        f"Host trim: {boundary.seed_id} "
-                        f"{boundary.start}-{boundary.end} -> {new_start}-{new_end} "
-                        f"(upstream={stats['upstream_bp']}bp, downstream={stats['downstream_bp']}bp)"
-                    )
-                    if stats.get("upstream_stopped_by"):
-                        logger.info(f"  Upstream stopped by: {stats['upstream_stopped_by']}")
-                    if stats.get("downstream_stopped_by"):
-                        logger.info(f"  Downstream stopped by: {stats['downstream_stopped_by']}")
-
-                    # Update boundary
-                    boundary.start = new_start
-                    boundary.end = new_end
-
-            trimmed_boundaries.append(boundary)
-
-        refined_boundaries = trimmed_boundaries
-
-        logger.info(
-            f"Host taxonomy trimming: {n_trimmed}/{len(trimmed_boundaries)} boundaries trimmed "
-            f"(upstream={total_upstream_bp:,}bp, downstream={total_downstream_bp:,}bp total) "
-            f"[no_seed_id={_n_no_seed_id}, no_mapping={_n_no_mapping}]"
-        )
-        logger.info("-" * 60)
-
-    # Apply boundary constraints to ensure boundaries don't exceed +/-N genes from original seed
-    # This is critical: the flanking genes in Phase 2b only cover +/-flank_genes from the seed
-    if refined_boundaries and boundary_diamond_query and boundary_diamond_query.seed_gene_mappings:
-        from virosync.pipeline.phase2.boundary_refiner import constrain_to_seed_bounds
-
-        constrained_boundaries = []
-        n_constrained = 0
-        for boundary in refined_boundaries:
-            seed_mapping = boundary_diamond_query.seed_gene_mappings.get(boundary.seed_id)
-            if seed_mapping:
-                original_start, original_end = boundary.start, boundary.end
-                constrained = constrain_to_seed_bounds(boundary, seed_mapping)
-                constrained_boundaries.append(constrained)
-                if constrained.start != original_start or constrained.end != original_end:
-                    n_constrained += 1
-            else:
-                # No seed mapping available (e.g., resume from BED) - keep original
-                constrained_boundaries.append(boundary)
-                if boundary.seed_id:
-                    logger.debug(
-                        "No seed mapping for %s - boundary not constrained",
-                        boundary.seed_id,
-                    )
-        refined_boundaries = constrained_boundaries
-        if n_constrained > 0:
-            logger.info(
-                "Boundary constraint applied to %d/%d regions (max +/-%d genes from seed)",
-                n_constrained,
-                len(refined_boundaries),
-                boundary_diamond_flank_genes,
-            )
-
-    # Check for adjacent EVE regions that should be merged based on taxonomy
-    # If the gap between two EVEs contains viral genes, merge them
-    if refined_boundaries and boundary_taxonomy_map and len(refined_boundaries) > 1:
-        from virosync.pipeline.phase2.boundary_refiner import merge_adjacent_viral_boundaries
-
-        pre_merge_count = len(refined_boundaries)
-        refined_boundaries = merge_adjacent_viral_boundaries(
-            boundaries=refined_boundaries,
-            taxonomy_map=boundary_taxonomy_map,
-            proteome_index=proteome_index,
-            max_gap_bp=10000,  # Max 10kb gap to consider merging
-            min_viral_fraction=0.3,  # At least 30% of gap genes must be viral
-        )
-        if len(refined_boundaries) < pre_merge_count:
-            logger.info(
-                "Post-taxonomy merge: %d -> %d EVE regions",
-                pre_merge_count,
-                len(refined_boundaries),
-            )
+        refined_boundaries.append(boundary)
+    refined_boundaries = merge_reachable_boundaries(refined_boundaries)
 
     # Terminal repeats are read from the raw genome because Phase 0 hard-masks
     # repeats. Run this after every heuristic coordinate change and merge, but
-    # before marker-floor metadata and coordinate-derived composition evidence.
+    # before coordinate-derived composition evidence.
     if (
         config.phase2.terminal_repeat_enabled
         and refined_boundaries
@@ -1106,28 +726,13 @@ def _run_phase2_subflow(
             n_tir_overrides,
         )
 
-    # === Validated-marker floor metadata (Phase-3 re-admit input) ===
-    # Phase-2 host trimming can collapse a marker-dense NCLDV/MIRUS boundary below
-    # its validated-marker span, stripping hallmark genes out so the v2 gate
-    # (length > 5000 OR has_capsid_evidence) rejects a genuine EVE. We do NOT mutate the
-    # boundary here (extending an accepted region pulls host genes in and regresses
-    # its confidence/tier -> NCLDV loss;. Instead we
-    # only record the floored-alternative span as metadata on each boundary; the
-    # Phase-3 re-admit pass consumes it on REJECTED boundaries only. Scoped to each
-    # boundary's own seed span, validated markers only -> host regions get no floor.
-    if refined_boundaries and validated_markers:
-        from virosync.pipeline.phase2.boundary_refiner import (
-            annotate_boundaries_with_marker_floor,
-        )
-
-        n_marker_floored = annotate_boundaries_with_marker_floor(refined_boundaries, validated_markers)
-        if n_marker_floored:
-            logger.info(
-                "Validated-marker floor recorded on %d/%d boundaries (Phase-3 re-admit candidates)",
-                n_marker_floored,
-                len(refined_boundaries),
-            )
-
+    validate_source_membership(merged_seeds, refined_boundaries)
+    refresh_boundary_classification(
+        refined_boundaries,
+        validated_markers,
+        ablation_id=ablation_id,
+        single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+    )
     _recalculate_boundary_composition(
         refined_boundaries,
         masked_path=masked_path,

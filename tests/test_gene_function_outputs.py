@@ -15,6 +15,7 @@ import pytest
 
 from virosync.orchestration._flows.single_genome import orchestrator
 from virosync.orchestration.tasks import generate_outputs_task
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
 from virosync.pipeline.phase3 import gene_functions
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
@@ -110,6 +111,7 @@ def _write_model_hits(path: Path) -> Path:
 def _result(eve_id: str, genes: list[tuple[str, bool]]) -> VerificationResult:
     result = VerificationResult(
         eve_id=eve_id,
+        confirmed_seeds=(ConfirmedSeed(f"{eve_id}-marker-seed", "contig_1", 0, 480),),
         scaffold="contig_1",
         start=0,
         end=6001,

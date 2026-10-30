@@ -7,7 +7,7 @@ from virosync.orchestration._flows.single_genome.orchestrator import (
     _write_combined_eve_fasta,
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationStatus
 from virosync.pipeline.phase3.phase1_surface import build_phase1_seed_surface
 
@@ -70,6 +70,7 @@ def test_a1_exports_exact_phase1_coordinates_and_unscored_provenance() -> None:
         region_classification_mirus_markers=0,
         anchors=[lower_scoring_alias, selected_gene_a, mcp, outside_seed, other_scaffold],
         hhg_anchors=[selected_gene_a, mcp],
+        confirmed_seeds=(ConfirmedSeed("order-dependent-seed-id", "ctg", 0, 100),),
     )
 
     surface = build_phase1_seed_surface([seed])
@@ -129,6 +130,7 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
         seed_id="seed_0_ctg_5",
         anchors=[second, first],
         hhg_anchors=[first],
+        confirmed_seeds=(ConfirmedSeed("seed_0_ctg_5", "ctg", 5, 100),),
     )
     seed_b = MergedSeed(
         scaffold="ctg",
@@ -137,6 +139,7 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
         seed_id="seed_99_ctg_5",
         anchors=[first, second],
         hhg_anchors=[second],
+        confirmed_seeds=(ConfirmedSeed("seed_99_ctg_5", "ctg", 5, 100),),
     )
 
     result_a = build_phase1_seed_surface([seed_a]).results[0]
@@ -162,6 +165,7 @@ def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> Non
         seed_id="ordinary-seed",
         sources=["hhg"],
         anchors=[_anchor("ordinary-gene", "GVOGm0004", 50.0)],
+        confirmed_seeds=(ConfirmedSeed("ordinary-seed", "ctg", 5, 100),),
     )
     rescue = MergedSeed(
         scaffold="ctg",
@@ -170,6 +174,7 @@ def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> Non
         seed_id="rescue-seed",
         sources=["frameshift_rescue"],
         anchors=[_anchor("rescue-gene", "plv_mcp_1", 80.0)],
+        confirmed_seeds=(ConfirmedSeed("rescue-seed", "ctg", 5, 100),),
     )
 
     forward = build_phase1_seed_surface([ordinary, rescue]).results
@@ -204,6 +209,7 @@ def test_a1_combined_fasta_is_available_before_report_generation(tmp_path) -> No
         end=8,
         seed_id="seed_0_ctg_2",
         anchors=[_anchor("gene-a", "GVOGm0004", 50.0, start=2, end=8)],
+        confirmed_seeds=(ConfirmedSeed("seed_0_ctg_2", "ctg", 2, 8),),
     )
     surface = build_phase1_seed_surface([seed])
 
@@ -247,6 +253,7 @@ def test_combined_fasta_fails_closed_when_results_do_not_match_the_genome(
         end=8,
         seed_id="seed_0_ctg_2",
         anchors=[_anchor("gene-a", "GVOGm0004", 50.0, start=2, end=8)],
+        confirmed_seeds=(ConfirmedSeed("seed_0_ctg_2", "ctg", 2, 8),),
     )
     surface = build_phase1_seed_surface([seed])
 
@@ -257,3 +264,29 @@ def test_combined_fasta_fails_closed_when_results_do_not_match_the_genome(
             genome_path=genome_path,
             results=surface.canonical_results,
         )
+
+
+def test_a1_rejects_missing_original_seed() -> None:
+    seed = MergedSeed(scaffold="ctg", start=0, end=100, seed_id="original")
+
+    with pytest.raises(ValueError, match="confirmed seed"):
+        build_phase1_seed_surface([seed])
+
+
+def test_a1_uses_frozen_original_core_instead_of_mutated_active_span() -> None:
+    core = ConfirmedSeed("original", "ctg", 0, 101)
+    seed = MergedSeed(
+        scaffold="ctg",
+        start=0,
+        end=100,
+        seed_id="original",
+        confirmed_seeds=(core,),
+        anchors=[_anchor("marker", "GVOGm0004", 50.0)],
+    )
+
+    result = build_phase1_seed_surface([seed]).results[0]
+
+    assert (result.start, result.end) == (0, 101)
+    assert result.confirmed_seeds == (core,)
+    assert result.eve_id == "EVE_ctg_0-101"
+    assert (seed.start, seed.end) == (0, 100)

@@ -4,7 +4,7 @@ import json
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from virosync.ablation import AblationID, InterventionCounts
@@ -26,10 +26,8 @@ from virosync.pipeline.phase2.boundary_diamond import (
     missing_boundary_taxonomy_ids,
 )
 from virosync.pipeline.phase2.boundary_refiner import (
-    assign_boundary_candidate_ids,
     boundary_candidate_id,
 )
-from virosync.pipeline.phase2.repeat_evidence import for_changed_endpoints
 from virosync.pipeline.phase3.acceptance_selection import (
     select_phase3_acceptance,
 )
@@ -38,11 +36,7 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
     recluster_survivors,
     unsupported_eve_ids,
 )
-from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
-from virosync.pipeline.phase3.output_generator import (
-    _is_atpase_marker,
-    evaluate_v2_quality_gate,
-)
+from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult, validate_results_seed_containment
 from virosync.utils.path_safety import safe_filename_components
 
 from .loaders import (
@@ -141,14 +135,6 @@ def _query_boundary_coordinate_records(
         _query_scaffold_index(taxonomy_index, **query),
         _query_scaffold_index(marker_index, **query),
     )
-
-
-def _is_marker_floor_recovery_candidate(result) -> bool:
-    """Return whether selection excluded a candidate for a recoverable reason."""
-    return result.canonical_selection_outcome in {
-        "normal_gate_rejected",
-        "rescue_marker_excluded",
-    }
 
 
 def _resolve_tmvec_device(device: str) -> str:
@@ -868,183 +854,8 @@ def _run_phase3_subflow(
         config=config,
     )
 
-    # First acceptance pass. It identifies which candidates the v2 gate
-    # rejects; the marker-floor re-admit below can only add to that set.
-    acceptance_selection = select_phase3_acceptance(
-        verification_results,
-        ablation_id,
-    )
-
-    # === Phase-3 marker-floor re-admit (recall recovery) ===
-    # Phase-2 host trimming can collapse a marker-dense NCLDV/MIRUS seed below 5 kb,
-    # stripping validated hallmark markers out of the boundary so the v2 gate
-    # rejects a genuine EVE. Rather than MUTATE the boundary in Phase 2 (extending an
-    # ALREADY-ACCEPTED region pulls host genes in, lowers confidence, drops the tier
-    # MEDIUM->LOW, and the stricter LOW NCLDV gate then rejects it -> NCLDV genes lost
-    # on rhizophagus/tstriata), recover ONLY here and ONLY additively: for each
-    # REJECTED region whose own seed span carried >=2 validated markers
-    # (annotate_boundaries_with_marker_floor stored marker_floor_start/end),
-    # synthesize an ALTERNATIVE at the floored span via the same evidence path and
-    # re-admit it iff it (a) independently passes the v2 gate, (b) carries a genuine
-    # non-ATPase viral hallmark inside the floored span, (c) has TIER-2 interior
-    # viral fraction >= READMIT_MIN_VIRAL_FRACTION (so host-with-a-marker regions are
-    # rejected), and (d) does not overlap any accepted region. No boundary already
-    # accepted is modified, and the alternatives only ever ADD candidates, so the
-    # accepted set cannot shrink. The selector is re-run afterwards over the
-    # extended list. Direct-overlap arbitration prevents a non-overlapping
-    # alternative from changing an original winner through a transitive bridge.
-    #
-    READMIT_MIN_VIRAL_FRACTION = 0.10
-    # Regions accepted so far, seeded from the first pass and extended as
-    # alternatives qualify, so no two re-admits can overlap each other.
-    readmit_accepted = list(acceptance_selection.canonical_results)
-    boundary_by_candidate_id = {boundary_candidate_id(boundary): boundary for boundary in refined_boundaries}
-    readmit_boundaries = []
-    for r in verification_results:
-        if not _is_marker_floor_recovery_candidate(r):
-            continue
-        boundary = boundary_by_candidate_id.get(r.eve_id)
-        if boundary is None:
-            continue
-        if getattr(boundary, "tir_boundary_override", False):
-            continue
-        floor_start = getattr(boundary, "marker_floor_start", None)
-        floor_end = getattr(boundary, "marker_floor_end", None)
-        if floor_start is None or floor_end is None:
-            continue
-        # Only a strictly wider floored span gives the gate something new to see.
-        if not (floor_start < boundary.start or floor_end > boundary.end):
-            continue
-        readmit_boundaries.append(
-            replace(
-                boundary,
-                start=min(boundary.start, floor_start),
-                end=max(boundary.end, floor_end),
-                candidate_id="",
-                repeat_evidence=for_changed_endpoints(
-                    boundary.repeat_evidence,
-                    start=min(boundary.start, floor_start),
-                    end=max(boundary.end, floor_end),
-                ),
-            )
-        )
-
-    readmit_boundaries = assign_boundary_candidate_ids(
-        readmit_boundaries,
-        reserved_candidate_ids=boundary_by_candidate_id,
-    )
-
-    n_readmitted = 0
-    if readmit_boundaries:
-        from .phase2 import _recalculate_boundary_composition
-
-        _recalculate_boundary_composition(
-            readmit_boundaries,
-            masked_path=masked_path,
-        )
-        # Evidence parity is partial by construction. Hallmarks and Phase-2b gene
-        # taxonomy are recomputed for the floored span, but InterProScan and TMVec
-        # were precomputed for the ORIGINAL boundaries only, so proteins that the
-        # floor newly includes carry no InterPro or structural evidence here.
-        # That can only lower an alternative's score, so it costs recoveries
-        # rather than admitting anything extra. Re-running those two tools per
-        # alternative is the fix if the recovery rate proves too low.
-        alt_hh_map, alt_gt_map, alt_ip_map = {}, {}, {}
-        for alt_boundary in readmit_boundaries:
-            evidence = _build_boundary_evidence(
-                boundary=alt_boundary,
-                taxonomy_index=boundary_taxonomy_index,
-                marker_index=validated_marker_index,
-                boundary_taxonomy_map=boundary_taxonomy_map,
-                proteome_index=proteome_index,
-                boundary_diamond_query=boundary_diamond_query,
-                interproscan_map=interproscan_map,
-                use_precomputed_taxonomy=use_precomputed_taxonomy,
-                proteome_path=proteome_path,
-                config=config,
-                logger=logger,
-            )
-            alt_hh_map[evidence.boundary_id] = evidence.hallmarks
-            if evidence.gene_taxonomy:
-                alt_gt_map[evidence.boundary_id] = evidence.gene_taxonomy
-            if evidence.interproscan:
-                alt_ip_map[evidence.boundary_id] = evidence.interproscan
-        alt_results = _run_verification(
-            boundaries=readmit_boundaries,
-            hallmark_hits_map=alt_hh_map,
-            gene_taxonomy_map=alt_gt_map,
-            interproscan_map=alt_ip_map,
-            jelly_roll_map=jelly_roll_map,
-            masked_path=masked_path,
-            proteome_path=proteome_path,
-            output_dir=output_dir,
-            host_signatures=host_signatures,
-            host_signature_model_payload=host_signature_model_payload,
-            precomputed_tmvec=precomputed_tmvec,
-            tmvec_device=tmvec_device,
-            config=config,
-        )
-        # Deterministic order so the highest-confidence alternative wins any overlap.
-        alt_results.sort(key=lambda a: (-getattr(a, "final_confidence", 0.0), a.scaffold, a.start))
-        for alt in alt_results:
-            # (a) the floored alternative must independently pass the v2 gate.
-            if not evaluate_v2_quality_gate(alt).kept:
-                continue
-            # (b) viral-content criterion: a genuine non-ATPase viral hallmark must
-            # lie inside the floored span (blocks host regions whose >=2 validated
-            # markers are sparse / host-like by TIER-2).
-            non_atpase_hallmark = sum(1 for g in (getattr(alt, "hallmark_genes", []) or []) if not _is_atpase_marker(g))
-            if non_atpase_hallmark < 1:
-                continue
-            # (c) TIER-2 viral-content floor: the floored span's interior gene
-            # content must be genuinely viral, not merely carry a sparse marker.
-            # A validated marker is a TIER-1 (HMM/Diamond) hit; host regions whose
-            # >=2 validated markers are host-like under the TIER-2 proteome
-            # classifier have near-zero interior viral fraction. Requiring
-            # >=READMIT_MIN_VIRAL_FRACTION admits genuine marker-dense NCLDV EVEs
-            # while rejecting host-with-a-marker regions. Measured on three real
-            # genomes with v1.0.6 resources: every region this pass admitted
-            # carried viral best-hit proteins (none were zero-viral), and no
-            # previously accepted region was lost. The 0.10 value itself has not
-            # been swept, so it remains a working default rather than a tuned
-            # optimum.
-            total_interior = getattr(alt, "gene_taxonomy_total", 0) or 0
-            viral_interior = getattr(alt, "gene_taxonomy_viral_top10", 0) or 0
-            alt_viral_fraction = viral_interior / total_interior if total_interior else 0.0
-            if alt_viral_fraction < READMIT_MIN_VIRAL_FRACTION:
-                continue
-            # (d) dedup: never re-admit something overlapping an already-accepted
-            # region; readmit_accepted grows as we re-admit, so two alternatives
-            # cannot overlap each other either.
-            if any(a.scaffold == alt.scaffold and a.start < alt.end and a.end > alt.start for a in readmit_accepted):
-                continue
-            readmit_accepted.append(alt)
-            # Also surface the alternative as a verified candidate. The second
-            # selection pass below produces the explicit canonical subset used
-            # by output generation. Only fully qualified alternatives reach it.
-            verification_results.append(alt)
-            n_readmitted += 1
-        if n_readmitted:
-            # The rejected originals stay in verification_results; the qualifying
-            # alternatives are appended alongside them. Every count below is
-            # recomputed from the second selection, so no manual bookkeeping.
-            logger.info(
-                "Phase 3 marker-floor re-admit: recovered %d marker-dense EVE(s) "
-                "excluded after host-trim boundary collapse",
-                n_readmitted,
-            )
-
-        if n_readmitted:
-            # Re-run selection over the extended candidate list so the counts,
-            # classification statistics, promoted-LOW list, and ablation
-            # bookkeeping below all derive from one consistent selection.
-            # Appending to accepted_results after the fact would leave
-            # normal_gate_decisions and the classified-vs-accepted invariant
-            # out of step with the accepted set.
-            acceptance_selection = select_phase3_acceptance(
-                verification_results,
-                ablation_id,
-            )
+    validate_results_seed_containment(verification_results)
+    acceptance_selection = select_phase3_acceptance(verification_results, ablation_id)
 
     ablation_counts = acceptance_selection.intervention_counts
     if ablation_id is AblationID.A5:
@@ -1202,13 +1013,8 @@ def _annotate_integration_genes(
         IntegrationRegion(
             region_id=result.eve_id,
             scaffold=result.scaffold,
-            scan_start=max(
-                0,
-                min(result.start, result.candidate_start if result.candidate_start is not None else result.start)
-                - flank_bp,
-            ),
-            scan_end=max(result.end, result.candidate_end if result.candidate_end is not None else result.end)
-            + flank_bp,
+            scan_start=max(0, result.start - flank_bp),
+            scan_end=result.end + flank_bp,
             interior_start=result.start,
             interior_end=result.end,
         )

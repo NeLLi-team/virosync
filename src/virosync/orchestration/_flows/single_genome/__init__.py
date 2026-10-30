@@ -12,9 +12,6 @@ package re-exports the historical module-level names so the import path
 """
 
 from .loaders import (
-    _build_merged_seeds_from_regions as _build_merged_seeds_from_regions,
-)
-from .loaders import (
     _count_fasta_records as _count_fasta_records,
 )
 from .loaders import (

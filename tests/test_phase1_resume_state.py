@@ -32,7 +32,7 @@ from virosync.pipeline.phase1.frameshift_screening import (
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
 
 def _complete_marker() -> ValidatedMarkerHit:
@@ -94,6 +94,7 @@ def _complete_seed() -> MergedSeed:
         start=51,
         end=1601,
         seed_id="seed_0_scaffold/alpha_51",
+        confirmed_seeds=(ConfirmedSeed("seed_0_scaffold/alpha_51", "scaffold/alpha", 51, 1601),),
         sources=["hhg", "marker_validation"],
         hhg_score=123.456789012345,
         novelty_score=0.123456789012345,
@@ -115,12 +116,6 @@ def _complete_seed() -> MergedSeed:
         region_classification_ncldv_markers=4,
         region_classification_vp_plv_markers=2,
         region_classification_mirus_markers=1,
-        host_trim_original_start=41,
-        host_trim_original_end=1611,
-        host_trimmed_start=51,
-        host_trimmed_end=1601,
-        host_trim_reason="host-taxonomy",
-        host_trim_common_euk_taxonomy="Eukaryota;Amoebozoa",
     )
 
 

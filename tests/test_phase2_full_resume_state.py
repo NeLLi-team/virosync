@@ -29,6 +29,7 @@ from virosync.orchestration._flows.single_genome.phase_state import (
     phase2_state_to_document,
     write_phase2_state,
 )
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
     ControlStats,
     GeneTaxonomy,
@@ -51,10 +52,9 @@ def _boundary() -> RefinedBoundary:
         end=999,
         candidate_id="EVE_scaffold/alpha_101-999",
         seed_id="seed-b",
+        confirmed_seeds=(ConfirmedSeed("seed-b", "scaffold/alpha", 150, 850),),
         original_start=90,
         original_end=1010,
-        candidate_start=80,
-        candidate_end=1020,
         pre_tir_start=120,
         pre_tir_end=1000,
         tir_present=True,
@@ -238,12 +238,14 @@ def test_phase2_checkpoints_and_bed_share_disambiguated_candidate_ids(
                 start=10,
                 end=30,
                 seed_id="ordinary",
+                confirmed_seeds=(ConfirmedSeed("ordinary", "scaffold", 10, 30),),
             ),
             RefinedBoundary(
                 scaffold="scaffold",
                 start=10,
                 end=30,
                 seed_id="rescue",
+                confirmed_seeds=(ConfirmedSeed("rescue", "scaffold", 10, 30),),
                 seed_sources=["frameshift_rescue"],
             ),
         ]
@@ -452,13 +454,7 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
     config = PipelineConfig().with_overrides(
         resume=True,
         boundary_host_trim_enabled=False,
-        boundary_host_trim_window_bp=1000,
-        boundary_host_trim_step_bp=500,
-        boundary_host_trim_max_host_fraction=0.5,
-        boundary_host_trim_min_viral_fraction=0.1,
         boundary_host_trim_score_threshold=0.5,
-        boundary_host_trim_buffer_kb=1,
-        boundary_host_trim_min_overlap_score=0.2,
         boundary_taxonomy_ml_model="logreg",
         boundary_taxonomy_ml_neighbor_window=1,
         threads=1,
@@ -474,7 +470,15 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
     result = phase2._run_phase2_subflow(
         masked_path=tmp_path / "masked.fna",
         proteome_path=tmp_path / "proteome.faa",
-        merged_seeds=[object()],
+        merged_seeds=[
+            MergedSeed(
+                scaffold="scaffold/alpha",
+                start=150,
+                end=850,
+                seed_id="seed-b",
+                confirmed_seeds=(ConfirmedSeed("seed-b", "scaffold/alpha", 150, 850),),
+            )
+        ],
         validated_markers=[],
         host_signature_model=None,
         output_dir=tmp_path,

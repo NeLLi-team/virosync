@@ -63,7 +63,7 @@ from virosync.pipeline.phase0.masking import (
     mask_genome_pipeline,
     write_masking_status,
 )
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
 _PREDICTION_HEADER = (
@@ -254,6 +254,7 @@ class _MockPipeline:
                 start=0,
                 end=4,
                 seed_id="seed-1",
+                confirmed_seeds=(ConfirmedSeed("seed-1", "scaffold", 0, 4),),
                 sources=["integration-test"],
             )
         ]
@@ -349,6 +350,7 @@ class _MockPipeline:
                     start=0,
                     end=4,
                     seed_id="lossless-seed",
+                    confirmed_seeds=(ConfirmedSeed("seed-1", "scaffold", 0, 4),),
                     seed_sources=["integration-test"],
                     hallmark_genes=["MCP"],
                     confidence=0.91,
@@ -1556,7 +1558,7 @@ def test_old_phase2_checkpoint_schemas_restart_phase2(
     )
     assert stale_plan.reusable_phases == (0, 1)
     assert stale_plan.restart_phase == 2
-    assert "must use schema 'virosync.phase2.refined_boundaries/v5'" in (stale_plan.reason or "")
+    assert "must use schema 'virosync.phase2.refined_boundaries/v6'" in (stale_plan.reason or "")
 
     result = mocked_pipeline.run()
 

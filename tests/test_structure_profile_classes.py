@@ -16,7 +16,7 @@ import pytest
 
 from virosync.pipeline import host_signatures
 from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase1.viral_markers import (
     classify_region_by_markers,
     get_region_classification_summary,
@@ -287,7 +287,14 @@ def _verify_one_marker_region(
     synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig())
     monkeypatch.setattr(synthesizer, "_run_tiebreakers", lambda *args, **kwargs: None)
     hit = _hit(gene, prefixes, pidents, porf_id="sc|1", status=status)
-    boundary = RefinedBoundary(scaffold="sc", start=0, end=end, confidence=0.95, predicted_family=region_class)
+    boundary = RefinedBoundary(
+        scaffold="sc",
+        start=0,
+        end=end,
+        confidence=0.95,
+        predicted_family=region_class,
+        confirmed_seeds=(ConfirmedSeed("marker-core", "sc", 0, 900),),
+    )
     return synthesizer.verify_eve(
         boundary,
         window_features=[],
@@ -428,6 +435,7 @@ def _seed(*anchors: Anchor, predicted_family: str = "") -> MergedSeed:
         start=0,
         end=3000,
         seed_id="seed",
+        confirmed_seeds=(ConfirmedSeed("seed", "ctg", 0, 3000),),
         sources=["marker_validation"],
         hhg_score=0.0,
         novelty_score=0.0,

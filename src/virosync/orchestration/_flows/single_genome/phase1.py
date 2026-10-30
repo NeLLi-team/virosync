@@ -83,7 +83,7 @@ def _candidate_regions_to_seeds(
 ) -> list:
     """Convert assembled regions into the stable seed surface for Phase 2."""
     from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
-    from virosync.pipeline.phase1.seed_merger import MergedSeed
+    from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
     merged_seeds = []
     anchor_markers = _seed_annotation_markers(
@@ -146,6 +146,7 @@ def _candidate_regions_to_seeds(
 
     for index, seed in enumerate(merged_seeds):
         seed.seed_id = f"seed_{index}_{seed.scaffold}_{seed.start}"
+        seed.confirmed_seeds = (ConfirmedSeed(seed.seed_id, seed.scaffold, seed.start, seed.end),)
     return merged_seeds
 
 

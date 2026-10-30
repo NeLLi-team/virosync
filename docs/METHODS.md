@@ -69,7 +69,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 9. The repeat-evidence groups below comprise 18
+Both tables use output schema 10. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -134,17 +134,18 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 9 |
+| Public output schema | 10 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
-| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v2` |
-| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v4` |
-| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v5` |
+| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v3` |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v5` |
+| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v6` |
 | Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v7` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
 
 Resume validates the input, configuration, software, environment, resources,
 phase checkpoints and output artifacts. The Phase-2 checkpoints retain the
-nested repeat assessments; TSV and BED reports cannot reconstruct that state.
+nested repeat assessments and confirmed seed intervals, without a second
+candidate-coordinate pair; TSV and BED reports cannot reconstruct that state.
 Incompatible checkpoint schemas cannot be reused. A changed run fingerprint
 starts a new run; otherwise only the validated sequence of completed phases
 can be reused.
@@ -397,9 +398,9 @@ its evidence, as a `function` annotation.
 ## Workflow summary
 
 ViroSync predicts genes, finds viral marker proteins, and validates marker
-matches against viral references. It builds candidate regions around supported
-markers, then refines their boundaries with gene-level taxonomy and host
-context. The last phase combines marker, taxonomy, composition, and optional
+matches against viral references. It builds confirmed seed regions around
+supported markers and preserves each complete seed while extending outward.
+The last phase combines marker, taxonomy, composition, and optional
 domain or structure evidence. Acceptance rules then select the reported
 regions. Within each genome, ANI clustering can transfer a class from
 MCP-bearing members that meet the transfer rules and agree on the class.
@@ -410,8 +411,9 @@ candidates.
 
 ### Reference hit selection
 
-Marker validation and host-signature seeding read the top 10 DIAMOND hits of each
-protein against the marker database. They use DIAMOND's rows as they are.
+Marker validation and host-signature estimation read the top 10 DIAMOND hits of
+each marker-domain query against the marker database. They use DIAMOND's rows
+as they are. The host-signature model does not create seeds.
 
 Boundary refinement, gene-level taxonomy and the Phase 3 DIAMOND check search the
 combined proteome. That database holds the same subject ID several times, several
@@ -448,12 +450,82 @@ kinase family: `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`
 with NCLDV kinases, so host kinases pass marker validation. A marker from one of
 these models never seeds a region. Model names match without case and without a
 suffix after the first `_` or `.`. The terminal-repeat step in Phase 2 follows the
-same rule: a repeat-bounded child, or a slice left between children, needs a
-marker from another model or an identity-qualified viral gene of its own. A slice
-that only blocked markers support is dropped, as a slice without any evidence
-already was. If no repeat pair has such support, the parent stays whole. A blocked
-marker still counts as a marker, in hallmark and marker counts and in scoring,
+same rule. Every repeat-bounded child must also receive at least one complete
+confirmed seed. A viral hit alone cannot turn an unseeded residual slice into
+an EVE. A partition that cuts or loses a confirmed seed keeps the parent whole.
+A blocked marker still counts as a marker, in hallmark and marker counts and in scoring,
 when another marker seeded the region that contains it.
+
+### Seed-preserving extension
+
+The complete assembled Phase 1 interval, including its padding, is the
+protected seed. Its original identity and coordinates remain attached to every
+derived candidate. The searched flanking envelope is separate from the EVE:
+finding the first or last predicted gene does not remove gene-free seed ends.
+
+One controller starts at the seed and walks flanking genes in genomic order,
+independently on each side. Identity-qualified viral hits provide positive
+support. Optional taxonomy ML supplies per-gene support without using the
+host-signature model as a positive feature. Ambiguous genes, genes without
+hits and isolated model-matched host genes do not extend the boundary on their
+own. They remain pending until connected positive support occurs within the
+five-gene lookahead and the searched nucleotide envelope.
+Five unsupported genes end the support search. If the envelope ends after only
+one to four unsupported genes, the reported limit is the search envelope.
+
+Three consecutive exterior genes matching the host-signature model at the
+configured host-lineage-share threshold (default 0.35), with no qualifying viral
+support in those genes, stop
+extension before the first gene in the run. A single eukaryotic best hit does
+not establish this stop. A missing model or missing taxonomy is reported as
+an evidence limitation; it does not imply host origin. Overlapping genes are
+checked before a supported gene can extend the boundary past another feature.
+A host block crossing the seed edge can stop new growth at that edge, but
+cannot cut the seed.
+Phase 3 reports the retained coordinates directly. It does not export a second
+candidate interval or reduction fields. Integration-gene scans use the retained
+interval plus the configured Phase 1 extension flank.
+Host-lineage share measures the hit weight within the host's lineage; it does
+not compare a gene's hit composition with the pooled model by weighted Jaccard.
+Standalone checkpoint audits must load the configured taxonomy labels before
+scoring; normal fresh and resumed Phase 1 runs initialize this lookup.
+The configured taxonomy weighting applies to these hit shares, including the
+stored per-hit bitscores when `taxonomy_weight_mode` is `bitscore`.
+
+The existing `phase2.host_trim_enabled` and `host_trim_score_threshold`
+settings now control this exterior stop. The former window, step, host-fraction,
+viral-fraction, buffer and overlap-score settings belonged to the removed
+trimming stages and are no longer accepted configuration keys.
+
+The controller distinguishes a host stop, a support gap and the search-envelope
+limit. A later ML, merge, repeat or rescue operation cannot cross a host stop.
+Reaching the envelope records the limit without an automatic new search.
+Each independently confirmed seed beyond a stop is processed separately.
+Overlapping search envelopes alone do not merge candidates. An allowed merge
+retains every source seed and the tightest recorded stop on each side. The
+controller checks all reachable overlapping candidates, including those
+separated in the list by an independent rescue or CRESS call. It does not merge
+disjoint candidate intervals. A split assigns each original seed whole to
+exactly one retained child,
+or leaves the parent intact.
+
+Final gene sets, markers, composition and optional evidence are computed for
+the retained coordinates before scoring. Output and resumed-state checks
+require complete seed containment. Incompatible boundary checkpoints must be
+recomputed rather than reconstructed from late, mutable boundary fields.
+Each Phase 1 checkpoint seed must exactly match its one original seed record.
+Phase 2 also checks that its complete source membership agrees with Phase 1,
+both when writing new boundaries and when resuming them.
+Marker family votes are deduplicated by protein identity, including when HMM
+queries carry domain-coordinate suffixes. Region marker counts retain the
+highest-scoring profile per protein. After merging or repeat partitioning,
+the final region class and marker counts are recomputed from markers in the
+retained interval for every candidate using the same marker-retention policy as
+final evidence synthesis, including the selected ablation. A3 uses that same
+policy at its unchanged seed coordinates. Compact CRESS regions retain their
+separate classification.
+The three-gene stop is a working detection rule, not a calibrated biological
+cutoff; its effects require comparison with positive controls.
 
 ## Confidence and limitations
 
@@ -465,8 +537,13 @@ taxonomy evidence, so they are not independent observations.
 
 Reference coverage limits marker validation and lineage assignment. ViroSync
 uses predicted genes to refine boundaries, so gene prediction errors and
-fragmented assemblies can affect the result. Host-like hits inside an EVE can
-also lower its score. Scaffold order can change the background used for
+fragmented assemblies can affect the result. Independent evidence of cellular
+homology inside an EVE can lower its score. Host-signature model outputs are
+diagnostics and extension-stop evidence; they do not contribute a score penalty,
+restrict the viral-enrichment bonus or supply a non-host-gene-count acceptance
+alternative. The non-HHG fallback retains its marker/capsid alternatives.
+Preserving a confirmed seed does not guarantee final acceptance or establish
+viral integration. Scaffold order can change the background used for
 composition scoring. Structural matches are computational support, not
 experimental validation.
 
@@ -499,25 +576,30 @@ extended flanks, limited to the region with gene-taxonomy coverage. The flank
 length is `phase1.extension_kb` (5 kb by default). A qualifying pair must enclose
 at least one complete validated marker-bearing protein. Repeated hits to the
 same protein provide one anchor. Unambiguous pairs with complete gene-taxonomy
-coverage set boundaries before ViroSync recalculates composition and gene
-evidence. These boundaries take precedence over heuristic trimming and
-marker-floor widening. EVE acceptance rules still apply.
+coverage can propose boundaries within the controller's reachable span.
+A proposal must contain its assigned confirmed seeds and respect host stops.
+Incompatible repeat arms remain annotations without changing coordinates.
+ViroSync recalculates composition and gene evidence for the final span.
+EVE acceptance rules still apply.
 
 Disjoint pairs can divide a merged candidate into several EVE candidates.
-Leading, intervening and trailing segments remain candidates when they contain
-a validated marker or a qualified viral gene-taxonomy hit, including segments
-without TIRs. Each child receives its own classification, marker counts and
+Leading, intervening and trailing segments remain candidates only when they
+receive complete confirmed seeds, including segments without TIRs. Every
+source seed must belong to exactly one retained child. Each child receives its
+own classification, marker counts and
 verification. The detailed table includes every retained child. The accepted
 table includes children that independently pass the usual acceptance rules.
+If a proposed child lacks a confirmed seed, overlaps another child or leaves
+a source seed unassigned, the whole split is rejected and the parent is kept.
 The parent coordinates remain in `pre_tir_start` and `pre_tir_end`.
 
 Identical repeats on neighboring elements can also form a pair spanning both.
 When local and spanning pairs compete, the scanner retains the unsplit parent
 with `tir_status=ambiguous`. Nested and overlapping alternatives receive the
 same treatment, even when another part of the parent has an independent pair.
-A split cannot discard or bisect a retained validated marker. Gene-taxonomy
-evidence preserves a neighboring segment only when a qualified viral gene fits
-wholly inside that segment. Other predicted genes may cross a repeat boundary.
+A split cannot discard or bisect a confirmed seed. Gene-taxonomy evidence alone
+does not create an unseeded neighboring candidate. Other predicted genes may
+cross a repeat boundary.
 They retain their full coordinates under the usual interval-overlap rules,
 so one crossing gene can appear in both
 neighboring regions. Repeat boundaries that conflict across separate parent
@@ -552,8 +634,8 @@ then longer alignment, then the earlier start.
 | `tir_status` | Meaning |
 | --- | --- |
 | `detected` | A qualifying pair defines this child's boundary. |
-| `ambiguous` | Repeat evidence does not support an unambiguous split with intact marker evidence; heuristic coordinates are retained. |
-| `shared_pair` | Distinct candidates would acquire the same interval; heuristic coordinates are retained. |
+| `ambiguous` | Repeat evidence does not support a split with whole confirmed seeds; the parent interval is retained. |
+| `shared_pair` | Distinct candidates would acquire the same interval; parent intervals are retained. |
 | `taxonomy_incomplete` | The marker span or a proposed repeat-defined interval lacks required gene-taxonomy coverage. |
 | `not_detected` | No qualifying pair defines this region, including a retained neighboring segment without TIRs. |
 | `no_marker_anchor` | No retained marker span was available to anchor the search. |
@@ -563,8 +645,8 @@ then longer alignment, then the earlier start.
 
 The default gene screen uses five bundled Pfam profiles through PyHMMER.
 Both sequence and domain scores must pass the profile's curated gathering
-threshold. It runs without InterProScan and covers the final EVE, its original
-candidate span, and the configured flanking extension. Each annotation records
+threshold. It runs without InterProScan and covers the retained EVE interval
+plus the configured flanking extension. Each annotation records
 whether its gene is interior, upstream, downstream, or crosses a boundary.
 
 The integration HMM screen searches selected proteins up to 100,000 amino

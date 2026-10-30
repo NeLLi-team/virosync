@@ -79,13 +79,15 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "--write-snapshot" in workflow
     assert "--compare-snapshot" in workflow
     assert "--require-resume" in workflow
-    assert workflow.count("--expect-predictions 6") == 2
+    assert workflow.count("--expect-predictions 9") == 2
     assert workflow.count("--expect-predictions 1") == 1
-    assert workflow.count("--expect-accepted 1") == 3
+    assert workflow.count("--expect-accepted 4") == 2
+    assert workflow.count("--expect-accepted 1") == 1
     assert workflow.count("--expect-canonical-eve-id") == 1
     assert workflow.count("--expect-detailed-eve-id") == 1
     assert "EVE_DS113495.1_18305-37386" not in workflow
-    assert "EVE_DS113200.1_129184-157630" in workflow
+    assert "EVE_DS113200.1_129254-157637" in workflow
+    assert "EVE_DS113200.1_129184-157630" not in workflow
     assert "EVE_DS113495.1_58468-89417" not in workflow
     assert workflow.count("check_coordinate_outputs.py") == 3
     assert "results/ci_example/*/run.log" not in workflow

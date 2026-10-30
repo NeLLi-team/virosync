@@ -18,6 +18,7 @@ from virosync.pipeline.phase2.boundary_refiner import (
     assign_boundary_candidate_ids,
     boundary_candidate_id,
 )
+from virosync.pipeline.phase2.seed_extension import confirmed_seed_core
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     VerificationStatus,
@@ -142,6 +143,7 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         scaffold=seed.scaffold,
         start=seed.start,
         end=seed.end,
+        confirmed_seeds=seed.confirmed_seeds,
         status=VerificationStatus.AMBIGUOUS,
         final_confidence=0.0,
         confidence_tier="LOW",
@@ -191,6 +193,7 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
 
 def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
     """Adapt Tier-1-vetted Phase-1 seeds without running Phase 2 or Phase 3."""
+    seeds = [confirmed_seed_core(seed) for seed in seeds]
     boundaries = assign_boundary_candidate_ids(
         [
             RefinedBoundary(
@@ -198,6 +201,7 @@ def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
                 start=seed.start,
                 end=seed.end,
                 seed_id=seed.seed_id,
+                confirmed_seeds=seed.confirmed_seeds,
             )
             for seed in seeds
         ]

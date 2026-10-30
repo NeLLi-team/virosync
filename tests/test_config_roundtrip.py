@@ -1,17 +1,13 @@
-"""Config round-trip tests.
-
-Guards against YAML keys that are silently dropped by the parser (i.e. present
-in config but never read, so edits have no effect). This is exactly the failure
-mode that left ``host_trim_min_overlap_score`` stuck at its default.
-"""
+"""Config round-trip tests reject retired options instead of silently ignoring them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
-from virosync.config import ApplicationConfig, PipelineConfig
+from virosync.config import ApplicationConfig, ConfigError, PipelineConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "orchestration.yaml"
@@ -24,16 +20,21 @@ def test_default_config_loads_and_round_trips() -> None:
     assert isinstance(flow_kwargs, dict) and flow_kwargs
 
 
-def test_host_trim_min_overlap_score_is_not_silently_dropped(tmp_path: Path) -> None:
-    """A non-default phase2.host_trim_min_overlap_score must reach the config + flow kwargs."""
-    data = yaml.safe_load(DEFAULT_CONFIG.read_text())
-    data.setdefault("phase2", {})["host_trim_min_overlap_score"] = 0.77
-
-    cfg = ApplicationConfig.from_dict(data).pipeline
-    assert cfg.phase2.host_trim_min_overlap_score == 0.77
-
-    flow_kwargs = cfg.to_flow_kwargs()
-    assert flow_kwargs["boundary_host_trim_min_overlap_score"] == 0.77
+@pytest.mark.parametrize(
+    "key",
+    [
+        "host_trim_window_bp",
+        "host_trim_step_bp",
+        "host_trim_max_host_fraction",
+        "host_trim_min_viral_fraction",
+        "host_trim_buffer_kb",
+        "host_trim_min_overlap_score",
+    ],
+)
+def test_retired_host_trim_knobs_are_rejected(key: str) -> None:
+    """Retired coordinate-writer options cannot silently alter or disappear from a run."""
+    with pytest.raises(ConfigError, match="[Uu]nknown"):
+        ApplicationConfig.from_dict({"phase2": {key: 1}})
 
 
 def test_taxonomy_ml_enabled_round_trips(tmp_path: Path) -> None:

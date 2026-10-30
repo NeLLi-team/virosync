@@ -1,4 +1,4 @@
-"""Phase 2 taxonomy-based ML boundary refinement."""
+"""Host-model-independent per-gene ML evidence for the extension controller."""
 
 from __future__ import annotations
 
@@ -8,10 +8,8 @@ import logging
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from virosync.pipeline.host_signatures import HostSignatureModel, score_host_signature_record
-from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
     VIRAL_PREFIXES,
@@ -19,7 +17,10 @@ from virosync.pipeline.phase2.boundary_diamond import (
 from virosync.pipeline.taxonomy_utils import compute_hit_weight
 
 if TYPE_CHECKING:
-    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, GenomeDiamondQuery, SeedGeneMapping
+    import numpy as np
+    from numpy.typing import NDArray
+
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, GenomeDiamondQuery
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +35,25 @@ FEATURE_COLUMNS = [
     "top1_is_host",
     "host_rank_score",
     "viral_rank_score",
-    "host_signature_score",
     "top10_hit_count",
     "mean_top10_bits",
     "viral_top10_fraction",
     "host_top10_fraction",
     "neighbor_viral_fraction_mean",
-    "neighbor_host_score_mean",
     "neighbor_host_top1_fraction",
 ]
+
+
+class TaxonomyClassifier(Protocol):
+    """Operations needed from the selected scikit-learn-compatible model."""
+
+    def fit(self, matrix: list[list[float]], labels: list[int]) -> object:
+        """Fit the training matrix."""
+        ...
+
+    def predict_proba(self, matrix: list[list[float]]) -> NDArray[np.float64]:
+        """Return negative and positive class probabilities."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -58,11 +69,9 @@ class GeneFeatureRow:
     features: dict[str, float]
 
 
-def refine_seeds_by_taxonomy_ml(
-    merged_seeds: list[MergedSeed],
+def predict_taxonomy_support(
     taxonomy_map: dict[str, GeneTaxonomy],
     boundary_query: GenomeDiamondQuery,
-    host_signature_model: HostSignatureModel | None = None,
     model_type: TaxonomyMLModelType = "logreg",
     host_prefix: str = "EUK__",
     probability_threshold: float = 0.5,
@@ -70,70 +79,33 @@ def refine_seeds_by_taxonomy_ml(
     output_dir: Path | None = None,
     random_state: int = 42,
     taxonomy_weight_mode: str = "rank",
-    host_signature_threshold: float = 0.5,
-    host_guard_viral_rank_min: float = 8.0,
-) -> list[MergedSeed]:
-    """Train per-genome taxonomy model and refine seeds within flank envelopes."""
-    if not merged_seeds or not taxonomy_map or not boundary_query.seed_gene_mappings:
-        return merged_seeds
-
-    rows = _build_rows(
-        boundary_query,
-        taxonomy_map,
-        host_signature_model,
-        host_prefix,
-        taxonomy_weight_mode,
-        neighbor_window,
-    )
-    train_rows = _select_training_rows(rows)
-    model, model_summary = _fit_model(train_rows, model_type, random_state)
-
+) -> dict[str, frozenset[str]]:
+    """Return host-model-independent per-gene support, never coordinates."""
+    rows = _build_rows(boundary_query, taxonomy_map, host_prefix, taxonomy_weight_mode, neighbor_window)
+    model, summary = _fit_model(_select_training_rows(rows), model_type, random_state)
+    if model is None:
+        logger.info("Taxonomy ML unavailable (%s); using deterministic extension", summary["fallback_reason"])
+        return {}
     prediction_rows = [row for row in rows if row.role != "control"]
+    if not prediction_rows:
+        return {}
     scores = _predict_scores(model, prediction_rows)
-    refined_seeds, refine_summary = _refine_seed_boundaries(
-        merged_seeds,
-        boundary_query.seed_gene_mappings,
-        prediction_rows,
-        scores,
-        probability_threshold,
-        host_signature_threshold=host_signature_threshold,
-        host_guard_viral_rank_min=host_guard_viral_rank_min,
-    )
-
     if output_dir is not None:
-        out = Path(output_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        _write_feature_table(out / "feature_table.tsv", rows)
-        _write_predictions(out / "gene_predictions.tsv", prediction_rows, scores, probability_threshold)
-        summary = {
-            "requested_model_type": model_type,
-            "used_model_type": model_summary["used_model_type"],
-            "fallback_reason": model_summary["fallback_reason"],
-            "feature_columns": FEATURE_COLUMNS,
-            "threshold": probability_threshold,
-            "neighbor_window": neighbor_window,
-            "host_signature_threshold": host_signature_threshold,
-            "host_guard_viral_rank_min": host_guard_viral_rank_min,
-            "training": model_summary,
-            "refinement": refine_summary,
-            "n_feature_rows": len(rows),
-            "n_prediction_rows": len(prediction_rows),
-        }
-        (out / "model_summary.json").write_text(json.dumps(summary, indent=2))
-
-    logger.info(
-        "Taxonomy ML refinement updated %d/%d seeds (%s)",
-        refine_summary["changed"],
-        len(merged_seeds),
-        model_summary["used_model_type"],
-    )
-    return refined_seeds
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _write_feature_table(output_dir / "feature_table.tsv", rows)
+        _write_predictions(output_dir / "gene_predictions.tsv", prediction_rows, scores, probability_threshold)
+        (output_dir / "model_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return {
+        seed_id: frozenset(
+            porf_id for (sid, porf_id), score in scores.items() if sid == seed_id and score >= probability_threshold
+        )
+        for seed_id in boundary_query.seed_gene_mappings
+    }
 
 
 def _build_rows(
     boundary_query: GenomeDiamondQuery,
     taxonomy_map: dict[str, GeneTaxonomy],
-    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
     neighbor_window: int,
@@ -150,7 +122,6 @@ def _build_rows(
             1,
             seen,
             taxonomy_map,
-            host_model,
             host_prefix,
             taxonomy_weight_mode,
         )
@@ -162,7 +133,6 @@ def _build_rows(
             -1,
             seen,
             taxonomy_map,
-            host_model,
             host_prefix,
             taxonomy_weight_mode,
         )
@@ -174,7 +144,6 @@ def _build_rows(
             -1,
             seen,
             taxonomy_map,
-            host_model,
             host_prefix,
             taxonomy_weight_mode,
         )
@@ -196,7 +165,6 @@ def _build_rows(
                 "control",
                 0,
                 tax,
-                host_model,
                 host_prefix,
                 taxonomy_weight_mode,
             )
@@ -212,7 +180,6 @@ def _add_seed_role_rows(
     label: int,
     seen: set[str],
     taxonomy_map: dict[str, GeneTaxonomy],
-    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
 ) -> None:
@@ -227,7 +194,6 @@ def _add_seed_role_rows(
                 role,
                 label,
                 taxonomy_map[porf_id],
-                host_model,
                 host_prefix,
                 taxonomy_weight_mode,
             )
@@ -240,7 +206,6 @@ def _build_row(
     role: str,
     label: int,
     tax: GeneTaxonomy,
-    host_model: HostSignatureModel | None,
     host_prefix: str,
     taxonomy_weight_mode: str,
 ) -> GeneFeatureRow:
@@ -249,7 +214,6 @@ def _build_row(
     bits = [float(v) for v in (getattr(tax, "top10_bits", []) or [])]
     prefixes = [str(p) for p in (getattr(tax, "top10_prefixes", []) or [])]
     pidents = [float(v) for v in (getattr(tax, "top10_pidents", []) or [])]
-    host_score = score_host_signature_record(tax, host_model) if host_model is not None else 0.0
     top10_count = float(len(prefixes))
     viral_fraction = (
         sum(
@@ -272,13 +236,11 @@ def _build_row(
         "top1_is_host": float(getattr(tax, "top1_prefix", "") == host_prefix),
         "host_rank_score": host_rank,
         "viral_rank_score": viral_rank,
-        "host_signature_score": float(host_score),
         "top10_hit_count": top10_count,
         "mean_top10_bits": (sum(bits) / len(bits)) if bits else 0.0,
         "viral_top10_fraction": viral_fraction,
         "host_top10_fraction": host_fraction,
         "neighbor_viral_fraction_mean": 0.0,
-        "neighbor_host_score_mean": 0.0,
         "neighbor_host_top1_fraction": 0.0,
     }
     return GeneFeatureRow(
@@ -335,11 +297,9 @@ def _annotate_neighbor_features(
         neighborhood = rows[left:right]
         size = float(len(neighborhood)) or 1.0
         viral_mean = sum(r.features["viral_top10_fraction"] for r in neighborhood) / size
-        host_score_mean = sum(r.features["host_signature_score"] for r in neighborhood) / size
         host_top1_mean = sum(r.features["top1_is_host"] for r in neighborhood) / size
         features = dict(row.features)
         features["neighbor_viral_fraction_mean"] = viral_mean
-        features["neighbor_host_score_mean"] = host_score_mean
         features["neighbor_host_top1_fraction"] = host_top1_mean
         updated_rows.append(replace(row, features=features))
     return updated_rows
@@ -360,7 +320,7 @@ def _fit_model(
     training_rows: list[GeneFeatureRow],
     model_type: TaxonomyMLModelType,
     random_state: int,
-) -> tuple[object | None, dict[str, object]]:
+) -> tuple[TaxonomyClassifier | None, dict[str, object]]:
     labels = [row.label for row in training_rows]
     n_pos = sum(1 for v in labels if v == 1)
     n_neg = sum(1 for v in labels if v == 0)
@@ -368,7 +328,7 @@ def _fit_model(
         "n_training_genes": len(training_rows),
         "n_positive_genes": n_pos,
         "n_negative_genes": n_neg,
-        "used_model_type": "heuristic",
+        "used_model_type": "unavailable",
         "fallback_reason": "",
         "metrics": {},
     }
@@ -401,7 +361,7 @@ def _build_estimator(
     random_state: int,
     n_pos: int,
     n_neg: int,
-) -> tuple[object, str, str]:
+) -> tuple[TaxonomyClassifier, str, str]:
     if model_type == "logreg":
         from sklearn.linear_model import LogisticRegression
         from sklearn.pipeline import make_pipeline
@@ -414,123 +374,32 @@ def _build_estimator(
         return model, "logreg", ""
 
     if model_type == "xgboost":
-        try:
-            from xgboost import XGBClassifier
+        from xgboost import XGBClassifier
 
-            ratio = float(n_neg) / float(max(1, n_pos))
-            model = XGBClassifier(
-                n_estimators=200,
-                max_depth=3,
-                learning_rate=0.1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                objective="binary:logistic",
-                eval_metric="logloss",
-                scale_pos_weight=ratio,
-                random_state=random_state,
-                n_jobs=1,
-            )
-            return model, "xgboost", ""
-        except Exception:
-            logger.warning("xgboost unavailable; using GradientBoostingClassifier")
+        ratio = float(n_neg) / float(max(1, n_pos))
+        model = XGBClassifier(
+            n_estimators=200,
+            max_depth=3,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            scale_pos_weight=ratio,
+            random_state=random_state,
+            n_jobs=1,
+        )
+        return model, "xgboost", ""
 
     from sklearn.ensemble import GradientBoostingClassifier
 
-    fallback = "xgboost_unavailable" if model_type == "xgboost" else ""
-    return GradientBoostingClassifier(random_state=random_state), "gbdt", fallback
+    return GradientBoostingClassifier(random_state=random_state), "gbdt", ""
 
 
-def _predict_scores(model: object | None, rows: list[GeneFeatureRow]) -> dict[tuple[str, str], float]:
-    if model is None:
-        return {(row.seed_id, row.porf_id): _heuristic_probability(row) for row in rows}
+def _predict_scores(model: TaxonomyClassifier, rows: list[GeneFeatureRow]) -> dict[tuple[str, str], float]:
     matrix = [[row.features[name] for name in FEATURE_COLUMNS] for row in rows]
     probs = model.predict_proba(matrix)[:, 1]
     return {(row.seed_id, row.porf_id): float(prob) for row, prob in zip(rows, probs)}
-
-
-def _heuristic_probability(row: GeneFeatureRow) -> float:
-    viral = row.features["viral_rank_score"] + row.features["has_viral"]
-    host = row.features["host_rank_score"] + row.features["host_signature_score"]
-    score = viral / (viral + host) if (viral + host) > 0 else row.features["has_viral"]
-    if row.features["top1_is_host"] > 0 and row.features["has_viral"] <= 0:
-        score *= 0.5
-    return max(0.0, min(1.0, score))
-
-
-def _refine_seed_boundaries(
-    merged_seeds: list[MergedSeed],
-    seed_mappings: dict[str, SeedGeneMapping],
-    prediction_rows: list[GeneFeatureRow],
-    scores: dict[tuple[str, str], float],
-    threshold: float,
-    host_signature_threshold: float = 0.5,
-    host_guard_viral_rank_min: float = 8.0,
-) -> tuple[list[MergedSeed], dict[str, int]]:
-    mapping_by_coords = {(m.scaffold, int(m.seed_start), int(m.seed_end)): key for key, m in seed_mappings.items()}
-
-    rows_by_seed: dict[str, list[GeneFeatureRow]] = {}
-    for row in prediction_rows:
-        rows_by_seed.setdefault(row.seed_id, []).append(row)
-
-    refined: list[MergedSeed] = []
-    changed = 0
-    extended = 0
-    contracted = 0
-    for seed in merged_seeds:
-        if seed.predicted_family == "CRESS":
-            refined.append(seed)
-            continue
-        seed_key = seed.seed_id or mapping_by_coords.get((seed.scaffold, seed.start, seed.end), "")
-        mapping = seed_mappings.get(seed_key)
-        rows = sorted(rows_by_seed.get(seed_key, []), key=lambda r: (r.start, r.end))
-        if mapping is None or not rows:
-            refined.append(seed)
-            continue
-
-        positive_candidates = [r for r in rows if scores.get((r.seed_id, r.porf_id), 0.0) >= threshold]
-        positives = [
-            row
-            for row in positive_candidates
-            if _passes_host_guard(row, host_signature_threshold, host_guard_viral_rank_min)
-        ]
-        if not positives:
-            refined.append(seed)
-            continue
-
-        new_start = max(mapping.flank_start_bp, min(r.start for r in positives))
-        new_end = min(mapping.flank_end_bp, max(r.end for r in positives))
-        if new_start >= new_end:
-            refined.append(seed)
-            continue
-
-        if new_start != seed.start or new_end != seed.end:
-            changed += 1
-            if new_start < seed.start or new_end > seed.end:
-                extended += 1
-            if new_start > seed.start or new_end < seed.end:
-                contracted += 1
-        refined.append(replace(seed, start=new_start, end=new_end))
-
-    return refined, {
-        "changed": changed,
-        "extended": extended,
-        "contracted": contracted,
-    }
-
-
-def _passes_host_guard(
-    row: GeneFeatureRow,
-    host_signature_threshold: float,
-    host_guard_viral_rank_min: float,
-) -> bool:
-    """Block host-like positives unless they also have strong viral evidence."""
-    host_score = float(row.features.get("host_signature_score", 0.0))
-    if host_score < host_signature_threshold:
-        return True
-    if float(row.features.get("has_viral", 0.0)) > 0.0:
-        return True
-    viral_rank = float(row.features.get("viral_rank_score", 0.0))
-    return viral_rank >= host_guard_viral_rank_min
 
 
 def _write_feature_table(path: Path, rows: list[GeneFeatureRow]) -> None:
@@ -613,4 +482,4 @@ def _write_predictions(
             writer.writerow([*values, int(probability >= threshold)])
 
 
-__all__ = ["TaxonomyMLModelType", "refine_seeds_by_taxonomy_ml"]
+__all__ = ["TaxonomyMLModelType", "predict_taxonomy_support"]

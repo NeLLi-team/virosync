@@ -160,7 +160,8 @@ def _parse_top10_hits(hit) -> list[tuple[str, float, float, float]]:
         best_bits = hit.get("best_hit_bits", 0.0)
     else:
         targets = _split_csv_field(getattr(hit, "top10_targets", ""))
-        bits = _parse_float_list(_split_csv_field(getattr(hit, "top10_bitscores", "")))
+        # GeneTaxonomy stores top10_bits; ValidatedMarkerHit stores top10_bitscores.
+        bits = _parse_float_list(_split_csv_field(getattr(hit, "top10_bits", getattr(hit, "top10_bitscores", ""))))
         pidents = _parse_float_list(_split_csv_field(getattr(hit, "top10_pidents", "")))
         evalues = _parse_float_list(_split_csv_field(getattr(hit, "top10_evalues", "")))
         best_target = getattr(hit, "best_hit_target", "")
@@ -473,14 +474,6 @@ def host_lineage_share(record, model: HostSignatureModel) -> float:
             continue
         weighted += weight * len(set(levels) & tokens) / len(tokens)
     return weighted / total if total else 0.0
-
-
-def score_host_signature_record(record, model: HostSignatureModel) -> float:
-    """Score a gene record using its top-10 taxonomy distribution."""
-    fingerprint = _fingerprint_from_record(record, model)
-    if not fingerprint:
-        return 0.0
-    return score_host_signature(fingerprint, model)
 
 
 def host_signature_density_evalue_weighted(

@@ -20,9 +20,6 @@ from virosync.orchestration._flows.single_genome import (
     _summarize_predictions_tsv,
     _write_completion_manifest,
 )
-from virosync.orchestration._flows.single_genome.loaders import (
-    _build_merged_seeds_from_regions,
-)
 from virosync.orchestration._flows.single_genome.manifest import (
     _summarize_prediction_outputs,
 )
@@ -61,7 +58,7 @@ from virosync.output_contract import (
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
-from virosync.pipeline.phase1.seed_merger import MergedSeed
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
 _ZERO_PREDICTION_HEADER = (
@@ -193,6 +190,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
                 start=0,
                 end=4,
                 seed_id="seed-0-demo-0",
+                confirmed_seeds=(ConfirmedSeed("seed-0-demo-0", "demo", 0, 4),),
                 sources=["test"],
             )
         ],
@@ -227,6 +225,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         start=0,
         end=4,
         seed_id="seed-0-demo-0",
+        confirmed_seeds=(ConfirmedSeed("seed-0-demo-0", "demo", 0, 4),),
         seed_sources=["test"],
         confidence=0.9,
     )
@@ -507,18 +506,6 @@ def test_require_phase2b_gene_taxonomy_db_accepts_existing_path(tmp_path: Path) 
     db.write_text("diamond")
 
     assert _require_phase2b_gene_taxonomy_db(db, has_seeds=True) == db
-
-
-def test_phase1_resume_rebuild_preserves_zero_based_seed_ids() -> None:
-    seeds = _build_merged_seeds_from_regions(
-        [
-            {"region_id": "r1", "scaffold": "a", "start": 10, "end": 20},
-            {"region_id": "r2", "scaffold": "b", "start": 30, "end": 40},
-        ],
-        [],
-    )
-
-    assert [seed.seed_id for seed in seeds] == ["seed_0_a_10", "seed_1_b_30"]
 
 
 def test_summarize_predictions_tsv_counts_canonical_rows_for_rollups(tmp_path: Path) -> None:

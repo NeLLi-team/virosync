@@ -309,23 +309,17 @@ class Phase2Config:
     taxonomy_ml_model: str = "logreg"  # "logreg", "gbdt", or "xgboost"
     taxonomy_ml_threshold: float = 0.5
     taxonomy_ml_neighbor_window: int = 3
-    # Phase 2a: host-signature trimming
+    # Host-model stop for outward growth; complete seeds are always retained.
     host_trim_enabled: bool = True
-    host_trim_window_bp: int = 5000
-    host_trim_step_bp: int = 1000
-    host_trim_max_host_fraction: float = 0.3
-    host_trim_min_viral_fraction: float = 0.05
     # Share of a gene's ten hits that must sit in the host's own lineage.
     # Order-level agreement on average; measured on the five real genomes.
     host_trim_score_threshold: float = 0.35
-    host_trim_buffer_kb: int = 5
     # Phase 2c: terminal-repeat refinement. Off only to measure what the step
     # contributes; every benchmarked run has it on.
     terminal_repeat_enabled: bool = True
     host_signature_min_token_len: int = 3
-    host_trim_min_overlap_score: float = 0.40  # Min fingerprint overlap for host classification
     # Phase 2b: batched Diamond for boundary refinement (always enabled as of Jan 2026)
-    diamond_flank_genes: int = 10  # Seeds already extended by ±5 genes; ±10 flank gives ±15 total
+    diamond_flank_genes: int = 10  # Number of flank genes searched around the complete seed
     diamond_control_sample_size: int = 100
     diamond_control_min_distance: int = 30
     diamond_top_k: int = 10
@@ -584,13 +578,7 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("boundary_host_trim_enabled", "phase2", "host_trim_enabled"),
     _spec("boundary_terminal_repeat_enabled", "phase2", "terminal_repeat_enabled"),
     _spec("pfam_arbitration_enabled", "phase1", "pfam_arbitration_enabled"),
-    _spec("boundary_host_trim_window_bp", "phase2", "host_trim_window_bp"),
-    _spec("boundary_host_trim_step_bp", "phase2", "host_trim_step_bp"),
-    _spec("boundary_host_trim_max_host_fraction", "phase2", "host_trim_max_host_fraction"),
-    _spec("boundary_host_trim_min_viral_fraction", "phase2", "host_trim_min_viral_fraction"),
     _spec("boundary_host_trim_score_threshold", "phase2", "host_trim_score_threshold"),
-    _spec("boundary_host_trim_buffer_kb", "phase2", "host_trim_buffer_kb"),
-    _spec("boundary_host_trim_min_overlap_score", "phase2", "host_trim_min_overlap_score"),
     _spec("boundary_host_signature_min_token_len", "phase2", "host_signature_min_token_len"),
     # phase2b Diamond + ANI: emitted but NOT overridable; parsed from the nested boundary_diamond block.
     _spec("boundary_diamond_flank_genes", "phase2", "diamond_flank_genes", overridable=False),
@@ -856,8 +844,6 @@ class PipelineConfig:
             "phase1.host_taxonomy_deviation_seed_window_bp": self.phase1.host_taxonomy_deviation_seed_window_bp,
             "phase1.host_taxonomy_deviation_seed_min_markers": self.phase1.host_taxonomy_deviation_seed_min_markers,
             "phase1.marker_validation_top_k": self.phase1.marker_validation_top_k,
-            "phase2.host_trim_window_bp": self.phase2.host_trim_window_bp,
-            "phase2.host_trim_step_bp": self.phase2.host_trim_step_bp,
             "phase2.host_signature_min_token_len": self.phase2.host_signature_min_token_len,
             "phase2.taxonomy_ml_neighbor_window": self.phase2.taxonomy_ml_neighbor_window,
             "phase2.diamond_control_sample_size": self.phase2.diamond_control_sample_size,
@@ -883,7 +869,6 @@ class PipelineConfig:
             "phase1.extension_kb": self.phase1.extension_kb,
             "phase1.merge_distance": self.phase1.merge_distance,
             "phase1.host_taxonomy_deviation_window_seed": self.phase1.host_taxonomy_deviation_window_seed,
-            "phase2.host_trim_buffer_kb": self.phase2.host_trim_buffer_kb,
             "phase2.diamond_flank_genes": self.phase2.diamond_flank_genes,
             "phase2.diamond_control_min_distance": self.phase2.diamond_control_min_distance,
             "phase2.diamond_random_seed": self.phase2.diamond_random_seed,
@@ -903,10 +888,7 @@ class PipelineConfig:
             "phase1.host_taxonomy_deviation_overlap_threshold": self.phase1.host_taxonomy_deviation_overlap_threshold,
             "phase1.novel_marker_min_coverage": self.phase1.novel_marker_min_coverage,
             "phase2.taxonomy_ml_threshold": self.phase2.taxonomy_ml_threshold,
-            "phase2.host_trim_max_host_fraction": self.phase2.host_trim_max_host_fraction,
-            "phase2.host_trim_min_viral_fraction": self.phase2.host_trim_min_viral_fraction,
             "phase2.host_trim_score_threshold": self.phase2.host_trim_score_threshold,
-            "phase2.host_trim_min_overlap_score": self.phase2.host_trim_min_overlap_score,
             "phase3.host_signature_evidence_threshold": self.phase3.host_signature_evidence_threshold,
             "phase3.tmvec_min_score": self.phase3.tmvec_min_score,
         }

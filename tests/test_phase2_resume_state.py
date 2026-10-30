@@ -18,6 +18,7 @@ from virosync.orchestration._flows.single_genome.phase_state import (
     phase2_state_to_document,
     write_phase2_state,
 )
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
 
@@ -29,12 +30,13 @@ def _complete_boundary() -> RefinedBoundary:
         end=999,
         candidate_id="EVE_scaffold/alpha_101-999",
         seed_id="seed_7_scaffold_alpha_90",
+        confirmed_seeds=(ConfirmedSeed("seed_7_scaffold_alpha_90", "scaffold/alpha", 150, 850),),
+        left_stop_reason="host_stop",
+        right_stop_reason="evidence_gap",
+        left_stop=101,
+        host_stop_available=True,
         original_start=90,
         original_end=1010,
-        candidate_start=80,
-        candidate_end=1020,
-        host_trim_reason="host-taxonomy",
-        host_trim_common_euk_taxonomy="Eukaryota;Viridiplantae",
         pre_tir_start=110,
         pre_tir_end=1000,
         tir_present=True,
@@ -155,12 +157,17 @@ def test_phase2_state_file_round_trip_preserves_every_boundary_field(
     assert payload["schema_version"] == PHASE2_STATE_SCHEMA_VERSION
     assert payload["artifact_type"] == PHASE2_STATE_ARTIFACT_TYPE
     assert payload["boundaries"][0]["state_posteriors"]["dtype"] == "float32"
+    assert {"candidate_start", "candidate_end"}.isdisjoint(payload["boundaries"][0])
+    assert {"candidate_start", "candidate_end"}.isdisjoint(original.__dataclass_fields__)
 
 
 def test_phase2_state_round_trip_preserves_none_and_empty_posterior_shape() -> None:
-    without_posteriors = RefinedBoundary(scaffold="a", start=0, end=10)
+    without_posteriors = RefinedBoundary(
+        scaffold="a", start=0, end=10, confirmed_seeds=(ConfirmedSeed("a", "a", 0, 10),)
+    )
     with_empty_posteriors = RefinedBoundary(
         scaffold="b",
+        confirmed_seeds=(ConfirmedSeed("b", "b", 10, 20),),
         start=10,
         end=20,
         state_posteriors=np.empty((0, 6), dtype=np.float64),
@@ -202,6 +209,7 @@ def test_phase2_state_round_trip_preserves_tir_split_children() -> None:
         start=100,
         end=420,
         seed_id="seed-1",
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
         original_start=100,
         original_end=420,
         pre_tir_start=0,
@@ -223,7 +231,8 @@ def test_phase2_state_round_trip_preserves_tir_split_children() -> None:
         scaffold="contig",
         start=840,
         end=1200,
-        seed_id="seed-1",
+        seed_id="seed-2",
+        confirmed_seeds=(ConfirmedSeed("seed-2", "contig", 900, 1100),),
         original_start=840,
         original_end=1200,
         pre_tir_start=0,
@@ -242,6 +251,7 @@ def test_phase2_state_round_trip_preserves_tir_split_children() -> None:
 def test_phase2_state_accepts_single_candidate_partition_veto() -> None:
     boundary = RefinedBoundary(
         scaffold="contig",
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 0, 1200),),
         start=0,
         end=1200,
         original_start=0,
@@ -386,3 +396,41 @@ def test_phase2_state_failed_validation_preserves_existing_file(
         write_phase2_state(state_path, [boundary])
 
     assert state_path.read_text() == "previous valid state\n"
+
+
+@pytest.mark.parametrize("field,value", [("confirmed_seeds", []), ("left_stop", 102), ("right_stop", 998)])
+def test_phase2_state_rejects_missing_seed_or_crossed_stop(field: str, value: object) -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["boundaries"][0][field] = value
+
+    with pytest.raises(Phase2StateError, match="confirmed seed|host stop"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_trimmed_seed_on_resume() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["boundaries"][0]["confirmed_seeds"][0]["start"] = 100
+
+    with pytest.raises(Phase2StateError, match="complete confirmed seed"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_pre_seed_provenance_schema() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["schema_version"] = 5
+
+    with pytest.raises(Phase2StateError, match="unsupported.*schema_version"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_reused_seed_membership_on_resume() -> None:
+    document = phase2_state_to_document([_complete_boundary()])
+    document["boundaries"].append(copy.deepcopy(document["boundaries"][0]))
+
+    with pytest.raises(Phase2StateError, match="confirmed seed.*multiple"):
+        phase2_state_from_document(document)
+
+
+def test_phase2_state_rejects_reused_seed_membership_before_save() -> None:
+    with pytest.raises(Phase2StateError, match="confirmed seed.*multiple"):
+        phase2_state_to_document([_complete_boundary(), _complete_boundary()])

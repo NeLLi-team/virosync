@@ -15,8 +15,8 @@ from virosync.orchestration._flows.single_genome.phase_state import (
     phase2_state_to_document,
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
-from virosync.pipeline.phase1.seed_merger import MergedSeed
-from virosync.pipeline.phase2 import boundary_diamond, host_signature_trim
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
+from virosync.pipeline.phase2 import boundary_diamond
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
     DiamondHit,
@@ -231,13 +231,7 @@ def _run_phase2(
         resume=False,
         gene_taxonomy_faa_db=database,
         host_prefixes=["EUK__"],
-        boundary_host_trim_window_bp=100,
-        boundary_host_trim_step_bp=50,
-        boundary_host_trim_max_host_fraction=0.5,
-        boundary_host_trim_min_viral_fraction=0.0,
         boundary_host_trim_score_threshold=0.5,
-        boundary_host_trim_buffer_kb=0,
-        boundary_host_trim_min_overlap_score=0.2,
         boundary_taxonomy_ml_neighbor_window=1,
         threads=1,
         gene_taxonomy_threads=1,
@@ -261,6 +255,7 @@ def _run_phase2(
                 seed_id="seed-1",
                 sources=["hhg", "marker_validation"],
                 confidence="high",
+                confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 100, 350),),
             )
         ],
         validated_markers=[],
@@ -273,7 +268,7 @@ def _run_phase2(
     )
 
 
-def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
+def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -335,7 +330,7 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
         prototype_enabled=True,
     )
 
-    assert search_counts == {"legacy": 2, "prototype": 1}
+    assert search_counts == {"legacy": 1, "prototype": 1}
     assert phase2_state_to_document(legacy.refined_boundaries) == (
         phase2_state_to_document(prototype.refined_boundaries)
     )
@@ -350,7 +345,7 @@ def test_superset_flow_uses_one_search_and_matches_legacy_phase2_surfaces(
 
 
 @pytest.mark.parametrize("prototype_enabled", [False, True], ids=["legacy", "superset"])
-def test_phase2_host_trim_preserves_duplicate_coordinate_candidates(
+def test_phase2_preserves_independent_duplicate_coordinate_seeds(
     tmp_path: Path,
     monkeypatch,
     prototype_enabled: bool,
@@ -372,6 +367,7 @@ def test_phase2_host_trim_preserves_duplicate_coordinate_candidates(
             hhg_score=30.0,
             confidence="medium",
             predicted_family="UNKNOWN",
+            confirmed_seeds=(ConfirmedSeed(f"seed_412_{scaffold}_0", scaffold, 0, 2087),),
         ),
         MergedSeed(
             scaffold=scaffold,
@@ -382,43 +378,11 @@ def test_phase2_host_trim_preserves_duplicate_coordinate_candidates(
             hhg_score=20.0,
             confidence="medium",
             predicted_family="CRESS",
+            confirmed_seeds=(ConfirmedSeed(f"seed_413_{scaffold}_0", scaffold, 0, 2087),),
         ),
     ]
-    taxonomy_regions: list[list[dict]] = []
-    trim_inputs: list[list[MergedSeed]] = []
-    materialize_taxonomy = gene_taxonomy.materialize_gene_taxonomy_batch_from_cached_hits
-    trim_seeds = host_signature_trim.trim_seeds_by_host_signature
-
-    def record_materialized_taxonomy(**kwargs):
-        taxonomy_regions.append(kwargs["regions"])
-        return materialize_taxonomy(**kwargs)
-
-    def fake_call_task(_task, **kwargs):
-        return record_materialized_taxonomy(
-            regions=kwargs["regions"],
-            proteome_fasta=kwargs["proteome_path"],
-            diamond_hits={},
-            output_dir=kwargs["output_dir"],
-            high_pident_euk_threshold=kwargs["high_pident_host_threshold"],
-        )
-
-    def record_trim_inputs(**kwargs):
-        trim_inputs.append(kwargs["seeds"])
-        return trim_seeds(**kwargs)
-
-    monkeypatch.setattr(phase2, "call_task", fake_call_task)
     monkeypatch.setattr(phase2, "run_batched_diamond", lambda **_kwargs: {})
     monkeypatch.setattr(phase2, "run_full_proteome_diamond", lambda **_kwargs: {})
-    monkeypatch.setattr(
-        gene_taxonomy,
-        "materialize_gene_taxonomy_batch_from_cached_hits",
-        record_materialized_taxonomy,
-    )
-    monkeypatch.setattr(
-        host_signature_trim,
-        "trim_seeds_by_host_signature",
-        record_trim_inputs,
-    )
 
     result = _run_phase2(
         output_dir=tmp_path / "result",
@@ -429,20 +393,6 @@ def test_phase2_host_trim_preserves_duplicate_coordinate_candidates(
         merged_seeds=duplicate_coordinate_seeds,
     )
 
-    assert taxonomy_regions == [
-        [
-            {
-                "eve_id": f"EVE_{scaffold}_0-2087",
-                "scaffold": scaffold,
-                "start": 0,
-                "end": 2087,
-            }
-        ]
-    ]
-    assert len(trim_inputs) == 1
-    assert len(trim_inputs[0]) == 2
-    summary_lines = (tmp_path / "result" / "phase2" / "host_trim" / "host_signature_trim.tsv").read_text().splitlines()
-    assert len(summary_lines) == 3
     assert [(boundary.predicted_family, boundary.seed_hhg_score) for boundary in result.refined_boundaries] == [
         ("UNKNOWN", 30.0),
         ("CRESS", 20.0),

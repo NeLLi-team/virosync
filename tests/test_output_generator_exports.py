@@ -21,9 +21,9 @@ from virosync.output_contract import (
     OUTPUT_SCHEMA_VERSION,
     REPEAT_CANDIDATE_COLUMNS,
 )
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
-    merge_adjacent_viral_boundaries,
 )
 from virosync.pipeline.phase2.repeat_evidence import (
     DirectRepeatCandidate,
@@ -32,6 +32,7 @@ from virosync.pipeline.phase2.repeat_evidence import (
     _stable_id,
     assess_repeat_evidence,
 )
+from virosync.pipeline.phase2.seed_extension import merge_reachable_boundaries
 from virosync.pipeline.phase3.acceptance_selection import select_phase3_acceptance
 from virosync.pipeline.phase3.evidence_graph import (
     CoherenceAnalysis,
@@ -89,11 +90,6 @@ CANONICAL_BASE_FIELDS = (
     "interproscan_total_hits",
     "interproscan_viral_hits",
     "interproscan_keyword_hits",
-    "candidate_start",
-    "candidate_end",
-    "candidate_length",
-    "candidate_reduction_bp",
-    "candidate_reduction_reason",
     *INTEGRATION_EVIDENCE_COLUMNS,
 )
 CANONICAL_EXTENDED_FIELDS = (
@@ -154,6 +150,7 @@ def _build_result(
 ) -> VerificationResult:
     return VerificationResult(
         eve_id=eve_id,
+        confirmed_seeds=(ConfirmedSeed(eve_id, scaffold, start, end),),
         scaffold=scaffold,
         start=start,
         end=end,
@@ -166,6 +163,37 @@ def _build_result(
         hallmark_count=hallmark_count,
         has_mcp=has_mcp,
     )
+
+
+@pytest.mark.parametrize("core_start,core_end", [(99, 200), (100, 201)])
+def test_generate_all_rejects_trimmed_confirmed_seed(tmp_path: Path, core_start: int, core_end: int) -> None:
+    candidate = _build_result(
+        eve_id="seed",
+        scaffold="scaf",
+        start=100,
+        end=200,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+    candidate.confirmed_seeds = (ConfirmedSeed("seed", "scaf", core_start, core_end),)
+
+    with pytest.raises(ValueError, match="confirmed seed"):
+        OutputGenerator(output_dir=tmp_path).generate_all([candidate])
+
+
+def test_generate_all_rejects_candidate_without_confirmed_seed(tmp_path: Path) -> None:
+    candidate = _build_result(
+        eve_id="seed",
+        scaffold="scaf",
+        start=100,
+        end=200,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+    candidate.confirmed_seeds = ()
+
+    with pytest.raises(ValueError, match="confirmed seed"):
+        OutputGenerator(output_dir=tmp_path).generate_all([candidate])
 
 
 def test_write_gvclass_export_uses_coordinate_overlap(tmp_path: Path) -> None:
@@ -858,7 +886,7 @@ def test_malformed_confirmed_table_does_not_discard_ordinary_marker_hits(
     "writer_name",
     ["write_predictions_tsv", "write_predictions_detailed_tsv"],
 )
-def test_prediction_tsv_writers_preserve_zero_candidate_start(
+def test_prediction_tsv_writers_export_only_retained_coordinates(
     tmp_path: Path,
     writer_name: str,
 ) -> None:
@@ -870,17 +898,25 @@ def test_prediction_tsv_writers_preserve_zero_candidate_start(
         confidence_tier="HIGH",
         status=VerificationStatus.HIGH_CONFIDENCE,
     )
-    result.candidate_start = 0
-    result.candidate_end = 20
-    result.candidate_length = 20
     generator = OutputGenerator(output_dir=tmp_path, extended_output=False)
 
     output_path = getattr(generator, writer_name)([result])
 
     with output_path.open(newline="") as handle:
         row = next(csv.DictReader(handle, delimiter="\t"))
-    assert row["candidate_start"] == "0"
-    assert row["candidate_end"] == "20"
+    assert row["start"] == "0"
+    assert row["end"] == "20"
+    retired = {
+        "candidate_start",
+        "candidate_end",
+        "candidate_length",
+        "candidate_reduction_bp",
+        "candidate_reduction_reason",
+        "candidate_common_euk_taxonomy",
+    }
+    assert retired.isdisjoint(row)
+    assert retired.isdisjoint(result.to_dict())
+    assert retired.isdisjoint(result.__dataclass_fields__)
 
 
 @pytest.mark.parametrize(
@@ -1039,6 +1075,7 @@ def test_merged_seed_sources_are_ordered_like_the_detailed_tsv_field() -> None:
             start=0,
             end=1000,
             original_end=1000,
+            confirmed_seeds=(ConfirmedSeed("left", "scaffold", 100, 900),),
             seed_sources=["novelty", "hhg", "compositional"],
         ),
         RefinedBoundary(
@@ -1046,15 +1083,12 @@ def test_merged_seed_sources_are_ordered_like_the_detailed_tsv_field() -> None:
             start=500,
             end=1500,
             original_end=1500,
+            confirmed_seeds=(ConfirmedSeed("right", "scaffold", 600, 1400),),
             seed_sources=["marker", "compositional"],
         ),
     ]
 
-    merged = merge_adjacent_viral_boundaries(
-        boundaries,
-        taxonomy_map={},
-        proteome_index={},
-    )
+    merged = merge_reachable_boundaries(boundaries)
 
     assert len(merged) == 1
     assert merged[0].seed_sources == ["compositional", "hhg", "marker", "novelty"]
@@ -1241,6 +1275,7 @@ def repeat_result() -> VerificationResult:
     second = DirectRepeatCandidate(_stable_id("dr", evidence.evidence_id, 25, 75, 475, 525), 25, 75, 475, 525, 0.96, 50)
     return VerificationResult(
         eve_id="EVE_contig_1_50-500",
+        confirmed_seeds=(ConfirmedSeed("input-parent", "contig_1", 100, 450),),
         scaffold="contig_1",
         start=50,
         end=500,
@@ -1305,7 +1340,9 @@ def test_repeat_sidecar_keeps_rejected_pairs_when_canonical_output_is_empty(
     tmp_path: Path, repeat_result: VerificationResult
 ) -> None:
     """Every final EVE keeps its parent link even when none reaches the canonical table."""
-    other = replace(repeat_result, eve_id="EVE_other")
+    other = replace(
+        repeat_result, eve_id="EVE_other", confirmed_seeds=(ConfirmedSeed("other-source", "contig_1", 120, 420),)
+    )
     generator = OutputGenerator(output_dir=tmp_path)
 
     outputs = generator.generate_all([other, repeat_result], canonical_results=[], promoted_low_results=[])
@@ -1345,7 +1382,12 @@ def test_repeat_negative_assessment_is_distinct_from_missing_evidence(
     negative = replace(
         repeat_result, repeat_evidence=replace(repeat_result.repeat_evidence, candidates=(), display_candidate_id="")
     )
-    missing = replace(repeat_result, eve_id="EVE_missing", repeat_evidence=None)
+    missing = replace(
+        repeat_result,
+        eve_id="EVE_missing",
+        repeat_evidence=None,
+        confirmed_seeds=(ConfirmedSeed("missing-source", "contig_1", 130, 400),),
+    )
     generator = OutputGenerator(output_dir=tmp_path)
 
     outputs = generator.generate_all([negative, missing], canonical_results=[], promoted_low_results=[])
@@ -1481,3 +1523,28 @@ def test_repeat_export_invariants_reject_tampered_linkage(
     report = run_tsv_invariant_checks(outputs["predictions_detailed_tsv"])
 
     assert expected_check in {issue.check for issue in report.fatal_issues}
+
+
+def test_generate_all_rejects_duplicate_confirmed_seed_membership(tmp_path: Path) -> None:
+    first = _build_result(
+        eve_id="first",
+        scaffold="scaf",
+        start=100,
+        end=300,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+    second = _build_result(
+        eve_id="second",
+        scaffold="scaf",
+        start=150,
+        end=350,
+        confidence_tier="HIGH",
+        status=VerificationStatus.HIGH_CONFIDENCE,
+    )
+    core = ConfirmedSeed("original", "scaf", 180, 220)
+    first.confirmed_seeds = (core,)
+    second.confirmed_seeds = (core,)
+
+    with pytest.raises(ValueError, match="confirmed seed"):
+        OutputGenerator(output_dir=tmp_path).generate_all([first, second])
