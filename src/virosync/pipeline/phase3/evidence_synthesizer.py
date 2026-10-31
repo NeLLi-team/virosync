@@ -128,7 +128,7 @@ def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
         else:
             porf_id = str(getattr(hit, "porf_id", None) or getattr(hit, "query_porf", "") or "")
         if porf_id:
-            gene_id = base_marker_gene_id(porf_id)
+            gene_id = str(_hit_field(hit, "scoring_locus_id") or base_marker_gene_id(porf_id))
             qualified.add(gene_id)
             if is_cress_specific_top1_marker(hit):
                 specific_top1.add(gene_id)
@@ -561,7 +561,7 @@ def marker_taxonomy_category(
 
 
 def deduplicate_preferring_mcp(hallmark_hits: list) -> list:
-    """One hit per protein for the taxonomy vote, preferring an MCP profile.
+    """One hit per scoring locus for the taxonomy vote, preferring an MCP profile.
 
     The gate's deduplication keeps the highest-scoring profile per protein, so a
     non-MCP profile that outscores an MCP on the same protein hides the capsid.
@@ -590,7 +590,9 @@ def deduplicate_preferring_mcp(hallmark_hits: list) -> list:
         porf_id = str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
         # Without a protein ID there is no evidence two hits share a protein, so
         # they must not be collapsed. Key them apart instead of on profile name.
-        base_gene = base_marker_gene_id(porf_id) if porf_id else f"\0hit{index}"
+        base_gene = (
+            str(_hit_field(hit, "scoring_locus_id") or base_marker_gene_id(porf_id)) if porf_id else f"\0hit{index}"
+        )
         try:
             score = float(_hit_field(hit, "hmm_score") or _hit_field(hit, "score") or 0.0)
         except (TypeError, ValueError):
@@ -631,9 +633,11 @@ def mcp_vote_classes(
     taxonomy_lookup: dict | None = None,
 ) -> set[str]:
     """Return the distinct classes this EVE's MCP markers vote for."""
+    linked = [hit for hit in hallmark_hits or [] if _hit_field(hit, "scoring_locus_id")]
+    independent = [hit for hit in hallmark_hits or [] if not _hit_field(hit, "scoring_locus_id")]
     return {
         category
-        for hit in (hallmark_hits or [])
+        for hit in [*independent, *deduplicate_preferring_mcp(linked)]
         if _is_mcp_marker(hit) and (category := marker_taxonomy_category(hit, taxonomy_lookup))
     }
 
@@ -660,6 +664,11 @@ def taxonomy_class_votes(
     """
     weights: Counter = Counter()
     marker_gene_ids: set[str] = set()
+    scoring_loci = {
+        base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")): str(locus)
+        for hit in hallmark_hits or []
+        if (locus := _hit_field(hit, "scoring_locus_id"))
+    }
     # One vote per marker-bearing protein, and an MCP profile on that protein
     # outranks any higher-scoring non-MCP profile. Done here rather than in the
     # caller so the function is correct however it is called.
@@ -671,10 +680,11 @@ def taxonomy_class_votes(
             continue
         gene_id = base_marker_gene_id(str(_hit_field(record, "porf_id") or ""))
         if gene_id:
-            gene_category_by_id[gene_id] = _vote_category(record, taxonomy_lookup)
+            gene_category_by_id[scoring_loci.get(gene_id, gene_id)] = _vote_category(record, taxonomy_lookup)
 
     for hit in hallmark_hits or []:
         gene_id = base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""))
+        gene_id = scoring_loci.get(gene_id, gene_id)
         if gene_id:
             marker_gene_ids.add(gene_id)
         marker_category = _marker_vote_category(hit, taxonomy_lookup)
@@ -1034,6 +1044,7 @@ class VerificationResult:
     host_stop_available: bool = field(default=False, kw_only=True)
 
     hallmark_evidence: list[HallmarkEvidence] = field(default_factory=list)
+    scoring_locus_ids: dict[str, str] = field(default_factory=dict)
     hallmark_witnesses: list[HallmarkWitness] = field(default_factory=list)
     hallmark_support: list[HallmarkSupport] = field(default_factory=list)
     hallmark_assessment: HallmarkAssessment | None = None
@@ -1307,6 +1318,7 @@ class VerificationResult:
             "hallmark_witnesses": [{**asdict(w), "witness_id": w.witness_id} for w in self.hallmark_witnesses],
             "hallmark_assessment": asdict(self.hallmark_assessment) if self.hallmark_assessment else None,
             "hallmark_support": [asdict(h) for h in self.hallmark_support],
+            "scoring_locus_ids": self.scoring_locus_ids,
             "hallmark_count": self.hallmark_count,
             "hallmark_diversity": self.hallmark_diversity,
             "has_virus_specific_marker": self.has_virus_specific_marker,
@@ -2328,7 +2340,7 @@ class EvidenceSynthesizer:
     def _deduplicate_hallmark_hits(
         hallmark_hits: list,
     ) -> tuple[list, list[str], dict[str, dict]]:
-        """Deduplicate hallmark hits by base gene ID.
+        """Deduplicate hallmark hits by scoring locus, or base gene ID.
 
         When multiple HMM profiles hit the same protein, keep only the
         best-scoring model (highest hmm_score) per gene.
@@ -2350,8 +2362,9 @@ class EvidenceSynthesizer:
                 continue
             # Extract base gene ID (remove |aaX-Y domain suffix)
             base_gene = porf_id.split("|aa")[0] if porf_id else gene_name
-            if base_gene not in by_gene or score > by_gene[base_gene]["score"]:
-                by_gene[base_gene] = {
+            locus = str(_hit_field(hit, "scoring_locus_id") or base_gene)
+            if locus not in by_gene or score > by_gene[locus]["score"]:
+                by_gene[locus] = {
                     "hit": hit,
                     "hallmark_gene": gene_name,
                     "score": score,
@@ -2368,9 +2381,8 @@ class EvidenceSynthesizer:
     ) -> None:
         """Process hallmark hits and update result with marker evidence.
 
-        Deduplicates by gene: when multiple HMM profiles hit the same protein,
-        only the best-scoring model counts. hallmark_count reflects unique
-        marker-bearing proteins, not the number of HMM profile hits.
+        Only the best-scoring model counts per scoring locus. Alternative
+        ordinary/rescued translations retain their separate annotation IDs.
         """
         if not hallmark_hits:
             return
@@ -2399,8 +2411,14 @@ class EvidenceSynthesizer:
             is_rescued_protein_id,
         )
 
-        rescued = [info for info in by_gene.values() if is_rescued_protein_id(info["base_gene"])]
-        result.frameshift_rescue_marker_ids = [info["base_gene"] for info in rescued]
+        result.frameshift_rescue_marker_ids = sorted(
+            {
+                base_marker_gene_id(gene)
+                for hit in hallmark_hits
+                if (gene := str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or ""))
+                and is_rescued_protein_id(gene)
+            }
+        )
         marker_summary = with_profile_class_families(
             summarize_marker_hits(hallmark_genes, annotation_index=self.marker_annotation_index),
             deduped_hits,
@@ -2908,6 +2926,11 @@ class EvidenceSynthesizer:
             if w.scaffold == result.scaffold and result.start <= w.start and w.end <= result.end
         ]
         result.hallmark_support = list(hallmark_support or [])
+        result.scoring_locus_ids = {
+            base_marker_gene_id(str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")): str(locus)
+            for hit in hallmark_hits or []
+            if (locus := _hit_field(hit, "scoring_locus_id"))
+        }
 
         # Process evidence: contig-edge, hallmarks, taxonomy, interproscan
         self._detect_contig_edge(result, refined_boundary, scaffold_lengths)

@@ -17,9 +17,10 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
 )
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkSupport, HallmarkWitness
+from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
-from virosync.pipeline.phase1.viral_markers import get_assembly_mode
+from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
     build_gene_taxonomy_record,
@@ -509,6 +510,62 @@ def _summarize_boundary_taxonomy(
     return gene_tax_records, summary
 
 
+def _scoring_locus_ids(hallmarks: list[dict[str, object]]) -> dict[str, str]:
+    """Link overlapping same-model translations when one is a confirmed rescue.
+
+    Ordinary genes alone never merge; overlapping rescues can merge with each
+    other or bridge ordinary fragments. Mixed-model links stay separate. Choose
+    the strongest hit to the shared model; raw evidence and IDs stay intact.
+    """
+    if not any(is_rescued_protein_id(hit["porf_id"]) for hit in hallmarks):
+        return {}
+
+    parents: dict[str, str] = {}
+    ranks: dict[tuple[str, str], tuple[float, str]] = {}
+    groups: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for hit in hallmarks:
+        gene = base_marker_gene_id(hit["porf_id"])
+        parents[gene] = gene
+        key = (hit["hallmark_gene"], gene)
+        ranks[key] = max(ranks.get(key, (float("-inf"), gene)), (hit["hmm_score"], gene))
+        groups[(hit["scaffold"], hit["strand"], hit["hallmark_gene"])].append(hit)
+
+    def root(gene: str) -> str:
+        while parents[gene] != gene:
+            parents[gene] = parents[parents[gene]]
+            gene = parents[gene]
+        return gene
+
+    links = []
+    linked_models: dict[str, set[str]] = defaultdict(set)
+    for (_scaffold, _strand, model), hits in groups.items():
+        hits.sort(key=lambda hit: hit["start"])
+        for index, left in enumerate(hits):
+            left_gene = base_marker_gene_id(left["porf_id"])
+            for right in hits[index + 1 :]:
+                if right["start"] >= left["end"]:
+                    break
+                right_gene = base_marker_gene_id(right["porf_id"])
+                if left_gene == right_gene:
+                    continue
+                if not (is_rescued_protein_id(left_gene) or is_rescued_protein_id(right_gene)):
+                    continue
+                links.append((left_gene, right_gene, model))
+                linked_models[left_gene].add(model)
+                linked_models[right_gene].add(model)
+
+    for left_gene, right_gene, model in links:
+        if len(linked_models[left_gene]) != 1 or len(linked_models[right_gene]) != 1:
+            continue
+        left_root, right_root = root(left_gene), root(right_gene)
+        winner = max((left_root, right_root), key=lambda gene: ranks[model, gene])
+        parents[left_root] = parents[right_root] = winner
+
+    loci = {gene: root(gene) for gene in parents}
+    shared = {locus for gene, locus in loci.items() if gene != locus}
+    return {gene: locus for gene, locus in loci.items() if locus in shared}
+
+
 def _build_boundary_hallmarks(
     boundary_markers: list[object],
     config: PipelineConfig,
@@ -527,6 +584,8 @@ def _build_boundary_hallmarks(
         porf_id = getattr(marker, "porf_id", None) or getattr(marker, "query_porf", None)
         hallmarks.append(
             {
+                "scaffold": marker.scaffold,
+                "strand": marker.strand,
                 "start": marker.start,
                 "end": marker.end,
                 "porf_id": porf_id,
@@ -566,6 +625,20 @@ def _build_boundary_evidence(
         taxonomy_map=boundary_taxonomy_map if use_precomputed_taxonomy else None,
         proteome_index=proteome_index if use_precomputed_taxonomy else None,
     )
+    hallmarks = _build_boundary_hallmarks(boundary_markers, config)
+    scoring_loci = _scoring_locus_ids(hallmarks)
+    for hit in hallmarks:
+        gene = base_marker_gene_id(hit["porf_id"])
+        if gene in scoring_loci:
+            hit["scoring_locus_id"] = scoring_loci[gene]
+    if scoring_loci:
+        taxonomy_by_locus = {}
+        for taxonomy in filtered_taxonomy:
+            gene = base_marker_gene_id(taxonomy.porf_id)
+            locus = scoring_loci.get(gene, gene)
+            if locus not in taxonomy_by_locus or gene == locus:
+                taxonomy_by_locus[locus] = taxonomy
+        filtered_taxonomy = list(taxonomy_by_locus.values())
     gene_taxonomy = None
     if use_precomputed_taxonomy:
         gene_taxonomy = _summarize_boundary_taxonomy(
@@ -585,7 +658,7 @@ def _build_boundary_evidence(
             end=boundary.end,
             max_porfs=10000,
         )
-        gene_count = len(porf_sequences)
+        gene_count = len({scoring_loci.get(gene, gene) for gene, _sequence in porf_sequences})
         gene_taxonomy = (
             [],
             {
@@ -599,7 +672,7 @@ def _build_boundary_evidence(
     interproscan = interproscan_map.get(candidate_id) if interproscan_map else None
     return _BoundaryEvidence(
         boundary_id=candidate_id,
-        hallmarks=_build_boundary_hallmarks(boundary_markers, config),
+        hallmarks=hallmarks,
         gene_taxonomy=gene_taxonomy,
         interproscan=interproscan,
     )

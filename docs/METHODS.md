@@ -603,6 +603,23 @@ The viral-gene fraction uses only interior genes with a viral reference hit at
 cannot replace a zero count of identity-qualified viral genes. The seed-cluster
 component describes marker support separately from this gene-taxonomy term.
 
+A confirmed frameshift rescue and an overlapping ordinary or rescued protein
+carrying the same marker model on the same strand are treated as one scoring
+locus. A protein that links different model groups is left separate. Phase 3 uses
+one representative for gene-taxonomy counts, marker counts and lineage votes.
+The same identity defines independent catalogue cores and score-qualified
+spatial witnesses, including after boundary reassessment. Original witnesses
+and confirmed seed intervals remain unchanged. Evidence profiles export the
+protein-to-locus mapping used for scoring.
+Capsid-fold counts and their bonus also count each linked locus once, using its
+supported evidence before confidence rank. Linked alternatives cannot contribute extra independent
+votes to these terms. Raw marker and fold records, rescued sequences, annotation
+IDs and all confirmed seed intervals remain available. Distinct models, opposite strands and
+nonoverlapping intervals are not joined by this rule.
+This coordinate-based heuristic cannot distinguish a fragment bridge from a
+rescued read-through across real tandem copies. A1 stops before Phase 3 scoring;
+its marker counts remain raw translation diagnostics and its confidence is zero.
+
 Non-marker components and cellular penalties remain active. Small-region
 penalties use the catalogue's full-weight capsid qualification. A candidate
 without qualifying core evidence is capped below MEDIUM; one with fewer than

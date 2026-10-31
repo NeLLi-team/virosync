@@ -126,8 +126,12 @@ def assess_hallmarks(result: VerificationResult) -> HallmarkAssessment:
         result.scaffold,
         result.start,
         result.end,
-        summarize_hallmarks(retained, result.hallmark_support),
-        tuple(contained_witnesses(retained, result.hallmark_witnesses, result.scaffold, result.start, result.end)),
+        summarize_hallmarks(retained, result.hallmark_support, result.scoring_locus_ids),
+        tuple(
+            contained_witnesses(
+                retained, result.hallmark_witnesses, result.scaffold, result.start, result.end, result.scoring_locus_ids
+            )
+        ),
     )
 
 
@@ -267,16 +271,24 @@ def add_rescue_seeds(seeds: list[MergedSeed], witnesses: Sequence[HallmarkWitnes
 
 
 def contained_witnesses(
-    evidence: Sequence[HallmarkEvidence], witnesses: Sequence[HallmarkWitness], scaffold: str, start: int, end: int
+    evidence: Sequence[HallmarkEvidence],
+    witnesses: Sequence[HallmarkWitness],
+    scaffold: str,
+    start: int,
+    end: int,
+    scoring_locus_ids: dict[str, str] | None = None,
 ) -> list[HallmarkWitness]:
     """Retain original witnesses whose complete valid members remain inside."""
     retained = [h for h in evidence if h.scaffold == scaffold and start <= h.start and h.end <= end]
     by_id = {h.evidence_id: h for h in retained}
+    loci = scoring_locus_ids or {}
     contained = []
     for witness in witnesses:
         if witness.scaffold != scaffold or not set(witness.evidence_ids).issubset(by_id):
             continue
         selected = [by_id[key] for key in witness.evidence_ids]
+        if len({loci.get(hit.gene, hit.gene) for hit in selected}) != len(selected):
+            continue
         if witness in find_spatial_witnesses(selected):
             contained.append(witness)
     return contained
@@ -298,9 +310,12 @@ def has_spatial_rescue(result: VerificationResult) -> bool:
 
 
 def summarize_hallmarks(
-    evidence: Sequence[HallmarkEvidence], support: Sequence[HallmarkSupport] = ()
+    evidence: Sequence[HallmarkEvidence],
+    support: Sequence[HallmarkSupport] = (),
+    scoring_locus_ids: dict[str, str] | None = None,
 ) -> HallmarkSummary:
     """Select one compatible panel, then apply the approved graduated weights."""
+    loci = scoring_locus_ids or {}
     core, context = defaultdict(list), defaultdict(list)
     for hit, link in _linked(evidence):
         if (
@@ -320,11 +335,11 @@ def summarize_hallmarks(
                 context[link["panel"]].append((hit, link))
     choices = []
     for panel, hits in core.items():
-        total = len(_assignment(hits))
-        strong = len(_assignment([(h, link) for h, link in hits if h.evalue <= STRONG_EVALUE]))
+        total = len(_assignment(hits, loci))
+        strong = len(_assignment([(h, link) for h, link in hits if h.evalue <= STRONG_EVALUE], loci))
         any_capsid = any(link["capsid"] for _, link in hits)
         strong_capsid = any(link["capsid"] and h.evalue <= STRONG_EVALUE for h, link in hits)
-        compatible = len(_assignment(context[panel]))
+        compatible = len(_assignment(context[panel], loci))
         if total >= 3:
             effective, weak_weight = float(total), 1.0
         elif total == 2:
@@ -332,7 +347,7 @@ def summarize_hallmarks(
                 (
                     int(a.evalue <= STRONG_EVALUE) + int(b.evalue <= STRONG_EVALUE)
                     for (a, left), (b, right) in combinations(hits, 2)
-                    if a.gene != b.gene and left["marker"] != right["marker"]
+                    if loci.get(a.gene, a.gene) != loci.get(b.gene, b.gene) and left["marker"] != right["marker"]
                 ),
                 default=0,
             )
@@ -384,10 +399,12 @@ def _linked(evidence: Sequence[HallmarkEvidence]) -> Iterable[tuple[HallmarkEvid
 
 def _assignment(
     hits: Sequence[tuple[HallmarkEvidence | HallmarkSupport, dict]],
+    scoring_locus_ids: dict[str, str] | None = None,
 ) -> list[tuple[HallmarkEvidence | HallmarkSupport, dict]]:
     edges = defaultdict(dict)
+    loci = scoring_locus_ids or {}
     for hit, link in sorted(hits, key=lambda pair: (pair[0].evalue, pair[0].model)):
-        edges[link["marker"]].setdefault(hit.gene, (hit, link))
+        edges[link["marker"]].setdefault(loci.get(hit.gene, hit.gene), (hit, link))
     matched = {}
 
     def assign(family: str, seen: set[str]) -> bool:

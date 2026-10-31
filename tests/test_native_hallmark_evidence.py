@@ -1,7 +1,9 @@
 """Native retained-hallmark scoring and protected spatial rescue contracts."""
 
 import json
+import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -456,3 +458,270 @@ def test_candidate_annotations_reuse_marker_index_and_scan_evidence_once(tmp_pat
     identity = boundary_candidate_id(boundaries[0])
     assert labelled == [(identity, "frameshift"), (identity, "raw")]
     assert evidence.iterations == markers.iterations == 1
+
+
+@pytest.mark.parametrize("ordinary_score", [65.0, 200.0])
+def test_frameshift_alternative_does_not_add_gene_taxonomy_or_family_credit(
+    tmp_path: Path, ordinary_score: float
+) -> None:
+    """One physical MCP keeps both records but contributes one scoring locus."""
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase3
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
+    from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+    from virosync.pipeline.phase3.evidence_synthesizer import taxonomy_class_votes
+
+    ordinary = ValidatedMarkerHit(
+        query_porf="s_9|aa15-237",
+        scaffold="s",
+        start=10774,
+        end=11929,
+        strand="+",
+        hmm_target="VS000309",
+        hmm_score=ordinary_score,
+        hmm_evalue=2e-21,
+        validation_status="validated",
+        top10_prefixes="NCLDV__",
+        top10_targets="NCLDV__reference|protein",
+        top10_pidents="87.1",
+        best_hit_target="NCLDV__reference|protein",
+        best_hit_pident=87.1,
+        best_hit_bits=465,
+        has_ncldv=1,
+        has_mirus=0,
+        has_plv=0,
+        has_vp=0,
+        has_viral=1,
+    )
+    rescued_id = "s_VSR0123456789abcdef"
+    rescued = replace(
+        ordinary,
+        query_porf=f"{rescued_id}|aa1-343",
+        start=10873,
+        end=11898,
+        hmm_score=144,
+        hmm_evalue=2e-46,
+    )
+    marker_taxonomy = GeneTaxonomy(
+        "s_9",
+        "s",
+        10774,
+        11929,
+        top1_target="NCLDV__reference|protein",
+        top1_prefix="NCLDV__",
+        top1_pident=87.1,
+        top10_prefixes=["NCLDV__"],
+        top10_targets=["NCLDV__reference|protein"],
+        top10_pidents=[87.1],
+        has_ncldv_mirus=True,
+        has_viral=True,
+        has_hit=True,
+    )
+    taxonomies = [
+        GeneTaxonomy(f"s_{index}", "s", start, start + 100)
+        for index, start in enumerate((6000, 6500, 7000, 7500, 8000))
+    ] + [marker_taxonomy, replace(marker_taxonomy, porf_id=rescued_id, start=10873, end=11898)]
+    core = ConfirmedSeed("original", "s", 5774, 16929)
+    boundary = RefinedBoundary("s", 5774, 16929, confirmed_seeds=(core,))
+    native = collect_hallmark_evidence(
+        [ordinary, rescued],
+        [HMMHit("s_9", "VS000309", ordinary_score, 2e-21, 65, 15, 237)],
+        frameshift_ids={rescued_id},
+    )
+    built = phase3._build_boundary_evidence(
+        boundary=boundary,
+        taxonomy_index=phase3._build_scaffold_start_index(taxonomies),
+        marker_index=phase3._build_scaffold_start_index([ordinary, rescued]),
+        boundary_taxonomy_map={},
+        proteome_index={},
+        boundary_diamond_query=None,
+        interproscan_map=None,
+        use_precomputed_taxonomy=True,
+        proteome_path=tmp_path / "unused.faa",
+        config=PipelineConfig(),
+        logger=logging.getLogger(__name__),
+    )
+    records, summary = built.gene_taxonomy
+    result = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    ).verify_eve(
+        boundary,
+        [],
+        hallmark_hits=built.hallmarks,
+        hallmark_evidence=native,
+        hallmark_witnesses=find_spatial_witnesses(native),
+        gene_taxonomy_records=records,
+        gene_taxonomy_summary=summary,
+    )
+
+    assert result.gene_count == result.gene_taxonomy_total == 6
+    assert result.gene_taxonomy_viral_top10 == result.gene_taxonomy_viral_interior == 1
+    assert result.gene_taxonomy_dominant_fraction == pytest.approx(1 / 6)
+    assert result.score_components["scores"]["gene_taxonomy"] == pytest.approx(1 / 6)
+    assert result.family_consistency_score == 0
+    assert result.hallmark_count == 1
+    assert taxonomy_class_votes(built.hallmarks, gene_taxonomy_records=records) == {"NCLDV": 5}
+    assert set(result.mcp_gene_ids) == {"s_9", rescued_id}
+    assert result.frameshift_rescue_marker_ids == [rescued_id]
+    assert result.hallmark_evidence == native
+    assert result.hallmark_assessment.summary.core_count == 1
+    assert result.confirmed_seeds == (core,)
+    assert (result.start, result.end) == (5774, 16929)
+
+
+@pytest.mark.parametrize(
+    "different",
+    [
+        {"strand": "-"},
+        {"scaffold": "other"},
+        {"hallmark_gene": "GVOGm0003"},
+        {"start": 400, "end": 600},
+        {"start": 401, "end": 600},
+        {"porf_id": "ordinary_second"},
+    ],
+)
+def test_rescued_locus_count_keeps_independent_genes(different):
+    from virosync.orchestration._flows.single_genome.phase3 import _scoring_locus_ids
+
+    ordinary = {
+        "porf_id": "ordinary",
+        "scaffold": "s",
+        "strand": "+",
+        "start": 100,
+        "end": 400,
+        "hallmark_gene": "VS000309",
+        "hmm_score": 65,
+    }
+    other = {**ordinary, "porf_id": "s_VSR0123456789abcdef", "start": 200, "end": 350, **different}
+    loci = _scoring_locus_ids([ordinary, other])
+    for marker in (ordinary, other):
+        marker["scoring_locus_id"] = loci.get(marker["porf_id"], marker["porf_id"])
+    retained, _, _ = EvidenceSynthesizer._deduplicate_hallmark_hits([ordinary, other])
+    assert len(retained) == 2
+
+
+def test_rescue_bridges_fragments_without_losing_raw_marker_records():
+    from virosync.orchestration._flows.single_genome.phase3 import _scoring_locus_ids
+
+    base = {"scaffold": "s", "strand": "+", "hallmark_gene": "VS000309", "hmm_score": 65}
+    markers = [
+        {**base, "porf_id": "left", "start": 100, "end": 300},
+        {**base, "porf_id": "right", "start": 400, "end": 600},
+        {**base, "porf_id": "s_VSR0123456789abcdef", "start": 200, "end": 500, "hmm_score": 144},
+    ]
+    for ordered in (markers, list(reversed(markers))):
+        loci = _scoring_locus_ids(ordered)
+        assert set(loci.values()) == {"s_VSR0123456789abcdef"}
+        for marker in ordered:
+            marker["scoring_locus_id"] = loci[marker["porf_id"]]
+        retained, _, _ = EvidenceSynthesizer._deduplicate_hallmark_hits(ordered)
+        assert len(retained) == 1
+        assert len(ordered) == 3
+
+
+def test_rescued_multimodel_protein_cannot_bridge_unrelated_marker_loci():
+    from virosync.orchestration._flows.single_genome.phase3 import _scoring_locus_ids
+
+    base = {"scaffold": "s", "strand": "+", "hmm_score": 65}
+    rescued = "s_VSR0123456789abcdef"
+    markers = [
+        {**base, "porf_id": "capsid", "start": 100, "end": 300, "hallmark_gene": "VS000309"},
+        {**base, "porf_id": "atpase", "start": 400, "end": 600, "hallmark_gene": "GVOGm0760"},
+        {**base, "porf_id": rescued, "start": 200, "end": 500, "hallmark_gene": "VS000309"},
+        {**base, "porf_id": rescued, "start": 200, "end": 500, "hallmark_gene": "GVOGm0760"},
+    ]
+    assert _scoring_locus_ids(markers) == {}
+    assert _scoring_locus_ids(list(reversed(markers))) == {}
+
+
+def test_rescue_representative_uses_shared_model_score_only():
+    from virosync.orchestration._flows.single_genome.phase3 import _scoring_locus_ids
+
+    base = {"scaffold": "s", "strand": "+", "start": 100, "end": 400, "hallmark_gene": "VS000309"}
+    rescued = "s_VSR0123456789abcdef"
+    markers = [
+        {**base, "porf_id": "ordinary", "hmm_score": 100},
+        {**base, "porf_id": rescued, "hmm_score": 80},
+        {**base, "porf_id": rescued, "hmm_score": 200, "hallmark_gene": "GVOGm0760"},
+    ]
+    assert _scoring_locus_ids(markers) == {"ordinary": "ordinary", rescued: "ordinary"}
+
+
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("independent_partner", [False, True])
+def test_linked_translations_cannot_supply_two_independent_catalogue_cores(
+    tmp_path, monkeypatch, batched, independent_partner
+):
+    from virosync.orchestration import tasks, utils
+    from virosync.pipeline.hallmark_evidence import assess_hallmarks
+    from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
+
+    rescued = "s_VSR0123456789abcdef"
+    evidence = [
+        hit(gene, model, 100, 400, evalue=1e-20, status="validated", identity=80)
+        for gene, model in [("ordinary", "VS000309"), (rescued, "VS000309"), (rescued, "GVOGm0760")]
+    ]
+    if independent_partner:
+        evidence.append(hit("independent", "GVOGm0760", 700, 800, evalue=1e-20, status="validated", identity=80))
+    markers = [
+        {
+            "porf_id": item.query_porf,
+            "hallmark_gene": item.model,
+            "hmm_score": item.score,
+            **({"scoring_locus_id": "ordinary"} if item.gene != "independent" else {}),
+            "validation_status": "validated",
+            "top10_prefixes": "NCLDV__",
+            "top10_pidents": "80",
+        }
+        for item in evidence
+    ]
+    seed = ConfirmedSeed("seed", "s", 0, 500)
+    boundary = RefinedBoundary("s", 0, 1000, confirmed_seeds=(seed,))
+    raw_witnesses = find_spatial_witnesses(evidence)
+    if batched:
+        genome = tmp_path / "genome.fna"
+        genome.write_text(">s\n" + "ACGT" * 250 + "\n")
+        monkeypatch.setattr(utils, "get_genes_for_boundary", lambda **kwargs: [])
+        identity = boundary_candidate_id(boundary)
+        [result] = tasks.verify_eve_candidates_batched_task(
+            boundaries=[boundary],
+            genome_path=genome,
+            work_dir=tmp_path / "work",
+            proteome_path=tmp_path / "unused.faa",
+            hallmark_hits_map={identity: markers},
+            hallmark_evidence_map={identity: evidence},
+            hallmark_witnesses_map={identity: raw_witnesses},
+            candidate_annotations={},
+            max_workers=1,
+        )
+    else:
+        result = EvidenceSynthesizer(
+            config=EvidenceSynthesizerConfig(
+                use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False
+            ),
+            work_dir=tmp_path,
+        ).verify_eve(boundary, [], hallmark_hits=markers, hallmark_evidence=evidence, hallmark_witnesses=raw_witnesses)
+    expected_cores = 2 if independent_partner else 1
+    expected_tier = "HIGH" if independent_partner else "MEDIUM"
+    assert result.hallmark_assessment.summary.core_count == expected_cores
+    assert result.hallmark_assessment.summary.strong_count == expected_cores
+    assert result.hallmark_assessment.summary.floor_tier == result.confidence_tier == expected_tier
+    assert result.hallmark_assessment.summary.coherence_bonus == (0.05 if independent_partner else 0)
+    assert any(
+        witness.rule == "capsid" and witness.tier == "MEDIUM" for witness in result.hallmark_assessment.witnesses
+    )
+    assert any(witness.tier == "HIGH" for witness in result.hallmark_assessment.witnesses) == independent_partner
+    if independent_partner:
+        assert any(evidence[-1].evidence_id in witness.evidence_ids for witness in result.hallmark_assessment.witnesses)
+    assert set(result.hallmark_assessment.summary.qualifying_evidence_ids) == {item.evidence_id for item in evidence}
+    assert result.hallmark_evidence == evidence
+    assert result.hallmark_witnesses == raw_witnesses
+    assert result.confirmed_seeds == (seed,)
+    assert result.to_dict()["scoring_locus_ids"] == {"ordinary": "ordinary", rescued: "ordinary"}
+    result.end = 900
+    reassessed = assess_hallmarks(result)
+    assert reassessed.summary.core_count == expected_cores
+    assert reassessed.summary.floor_tier == expected_tier
+    assert any(witness.tier == "HIGH" for witness in reassessed.witnesses) == independent_partner
+    assert result.start <= seed.start < seed.end <= result.end

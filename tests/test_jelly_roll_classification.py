@@ -137,7 +137,7 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
         assert row["mcp_support"] == support
         assert row["validation_status"] == status
 
-        summary = _build_jelly_roll_summary_for_boundary([(porf_id, "A")], loaded)
+        summary = _build_jelly_roll_summary_for_boundary([(porf_id, "A")], loaded, {})
         assert summary is not None
         assert summary["supported_mcp_count"] == int(promotes_mcp)
         assert summary["mcp_proteins"][0]["mcp_support"] == support
@@ -160,6 +160,7 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
     combined = _build_jelly_roll_summary_for_boundary(
         [("valid_djr", "A"), ("long_candidate", "A")],
         loaded,
+        {},
     )
     assert combined is not None
     assert combined["djr_count"] == 2
@@ -171,7 +172,7 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
     assert combined["confidence_bonus"] == pytest.approx(0.05 * supported_confidence * (1 / combined["total_mcp"]))
 
     preexisting = VerificationResult(eve_id="preexisting", scaffold="scaf", start=0, end=1000, has_mcp=True)
-    weak_summary = _build_jelly_roll_summary_for_boundary([("weak_mirus", "A")], loaded)
+    weak_summary = _build_jelly_roll_summary_for_boundary([("weak_mirus", "A")], loaded, {})
     synthesizer._apply_jelly_roll_summary(preexisting, weak_summary)
     assert preexisting.has_mcp is True
 
@@ -198,6 +199,89 @@ def test_curated_structure_mcp_reaches_jelly_roll_selection(tmp_path: Path) -> N
     assert len(rows) == 1
     assert rows[0]["marker"] == "EVE_CAPSID_NOVEL_0029"
     assert rows[0]["mcp_support"] == "sequence_supported"
+
+
+def test_batched_scoring_counts_rescue_linked_fragments_once_for_capsid_fold(tmp_path, monkeypatch):
+    from virosync.orchestration import tasks, utils
+    from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+    from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
+
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">s\n" + "ACGT" * 500 + "\n")
+    boundary = RefinedBoundary("s", 100, 1000, confirmed_seeds=(ConfirmedSeed("seed", "s", 100, 1000),))
+    identity = boundary_candidate_id(boundary)
+    rescued_id = "s_VSR0123456789abcdef"
+    markers = [
+        {
+            "porf_id": gene,
+            "hallmark_gene": "VS000309",
+            "hmm_score": score,
+            "scoring_locus_id": rescued_id,
+            "validation_status": "validated",
+            "top10_prefixes": "NCLDV__",
+            "top10_pidents": "80",
+        }
+        for gene, score in [("left", 65), ("right", 60), (rescued_id, 144)]
+    ]
+    folds = {
+        gene: [
+            {
+                "porf_id": f"{gene}|aa1-20",
+                "classification": "DJR",
+                "confidence": confidence,
+                "mcp_support": "sequence_supported",
+                "validation_status": "validated",
+            }
+        ]
+        for gene, confidence in [("left", 0.8), ("right", 0.9)]
+    }
+    monkeypatch.setattr(utils, "get_genes_for_boundary", lambda **kwargs: [("left", "AA"), ("right", "AA")])
+    [result] = tasks.verify_eve_candidates_batched_task(
+        boundaries=[boundary],
+        genome_path=genome,
+        work_dir=tmp_path / "work",
+        proteome_path=tmp_path / "unused.faa",
+        hallmark_hits_map={identity: markers},
+        hallmark_evidence_map={},
+        hallmark_witnesses_map={},
+        candidate_annotations={},
+        jelly_roll_map=folds,
+        max_workers=1,
+    )
+    assert result.jelly_roll_total_mcp == result.jelly_roll_supported_mcp_count == 1
+    assert result.jelly_roll_djr_count == 1
+    assert result.jelly_roll_confidence_bonus == pytest.approx(0.05 * 0.9)
+    assert {record["porf_id"] for record in result.jelly_roll_mcp_proteins} == {"left|aa1-20", "right|aa1-20"}
+
+
+@pytest.mark.parametrize(
+    "other_fold,other_confidence,other_support,linked_bonus",
+    [("SJR", 0.95, "sequence_supported", 0.0), ("DJR", 0.8, "candidate", 0.045), ("DJR", 0.95, "candidate", 0.045)],
+)
+def test_fold_alias_recomputes_counts_without_discarding_raw_annotations(
+    other_fold, other_confidence, other_support, linked_bonus
+):
+    folds = {
+        "left": [{"porf_id": "left", "classification": "DJR", "confidence": 0.9, "mcp_support": "sequence_supported"}],
+        "right": [
+            {
+                "porf_id": "right",
+                "classification": other_fold,
+                "confidence": other_confidence,
+                "mcp_support": other_support,
+            }
+        ],
+    }
+    sequences = [("left", "AA"), ("right", "AA")]
+    separate = _build_jelly_roll_summary_for_boundary(sequences, folds, {})
+    linked = _build_jelly_roll_summary_for_boundary(sequences, folds, {"left": "locus", "right": "locus"})
+    assert separate["total_mcp"] == 2
+    assert separate["confidence_bonus"] == pytest.approx(0.0225)
+    assert linked["total_mcp"] == 1
+    assert linked["confidence_bonus"] == pytest.approx(linked_bonus)
+    assert linked["supported_mcp_count"] == 1
+    assert linked["avg_confidence"] == (max(0.9, other_confidence) if other_support != "candidate" else 0.9)
+    assert linked["mcp_proteins"] == separate["mcp_proteins"]
 
 
 def test_multi_domain_uses_supported_status_without_changing_output_id(tmp_path: Path) -> None:

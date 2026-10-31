@@ -269,6 +269,10 @@ and sequence-preservation checks.
 
 Profile hits must pass the standard ViroSync marker-validation and region
 filters.
+An overlapping ordinary protein and its confirmed frameshift rescue can both
+retain capsid annotations, while their shared marker locus contributes only
+once to gene counts and confidence. Annotation IDs therefore need not equal
+the number of independent scoring loci.
 Structural similarity supports a putative function; it does not establish
 an active virion protein, a complete MCP, or a viral family.
 

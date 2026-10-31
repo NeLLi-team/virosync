@@ -813,6 +813,7 @@ def _base_porf_id(porf_id: str) -> str:
 def _build_jelly_roll_summary_for_boundary(
     porf_sequences: list[tuple[str, str]],
     jelly_roll_map: dict[str, list[dict]] | None,
+    scoring_loci: dict[str, str],
 ) -> dict | None:
     """Aggregate capsid-fold and MCP-support records for one boundary."""
     if not porf_sequences or not jelly_roll_map:
@@ -849,7 +850,23 @@ def _build_jelly_roll_summary_for_boundary(
     if not best_records:
         return None
 
-    records = sorted(best_records.values(), key=lambda rec: rec["porf_id"])
+    raw_records = sorted(best_records.values(), key=lambda rec: rec["porf_id"])
+    by_locus = {}
+
+    def support_rank(record):
+        return (
+            record["mcp_support"] in {"sequence_supported", "structure_supported"},
+            record["confidence"],
+            record["porf_id"],
+        )
+
+    for record in raw_records:
+        protein_id = record["porf_id"]
+        locus = scoring_loci.get(_base_porf_id(protein_id), protein_id)
+        prior = by_locus.get(locus)
+        if prior is None or support_rank(record) > support_rank(prior):
+            by_locus[locus] = record
+    records = list(by_locus.values())
     total_mcp = len(records)
     supported_records = [r for r in records if r["mcp_support"] in {"sequence_supported", "structure_supported"}]
     supported_djr_confidences = [r["confidence"] for r in supported_records if r["classification"] == "DJR"]
@@ -877,7 +894,7 @@ def _build_jelly_roll_summary_for_boundary(
         "total_mcp": total_mcp,
         "avg_confidence": avg_confidence,
         "confidence_bonus": confidence_bonus,
-        "mcp_proteins": records,
+        "mcp_proteins": raw_records,
     }
 
 
@@ -1056,6 +1073,11 @@ def verify_eve_candidates_batched_task(
             jelly_roll_summary = _build_jelly_roll_summary_for_boundary(
                 porf_sequences,
                 jelly_roll_map,
+                {
+                    _base_porf_id(hit["porf_id"]): hit["scoring_locus_id"]
+                    for hit in hallmark_hits
+                    if hit.get("scoring_locus_id")
+                },
             )
 
             gene_taxonomy_records = []

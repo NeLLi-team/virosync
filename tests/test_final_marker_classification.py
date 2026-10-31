@@ -19,6 +19,7 @@ def marker(protein: str, model: str, start: int, end: int, score: float = 100.0)
         query_porf=protein,
         hmm_target=model,
         scaffold="s",
+        strand="+",
         start=start,
         end=end,
         hmm_score=score,
