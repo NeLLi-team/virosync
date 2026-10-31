@@ -978,3 +978,10 @@ alignment coverages, not reconstructed from identities or annotation labels.
 No-hit records carry empty arrays. Resume schema 6 requires the new field;
 older checkpoints are not silently given coverage. This transport alone changes
 no scientific scoring, boundaries or output acceptance.
+
+The coverage transport also covers cached full-pORF hit materialization and the
+native region-search producer. Physical scaffold/start/end come from the parsed
+proteome header and region mapping; query coverage comes only from actual
+GeneDiamondHit.qcov values. The native completion registry accepts the current
+Phase2 resume schema6. This corrects transport/publication consistency and does
+not change scientific thresholds or invent coverage for old checkpoints.

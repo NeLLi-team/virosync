@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from Bio import SeqIO
@@ -77,13 +77,21 @@ class GeneTaxonomy:
     top10_targets: list[str] = None
     top10_bitscores: list[float] = None
     top10_pidents: list[float] = None
+    top10_qcovhsp: list[float] = None
     top10_evalues: list[float] = None
     has_ncldv_mirus: bool = False  # Strict NCLDV/MIRUS only
     has_vp_plv: bool = False
     has_viral: bool = False
     is_high_pident_euk: bool = False
+    scaffold: str = ""
+    start: int = field(init=False)
+    end: int = field(init=False)
 
     def __post_init__(self):
+        self.start = self.porf_start
+        self.end = self.porf_end
+        if self.top10_qcovhsp is None:
+            self.top10_qcovhsp = []
         if self.top10_prefixes is None:
             self.top10_prefixes = []
         if self.top10_raw_prefixes is None:
@@ -528,6 +536,7 @@ def classify_gene_taxonomy(
     high_pident_euk_threshold: float = 70.0,
     start: int | None = None,
     end: int | None = None,
+    scaffold: str = "",
 ) -> GeneTaxonomy:
     """Classify gene taxonomy based on top-10 Diamond hits.
 
@@ -547,6 +556,7 @@ def classify_gene_taxonomy(
             porf_id=porf_id,
             porf_start=start,
             porf_end=end,
+            scaffold=scaffold,
         )
 
     # Extract prefixes from top-10
@@ -580,6 +590,7 @@ def classify_gene_taxonomy(
         porf_id=porf_id,
         porf_start=start,
         porf_end=end,
+        scaffold=scaffold,
         top1_target=top1_target,
         top1_prefix=top1_prefix,
         top1_pident=top1_pident,
@@ -589,6 +600,7 @@ def classify_gene_taxonomy(
         top10_targets=top10_targets,
         top10_bitscores=top10_bitscores,
         top10_pidents=top10_pidents,
+        top10_qcovhsp=[hit.qcov for hit in hits],
         top10_evalues=top10_evalues,
         has_ncldv_mirus=has_ncldv_mirus,
         has_vp_plv=has_vp_plv,
@@ -638,6 +650,7 @@ def materialize_gene_taxonomy_batch_from_cached_hits(
                     high_pident_euk_threshold,
                     start=start,
                     end=end,
+                    scaffold=scaffold,
                 )
                 destination = results_with_hits if hits else results_without_hits
                 destination[region["eve_id"]].append(taxonomy)
@@ -740,6 +753,7 @@ def run_gene_taxonomy_diamond_batch(
     for scaffold in regions_by_scaffold:
         regions_by_scaffold[scaffold].sort(key=lambda r: r["start"])
 
+    region_scaffolds = {r["eve_id"]: r["scaffold"] for r in regions}
     region_genes: dict[str, list[str]] = {r["eve_id"]: [] for r in regions}
     query_map: dict[str, tuple[str, str]] = {}
     query_coords: dict[str, tuple[int, int]] = {}
@@ -841,6 +855,7 @@ def run_gene_taxonomy_diamond_batch(
                 porf_id=porf_id,
                 porf_start=start,
                 porf_end=end,
+                scaffold=region_scaffolds[eve_id],
             )
         else:
             top10_prefixes = [extract_prefix(hit.target) for hit in hits]
@@ -865,6 +880,7 @@ def run_gene_taxonomy_diamond_batch(
                 porf_id=porf_id,
                 porf_start=start,
                 porf_end=end,
+                scaffold=region_scaffolds[eve_id],
                 top1_target=top1_target,
                 top1_prefix=top1_prefix,
                 top1_pident=top1_pident,
@@ -874,6 +890,7 @@ def run_gene_taxonomy_diamond_batch(
                 top10_targets=top10_targets,
                 top10_bitscores=top10_bitscores,
                 top10_pidents=top10_pidents,
+                top10_qcovhsp=[hit.qcov for hit in hits],
                 top10_evalues=top10_evalues,
                 has_ncldv_mirus=has_ncldv_mirus,
                 has_vp_plv=has_vp_plv,
@@ -905,6 +922,7 @@ def run_gene_taxonomy_diamond_batch(
                     porf_id=porf_id,
                     porf_start=start,
                     porf_end=end,
+                    scaffold=region_scaffolds[eve_id],
                 )
             )
 
