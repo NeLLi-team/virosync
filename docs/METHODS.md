@@ -952,6 +952,9 @@ retained cellular hit. Cellular competitors are not filtered by identity,
 E-value or coverage. A missing cellular hit is recorded separately from a
 measured advantage. These are fixed experimental criteria, not calibrated
 cutoffs or evidence of integration.
+Competition also recognizes exact `MITO__` and `PLASTID__` target prefixes
+when the native Phase 2 taxonomy label is UNKNOWN. Unrelated UNKNOWN targets
+remain unclassified, and boundary taxonomy labels are not changed.
 
 Exact physical duplicates count once, opposite-strand overlaps cannot both
 count, and abutting half-open intervals can. Sorting by gene end gives the

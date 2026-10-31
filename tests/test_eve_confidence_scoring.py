@@ -460,3 +460,56 @@ def test_supplementary_native_verify_infers_existing_family_before_assessment(to
     assert result.confidence_tier == tier
     assert select_phase3_acceptance([result], AblationID.A0).canonical_results == (result,)
     assert unsupported_eve_ids([result]) == set()
+
+
+def _native_organelle_records(target_prefix, competitor_bits, weak_euk):
+    from virosync.pipeline.phase2.boundary_diamond import (
+        DiamondHit,
+        build_gene_taxonomy_record,
+        classify_all_porfs,
+        extract_prefix,
+        pORF,
+    )
+
+    genes = [pORF(f"native{i}", "scaf", i * 100, i * 100 + 90) for i in range(1, 4)]
+    hits = {}
+    for gene in genes:
+        target = f"{target_prefix}reference|{gene.id}"
+        assert extract_prefix(target) == "UNKNOWN"
+        rows = [
+            DiamondHit(gene.id, f"NCLDV__viral|{gene.id}", 1e-8, 100, 30, 80),
+            DiamondHit(gene.id, target, 0.5, competitor_bits, 5, 2),
+        ]
+        if weak_euk:
+            rows.append(DiamondHit(gene.id, f"EUK__host|{gene.id}", 0.1, 50, 10, 5))
+        hits[gene.id] = sorted(rows, key=lambda row: row.bits, reverse=True)
+    taxonomy = classify_all_porfs([gene.id for gene in genes], hits, {"scaf": genes}, host_prefix="EUK__")
+    records = [build_gene_taxonomy_record(taxonomy[gene.id]) for gene in genes]
+    assert all("UNKNOWN" in record["top10_prefixes"] for record in records)
+    return records
+
+
+@pytest.mark.parametrize("prefix", ["MITO__", "PLASTID__"])
+@pytest.mark.parametrize("bits", [120, 100, 80])
+@pytest.mark.parametrize("weak_euk", [False, True])
+def test_native_unknown_organelle_competes_without_viral_filters(prefix, bits, weak_euk):
+    records = _native_organelle_records(prefix, bits, weak_euk)
+    candidate = _supplementary_candidate(records=records)
+    calculate_eve_confidence(candidate, 0.0)
+    evidence = candidate.supplementary_viral_evidence
+    assert evidence.eligible is (bits < 100)
+    assert len(evidence.counted_gene_ids) == (3 if bits < 100 else 0)
+    assert len(evidence.measured_gene_ids) == (3 if bits < 100 else 0)
+    assert evidence.no_cellular_gene_ids == ()
+    assert evidence.eligible_without_no_cellular is (bits < 100)
+
+
+@pytest.mark.parametrize("prefix", ["MITOLOGY__", "PLASTIDLIKE__", "XMITO__"])
+def test_unrelated_unknown_target_is_not_an_organelle_competitor(prefix):
+    records = _native_organelle_records(prefix, 200, False)
+    candidate = _supplementary_candidate(records=records)
+    calculate_eve_confidence(candidate, 0.0)
+    evidence = candidate.supplementary_viral_evidence
+    assert evidence.eligible
+    assert len(evidence.no_cellular_gene_ids) == 3
+    assert not evidence.eligible_without_no_cellular

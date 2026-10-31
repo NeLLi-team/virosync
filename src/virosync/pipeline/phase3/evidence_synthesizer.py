@@ -1077,7 +1077,11 @@ def _assess_supplementary_viral_evidence(result: VerificationResult) -> Suppleme
     candidates = {"NCLDV": [], "MIRUS": []}
     cellular = {"EUK", "BAC", "ARC", "MITO", "PLASTID"}
     for (start, end), (names, hits) in physical.items():
-        cell_bits = [bits for _, prefix, bits, _, _, _ in hits if prefix in cellular]
+        cell_bits = [
+            bits
+            for target, prefix, bits, _, _, _ in hits
+            if prefix in cellular or target.startswith(("MITO__", "PLASTID__"))
+        ]
         best_cell = max(cell_bits) if cell_bits else None
         for prefix in candidates:
             subjects = tuple(
