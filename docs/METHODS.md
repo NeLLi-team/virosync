@@ -620,6 +620,16 @@ This coordinate-based heuristic cannot distinguish a fragment bridge from a
 rescued read-through across real tandem copies. A1 stops before Phase 3 scoring;
 its marker counts remain raw translation diagnostics and its confidence is zero.
 
+Ordinary ORF fragmentation remains a scoring limitation. In a paired
+single-deletion control, one viral gene split into two ordinary predicted ORFs:
+the viral-gene fraction changed from 1/6 to 2/7 and confidence from 0.308857 to
+0.433523. Rescue-locus deduplication did not change either score because the
+rescued translation was absent from the taxonomy table. This control supports
+marker deduplication and seed preservation, but does not establish robustness to
+fragmented genes or a rescue-dependent sensitivity gain. The aligner also
+reported three frameshift events for one planted deletion; event counts do not
+measure independent genomic lesions.
+
 Non-marker components and cellular penalties remain active. Small-region
 penalties use the catalogue's full-weight capsid qualification. A candidate
 without qualifying core evidence is capped below MEDIUM; one with fewer than
