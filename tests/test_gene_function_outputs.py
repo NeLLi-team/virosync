@@ -13,9 +13,16 @@ from unittest.mock import Mock
 import pyhmmer
 import pytest
 
+from virosync.config.pipeline_config import PipelineConfig
 from virosync.orchestration._flows.single_genome import orchestrator
+from virosync.orchestration._flows.single_genome.phase3 import (
+    _build_scaffold_start_index,
+    _prepare_candidate_annotations,
+)
 from virosync.orchestration.tasks import generate_outputs_task
+from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase3 import gene_functions
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
@@ -189,7 +196,7 @@ def test_write_gene_functions_fails_on_a_bundle_with_only_one_of_the_two_files(t
     generator = _generator(tmp_path, hmm_database)
 
     with pytest.raises(FileNotFoundError, match="gene_function_labels.tsv"):
-        generator.write_gene_functions([_eve_with_one_flank()])
+        generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()]))
 
 
 def test_label_core_genes_labels_genes_from_pfam_hits_and_curated_models(tmp_path: Path) -> None:
@@ -330,16 +337,64 @@ def _generator(tmp_path: Path, hmm_database: Path) -> OutputGenerator:
     )
 
 
-def test_write_gene_functions_labels_the_core_genes_of_the_output_eves_only(tmp_path: Path) -> None:
+def _prepare_annotations(
+    generator: OutputGenerator, results: list[VerificationResult], markers: tuple[ValidatedMarkerHit, ...] = ()
+) -> list[VerificationResult]:
+    """Run the native pre-score scan and attach its results for publication."""
+    config = PipelineConfig()
+    config.databases.hmm_database = generator.gene_function_inputs.hmm_database
+    config.compute.threads = 1
+    run_dir = generator.output_dir.parent
+    model_hits = run_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv"
+    model_hits.parent.mkdir(parents=True, exist_ok=True)
+    model_hits.write_bytes(generator.gene_function_inputs.model_hits.read_bytes())
+    boundaries = [
+        RefinedBoundary(scaffold=r.scaffold, start=r.start, end=r.end, candidate_id=r.eve_id) for r in results
+    ]
+    taxonomy = {
+        r.eve_id: (
+            [dict(record, start=record["porf_start"], end=record["porf_end"]) for record in r.gene_taxonomy_records],
+            {},
+        )
+        for r in results
+    }
+    annotations = _prepare_candidate_annotations(
+        boundaries,
+        taxonomy,
+        [],
+        proteome_path=generator.proteome_fasta,
+        validated_markers=list(markers),
+        validated_marker_index=_build_scaffold_start_index(markers),
+        output_dir=run_dir,
+        config=config,
+    )
+    for result in results:
+        for name, value in annotations[result.eve_id].items():
+            setattr(result, name, value)
+    return results
+
+
+def test_write_gene_functions_labels_the_core_genes_of_the_output_eves_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
 
-    output_files = generator.write_gene_functions([_eve_with_one_flank()])
+    results = _prepare_annotations(generator, [_eve_with_one_flank()])
+    assert [(row.gene, row.model, row.stage) for row in results[0].hallmark_support] == [
+        ("core_curated", "GVOGm0054", "phase3_function"),
+        ("core_pol", "DNA_pol_B", "phase3_function"),
+    ]
+    monkeypatch.setattr(
+        gene_functions.pyhmmer, "hmmsearch", Mock(side_effect=AssertionError("output must reuse pre-score labels"))
+    )
+
+    output_files = generator.write_gene_functions(results)
 
     table = output_files["gene_functions"]
     assert table == tmp_path / "phase3_synthesis" / "gene_functions.tsv"
     assert [(row.eve_id, row.porf_id, row.label) for row in read_gene_functions(table)] == [
-        ("EVE_1", "core_pol", "PolB"),
         ("EVE_1", "core_curated", "PolB"),
+        ("EVE_1", "core_pol", "PolB"),
     ]
 
 
@@ -347,7 +402,7 @@ def test_gene_function_length_exclusions_preserve_labels_and_first_file_sequence
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
-    baseline_files = generator.write_gene_functions([_eve_with_one_flank()])
+    baseline_files = generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()]))
     baseline = {row.porf_id: row for row in read_gene_functions(baseline_files["gene_functions"])}
     proteins = {
         "core_pol": SEED_POLYMERASE,
@@ -372,11 +427,11 @@ def test_gene_function_length_exclusions_preserve_labels_and_first_file_sequence
     ]
 
     with caplog.at_level(logging.WARNING, logger="virosync.pipeline.phase3.gene_functions"):
-        output_files = generator.generate_all(eves)
+        output_files = generator.generate_all(_prepare_annotations(generator, eves))
 
     assert read_gene_functions(Path(output_files["gene_functions"])) == [
-        baseline["core_pol"],
         baseline["core_curated"],
+        baseline["core_pol"],
     ]
     assert Path(output_files["gene_function_length_exclusions"]).read_text() == (
         LENGTH_EXCLUSIONS_HEADER
@@ -399,7 +454,9 @@ def test_gene_function_length_limit_follows_stop_removal(
     search = Mock(wraps=pyhmmer.hmmsearch)
     monkeypatch.setattr(gene_functions.pyhmmer, "hmmsearch", search)
 
-    output_files = generator.write_gene_functions([_result("EVE_1", [("core_other", False)])])
+    output_files = generator.write_gene_functions(
+        _prepare_annotations(generator, [_result("EVE_1", [("core_other", False)])])
+    )
 
     assert read_gene_functions(output_files["gene_functions"]) == []
     excluded = "EVE_1\tcore_other\tunsearched\tsequence_length_limit\t100001\t100000\n" if length_aa > 100_000 else ""
@@ -417,10 +474,10 @@ def test_gene_function_length_handling_propagates_unrelated_search_failure(
     monkeypatch.setattr(gene_functions.pyhmmer, "hmmsearch", Mock(side_effect=ValueError("unrelated profile failure")))
 
     with pytest.raises(ValueError, match="unrelated profile failure"):
-        generator.write_gene_functions([_eve_with_one_flank()])
+        generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()]))
 
 
-def _write_rescue_protein(tmp_path: Path, start: int, end: int) -> Path:
+def _write_rescue_protein(tmp_path: Path, start: int, end: int) -> ValidatedMarkerHit:
     rescue = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     rescue.parent.mkdir(parents=True)
     rescue.write_text(
@@ -429,15 +486,34 @@ def _write_rescue_protein(tmp_path: Path, start: int, end: int) -> Path:
         f"{SEED_POLYMERASE}\n",
         encoding="utf-8",
     )
-    return rescue
+    return ValidatedMarkerHit(
+        query_porf="contig_1_VSR0123456789abcdef",
+        scaffold="contig_1",
+        start=start,
+        end=end,
+        strand="+",
+        hmm_target="VS000001",
+        hmm_score=80.0,
+        hmm_evalue=1e-20,
+        validation_status="validated",
+        top10_prefixes="NCLDV__",
+        best_hit_target="NCLDV__ref",
+        best_hit_pident=80.0,
+        best_hit_bits=90.0,
+        has_ncldv=1,
+        has_mirus=0,
+        has_plv=0,
+        has_vp=0,
+        has_viral=1,
+    )
 
 
 def test_write_gene_functions_labels_a_frameshift_rescued_protein_inside_an_eve(tmp_path: Path) -> None:
     hmm_database = _write_bundle(tmp_path / "virosync")
-    _write_rescue_protein(tmp_path, 2000, 2480)
+    marker = _write_rescue_protein(tmp_path, 2000, 2480)
     generator = _generator(tmp_path, hmm_database)
 
-    output_files = generator.write_gene_functions([_eve_with_one_flank()])
+    output_files = generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()], (marker,)))
 
     rows = {(row.eve_id, row.porf_id): row for row in read_gene_functions(output_files["gene_functions"])}
     rescued = rows[("EVE_1", "contig_1_VSR0123456789abcdef")]
@@ -446,10 +522,10 @@ def test_write_gene_functions_labels_a_frameshift_rescued_protein_inside_an_eve(
 
 def test_write_gene_functions_leaves_a_frameshift_rescued_protein_outside_the_eve_unlabelled(tmp_path: Path) -> None:
     hmm_database = _write_bundle(tmp_path / "virosync")
-    _write_rescue_protein(tmp_path, 7000, 7480)
+    marker = _write_rescue_protein(tmp_path, 7000, 7480)
     generator = _generator(tmp_path, hmm_database)
 
-    output_files = generator.write_gene_functions([_eve_with_one_flank()])
+    output_files = generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()], (marker,)))
 
     assert "contig_1_VSR0123456789abcdef" not in {
         row.porf_id for row in read_gene_functions(output_files["gene_functions"])
@@ -502,11 +578,11 @@ def test_write_gene_functions_labels_ordinary_genes_when_the_rescue_file_is_empt
     _write_empty_rescue_file(tmp_path)
     generator = _generator(tmp_path, hmm_database)
 
-    output_files = generator.write_gene_functions([_eve_with_one_flank()])
+    output_files = generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()]))
 
     assert [row.porf_id for row in read_gene_functions(output_files["gene_functions"])] == [
-        "core_pol",
         "core_curated",
+        "core_pol",
     ]
 
 
@@ -514,11 +590,12 @@ def test_generate_all_completes_and_labels_genes_when_the_rescue_file_is_empty(t
     hmm_database = _write_bundle(tmp_path / "virosync")
     _write_empty_rescue_file(tmp_path)
 
-    output_files = _generator(tmp_path, hmm_database).generate_all([_eve_with_one_flank()])
+    generator = _generator(tmp_path, hmm_database)
+    output_files = generator.generate_all(_prepare_annotations(generator, [_eve_with_one_flank()]))
 
     assert [row.porf_id for row in read_gene_functions(Path(output_files["gene_functions"]))] == [
-        "core_pol",
         "core_curated",
+        "core_pol",
     ]
 
 
@@ -602,7 +679,9 @@ def test_label_core_genes_falls_back_to_profile_evidence_for_an_og_model_with_a_
 def test_write_gene_functions_writes_a_header_when_no_core_gene_gets_a_label(tmp_path: Path) -> None:
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
 
-    output_files = generator.write_gene_functions([_result("EVE_2", [("core_other", False)])])
+    output_files = generator.write_gene_functions(
+        _prepare_annotations(generator, [_result("EVE_2", [("core_other", False)])])
+    )
 
     assert read_gene_functions(output_files["gene_functions"]) == []
     assert output_files["gene_functions"].read_text(encoding="utf-8").startswith("eve_id\tporf_id\t")
@@ -614,7 +693,7 @@ def test_write_gene_functions_skips_a_bundle_before_v1_2_0_with_one_info_line(
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync", gene_function_files=False))
 
     with caplog.at_level(logging.INFO, logger="virosync.pipeline.phase3.output_generator"):
-        output_files = generator.write_gene_functions([_eve_with_one_flank()])
+        output_files = generator.write_gene_functions(_prepare_annotations(generator, [_eve_with_one_flank()]))
 
     assert output_files == {}
     assert not (tmp_path / "phase3_synthesis" / "gene_functions.tsv").exists()
@@ -636,7 +715,7 @@ def test_write_gene_functions_does_nothing_without_gene_function_inputs(tmp_path
 def test_generate_all_registers_the_gene_function_table_among_the_output_files(tmp_path: Path, empty: bool) -> None:
     generator = _generator(tmp_path, _write_bundle(tmp_path / "virosync"))
 
-    output_files = generator.generate_all([] if empty else [_eve_with_one_flank()])
+    output_files = generator.generate_all(_prepare_annotations(generator, [] if empty else [_eve_with_one_flank()]))
 
     expected = set() if empty else {"gene_functions", "gene_function_length_exclusions"}
     assert set(output_files) & {"gene_functions", "gene_function_length_exclusions"} == expected
@@ -650,8 +729,10 @@ def test_generate_all_registers_the_gene_function_table_among_the_output_files(t
 def test_generate_all_keeps_every_other_output_byte_identical(tmp_path: Path) -> None:
     hmm_database = _write_bundle(tmp_path / "virosync")
 
-    labelled = _generator(tmp_path, hmm_database).generate_all([_eve_with_one_flank()])
-    unlabelled = OutputGenerator(output_dir=tmp_path / "plain").generate_all([_eve_with_one_flank()])
+    generator = _generator(tmp_path, hmm_database)
+    results = _prepare_annotations(generator, [_eve_with_one_flank()])
+    labelled = generator.generate_all(results)
+    unlabelled = OutputGenerator(output_dir=tmp_path / "plain").generate_all(results)
 
     assert set(labelled) - set(unlabelled) == {"gene_functions", "gene_function_length_exclusions"}
     for key in ("predictions_tsv", "predictions_detailed_tsv", "gene_taxonomy_all", "evidence_json"):
@@ -661,8 +742,10 @@ def test_generate_all_keeps_every_other_output_byte_identical(tmp_path: Path) ->
 def test_generate_outputs_task_passes_the_gene_function_inputs_to_the_generator(tmp_path: Path) -> None:
     hmm_database = _write_bundle(tmp_path / "virosync")
 
+    generator = _generator(tmp_path, hmm_database)
+    results = _prepare_annotations(generator, [_eve_with_one_flank()])
     output_files = generate_outputs_task(
-        [_eve_with_one_flank()],
+        results,
         tmp_path / "phase3_synthesis",
         proteome_path=_write_proteome(tmp_path / "proteome.fasta"),
         gene_function_inputs=_inputs(hmm_database, _write_model_hits(tmp_path / "hits.tsv")),
@@ -671,8 +754,8 @@ def test_generate_outputs_task_passes_the_gene_function_inputs_to_the_generator(
     assert [
         (row.eve_id, row.porf_id, row.label) for row in read_gene_functions(Path(output_files["gene_functions"]))
     ] == [
-        ("EVE_1", "core_pol", "PolB"),
         ("EVE_1", "core_curated", "PolB"),
+        ("EVE_1", "core_pol", "PolB"),
     ]
 
 

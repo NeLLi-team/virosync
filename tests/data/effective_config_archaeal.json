@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "41a1616c6e40ab58723cd2087cdecc13e516c0e400d748829c4fb581289de5ab",
+  "effective_config_sha256": "456e4029a5dcc778738346629904036ef7f4dccea256cc4dc0b2a17fbfef32d9",
   "execution": {
     "masking": {
       "backend": "off",
@@ -210,14 +210,6 @@
       "vltf"
     ],
     "low_tier_threshold": 0.4,
-    "marker_family_bonus_per_family": 0.06,
-    "marker_floor_priority_multi_family": 0.8,
-    "marker_floor_priority_only": 0.55,
-    "marker_floor_priority_plus_family": 0.7,
-    "marker_multi_family_bonus": 0.08,
-    "priority_marker_list": [
-      "mcp"
-    ],
     "run_gvclass": false,
     "skip_structural": true,
     "tmvec_database_dir": null,

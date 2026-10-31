@@ -187,12 +187,8 @@ def test_notebook_repeat_evidence_handles_empty_and_legacy_outputs(
 
 
 def _standalone_helper_cell() -> str:
-    """Return the notebook's self-contained helper cell.
-
-    Anchored on the MCP detector because that helper mirrors a pipeline
-    predicate and is parity-tested below, so it cannot quietly leave the cell.
-    """
-    return _notebook_cell("def _report_is_mcp_gene(")
+    """Return the notebook's self-contained output readers and plot helpers."""
+    return _notebook_cell("def _report_profile_hallmarks(")
 
 
 def _parameter_defaults() -> dict[str, object]:
@@ -417,7 +413,7 @@ def test_notebook_path_helpers_run_from_result_dir_without_virosync(
 ) -> None:
     helper_source = _standalone_helper_cell()
     assert "from virosync" not in helper_source
-    script = helper_source + "\nassert _report_is_mcp_gene('vp_mcp_1')\n"
+    script = helper_source + "\nassert _report_profile_hallmarks({}) == []\n"
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
 
@@ -443,67 +439,143 @@ def test_notebook_safe_ratio_handles_zero_denominators() -> None:
     assert safe_ratio(7, None) == 0.0
 
 
-def test_notebook_mcp_helper_matches_canonical_detector() -> None:
-    from virosync.pipeline.phase3.mcp_detection import (
-        MCP_HMM_EXACT,
-        MCP_HMM_PREFIXES,
-        is_mcp_gene,
+def test_notebook_reads_accepted_phylogenetic_rejection_without_assessment() -> None:
+    from types import SimpleNamespace
+
+    from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+    from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+    from virosync.pipeline.phase3.eve_ani_clustering import unsupported_eve_ids
+    from virosync.pipeline.phase3.evidence_synthesizer import EvidenceSynthesizer, EvidenceSynthesizerConfig
+    from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+
+    class RejectedPhylogeny(EvidenceSynthesizer):
+        def _run_phylogenetic_validation(self, result, boundary):
+            result.phylogenetic_result = SimpleNamespace(has_viral_in_any_neighbor=False, rejects_viral=True)
+            result.phylogenetic_score = 0.0
+
+    hits = [
+        {
+            "porf_id": "p1|aa1-20",
+            "hallmark_gene": "GVOGm0054",
+            "hmm_score": 70,
+            "validation_status": "validated",
+            "top10_prefixes": "NCLDV__",
+            "top10_pidents": "40",
+            "top10_targets": "NCLDV__reference|p1",
+        },
+        {
+            "porf_id": "p2|aa1-20",
+            "hallmark_gene": "GVOGm0760",
+            "hmm_score": 70,
+            "validation_status": "validated",
+            "top10_prefixes": "NCLDV__",
+            "top10_pidents": "40",
+            "top10_targets": "NCLDV__reference|p2",
+        },
+    ]
+    boundary = RefinedBoundary(
+        "s",
+        0,
+        6000,
+        predicted_family="NCLDV",
+        confirmed_seeds=(ConfirmedSeed("seed", "s", 0, 6000),),
     )
+    result = RejectedPhylogeny(config=EvidenceSynthesizerConfig()).verify_eve(boundary, [], hallmark_hits=hits)
+    assert result.confidence_tier == "LOW"
+    assert evaluate_v2_quality_gate(result).kept
+    assert unsupported_eve_ids([result]) == set()
+    profile = result.to_dict()
+    assert profile["hallmark_assessment"] is None
 
-    namespace: dict[str, object] = {}
+    namespace = {}
     exec(_standalone_helper_cell(), namespace)
-
-    assert namespace["_REPORT_MCP_HMM_EXACT"] == MCP_HMM_EXACT
-    assert namespace["_REPORT_MCP_HMM_PREFIXES"] == MCP_HMM_PREFIXES
-    report_is_mcp_gene = namespace["_report_is_mcp_gene"]
-    corpus = [
-        "OG1352",
-        "gamadvirusMCP",
-        "plv_MCP_1",
-        "vp_MCP_3",
-        "mcp_mirus",
-        "EVE_CAPSID_NOVEL_0029",
-        "EVE_CAPSID_NOVEL_0028",
-        "dmcp",
-        "mcp_lookalike",
-        "ncmcp_pseudoprotein",
-        "polb",
-        "",
-        None,
-    ]
-    assert [report_is_mcp_gene(name) for name in corpus] == [is_mcp_gene(name) for name in corpus]
+    assert namespace["_report_profile_hallmarks"](profile) == []
+    assert profile["hallmark_assessment"] is None
+    assert profile["taxonomy_class"] == "NCLDV"
 
 
-def test_notebook_capsid_helper_matches_canonical_detector() -> None:
-    from virosync.pipeline.phase3.mcp_detection import (
-        CAPSID_EVIDENCE_MODELS,
-        is_capsid_evidence_gene,
+def test_notebook_displays_contained_profile_rescue_without_revalidating_it(tmp_path: Path) -> None:
+    synthesis = tmp_path / "phase3_synthesis"
+    synthesis.mkdir()
+    phase0 = tmp_path / "phase0"
+    phase0.mkdir()
+    phase0.joinpath("proteome.fasta").write_text(
+        ">s_1 # 101 # 200 # 1 # ID=s_1;partial=00\nMAAA\n>s_2 # 301 # 400 # 1 # ID=s_2;partial=00\nMAAA\n"
     )
-
-    namespace: dict[str, object] = {}
+    role = {
+        "panel": "Mirusviricota",
+        "marker": "MCP",
+        "module": "capsid_packaging",
+        "role": "core_marker",
+        "capsid": True,
+        "structural_anchor": True,
+        "excluded_from_scoring": False,
+    }
+    mcp = {
+        "evidence_id": "mcp",
+        "gene": "s_1",
+        "scaffold": "s",
+        "start": 100,
+        "end": 200,
+        "model": "Mirus_MCP",
+        "evalue": 0.001,
+        "validation_status": "unvalidated",
+        "model_roles": [role],
+    }
+    portal = {
+        **mcp,
+        "evidence_id": "portal",
+        "gene": "s_2",
+        "start": 300,
+        "end": 400,
+        "model": "Mirus_Portal",
+        "model_roles": [{**role, "marker": "Portal", "capsid": False}],
+    }
+    profile = {
+        "scaffold": "s",
+        "start": 0,
+        "end": 1000,
+        "status": "accepted",
+        "final_confidence": 0.7,
+        "confidence_tier": "HIGH",
+        "taxonomy_class": "UNKNOWN",
+        "hallmark_evidence": [
+            mcp,
+            portal,
+            {**mcp, "evidence_id": "duplicate", "evalue": 0.002},
+            {**mcp, "evidence_id": "outside", "gene": "s_3", "end": 1001},
+            {**mcp, "evidence_id": "unqualified", "gene": "s_4", "evalue": 2},
+        ],
+        "hallmark_assessment": {
+            "summary": {"qualifying_evidence_ids": ["mcp", "duplicate", "outside"]},
+            "witnesses": [{"evidence_ids": ["mcp", "portal"]}],
+        },
+    }
+    synthesis.joinpath("evidence_profiles.json").write_text(json.dumps({"EVE_s_0-1000": profile}))
+    namespace = {
+        "BASE": tmp_path,
+        "SYNTHESIS": synthesis,
+        "GENOME_ID": "demo",
+        "SHOW_TIERS": ["HIGH"],
+        "json": json,
+        "pd": pd,
+        "defaultdict": defaultdict,
+        "re": re,
+        "csv": csv,
+    }
     exec(_standalone_helper_cell(), namespace)
-
-    assert namespace["_REPORT_CAPSID_EVIDENCE_MODELS"] == CAPSID_EVIDENCE_MODELS
-    report_is_capsid_evidence_gene = namespace["_report_is_capsid_evidence_gene"]
-    corpus = [
-        "EVE_CAPSID_NOVEL_0002",
-        "eve_capsid_novel_0028",
-        " EVE_CAPSID_NOVEL_0033 ",
-        "EVE_CAPSID_NOVEL_0029",
-        "EVE_CAPSID_NOVEL_0001",
-        "EVE_CAPSID_NOVEL_0018",
-        "EVE_CAPSID_NOVEL_0026",
-        "EVE_CAPSID_NOVEL_0034",
-        "OG1352",
-        "plv_MCP_1",
-        "dmcp",
-        "polb",
-        "",
-        None,
-    ]
-    assert [report_is_capsid_evidence_gene(name) for name in corpus] == [
-        is_capsid_evidence_gene(name) for name in corpus
-    ]
+    exec(_notebook_cell("# ---- Load data ----"), namespace)
+    assert namespace["mcp_porf_ids"] == {"s_1"}
+    assert namespace["capsid_porf_ids"] == {"s_1"}
+    retained = namespace["profile_hallmarks"]["EVE_s_0-1000"]
+    assert {(h["gene"], h["model"]) for h in retained} == {("s_1", "Mirus_MCP"), ("s_2", "Mirus_Portal")}
+    assert len(retained) == 2
+    assert all(h["validation_status"] == "unvalidated" for h in retained)
+    assert namespace["profiles"]["EVE_s_0-1000"] == profile
+    labels = namespace["gene_function_by_gene"]
+    assert labels["EVE_s_0-1000", "s_1"]["label"] == "MCP"
+    assert "unvalidated" in labels["EVE_s_0-1000", "s_1"]["evidence"]
+    assert "0.001" in labels["EVE_s_0-1000", "s_1"]["evidence"]
 
 
 def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
@@ -523,6 +595,28 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
                     "final_confidence": 0.9,
                     "confidence_tier": "HIGH",
                     "taxonomy_class": "NCLDV",
+                    "hallmark_evidence": [
+                        {
+                            "evidence_id": "mcp",
+                            "gene": "contig_4",
+                            "scaffold": "contig",
+                            "start": 90,
+                            "end": 120,
+                            "model": "GVOGm0003",
+                            "evalue": 1e-8,
+                            "validation_status": "validated_novel",
+                            "model_roles": [
+                                {
+                                    "panel": "NCLDV",
+                                    "marker": "MCP",
+                                    "module": "capsid_packaging",
+                                    "role": "core_marker",
+                                    "capsid": True,
+                                }
+                            ],
+                        }
+                    ],
+                    "hallmark_assessment": {"summary": {"qualifying_evidence_ids": ["mcp"]}, "witnesses": []},
                 }
             }
         )
@@ -545,12 +639,6 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         "contig_3\tDJR\t0.500\t410\tMCP\tlength\tcandidate\tunvalidated\n"
         "contig_5\tSJR\t0.700\t300\tMCP\ttmvec:reference\n"
     )
-    marker_dir = tmp_path / "phase1" / "marker_validation"
-    marker_dir.mkdir(parents=True)
-    marker_dir.joinpath("validated_marker_hits.tsv").write_text(
-        "query_porf\thmm_target\tvalidation_status\ncontig_4\tMCP\tvalidated_novel\ncontig_3\tMCP\tunvalidated\n"
-    )
-
     helper_namespace: dict[str, object] = {"pd": pd}
     exec(_standalone_helper_cell(), helper_namespace)
     namespace: dict[str, object] = {
@@ -563,9 +651,9 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
         "defaultdict": defaultdict,
         "re": re,
         "csv": csv,
-        "_report_is_mcp_gene": helper_namespace["_report_is_mcp_gene"],
-        "_report_is_capsid_evidence_gene": helper_namespace["_report_is_capsid_evidence_gene"],
+        "_report_profile_hallmarks": helper_namespace["_report_profile_hallmarks"],
         "_report_prodigal_gene": helper_namespace["_report_prodigal_gene"],
+        "_function_label_rows": helper_namespace["_function_label_rows"],
     }
     exec(_notebook_cell("# ---- Load data ----"), namespace)
 
@@ -1482,8 +1570,7 @@ def _load_data_namespace(tmp_path: Path, gene_functions: str | None) -> dict[str
         "defaultdict": defaultdict,
         "re": re,
         "csv": csv,
-        "_report_is_mcp_gene": helpers["_report_is_mcp_gene"],
-        "_report_is_capsid_evidence_gene": helpers["_report_is_capsid_evidence_gene"],
+        "_report_profile_hallmarks": helpers["_report_profile_hallmarks"],
         "_report_prodigal_gene": helpers["_report_prodigal_gene"],
         "_function_label_rows": helpers["_function_label_rows"],
     }
@@ -1621,7 +1708,7 @@ DETAIL_CELL = "DETAIL_MAX_EVES = 6"
 DISTRIBUTION_CELL = "# ---- Stacked bar: core vs flank gene composition ----"
 NOTEBOOK_CELLS_TO_GENE_RECORDS = (
     "from IPython import get_ipython",
-    "def _report_is_mcp_gene(",
+    "def _report_profile_hallmarks(",
     "# --- Style setup (beautiful-data-viz) ---",
     "# ---- Load data ----",
     "# ---- Build extended gene map data ----",
@@ -1664,14 +1751,6 @@ def euk_peve_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     marker_dir.mkdir(parents=True)
     token_weights = dict.fromkeys(HOST_TOKENS, 50.0) | dict.fromkeys(PEVE_TOKENS, 90.0) | {"sar": 10.0}
     (marker_dir / "host_signature_model.json").write_text(json.dumps({"token_weights": token_weights}))
-    (marker_dir / "validated_marker_hits.tsv").write_text(
-        "query_porf\thmm_target\tvalidation_status\n"
-        "contig_2\tEVE_CAPSID_NOVEL_0002\tvalidated\n"
-        "contig_3\tEVE_CAPSID_NOVEL_0001\tvalidated\n"
-        "contig_3\tEVE_CAPSID_NOVEL_0018\tvalidated_novel\n"
-        "contig_3\tEVE_CAPSID_NOVEL_0028\tunvalidated\n"
-        "contig_4|aa1-30\tEVE_CAPSID_NOVEL_0029\tvalidated_novel\n"
-    )
     boundary_dir = tmp_path / "phase2" / "boundary_diamond"
     boundary_dir.mkdir(parents=True)
     (boundary_dir / "taxonomy_map.tsv").write_text(
@@ -1695,6 +1774,8 @@ def euk_peve_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     "final_confidence": 0.9,
                     "confidence_tier": "HIGH",
                     "taxonomy_class": "VIRAL_UNKNOWN",
+                    "mcp_gene_ids": ["contig_4"],
+                    "capsid_gene_ids": ["contig_2", "contig_4"],
                 }
             }
         )
@@ -1795,7 +1876,7 @@ def test_notebook_gene_map_outlines_capsid_evidence_and_keeps_the_mcp_circle(
     legend = ax.get_legend()
     handles = {text.get_text(): handle for text, handle in zip(legend.get_texts(), legend.legend_handles, strict=True)}
     assert mcolors.to_hex(handles["EUK-pEVE (viral-like, eukaryotic genome)"].get_facecolor()) == colors["EUK-pEVE"]
-    assert mcolors.to_hex(handles["Black outline: capsid evidence"].get_edgecolor()) == "#000000"
+    assert mcolors.to_hex(handles["Thick black outline: capsid evidence"].get_edgecolor()) == "#000000"
     assert "Supported MCP" in handles
 
 
@@ -1817,7 +1898,7 @@ def test_notebook_detail_map_outlines_capsid_evidence_and_lists_euk_peve(
     )
     labels = [text.get_text() for text in fig.legends[0].get_texts()]
     assert "EUK-pEVE (viral-like, eukaryotic genome)" in labels
-    assert "Black outline: capsid evidence" in labels
+    assert "Thick black outline: capsid evidence" in labels
     assert "Supported MCP" in labels
 
 

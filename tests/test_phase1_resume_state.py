@@ -147,6 +147,8 @@ def _complete_deviation_summary() -> dict[str, object]:
 def _write_complete_state(path: Path) -> None:
     write_phase1_state(
         path,
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
         validated_markers=[_complete_marker()],
         merged_seeds=[_complete_seed()],
         host_signature_model=_complete_host_model(),
@@ -195,6 +197,55 @@ def _terminal_payload(result: object) -> dict[str, object]:
     return result.result
 
 
+def test_unvalidated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeypatch):
+    from virosync.orchestration.tasks import marker_validation_task, region_assembly_task
+
+    output_dir = tmp_path / "output"
+    kwargs = _phase1_kwargs(tmp_path, output_dir)
+    config = kwargs["config"]
+    config.execution.resume = False
+    config.phase1.pfam_arbitration_enabled = False
+    config.phase1.frameshift_screening_enabled = False
+    config.databases.hmm_database = tmp_path / "markers.hmm"
+    config.databases.marker_db = tmp_path / "markers.dmnd"
+    config.databases.hmm_database.write_text("HMM\n")
+    config.databases.marker_db.write_text("DB\n")
+    kwargs["resume_authorized"] = False
+    marker = _complete_marker()
+    marker.query_porf = "s_1|aa1-20"
+    marker.scaffold, marker.start, marker.end = "s", 101, 999
+    marker.validation_status = "unvalidated"
+    marker.top10_prefixes = "EUK__"
+    marker.top10_pidents = "90"
+    raw = HMMHit("s_1", marker.hmm_target, marker.hmm_score, marker.hmm_evalue, 62.123456789, 1, 20)
+
+    def fake_call(task, **kw):
+        if task is phase1_module.hhg_seeding_task:
+            return [], [raw]
+        if task is marker_validation_task:
+            return [marker]
+        if task is region_assembly_task:
+            assert kw["validated_markers"] == []
+            return []
+        if task is phase1_module.generate_outputs_task:
+            return {}
+        raise AssertionError(task)
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kw: {})
+    monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kw: None)
+    fresh = _run_phase1_subflow(**kwargs)
+    assert not isinstance(fresh, Phase1Terminal)
+    assert [(s.start, s.end) for s in fresh.merged_seeds] == [(101, 999)]
+    assert fresh.validated_markers[0].validation_status == "unvalidated"
+    config.execution.resume = True
+    kwargs["resume_authorized"] = True
+    resumed = _run_phase1_subflow(**kwargs)
+    assert resumed.hallmark_evidence == fresh.hallmark_evidence
+    assert resumed.hallmark_witnesses == fresh.hallmark_witnesses
+    assert resumed.merged_seeds == fresh.merged_seeds
+
+
 def test_phase1_state_file_round_trip_preserves_every_consumed_field(
     tmp_path: Path,
 ) -> None:
@@ -224,6 +275,8 @@ def test_phase1_state_file_round_trip_preserves_every_consumed_field(
 
 def test_phase1_state_rejects_schema_drift_and_lossy_values() -> None:
     document = phase1_state_to_document(
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
         validated_markers=[_complete_marker()],
         merged_seeds=[_complete_seed()],
         host_signature_model=_complete_host_model(),
@@ -303,6 +356,8 @@ def test_phase1_state_failed_validation_preserves_existing_file(
     with pytest.raises(Phase1StateError, match="hmm_score must be finite"):
         write_phase1_state(
             state_path,
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
             validated_markers=[marker],
             merged_seeds=[_complete_seed()],
             host_signature_model=_complete_host_model(),
@@ -703,6 +758,7 @@ def test_fresh_phase1_writes_exact_state_after_classification(
     kwargs["config"].databases.hmm_database = hmm_database
     kwargs["config"].databases.marker_db = marker_db
     marker = _complete_marker()
+    marker.query_porf += "|aa1-100"
 
     def fake_call_task(task, **task_kwargs):
         if task is phase1_module.hhg_seeding_task:

@@ -354,6 +354,8 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
         ]
         write_phase1_state(
             output_dir / "phase1" / "resume_state.json",
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
             validated_markers=[],
             merged_seeds=merged_seeds,
             host_signature_model=host_signature_model,
@@ -361,6 +363,8 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
             host_deviation_summary=None,
         )
         return Phase1Result(
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
             merged_seeds=merged_seeds,
             validated_markers=[],
             host_signature_model=host_signature_model,

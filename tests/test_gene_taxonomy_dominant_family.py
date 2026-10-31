@@ -13,7 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from virosync.pipeline.phase3.evidence_synthesizer import (
+    EvidenceSynthesizer,
+    VerificationResult,
+    calculate_eve_confidence,
+)
 from virosync.pipeline.phase3.gene_taxonomy import (
+    GeneDiamondHit,
     GeneTaxonomy,
     materialize_gene_taxonomy_batch_from_cached_hits,
     summarize_dominant_family,
@@ -64,3 +72,23 @@ def test_batch_summary_reports_unknown_without_hits(tmp_path: Path) -> None:
     assert len(taxonomies) == 1
     assert summary["dominant_family"] == "UNKNOWN"
     assert summary["dominant_fraction"] == 0.0
+
+
+@pytest.mark.parametrize("pident,qualified_count,component", [(24.999, 0, 0.0), (25.0, 1, 1.0)])
+def test_cached_gene_taxonomy_keeps_raw_flags_out_of_confidence(
+    tmp_path: Path, pident: float, qualified_count: int, component: float
+) -> None:
+    proteome = tmp_path / "proteome.fasta"
+    proteome.write_text(">scaf1_1 # 100 # 400 # 1 # ID=1_1;partial=00\nMKV\n")
+    taxonomies, summary = materialize_gene_taxonomy_batch_from_cached_hits(
+        regions=[{"eve_id": "EVE_1", "scaffold": "scaf1", "start": 0, "end": 1000}],
+        proteome_fasta=proteome,
+        diamond_hits={"scaf1_1": [GeneDiamondHit("scaf1_1", "NCLDV__reference|protein", 1e-5, 80, pident, 90)]},
+        output_dir=tmp_path / "out",
+    )["EVE_1"]
+    result = VerificationResult("EVE_1", "scaf1", 0, 1000)
+    EvidenceSynthesizer()._process_gene_taxonomy(result, taxonomies, summary)
+    calculate_eve_confidence(result, 0)
+    assert result.genes_with_ncldv_mirus_top10 == 1
+    assert result.gene_taxonomy_viral_top10 == qualified_count
+    assert result.score_components["scores"]["gene_taxonomy"] == component

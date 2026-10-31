@@ -295,13 +295,17 @@ def _verify_one_marker_region(
         predicted_family=region_class,
         confirmed_seeds=(ConfirmedSeed("marker-core", "sc", 0, 900),),
     )
-    return synthesizer.verify_eve(
+    result = synthesizer.verify_eve(
         boundary,
         window_features=[],
         hallmark_hits=[hit],
         gene_taxonomy_records=[_gene("sc|1", prefixes, pidents)],
         gene_taxonomy_summary={"total": 1},
     )
+
+    # These tests isolate taxonomy and class-specific gates at a fixed tier.
+    result.confidence_tier = "MEDIUM"
+    return result
 
 
 @pytest.mark.parametrize("region_class", ["", "UNKNOWN", "PPV"])

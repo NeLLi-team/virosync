@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from numbers import Integral, Real
 from pathlib import Path
+from typing import TypeVar
 
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkWitness
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
@@ -21,14 +23,36 @@ from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed, vali
 from virosync.utils.atomic_write import atomic_write
 
 PHASE1_STATE_FILENAME = "resume_state.json"
-PHASE1_STATE_SCHEMA_VERSION = 3
+PHASE1_STATE_SCHEMA_VERSION = 4
 PHASE1_STATE_ARTIFACT_TYPE = "virosync.phase1.resume_state"
 PHASE1_STATE_SCHEMA = f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
+
+_HallmarkRecord = TypeVar("_HallmarkRecord", HallmarkEvidence, HallmarkWitness)
+
+_HALLMARK_EVIDENCE_FIELDS = {
+    "query_porf",
+    "gene",
+    "scaffold",
+    "start",
+    "end",
+    "model",
+    "evalue",
+    "score",
+    "domain_score",
+    "query_start",
+    "query_end",
+    "validation_status",
+    "viral_top10_max_pident",
+    "source",
+}
+_HALLMARK_WITNESS_FIELDS = {"scaffold", "panel", "rule", "tier", "start", "end", "evidence_ids"}
 
 _TOP_LEVEL_FIELDS = {
     "artifact_type",
     "schema_version",
     "validated_markers",
+    "hallmark_evidence",
+    "hallmark_witnesses",
     "merged_seeds",
     "host_signature_model",
     "host_signatures",
@@ -161,6 +185,8 @@ class Phase1ResumeState:
     """Exact Phase-1 values consumed by Phase 2, Phase 3, and the run log."""
 
     validated_markers: list[ValidatedMarkerHit]
+    hallmark_evidence: list[HallmarkEvidence]
+    hallmark_witnesses: list[HallmarkWitness]
     merged_seeds: list[MergedSeed]
     host_signature_model: HostSignatureModel
     host_signatures: set[str]
@@ -252,6 +278,8 @@ def _require_string_number_map(
 def _validate_model_fields() -> None:
     model_fields = (
         (ValidatedMarkerHit, _MARKER_FIELD_SET, "ValidatedMarkerHit"),
+        (HallmarkEvidence, _HALLMARK_EVIDENCE_FIELDS, "HallmarkEvidence"),
+        (HallmarkWitness, _HALLMARK_WITNESS_FIELDS, "HallmarkWitness"),
         (Anchor, _ANCHOR_FIELD_SET, "Anchor"),
         (MergedSeed, _SEED_FIELD_SET, "MergedSeed"),
         (HostSignatureModel, _HOST_MODEL_FIELDS, "HostSignatureModel"),
@@ -581,6 +609,8 @@ def _host_deviation_to_document(value: object) -> dict[str, object] | None:
 def phase1_state_to_document(
     *,
     validated_markers: Sequence[ValidatedMarkerHit],
+    hallmark_evidence: Sequence[HallmarkEvidence],
+    hallmark_witnesses: Sequence[HallmarkWitness],
     merged_seeds: Sequence[MergedSeed],
     host_signature_model: HostSignatureModel,
     host_signatures: set[str],
@@ -601,10 +631,16 @@ def phase1_state_to_document(
     if not isinstance(host_signatures, set):
         raise Phase1StateError("host_signatures must be a set")
     signatures = sorted(_require_string(item, "host_signatures item") for item in host_signatures)
+    evidence_documents = [asdict(hit) for hit in hallmark_evidence]
+    witness_documents = [{**asdict(w), "evidence_ids": list(w.evidence_ids)} for w in hallmark_witnesses]
+    _hallmark_records(evidence_documents, HallmarkEvidence)
+    _hallmark_records(witness_documents, HallmarkWitness)
     return {
         "artifact_type": PHASE1_STATE_ARTIFACT_TYPE,
         "schema_version": PHASE1_STATE_SCHEMA_VERSION,
         "validated_markers": [_marker_to_document(marker, index) for index, marker in enumerate(validated_markers)],
+        "hallmark_evidence": evidence_documents,
+        "hallmark_witnesses": witness_documents,
         "merged_seeds": [_seed_to_document(seed, index) for index, seed in enumerate(merged_seeds)],
         "host_signature_model": _host_model_to_document(host_signature_model),
         "host_signatures": signatures,
@@ -644,6 +680,8 @@ def phase1_state_from_document(document: object) -> Phase1ResumeState:
         raise Phase1StateError("phase1 state.host_signatures must be sorted and unique")
     return Phase1ResumeState(
         validated_markers=[_marker_from_document(marker, index) for index, marker in enumerate(raw_markers)],
+        hallmark_evidence=_hallmark_records(payload["hallmark_evidence"], HallmarkEvidence),
+        hallmark_witnesses=_hallmark_records(payload["hallmark_witnesses"], HallmarkWitness),
         merged_seeds=[_seed_from_document(seed, index) for index, seed in enumerate(raw_seeds)],
         host_signature_model=_host_model_from_document(payload["host_signature_model"]),
         host_signatures=set(signatures),
@@ -670,6 +708,8 @@ def write_phase1_state(
     path: str | Path,
     *,
     validated_markers: Sequence[ValidatedMarkerHit],
+    hallmark_evidence: Sequence[HallmarkEvidence],
+    hallmark_witnesses: Sequence[HallmarkWitness],
     merged_seeds: Sequence[MergedSeed],
     host_signature_model: HostSignatureModel,
     host_signatures: set[str],
@@ -678,6 +718,8 @@ def write_phase1_state(
     """Atomically write exact Phase-1 resume state as canonical JSON."""
     document = phase1_state_to_document(
         validated_markers=validated_markers,
+        hallmark_evidence=hallmark_evidence,
+        hallmark_witnesses=hallmark_witnesses,
         merged_seeds=merged_seeds,
         host_signature_model=host_signature_model,
         host_signatures=host_signatures,
@@ -719,3 +761,33 @@ def _validate_phase1_source(seed: MergedSeed) -> None:
     expected = ConfirmedSeed(seed.seed_id, seed.scaffold, seed.start, seed.end)
     if seed.confirmed_seeds != (expected,):
         raise ValueError("Phase1 source container must exactly match its single confirmed seed")
+
+
+def _hallmark_records(value: object, record_type: type[_HallmarkRecord]) -> list[_HallmarkRecord]:
+    """Read closed hallmark records without coercing their exact numeric values."""
+    if not isinstance(value, list):
+        raise Phase1StateError("hallmark records must be a list")
+    records = []
+    for raw in value:
+        row = dict(
+            _require_exact_fields(
+                raw,
+                _HALLMARK_EVIDENCE_FIELDS if record_type is HallmarkEvidence else _HALLMARK_WITNESS_FIELDS,
+                record_type.__name__,
+            )
+        )
+        for key, item in row.items():
+            if key == "evidence_ids":
+                row[key] = tuple(_require_string_list(item, key))
+            elif key in {"start", "end", "query_start", "query_end"}:
+                if item is None and key.startswith("query_"):
+                    continue
+                _require_integer(item, key)
+            elif key in {"evalue", "score", "domain_score", "viral_top10_max_pident"}:
+                if item is None and key == "domain_score":
+                    continue
+                _require_finite_float(item, key)
+            else:
+                _require_string(item, key)
+        records.append(record_type(**row))
+    return records

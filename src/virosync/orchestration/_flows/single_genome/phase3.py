@@ -16,6 +16,7 @@ from virosync.output_contract import (
     canonical_family,
     normalize_effective_eve_class,
 )
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkSupport, HallmarkWitness
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
@@ -26,6 +27,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     missing_boundary_taxonomy_ids,
 )
 from virosync.pipeline.phase2.boundary_refiner import (
+    RefinedBoundary,
     boundary_candidate_id,
 )
 from virosync.pipeline.phase3.acceptance_selection import (
@@ -36,7 +38,8 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
     recluster_survivors,
     unsupported_eve_ids,
 )
-from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult, validate_results_seed_containment
+from virosync.pipeline.phase3.evidence_synthesizer import validate_results_seed_containment
+from virosync.pipeline.phase3.gene_functions import find_gene_function_resources, label_core_genes
 from virosync.utils.path_safety import safe_filename_components
 
 from .loaders import (
@@ -606,6 +609,9 @@ def _run_verification(
     *,
     boundaries: list,
     hallmark_hits_map: dict,
+    hallmark_evidence: list[HallmarkEvidence],
+    hallmark_witnesses: list[HallmarkWitness],
+    candidate_annotations: dict,
     gene_taxonomy_map: dict,
     interproscan_map: dict,
     jelly_roll_map: dict,
@@ -623,6 +629,18 @@ def _run_verification(
 
     databases = config.databases
     phase3 = config.phase3
+    hallmark_evidence_map = {}
+    hallmark_witnesses_map = {}
+    for records, by_boundary in (
+        (hallmark_evidence, hallmark_evidence_map),
+        (hallmark_witnesses, hallmark_witnesses_map),
+    ):
+        index = _build_scaffold_start_index(records)
+        for boundary in boundaries:
+            local = _query_scaffold_index(index, scaffold=boundary.scaffold, start=boundary.start, end=boundary.end)
+            by_boundary[boundary_candidate_id(boundary)] = [
+                record for record in local if boundary.start <= record.start and record.end <= boundary.end
+            ]
     return call_task(
         verify_eve_candidates_batched_task,
         boundaries=boundaries,
@@ -630,6 +648,9 @@ def _run_verification(
         work_dir=output_dir / "phase3",
         proteome_path=proteome_path,
         hallmark_hits_map=hallmark_hits_map,
+        hallmark_evidence_map=hallmark_evidence_map,
+        hallmark_witnesses_map=hallmark_witnesses_map,
+        candidate_annotations=candidate_annotations,
         novelty_scores={},
         gene_taxonomy_map=gene_taxonomy_map or None,
         interproscan_map=interproscan_map or None,
@@ -642,12 +663,6 @@ def _run_verification(
         high_tier_threshold=phase3.high_tier_threshold,
         low_tier_threshold=phase3.low_tier_threshold,
         use_crf_in_final_score=phase3.use_crf_in_final_score,
-        priority_marker_list=phase3.priority_marker_list,
-        marker_floor_priority_only=phase3.marker_floor_priority_only,
-        marker_floor_priority_plus_family=phase3.marker_floor_priority_plus_family,
-        marker_floor_priority_multi_family=phase3.marker_floor_priority_multi_family,
-        marker_family_bonus_per_family=phase3.marker_family_bonus_per_family,
-        marker_multi_family_bonus=phase3.marker_multi_family_bonus,
         skip_structural=phase3.skip_structural,
         use_boltz=phase3.use_boltz,
         boltz_mcp_only=phase3.boltz_mcp_only,
@@ -677,6 +692,8 @@ def _run_phase3_subflow(
     masked_path: Path,
     proteome_path: Path,
     validated_markers: list,
+    hallmark_evidence: list[HallmarkEvidence],
+    hallmark_witnesses: list[HallmarkWitness],
     host_signatures: set,
     host_signature_model_payload: dict | None,
     refined_boundaries: list,
@@ -837,10 +854,23 @@ def _run_phase3_subflow(
     # ==================================================
     # Run batched verification
     # ==================================================
+    candidate_annotations = _prepare_candidate_annotations(
+        refined_boundaries,
+        gene_taxonomy_map_batched,
+        hallmark_evidence,
+        proteome_path=proteome_path,
+        validated_markers=validated_markers,
+        validated_marker_index=validated_marker_index,
+        output_dir=output_dir,
+        config=config,
+    )
     logger.info("Phase 3: Running batched verification with %d threads", threads)
     verification_results = _run_verification(
         boundaries=refined_boundaries,
         hallmark_hits_map=hallmark_hits_map,
+        hallmark_evidence=hallmark_evidence,
+        hallmark_witnesses=hallmark_witnesses,
+        candidate_annotations=candidate_annotations,
         gene_taxonomy_map=gene_taxonomy_map_batched,
         interproscan_map=interproscan_map_batched,
         jelly_roll_map=jelly_roll_map,
@@ -896,13 +926,6 @@ def _run_phase3_subflow(
         not decision.kept for decision in acceptance_selection.normal_gate_decisions
     )
     accepted = len(accepted_results)
-    _annotate_integration_genes(
-        verification_results,
-        proteome_path=proteome_path,
-        validated_markers=validated_markers,
-        output_dir=output_dir,
-        config=config,
-    )
     phase3_elapsed = time.time() - phase3_start
 
     # Compute confidence tier distributions for all candidates and the
@@ -991,34 +1014,34 @@ def _run_phase3_subflow(
     )
 
 
-def _annotate_integration_genes(
-    results: list[VerificationResult],
+def _scan_candidate_integration(
+    boundaries: list,
     *,
     proteome_path: Path,
     validated_markers: list[ValidatedMarkerHit],
     output_dir: Path,
     config: PipelineConfig,
-) -> None:
-    """Attach integration annotations without modifying coordinates or confidence."""
+) -> dict:
+    """Scan candidate intervals once and return their integration annotations."""
     from virosync.pipeline.phase3.integration_genes import (
         IntegrationRegion,
         collect_annotated_integration_genes,
         scan_integration_genes,
     )
 
-    if not results:
-        return
+    if not boundaries:
+        return {}
     flank_bp = config.phase1.extension_kb * 1000
     regions = [
         IntegrationRegion(
-            region_id=result.eve_id,
+            region_id=boundary_candidate_id(result),
             scaffold=result.scaffold,
             scan_start=max(0, result.start - flank_bp),
             scan_end=result.end + flank_bp,
             interior_start=result.start,
             interior_end=result.end,
         )
-        for result in results
+        for result in boundaries
     ]
     scan = scan_integration_genes(proteome_path, regions, threads=config.compute.effective_threads())
     hits = scan.hits
@@ -1043,9 +1066,91 @@ def _annotate_integration_genes(
     unsearched_by_region: dict[str, list[dict[str, object]]] = defaultdict(list)
     for unsearched in scan.unsearched:
         unsearched_by_region[unsearched.region_id].append(asdict(unsearched))
-    for result in results:
-        result.integration_gene_hits = by_region[result.eve_id]
-        result.integration_hmm_unsearched = unsearched_by_region[result.eve_id]
-        result.integration_hmm_status = (
-            "incomplete_sequence_length" if result.integration_hmm_unsearched else "complete"
+    return {
+        boundary_candidate_id(boundary): {
+            "integration_gene_hits": by_region[boundary_candidate_id(boundary)],
+            "integration_hmm_unsearched": unsearched_by_region[boundary_candidate_id(boundary)],
+            "integration_hmm_status": "incomplete_sequence_length"
+            if unsearched_by_region[boundary_candidate_id(boundary)]
+            else "complete",
+        }
+        for boundary in boundaries
+    }
+
+
+def _prepare_candidate_annotations(
+    boundaries: list[RefinedBoundary],
+    taxonomy_map: dict,
+    hallmark_evidence: list[HallmarkEvidence],
+    *,
+    proteome_path: Path,
+    validated_markers: list[ValidatedMarkerHit],
+    validated_marker_index: _ScaffoldStartIndex,
+    output_dir: Path,
+    config: PipelineConfig,
+) -> dict:
+    """Run context scans before scoring and retain their outputs for publication."""
+    annotations = _scan_candidate_integration(
+        boundaries,
+        proteome_path=proteome_path,
+        validated_markers=validated_markers,
+        output_dir=output_dir,
+        config=config,
+    )
+    hallmark_index = _build_scaffold_start_index(hallmark_evidence)
+    genes = []
+    for boundary in boundaries:
+        query = {"scaffold": boundary.scaffold, "start": boundary.start, "end": boundary.end}
+        identity = boundary_candidate_id(boundary)
+        records, _ = taxonomy_map.get(identity, ([], {}))
+        members = {
+            r["porf_id"]
+            for r in records
+            if not r["is_flanking"] and boundary.start <= r["start"] and r["end"] <= boundary.end
+        }
+        members.update(
+            h.gene
+            for h in _query_scaffold_index(hallmark_index, **query)
+            if boundary.start <= h.start and h.end <= boundary.end
         )
+        members.update(
+            marker.query_porf.split("|aa", 1)[0]
+            for marker in _query_scaffold_index(validated_marker_index, **query)
+            if boundary.start <= marker.start and marker.end <= boundary.end
+        )
+        genes.extend((identity, gene) for gene in sorted(members))
+    resources = find_gene_function_resources(config.databases.hmm_database) if config.databases.hmm_database else None
+    if resources:
+        rescue = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
+        labelled = label_core_genes(
+            genes,
+            resources,
+            model_hits=output_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv",
+            proteomes=[proteome_path, *([rescue] if rescue.exists() else [])],
+            threads=config.compute.effective_threads(),
+        )
+    else:
+        from virosync.pipeline.phase3.gene_functions import GeneFunctionResult
+
+        labelled = GeneFunctionResult([], [])
+    labels_by_region = defaultdict(list)
+    exclusions_by_region = defaultdict(list)
+    for row in labelled.labels:
+        labels_by_region[row.eve_id].append(row)
+    for row in labelled.length_exclusions:
+        exclusions_by_region[row.eve_id].append(row)
+    for identity, annotation in annotations.items():
+        labels = labels_by_region[identity]
+        annotation["gene_function_labels"] = labels
+        annotation["gene_function_length_exclusions"] = exclusions_by_region[identity]
+        support = [
+            HallmarkSupport(row.porf_id, row.evidence.split(":", 1)[-1], row.evalue, "phase3_function")
+            for row in labels
+        ]
+        support.extend(
+            HallmarkSupport(row["protein_id"], row["profile"], row["evalue"], "phase3_integration")
+            for row in annotation["integration_gene_hits"]
+            if row["location"] == "interior" and row.get("evalue") is not None
+        )
+        annotation["hallmark_support"] = support
+    return annotations

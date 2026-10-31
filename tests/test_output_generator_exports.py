@@ -11,7 +11,7 @@ from Bio import SeqIO
 
 from virosync.ablation import AblationID
 from virosync.config.pipeline_config import PipelineConfig
-from virosync.orchestration._flows.single_genome.phase3 import _annotate_integration_genes
+from virosync.orchestration._flows.single_genome.phase3 import _scan_candidate_integration
 from virosync.output_contract import (
     COORDINATE_CONVENTION,
     COORDINATE_SCHEMA_VERSION,
@@ -1187,10 +1187,12 @@ def test_incomplete_hmm_screen_preserves_acceptance_and_all_exports(
         encoding="utf-8",
     )
 
-    _annotate_integration_genes(
+    annotations = _scan_candidate_integration(
         [result], proteome_path=proteome, validated_markers=[], output_dir=tmp_path, config=config
     )
 
+    for name, value in annotations[result.eve_id].items():
+        setattr(result, name, value)
     assert result.integration_hmm_status == "incomplete_sequence_length"
     expected_unsearched = [
         {
@@ -1244,10 +1246,12 @@ def test_empty_integration_selection_exports_complete_status(tmp_path: Path) -> 
     config.compute.threads = 1
     config.databases.hmm_database = ""
 
-    _annotate_integration_genes(
+    annotations = _scan_candidate_integration(
         [result], proteome_path=proteome, validated_markers=[], output_dir=tmp_path, config=config
     )
 
+    for name, value in next(iter(annotations.values())).items():
+        setattr(result, name, value)
     assert result.integration_hmm_status == "complete"
     assert result.integration_hmm_unsearched == []
     path = OutputGenerator(output_dir=tmp_path).write_predictions_detailed_tsv([result])

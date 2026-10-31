@@ -266,6 +266,8 @@ class _MockPipeline:
         else:
             write_phase1_state(
                 state_path,
+                hallmark_evidence=[],
+                hallmark_witnesses=[],
                 validated_markers=[],
                 merged_seeds=merged_seeds,
                 host_signature_model=host_model,
@@ -294,6 +296,8 @@ class _MockPipeline:
                 }
             )
         return Phase1Result(
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
             merged_seeds=merged_seeds,
             validated_markers=[],
             host_signature_model=host_model,

@@ -183,6 +183,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     phase1_state = output_dir / "phase1" / "resume_state.json"
     write_phase1_state(
         phase1_state,
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
         validated_markers=[],
         merged_seeds=[
             MergedSeed(

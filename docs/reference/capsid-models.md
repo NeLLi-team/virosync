@@ -50,19 +50,36 @@ A hit to one of these profiles is treated as a viral capsid hit:
 
 - Phase 1 lets it seed a candidate region when it validates on a viral or
   EUK-pEVE reference, and when it has no DIAMOND match and passes the HMM-only
-  gates (`validated_novel`). Only MCP profiles seeded in that second case before.
+  gates (`validated_novel`).
 - Phase 3 sets `has_capsid_evidence` on the region when `has_mcp` is true or
   any `validated` or `validated_novel` hit of the region is such a profile, even
   if a higher-scoring non-capsid profile on the same protein hides it from the
   marker count. A hit of another status (`supported`, `unvalidated`) gives none,
   even when it outscores the other profiles. The A1 seed export applies the same
-  rule to the anchors of each seed. The flag feeds every scoring and acceptance rule that an MCP
-  feeds: the MCP term of the marker score, the common bonus, the exemption from
-  the small-region penalty, the confidence caps, the priority-marker floors, the
-  non-HHG quality pass and the shortcuts of the v2 acceptance gate. The
-  re-admit pass inherits the gate change.
+  rule to the anchors of each seed. The flag supplies the capsid shortcuts of
+  the class-specific acceptance gate.
 
-`has_mcp` and `mcp_gene_ids` still name major capsid proteins only. The
+Graduated hallmark scoring and additive spatial rescue use the exact-model
+catalogue in `virosync/data/hallmark_panels.json`. Catalogue structural anchors
+and capsids are separate roles: a penton or other structural profile does not
+automatically become an MCP or receive the capsid-alone floor. Only mapped
+core evidence can supply graduated marker weight or a spatial witness. A
+qualifying spatial witness retains its original DIAMOND status, including
+`unvalidated`, and its full-gene coordinates. A fully retained witness can pass
+the native gate with an explicit rescue reason without changing its taxonomy.
+See [Confidence and limitations](../METHODS.md#confidence-and-limitations) for
+the weighting, containment and floor rules.
+
+The current catalogue does not include the 33 `EVE_CAPSID_NOVEL_*` profiles,
+including the structure-derived MCP `0029`. Their validated capsid annotations
+and class-specific acceptance rules remain, but those profiles alone do not
+supply the new marker component or MEDIUM/HIGH floors. A viral DIAMOND hit does
+not add a model to the catalogue.
+
+`has_mcp` describes the region's marker summary. `mcp_gene_ids` lists every
+protein with a `validated` or `validated_novel` MCP hit, even when another
+profile scored higher on that protein. These plotting IDs do not add confidence
+or alter taxonomy. Both fields refer only to major capsid proteins. The
 class-vote override, ANI class transfer, jelly-roll classification, Boltz input
 selection and the Phase 1 `high` seed confidence still need an MCP. The profile
 `0029` remains the only structure-derived MCP.

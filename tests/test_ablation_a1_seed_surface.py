@@ -31,6 +31,7 @@ def _anchor(
         hallmark_gene=hallmark_gene,
         score=score,
         evalue=evalue,
+        validation_status="validated",
     )
 
 
@@ -100,7 +101,7 @@ def test_a1_exports_exact_phase1_coordinates_and_unscored_provenance() -> None:
     assert result.hallmark_diversity == 2
     assert result.has_virus_specific_marker is True
     assert result.has_mcp is True
-    assert result.mcp_gene_ids == ["gene-b"]
+    assert result.mcp_gene_ids == ["gene-a", "gene-b"]
     # plv_ markers report under the unified Preplasmiviricota family.
     assert result.marker_family_hits == ["NCLDV", "PPV"]
 

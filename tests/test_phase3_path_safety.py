@@ -193,6 +193,9 @@ def test_boundary_batch_rejects_duplicates_before_output_or_executor(
             work_dir=work_dir,
             proteome_path=tmp_path / "proteome.faa",
             hallmark_hits_map={},
+            hallmark_evidence_map={},
+            hallmark_witnesses_map={},
+            candidate_annotations={},
         )
 
     assert executor_created is False
@@ -240,6 +243,9 @@ def test_single_boundary_task_executes_without_batch_preflight_name_error(
     boundary = RefinedBoundary(scaffold="scaffold", start=10, end=20)
 
     result = orchestration_tasks.verify_eve_task(
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
+        hallmark_support=[],
         boundary=boundary,
         genome_path=tmp_path / "genome.fna",
         work_dir=tmp_path / "single_work",

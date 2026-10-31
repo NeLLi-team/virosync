@@ -37,6 +37,7 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
     resolve_effective_eve_class,
 )
+from virosync.pipeline.hallmark_evidence import has_spatial_rescue
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
@@ -44,7 +45,6 @@ from .evidence_synthesizer import VerificationResult, validate_results_seed_cont
 from .gene_functions import (
     GeneFunctionInputs,
     find_gene_function_resources,
-    label_core_genes,
     write_gene_function_length_exclusions,
     write_gene_functions,
 )
@@ -468,6 +468,9 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
         classification=getattr(result, "classification", ""),
         likely_family=getattr(result, "likely_family", ""),
     )
+
+    if has_spatial_rescue(result):
+        return QualityGateDecision(True, eve_class, "hallmark_spatial_rescue_pass")
 
     if tier in ("HIGH", "MEDIUM"):
         if eve_class == "MIXED":
@@ -2105,7 +2108,7 @@ class OutputGenerator:
     def write_gene_functions(self, results: list[VerificationResult]) -> dict[str, Path]:
         """Write core-gene labels and explicit profile-search length exclusions.
 
-        Flanking genes get no label. Labels never change another output. A resource
+        Publish the labels computed before scoring without another search. A resource
         bundle before v1.2.0 has no gene-function profiles, so it gets neither table.
         """
         inputs = self.gene_function_inputs
@@ -2118,41 +2121,18 @@ class OutputGenerator:
                 Path(inputs.hmm_database).parent,
             )
             return {}
-        genes = list(
-            dict.fromkeys(
-                (result.eve_id, record.porf_id)
-                for result in results
-                for record in map(_normalize_gene_taxonomy_record, result.gene_taxonomy_records)
-                if not record.is_flanking
-            )
-        )
-        genes += [(result.eve_id, porf_id) for result in results for porf_id in self._rescued_core_porf_ids(result)]
-        rescue_fasta = self._find_confirmed_frameshift_proteins()
-        labelled = label_core_genes(
-            genes,
-            resources,
-            model_hits=inputs.model_hits,
-            proteomes=[self.proteome_fasta, *([rescue_fasta] if rescue_fasta else [])],
-            threads=inputs.threads,
+        from .gene_functions import GeneFunctionResult
+
+        labelled = GeneFunctionResult(
+            [row for result in results for row in result.gene_function_labels],
+            [row for result in results for row in result.gene_function_length_exclusions],
         )
         output_path = self.output_dir / "gene_functions.tsv"
         exclusion_path = self.output_dir / "gene_function_length_exclusions.tsv"
         write_gene_functions(labelled.labels, output_path)
         write_gene_function_length_exclusions(labelled.length_exclusions, exclusion_path)
-        logger.info("Labelled %d of %d core genes; wrote %s", len(labelled.labels), len(genes), output_path)
+        logger.info("Wrote %d precomputed core-gene labels to %s", len(labelled.labels), output_path)
         return {"gene_functions": output_path, "gene_function_length_exclusions": exclusion_path}
-
-    def _rescued_core_porf_ids(self, result: VerificationResult) -> list[str]:
-        """Return confirmed frameshift-rescued proteins inside the EVE, which have no taxonomy record."""
-        if self._find_confirmed_frameshift_proteins() is None:
-            return []
-        porfs_by_scaffold = self._load_porfs_by_scaffold()
-        rescued = self._rescued_protein_sequences or {}
-        return [
-            porf_id
-            for porf_start, porf_end, porf_id in porfs_by_scaffold.get(result.scaffold, [])
-            if porf_id in rescued and porf_start < result.end and porf_end > result.start
-        ]
 
     def write_evidence_profiles(self, results: list[VerificationResult]) -> Path:
         """Write detailed evidence profiles to JSON."""

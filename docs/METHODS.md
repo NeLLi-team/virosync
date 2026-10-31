@@ -38,6 +38,19 @@ coordinates. Reciprocal hits collapse to one record. These sparse hits support
 ribbons and similarity ordering; they do not alter predictions or gene content.
 The absence of a ribbon does not establish the absence of homology.
 
+Gene maps outline core HMM matches that qualify for scoring or a contained
+spatial rescue. Their annotations retain the model, E-value and original
+DIAMOND validation status. MCP matches receive the MCP symbol; a portal or
+penton match does not. The marker heatmap counts distinct proteins per
+qualified model. Candidates that bypassed scoring through the optional
+phylogenetic rejection path have no hallmark assessment and contribute no
+qualified heatmap entries. Their existing annotations remain available.
+Validated MCP annotations remain visible when another profile on the same
+protein has a higher score. These plotting IDs do not change the marker count,
+confidence score or taxonomy vote.
+These marks do not change the gene's taxonomy colour or establish viral
+integration.
+
 When Node.js and retained hits are available, confidence tiers with 3–500 rows
 are ordered by protein similarity. Larger tiers retain confidence order.
 The display shows at most 20,000 links. The saved session records whether the
@@ -234,7 +247,7 @@ fold assignment as separate fields:
 
 - `mcp_support` states whether an MCP-like match is only a `candidate`, is
   `sequence_supported`, or is `structure_supported`. Only a supported record
-  counts as MCP evidence for region scoring through this analysis.
+  counts as MCP evidence in this annotation.
 - `type` reports the inferred protein fold: `DJR`, `SJR`, `HK97`, or `UNKNOWN`.
   `UNKNOWN` means unresolved fold. It does not mean that MCP support or
   taxonomy is absent.
@@ -259,11 +272,15 @@ test reads every hit before deduplication, so a higher-scoring non-capsid profil
 on the same protein does not hide the capsid hit. A hit of any other status, such
 as `supported` or `unvalidated`, gives no capsid evidence, even when it outscores
 the other profiles on its protein. The A1 seed export applies the same rule to the
-anchors of each seed, which carry the status of their marker hit. Scoring and acceptance read this flag where
-they read an MCP: the MCP term of the marker score, the common bonus of 0.05, the
-exemption from the small-region penalty, the two confidence caps, the
-priority-marker floors, the non-HHG quality pass and the MCP shortcuts of the v2
-acceptance gate. A region whose viral hits are all `EUK-pEVE`, in the marker
+anchors of each seed, which carry the status of their marker hit. This flag
+describes the existing marker and structural evidence and supplies the capsid
+shortcuts of the class-specific acceptance gate. Graduated hallmark scoring and
+spatial rescue use the separate exact-model catalogue described under
+[Confidence and limitations](#confidence-and-limitations). A structural-anchor
+exemption is distinct from a catalogue capsid assignment. Neither the flag nor
+a model-name substring adds an unlisted model to that catalogue.
+
+A region whose viral hits are all `EUK-pEVE`, in the marker
 database, the proteome database or both, and whose markers supply no profile
 class, has the likely family `MIXED`. This holds whatever lineage the marker names
 or the Phase 1 region class suggest, and the gate reads a likely family of `MIXED`
@@ -453,13 +470,37 @@ suffix after the first `_` or `.`. The terminal-repeat step in Phase 2 follows t
 same rule. Every repeat-bounded child must also receive at least one complete
 confirmed seed. A viral hit alone cannot turn an unseeded residual slice into
 an EVE. A partition that cuts or loses a confirmed seed keeps the parent whole.
-A blocked marker still counts as a marker, in hallmark and marker counts and in scoring,
-when another marker seeded the region that contains it.
+A blocked marker can still appear in marker counts when another marker seeded
+the region that contains it. Only catalogue-qualified evidence contributes to
+the graduated hallmark score.
+
+The additive hallmark rescue examines retained Phase 1 marker records, including
+`supported` and `unvalidated` records, at E <= 0.01. It does not recover HMM
+models discarded by marker retention. Three independent core families on three
+proteins in one compatible panel and scaffold, within a full-gene span of at
+most 15,000 bp, give a provisional MEDIUM floor. A mapped MCP or CRESS capsid
+alone gives a MEDIUM floor; a distinct compatible core family on a different
+protein at an edge-to-edge gap of at most 5,000 bp gives a HIGH floor. These
+rules do not require a DIAMOND hit and do not change its recorded status.
+The search bounds candidate genes by coordinates and skips groups lacking the
+required distinct families. For each left endpoint it retains the earliest
+qualifying right endpoint; partner searches include long overlapping genes
+without clipping their coordinates.
+Phase 3 indexes retained evidence by scaffold and start coordinate, then routes
+fully contained records and witness memberships to each final boundary in their
+original order. Functional annotation uses the same boundary coordinates and
+the retained-marker index, including rescued frameshift genes.
+
+Each witness not wholly contained in an ordinary confirmed seed becomes a
+separate confirmed seed with a stable identity and its exact full-gene hull.
+Partial overlap does not trim either seed. A fully contained witness needs no
+duplicate seed. Ordinary seeds keep their original identities. The normal
+extension, merge and repeat-partition rules preserve every assigned seed.
 
 ### Seed-preserving extension
 
-The complete assembled Phase 1 interval, including its padding, is the
-protected seed. Its original identity and coordinates remain attached to every
+The complete assembled Phase 1 interval, including its padding, or the exact
+full-gene hull of a hallmark-rescue witness, is the protected seed. Its original identity and coordinates remain attached to every
 derived candidate. The searched flanking envelope is separate from the EVE:
 finding the first or last predicted gene does not remove gene-free seed ends.
 
@@ -535,13 +576,58 @@ region is an EVE. The default tiers are `HIGH` at 0.7 or above, `MEDIUM` from
 without changing its reported tier. Several score terms reuse marker or
 taxonomy evidence, so they are not independent observations.
 
+The packaged `hallmark_panels.json` records exact model aliases, core and
+support roles, structural anchors, capsids and excluded profiles for seven
+compatible panels. Panels group evidence; they do not assign taxonomy. The
+catalogue is part of the run's resource fingerprint. Exact retained HMM scores,
+E-values, query envelopes and measured domain scores are carried through Phase 1
+resume state. Unmeasured diagnostics are absent, including those unavailable
+from frameshift evidence. HMM envelopes do not define genomic seed bounds.
+
+Graduated core evidence requires E <= 0.01 and either `validated_novel`, a viral
+top-10 reference hit at >=25% identity, or a catalogue structural-anchor
+exemption. Maximum family-to-protein matching prevents repeated profiles,
+families or one protein from counting twice. Strong evidence has E <= 1e-5.
+Three or more independent core groups receive weight 1 each. A pair receives
+weight 1 per strong group and 0.5 per weak group, using the valid assignment
+with the most strong groups. A singleton receives weight 1 if strong and 0.25
+if weak. The marker component is capped at 1 and combines 0.2 times the weighted
+core count with a capsid term of 0.4, discounted by the applicable weak weight.
+Compatible context adds 0.05 per additional independent group, up to three,
+scaled by the weighted-to-unweighted core count. Function and integration hits
+can supply context at E <= 1e-5, but cannot become core groups or create seeds.
+Only genes wholly inside the final retained interval contribute.
+
+The viral-gene fraction uses only interior genes with a viral reference hit at
+>=25% identity. Raw NCLDV/MIRUS or PPV prefix flags remain informational and
+cannot replace a zero count of identity-qualified viral genes. The seed-cluster
+component describes marker support separately from this gene-taxonomy term.
+
+Non-marker components and cellular penalties remain active. Small-region
+penalties use the catalogue's full-weight capsid qualification. A candidate
+without qualifying core evidence is capped below MEDIUM; one with fewer than
+two independent core groups is capped below HIGH before floors. A qualified
+capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
+group supplies a HIGH floor without a distance restriction. The spatial rules
+add their floors only when all witness genes remain fully contained. Floors
+use the configured tier thresholds, whose defaults are 0.2 and 0.7.
+
+A retained spatial witness can pass acceptance with an explicit rescue reason,
+including for an `UNKNOWN` class, and survives the no-viral-evidence ANI filter.
+This does not rewrite taxonomy or DIAMOND status. Detailed evidence records
+carry the original status, qualification, component values, witness members
+and floor provenance. These are provisional candidate rules, not biological
+confirmation of viral origin or integration. Raw HMM support does not cancel
+an exterior host stop; an independently confirmed seed beyond that stop keeps
+its own protection.
+
 Reference coverage limits marker validation and lineage assignment. ViroSync
 uses predicted genes to refine boundaries, so gene prediction errors and
 fragmented assemblies can affect the result. Independent evidence of cellular
 homology inside an EVE can lower its score. Host-signature model outputs are
 diagnostics and extension-stop evidence; they do not contribute a score penalty,
 restrict the viral-enrichment bonus or supply a non-host-gene-count acceptance
-alternative. The non-HHG fallback retains its marker/capsid alternatives.
+alternative.
 Preserving a confirmed seed does not guarantee final acceptance or establish
 viral integration. Scaffold order can change the background used for
 composition scoring. Structural matches are computational support, not
@@ -679,7 +765,9 @@ checksums in `virosync/data/integration_profiles.json`. The run fingerprint
 covers both this manifest and the profiles. Existing marker annotations and
 optional InterProScan annotations retain their source. General repair/recombination
 proteins such as YqaJ are labelled separately from site-specific recombinases.
-Integration-gene annotations do not seed EVEs or increase confidence scores.
+Integration-gene annotations do not seed EVEs. Catalogue-mapped interior hits
+can contribute compatible context to the graduated hallmark score when core
+evidence is present; flanking hits cannot contribute.
 
 A domain match predicts a protein family. It does not establish catalytic
 activity, identify the enzyme that caused an insertion, or distinguish a viral

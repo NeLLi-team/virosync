@@ -18,6 +18,13 @@ from virosync.orchestration.tasks import (
     hhg_seeding_task,
     pfam_arbitration_task,
 )
+from virosync.pipeline.hallmark_evidence import (
+    HallmarkEvidence,
+    HallmarkWitness,
+    add_rescue_seeds,
+    collect_hallmark_evidence,
+    find_spatial_witnesses,
+)
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
@@ -43,6 +50,8 @@ class Phase1Result:
 
     merged_seeds: list
     validated_markers: list
+    hallmark_evidence: list[HallmarkEvidence]
+    hallmark_witnesses: list[HallmarkWitness]
     host_signature_model: object
     host_signatures: set[str]
     host_deviation_summary: dict | None
@@ -299,6 +308,8 @@ def _run_phase1_subflow(
         return Phase1Result(
             merged_seeds=merged_seeds,
             validated_markers=validated_markers,
+            hallmark_evidence=phase1_state.hallmark_evidence,
+            hallmark_witnesses=phase1_state.hallmark_witnesses,
             host_signature_model=host_signature_model,
             host_signatures=host_signatures,
             host_deviation_summary=host_deviation_summary,
@@ -790,7 +801,22 @@ def _run_phase1_subflow(
         len(validated_only),
     )
 
-    if not validated_only and not (host_taxonomy_deviation_allow_seeds and seedable_deviation_markers):
+    from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
+
+    hallmark_evidence = collect_hallmark_evidence(
+        validated_markers,
+        hhg_hits,
+        frameshift_ids={
+            m.query_porf.split("|aa", 1)[0] for m in validated_markers if is_rescued_protein_id(m.query_porf)
+        },
+    )
+    hallmark_witnesses = find_spatial_witnesses(hallmark_evidence)
+
+    if (
+        not validated_only
+        and not hallmark_witnesses
+        and not (host_taxonomy_deviation_allow_seeds and seedable_deviation_markers)
+    ):
         logger.warning("No validated markers - pipeline complete with 0 predictions")
         elapsed_sec = time.time() - phase1_start
         output_files_empty = call_task(
@@ -889,6 +915,8 @@ def _run_phase1_subflow(
         extension_markers,
     )
 
+    merged_seeds = add_rescue_seeds(merged_seeds, hallmark_witnesses)
+
     phase1_elapsed = time.time() - phase1_start
     logger.info(f"Phase 1 complete: {phase1_elapsed:.1f}s")
 
@@ -914,6 +942,8 @@ def _run_phase1_subflow(
     write_phase1_state(
         phase1_state_path,
         validated_markers=validated_markers,
+        hallmark_evidence=hallmark_evidence,
+        hallmark_witnesses=hallmark_witnesses,
         merged_seeds=merged_seeds,
         host_signature_model=host_signature_model,
         host_signatures=host_signatures,
@@ -924,6 +954,8 @@ def _run_phase1_subflow(
     return Phase1Result(
         merged_seeds=merged_seeds,
         validated_markers=validated_markers,
+        hallmark_evidence=hallmark_evidence,
+        hallmark_witnesses=hallmark_witnesses,
         host_signature_model=host_signature_model,
         host_signatures=host_signatures,
         host_deviation_summary=host_deviation_summary,

@@ -6,17 +6,14 @@
    region with one non-ATPase hallmark and no MCP was published at LOW and
    dropped at MEDIUM -- raising its confidence removed it from the output.
 
-2. The "mcp" priority marker must go through the canonical
-   :func:`is_mcp_gene` detector. A substring match handed the priority-marker
-   confidence floor (0.55-0.80, applied after the host-signature penalties) to
-   any hallmark merely containing the trigram, which lifted a fully
-   host-matching region across the LOW -> MEDIUM boundary.
+2. Only exact catalogue model evidence can earn a capsid floor.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     assign_confidence_tier,
@@ -101,22 +98,30 @@ def test_v2_gate_is_monotone_in_confidence_tier() -> None:
                 )
 
 
-def test_mcp_substring_does_not_earn_the_priority_marker_floor() -> None:
-    """Only a canonical MCP name lifts a host-matching region off the floor.
-
-    ``has_capsid_evidence`` stays False in both cases so the hallmark name is the only
-    difference, isolating the token-matching path.
-    """
+def test_mcp_substring_does_not_earn_the_catalogue_floor() -> None:
     decoy = _region()
-    decoy.hallmark_genes = ["ncmcp_pseudoprotein"]
-    decoy.final_confidence = calculate_eve_confidence(decoy, crf_confidence=0.0, priority_markers=["mcp"])
-    assert decoy.final_confidence < 0.2, (
-        f"a name merely containing 'mcp' earned the priority floor ({decoy.final_confidence:.4f})"
-    )
-    assert assign_confidence_tier(decoy) == "LOW"
-
     genuine = _region()
-    genuine.hallmark_genes = ["GVOGm0003"]
-    genuine.final_confidence = calculate_eve_confidence(genuine, crf_confidence=0.0, priority_markers=["mcp"])
-    assert genuine.final_confidence >= 0.55
+    for result, model in ((decoy, "ncmcp_pseudoprotein"), (genuine, "GVOGm0003")):
+        result.hallmark_evidence = [
+            HallmarkEvidence(
+                "gene|aa1-20",
+                "gene",
+                result.scaffold,
+                result.start,
+                result.end,
+                model,
+                1e-8,
+                70.0,
+                60.0,
+                1,
+                20,
+                "unvalidated",
+                0.0,
+                "retained_hmm",
+            )
+        ]
+        result.final_confidence = calculate_eve_confidence(result, crf_confidence=0.0)
+    assert decoy.final_confidence < 0.2
+    assert assign_confidence_tier(decoy) == "LOW"
+    assert genuine.final_confidence >= 0.2
     assert assign_confidence_tier(genuine) != "LOW"

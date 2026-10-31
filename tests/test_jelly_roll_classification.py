@@ -152,13 +152,10 @@ def test_task_loader_summary_and_scorer_keep_support_separate_from_fold(tmp_path
         profile = result.to_dict()
         assert profile["jelly_roll_supported_mcp_count"] == int(promotes_mcp)
         assert profile["jelly_roll_hk97_count"] == int(fold == "HK97")
-        if porf_id == "weak_mirus":
-            assert result.score_components["priority_floor"] == 0.0
-            assert score < 0.7
-        if porf_id == "long_candidate":
-            assert result.jelly_roll_confidence_bonus == 0.0
-        if porf_id == "valid_djr":
-            assert result.jelly_roll_confidence_bonus > 0.0
+        # Fold annotation alone is not retained catalogue HMM evidence.
+        assert result.score_components["hallmark_summary"]["core_count"] == 0
+        assert result.score_components["hallmark_floor"] == 0.0
+        assert score < 0.2
 
     combined = _build_jelly_roll_summary_for_boundary(
         [("valid_djr", "A"), ("long_candidate", "A")],

@@ -258,7 +258,6 @@ _BASE = {
     "ablation_contract_sha256": ABLATION_CONTRACT_SHA256,
     "assembly_mode": "default",
     "extension_kb": 5,
-    "marker_floor_priority_only": 0.55,
     "boundary_host_trim_enabled": False,
     "boundary_diamond_random_seed": 42,
     "search_backend": "diamond",
@@ -306,7 +305,6 @@ def test_noncanonical_coordinate_convention_is_rejected() -> None:
     "field,new",
     [
         ("assembly_mode", "permissive"),
-        ("marker_floor_priority_only", 0.6),
         ("boundary_host_trim_enabled", True),
         ("boundary_diamond_random_seed", 7),
         # The backend is hashed even though Diamond is the only valid value.

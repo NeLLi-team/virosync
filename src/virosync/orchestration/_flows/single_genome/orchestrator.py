@@ -335,7 +335,10 @@ def _enabled_resource_identities(flat_config: dict) -> list:
         build_resource_set_identity(
             "integration-profiles",
             "1",
-            {name: integration_root / name for name in ("integration_profiles.hmm", "integration_profiles.json")},
+            {
+                name: integration_root / name
+                for name in ("integration_profiles.hmm", "integration_profiles.json", "hallmark_panels.json")
+            },
         )
     ]
     seen: set[tuple[str, str, str, str]] = set()
@@ -988,6 +991,8 @@ def _publish_a1_seed_surface(
     genome_id: str,
     run_fingerprint: str,
     merged_seeds: list,
+    hallmark_evidence: list,
+    hallmark_witnesses: list,
     masked_path: Path,
     proteome_path: Path,
     taxonomy_labels_file: Path | None,
@@ -998,11 +1003,24 @@ def _publish_a1_seed_surface(
     current_counters: AblationCounters,
 ) -> dict:
     """Publish A1's nonzero Phase-1 seed surface without Phase 2 or 3."""
+    from virosync.pipeline.hallmark_evidence import assess_hallmarks
     from virosync.pipeline.phase3.phase1_surface import (
         build_phase1_seed_surface,
     )
 
     surface = build_phase1_seed_surface(merged_seeds)
+    for result in surface.results:
+        result.hallmark_evidence = [
+            h
+            for h in hallmark_evidence
+            if h.scaffold == result.scaffold and result.start <= h.start and h.end <= result.end
+        ]
+        result.hallmark_witnesses = [
+            w
+            for w in hallmark_witnesses
+            if w.scaffold == result.scaffold and result.start <= w.start and w.end <= result.end
+        ]
+        result.hallmark_assessment = assess_hallmarks(result)
     counters = _merge_ablation_counts(
         ablation_id=AblationID.A1,
         current=current_counters,
@@ -1661,6 +1679,8 @@ def _single_genome_flow_impl(
             genome_id=genome_id,
             run_fingerprint=run_fingerprint,
             merged_seeds=merged_seeds,
+            hallmark_evidence=phase1_result.hallmark_evidence,
+            hallmark_witnesses=phase1_result.hallmark_witnesses,
             masked_path=masked_path,
             proteome_path=proteome_path,
             taxonomy_labels_file=databases.taxonomy_labels_file,
@@ -1774,6 +1794,8 @@ def _single_genome_flow_impl(
         masked_path=masked_path,
         proteome_path=proteome_path,
         validated_markers=validated_markers,
+        hallmark_evidence=phase1_result.hallmark_evidence,
+        hallmark_witnesses=phase1_result.hallmark_witnesses,
         host_signatures=host_signatures,
         host_signature_model_payload=host_signature_model_payload,
         refined_boundaries=refined_boundaries,
@@ -2260,12 +2282,6 @@ def single_genome_flow(
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
     use_crf_in_final_score: bool = False,
-    priority_marker_list: list[str] | None = None,
-    marker_floor_priority_only: float = 0.55,
-    marker_floor_priority_plus_family: float = 0.70,
-    marker_floor_priority_multi_family: float = 0.80,
-    marker_family_bonus_per_family: float = 0.06,
-    marker_multi_family_bonus: float = 0.08,
     hmm_chunk_size: int | None = None,
     frameshift_screening_enabled: bool = False,
     gene_taxonomy_threads: int | None = None,

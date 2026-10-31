@@ -29,6 +29,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     infer_ppv_subtype,
     is_validated_marker,
     summarize_marker_hits,
+    validated_capsid_gene_ids,
     with_profile_class_families,
 )
 from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits, peve_profile_class
@@ -164,7 +165,10 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         has_mcp=bool(mcp_gene_ids),
         # Every overlapping anchor decides, not only the best profile per protein.
         has_capsid_evidence=bool(mcp_gene_ids) or has_validated_capsid_hit(overlapping_anchors),
-        mcp_gene_ids=mcp_gene_ids,
+        mcp_gene_ids=validated_capsid_gene_ids(
+            anchor for anchor in overlapping_anchors if is_mcp_gene(anchor.hallmark_gene)
+        ),
+        capsid_gene_ids=validated_capsid_gene_ids(overlapping_anchors),
         region_classification=region_classification,
         region_classification_ncldv_markers=seed.region_classification_ncldv_markers,
         region_classification_vp_plv_markers=seed.region_classification_vp_plv_markers,

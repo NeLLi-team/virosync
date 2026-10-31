@@ -341,12 +341,6 @@ class Phase3Config:
     high_tier_threshold: float = 0.7
     low_tier_threshold: float = 0.2
     use_crf_in_final_score: bool = False
-    priority_marker_list: list[str] = field(default_factory=lambda: ["mcp"])
-    marker_floor_priority_only: float = 0.55
-    marker_floor_priority_plus_family: float = 0.70
-    marker_floor_priority_multi_family: float = 0.80
-    marker_family_bonus_per_family: float = 0.06
-    marker_multi_family_bonus: float = 0.08
     enable_phylogenetic: bool = False
     skip_structural: bool = True
     use_boltz: bool = False
@@ -598,12 +592,6 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("high_tier_threshold", "phase3", "high_tier_threshold"),
     _spec("low_tier_threshold", "phase3", "low_tier_threshold"),
     _spec("use_crf_in_final_score", "phase3", "use_crf_in_final_score"),
-    _spec("priority_marker_list", "phase3", "priority_marker_list"),
-    _spec("marker_floor_priority_only", "phase3", "marker_floor_priority_only"),
-    _spec("marker_floor_priority_plus_family", "phase3", "marker_floor_priority_plus_family"),
-    _spec("marker_floor_priority_multi_family", "phase3", "marker_floor_priority_multi_family"),
-    _spec("marker_family_bonus_per_family", "phase3", "marker_family_bonus_per_family"),
-    _spec("marker_multi_family_bonus", "phase3", "marker_multi_family_bonus"),
     _spec("enable_phylogenetic", "phase3", "enable_phylogenetic"),
     _spec("skip_structural", "phase3", "skip_structural"),
     _spec("use_boltz", "phase3", "use_boltz"),
@@ -911,22 +899,6 @@ class PipelineConfig:
             errors.append("low_tier_threshold must be between 0.0 and 1.0")
         if self.phase3.high_tier_threshold <= self.phase3.low_tier_threshold:
             errors.append("high_tier_threshold must be > low_tier_threshold")
-        floor_values = [
-            self.phase3.marker_floor_priority_only,
-            self.phase3.marker_floor_priority_plus_family,
-            self.phase3.marker_floor_priority_multi_family,
-            self.phase3.marker_family_bonus_per_family,
-            self.phase3.marker_multi_family_bonus,
-        ]
-        if any(v < 0.0 or v > 1.0 for v in floor_values):
-            errors.append("phase3 marker floors/bonuses must be between 0.0 and 1.0")
-        if self.phase3.marker_floor_priority_plus_family < self.phase3.marker_floor_priority_only:
-            errors.append("marker_floor_priority_plus_family must be >= marker_floor_priority_only")
-        if self.phase3.marker_floor_priority_multi_family < self.phase3.marker_floor_priority_plus_family:
-            errors.append("marker_floor_priority_multi_family must be >= marker_floor_priority_plus_family")
-        if not self.phase3.priority_marker_list:
-            errors.append("phase3.priority_marker_list must include at least one marker token")
-
         if self.phase2.taxonomy_ml_model not in {"logreg", "gbdt", "xgboost"}:
             errors.append("phase2.taxonomy_ml_model must be one of: logreg, gbdt, xgboost")
         if self.phase2.taxonomy_weight_mode not in {"rank", "bitscore"}:

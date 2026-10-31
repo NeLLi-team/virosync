@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 
 import pytest
 
 from virosync.ablation import AblationID
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
     VerificationResult,
-    VerificationStatus,
-    assign_confidence_tier,
     calculate_eve_confidence,
     evaluate_composition_ablation_effect,
 )
@@ -27,6 +25,25 @@ def _candidate(*, kfd: float = 0.3, gc_deviation: float = 0.15) -> VerificationR
         start=0,
         end=1000,
     )
+    result.hallmark_evidence = [
+        HallmarkEvidence(
+            query_porf=f"{gene}|aa1-20",
+            gene=gene,
+            scaffold="scaffold",
+            start=start,
+            end=start + 100,
+            model=model,
+            evalue=1e-8,
+            score=70.0,
+            domain_score=60.0,
+            query_start=1,
+            query_end=20,
+            validation_status="validated_novel",
+            viral_top10_max_pident=0.0,
+            source="retained_hmm",
+        )
+        for gene, model, start in [("polb", "GVOGm0054", 100), ("atpase", "GVOGm0760", 300)]
+    ]
     result.kfd = kfd
     result.gc_deviation = gc_deviation
     result.gene_count = 10
@@ -74,25 +91,6 @@ def test_a5_preserves_raw_fields_but_removes_weight_and_crf_bonus() -> None:
     json.dumps(selected.to_dict(), allow_nan=False, sort_keys=True)
 
 
-def test_reference_preserves_historical_bonus_order_at_high_threshold() -> None:
-    result = _candidate()
-    result.jelly_roll_confidence_bonus = 0.07
-    result.ncldv_completeness_ratio = 0.5
-    result.structural_score = 0.543089430894308
-
-    score = calculate_eve_confidence(
-        result,
-        crf_confidence=0.95,
-        use_crf_score=False,
-        ablation_id=AblationID.A0,
-    )
-
-    assert result.score_components["bonus_total"] == 0.38000000000000006
-    assert score == 0.7
-    result.final_confidence = score
-    assert assign_confidence_tier(result, high=0.7, low=0.2) == "HIGH"
-
-
 @pytest.mark.parametrize(
     "ablation_id",
     [
@@ -125,36 +123,6 @@ def test_only_a5_disables_composition(ablation_id: AblationID) -> None:
     }
 
 
-def test_a5_removes_composition_driven_top_cap() -> None:
-    def strong_candidate() -> VerificationResult:
-        result = _candidate()
-        result.has_mcp = True
-        result.has_capsid_evidence = True
-        result.hallmark_count = 5
-        result.hallmark_diversity = 5
-        result.marker_category_hits = ["mcp"]
-        result.marker_complement_score = 1.0
-        result.region_classification_ncldv_markers = 3
-        result.gene_taxonomy_viral_top10 = 10
-        result.gene_taxonomy_viral_interior = 10
-        result.gene_taxonomy_dominant_fraction = 1.0
-        result.ncldv_completeness_ratio = 1.0
-        return result
-
-    reference = strong_candidate()
-    reference_score = _score(reference, AblationID.A0)
-    selected = strong_candidate()
-    selected_score = _score(selected, AblationID.A5)
-
-    assert reference.score_components["composition_cap_active"] is True
-    assert selected.score_components["composition_cap_active"] is False
-    assert reference.score_components["cap"] == pytest.approx(1.0)
-    assert selected.score_components["cap"] == pytest.approx(0.99)
-    assert reference_score == pytest.approx(1.0)
-    assert selected_score == pytest.approx(0.99)
-    assert selected.composition_ablation_effect.changed == 1
-
-
 def test_a5_zero_composition_has_no_opportunity_or_intervention() -> None:
     reference = _candidate(kfd=0.0, gc_deviation=0.0)
     reference_score = _score(reference, AblationID.A0)
@@ -174,7 +142,7 @@ def test_a5_zero_composition_has_no_opportunity_or_intervention() -> None:
 def test_a5_records_a_reference_to_selected_tier_flip() -> None:
     result = _candidate()
     result.structural_score = 0.5
-    result.clustering_bonus = 0.15
+    result.clustering_bonus = 0.05
 
     _score(result, AblationID.A5)
 
@@ -222,6 +190,7 @@ def test_counterfactual_effect_is_pure_and_deterministic() -> None:
 
 def test_changed_counter_uses_final_post_score_tier_policy() -> None:
     result = _candidate()
+    result.hallmark_evidence = []
     result.gene_count = 2
     result.gene_taxonomy_viral_top10 = 2
     result.gene_taxonomy_viral_interior = 2
@@ -254,94 +223,6 @@ def test_changed_counter_uses_final_post_score_tier_policy() -> None:
     assert effect.selected_confidence == pytest.approx(0.199)
     assert effect.reference_tier == effect.selected_tier == "LOW"
     assert (effect.opportunities, effect.interventions, effect.changed) == (1, 1, 0)
-
-
-def _configure_override_path(result: VerificationResult, path: str) -> None:
-    if path == "marker_taxonomy":
-        result.gene_taxonomy_has_ncldv_mirus = True
-        result.hallmark_count = 2
-        result.region_classification = "NCLDV"
-        result.region_classification_ncldv_markers = 1
-        result.region_classification_mirus_markers = 1
-    elif path == "mcp":
-        result.has_mcp = True
-        result.has_capsid_evidence = True
-        result.hallmark_count = 1
-        result.region_classification = "NCLDV"
-        result.region_classification_ncldv_markers = 1
-    elif path == "final":
-        result.hallmark_count = 1
-    else:
-        raise AssertionError(f"unknown test path: {path}")
-
-
-@pytest.mark.parametrize("path", ["marker_taxonomy", "mcp", "final"])
-def test_configured_scoring_reaches_all_three_routes(
-    monkeypatch: pytest.MonkeyPatch,
-    path: str,
-) -> None:
-    result = _candidate()
-    _configure_override_path(result, path)
-    result.hallmark_genes = ["polb"]
-    synthesizer = EvidenceSynthesizer(
-        config=EvidenceSynthesizerConfig(
-            ablation_id=AblationID.A5,
-            use_crf_in_final_score=True,
-            priority_marker_list=["polb"],
-            marker_floor_priority_only=0.21,
-            marker_floor_priority_plus_family=0.61,
-            marker_floor_priority_multi_family=0.91,
-            marker_family_bonus_per_family=0.11,
-            marker_multi_family_bonus=0.17,
-        )
-    )
-    boundary = RefinedBoundary(
-        scaffold="scaffold",
-        start=0,
-        end=1000,
-        confidence=0.95,
-    )
-
-    monkeypatch.setattr(synthesizer, "_initialize_result", lambda _boundary: result)
-    no_op: Callable[..., None] = lambda *args, **kwargs: None
-    for method_name in (
-        "_detect_contig_edge",
-        "_process_hallmark_hits",
-        "_process_gene_taxonomy",
-        "_assign_taxonomy_class",
-        "_process_interproscan",
-        "_apply_jelly_roll_summary",
-        "_run_tiebreakers",
-    ):
-        monkeypatch.setattr(synthesizer, method_name, no_op)
-
-    observed = synthesizer.verify_eve(boundary, window_features=[])
-
-    assert observed is result
-    assert observed.ablation_id is AblationID.A5
-    assert observed.score_components["weights"]["crf"] == pytest.approx(0.18)
-    assert observed.score_components["weights"]["composition"] == 0.0
-    assert observed.score_components["priority_marker_active"] is True
-    expected_floor = {"marker_taxonomy": 0.91, "mcp": 0.61, "final": 0.21}[path]
-    assert observed.score_components["priority_floor"] == pytest.approx(expected_floor)
-    expected_bonus = {"marker_taxonomy": 0.25, "mcp": 0.24, "final": 0.08}[path]
-    assert observed.score_components["bonus_total"] == pytest.approx(expected_bonus)
-    expected_confidence = {
-        "marker_taxonomy": 0.91,
-        "mcp": 0.6870731707317074,
-        "final": 0.38073170731707323,
-    }[path]
-    assert observed.final_confidence == pytest.approx(expected_confidence)
-    expected_tier = "HIGH" if path == "marker_taxonomy" else "MEDIUM"
-    assert observed.confidence_tier == expected_tier
-    expected_status = (
-        VerificationStatus.HIGH_CONFIDENCE if path == "marker_taxonomy" else VerificationStatus.MEDIUM_CONFIDENCE
-    )
-    assert observed.status is expected_status
-    assert observed.likely_family == ("UNKNOWN" if path == "final" else "NCLDV")
-    assert observed.composition_ablation_effect.interventions == 1
-    assert observed.composition_ablation_effect.reference_confidence is not None
-    assert observed.composition_ablation_effect.selected_confidence == pytest.approx(expected_confidence)
 
 
 def test_config_requires_the_single_ablation_enum() -> None:

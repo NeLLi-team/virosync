@@ -27,6 +27,13 @@ from typing import TYPE_CHECKING, Literal
 from virosync.ablation import AblationID
 from virosync.config import get_config
 from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family
+from virosync.pipeline.hallmark_evidence import (
+    HallmarkAssessment,
+    HallmarkEvidence,
+    HallmarkSupport,
+    HallmarkWitness,
+    assess_hallmarks,
+)
 from virosync.pipeline.host_signatures import (
     HostSignatureModel,
     get_taxonomy_lookup,
@@ -764,6 +771,18 @@ def has_validated_capsid_hit(hits: list) -> bool:
     return _has_validated_marker(capsid_hits)
 
 
+def validated_capsid_gene_ids(hits: Iterable[object]) -> list[str]:
+    """Return annotated capsid proteins without changing validation or score eligibility."""
+    gene_ids = set()
+    for hit in hits:
+        if not has_validated_capsid_hit([hit]):
+            continue
+        protein_id = str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
+        if protein_id:
+            gene_ids.add(base_marker_gene_id(protein_id))
+    return sorted(gene_ids)
+
+
 def _has_only_peve_viral_evidence(result: VerificationResult) -> bool:
     """Return whether every viral hit of the region is EUK-pEVE, in either database."""
     interior_records = [
@@ -857,20 +876,6 @@ def assign_confidence_tier(result: VerificationResult, high: float = 0.7, low: f
         Tier string: "HIGH", "MEDIUM", or "LOW"
     """
     return _confidence_tier_for_score(result.final_confidence, high=high, low=low)
-
-
-def compute_marker_score(result: VerificationResult) -> float:
-    """Compute marker score from hallmark evidence."""
-    # seed_sources records provenance, not marker identity. The authoritative
-    # has_capsid_evidence flag is populated in _process_hallmark_hits via
-    # is_capsid_evidence_gene, which an MCP also satisfies.
-    capsid_term = 1.0 if result.has_capsid_evidence else 0.0
-    total_markers = result.hallmark_count
-    diversity_score = min(result.hallmark_diversity / 5.0, 1.0) if total_markers > 0 else 0.0
-
-    if result.marker_category_hits:
-        return 0.45 * capsid_term + 0.35 * result.marker_complement_score + 0.20 * diversity_score
-    return 0.50 * capsid_term + 0.30 * diversity_score + 0.20 * min(total_markers / 8.0, 1.0)
 
 
 def compute_family_consistency_score(result: VerificationResult) -> float:
@@ -1028,6 +1033,13 @@ class VerificationResult:
     right_stop: int | None = field(default=None, kw_only=True)
     host_stop_available: bool = field(default=False, kw_only=True)
 
+    hallmark_evidence: list[HallmarkEvidence] = field(default_factory=list)
+    hallmark_witnesses: list[HallmarkWitness] = field(default_factory=list)
+    hallmark_support: list[HallmarkSupport] = field(default_factory=list)
+    hallmark_assessment: HallmarkAssessment | None = None
+    gene_function_labels: list = field(default_factory=list)
+    gene_function_length_exclusions: list = field(default_factory=list)
+
     # Status
     status: VerificationStatus = VerificationStatus.AMBIGUOUS
     final_confidence: float = 0.0
@@ -1087,9 +1099,11 @@ class VerificationResult:
     # ANI class donation read it.
     has_mcp: bool = False
     # True when has_mcp is true or a hallmark gene is a capsid-type profile.
-    # Scoring and acceptance read it where they once read has_mcp.
+    # Class-specific acceptance and reporting use this broader annotation;
+    # graduated scores and floors use the separate catalogue assessment.
     has_capsid_evidence: bool = False
     mcp_gene_ids: list[str] = field(default_factory=list)
+    capsid_gene_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_ids: list[str] = field(default_factory=list)
     tier1_bypassed_marker_models: list[str] = field(default_factory=list)
     frameshift_rescue_marker_ids: list[str] = field(default_factory=list)
@@ -1286,6 +1300,13 @@ class VerificationResult:
             "structural_score": self.structural_score,
             "phylogenetic_score": self.phylogenetic_score,
             "score_components": dict(self.score_components) if self.score_components else {},
+            "hallmark_evidence": [
+                {**asdict(h), "evidence_id": h.evidence_id, "model_roles": h.model_roles}
+                for h in self.hallmark_evidence
+            ],
+            "hallmark_witnesses": [{**asdict(w), "witness_id": w.witness_id} for w in self.hallmark_witnesses],
+            "hallmark_assessment": asdict(self.hallmark_assessment) if self.hallmark_assessment else None,
+            "hallmark_support": [asdict(h) for h in self.hallmark_support],
             "hallmark_count": self.hallmark_count,
             "hallmark_diversity": self.hallmark_diversity,
             "has_virus_specific_marker": self.has_virus_specific_marker,
@@ -1313,6 +1334,7 @@ class VerificationResult:
             "has_mcp": self.has_mcp,
             "has_capsid_evidence": self.has_capsid_evidence,
             "mcp_gene_ids": self.mcp_gene_ids,
+            "capsid_gene_ids": self.capsid_gene_ids,
             "tier1_bypassed_marker_ids": self.tier1_bypassed_marker_ids,
             "tier1_bypassed_marker_models": self.tier1_bypassed_marker_models,
             "frameshift_rescue_marker_ids": self.frameshift_rescue_marker_ids,
@@ -1461,12 +1483,6 @@ class EvidenceSynthesizerConfig:
     high_tier_threshold: float = field(default_factory=lambda: get_config().evidence.high_tier_threshold)
     low_tier_threshold: float = field(default_factory=lambda: get_config().evidence.low_tier_threshold)
     use_crf_in_final_score: bool = False
-    priority_marker_list: list[str] = field(default_factory=lambda: ["mcp"])
-    marker_floor_priority_only: float = 0.55
-    marker_floor_priority_plus_family: float = 0.70
-    marker_floor_priority_multi_family: float = 0.80
-    marker_family_bonus_per_family: float = 0.06
-    marker_multi_family_bonus: float = 0.08
 
     # Optional host signature strings for diagnostics
     euk_host_signatures: set[str] | None = None
@@ -1584,43 +1600,11 @@ def load_jelly_roll_data(jelly_roll_path: Path) -> dict[str, list[dict]]:
     return results
 
 
-def _has_priority_marker(result: VerificationResult, priority_markers: list[str]) -> bool:
-    marker_set = {m.lower() for m in priority_markers}
-    if result.has_capsid_evidence and "mcp" in marker_set:
-        return True
-    # seed_sources intentionally excluded: it only carries
-    # {"hhg","novelty","compositional"} source tags, never priority-marker
-    # tokens like "mcp"/"polb". See note above compute_marker_score.
-    marker_tokens = (
-        list(result.hallmark_genes) + list(result.interproscan_keyword_hits) + list(result.interproscan_category_hits)
-    )
-    # "mcp" goes through the canonical detector: a substring match promoted any
-    # name merely containing the trigram ("ncmcp_pseudoprotein", "Baculovirus
-    # mcp-like repeat domain") to the priority-marker confidence floor, which is
-    # applied after the host-signature penalties. The remaining markers have no
-    # canonical detector and stay on substring matching.
-    mcp_is_priority = "mcp" in marker_set
-    substring_markers = marker_set - {"mcp"}
-    for token in marker_tokens:
-        lower = str(token).lower()
-        if mcp_is_priority and is_mcp_gene(lower):
-            return True
-        if any(marker in lower for marker in substring_markers):
-            return True
-    return False
-
-
 def calculate_eve_confidence(
     result: VerificationResult,
     crf_confidence: float,
     tmvec_score: float | None = None,
     use_crf_score: bool = False,
-    priority_markers: list[str] | None = None,
-    marker_floor_priority_only: float = 0.55,
-    marker_floor_priority_plus_family: float = 0.70,
-    marker_floor_priority_multi_family: float = 0.80,
-    marker_family_bonus_per_family: float = 0.06,
-    marker_multi_family_bonus: float = 0.08,
     ablation_id: AblationID = AblationID.A0,
     high_tier_threshold: float = 0.7,
     low_tier_threshold: float = 0.2,
@@ -1639,7 +1623,7 @@ def calculate_eve_confidence(
 
     Active base weights are normalized. Structural evidence contributes a
     separate additive term of at most 0.15 before penalties, bonuses, caps,
-    and configured priority-marker floors are applied.
+    and catalogue-qualified candidate floors are applied.
 
     After both reference and selected scores succeed, this function updates
     ``result.ablation_id``, ``result.high_confidence_euk_genes``,
@@ -1661,6 +1645,7 @@ def calculate_eve_confidence(
     """
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
+    result.hallmark_assessment = assess_hallmarks(result)
     evidence = _collect_confidence_evidence(
         result,
         crf_confidence=crf_confidence,
@@ -1670,18 +1655,26 @@ def calculate_eve_confidence(
     bonuses = _calculate_confidence_bonuses(
         result,
         evidence,
-        priority_markers=[marker.lower() for marker in (priority_markers or ["mcp"])],
-        marker_floor_priority_only=marker_floor_priority_only,
-        marker_floor_priority_plus_family=marker_floor_priority_plus_family,
-        marker_floor_priority_multi_family=marker_floor_priority_multi_family,
-        marker_family_bonus_per_family=marker_family_bonus_per_family,
-        marker_multi_family_bonus=marker_multi_family_bonus,
     )
     _log_confidence_bonuses(result, evidence, bonuses)
 
-    reference = _assemble_confidence(result, evidence, bonuses, include_composition=True)
+    reference = _assemble_confidence(
+        result,
+        evidence,
+        bonuses,
+        include_composition=True,
+        high_threshold=high_tier_threshold,
+        low_threshold=low_tier_threshold,
+    )
     selected = (
-        _assemble_confidence(result, evidence, bonuses, include_composition=False)
+        _assemble_confidence(
+            result,
+            evidence,
+            bonuses,
+            include_composition=False,
+            high_threshold=high_tier_threshold,
+            low_threshold=low_tier_threshold,
+        )
         if ablation_id is AblationID.A5
         else reference
     )
@@ -1728,8 +1721,6 @@ class _ConfidenceBonuses:
     common: float
     reference: float
     composition: float
-    priority_floor: float
-    has_priority_marker: bool
     taxonomy_distribution: float
     host_divergence: float
     viral_enrichment: float
@@ -1751,7 +1742,7 @@ def _collect_confidence_evidence(
     use_crf_score: bool,
 ) -> _ConfidenceEvidence:
     """Normalize all score components and penalties without mutating the result."""
-    marker_score = compute_marker_score(result)
+    marker_score = result.hallmark_assessment.summary.marker_score
     composition_score = _composition_score(result)
     viral_fraction = _viral_gene_fraction(result)
     gene_taxonomy_score = _gene_taxonomy_score(result, viral_fraction)
@@ -1799,8 +1790,7 @@ def _viral_gene_fraction(result: VerificationResult) -> float:
     if result.gene_count <= 0:
         return 0.0
 
-    viral_genes = result.gene_taxonomy_viral_top10 or result.genes_with_ncldv_mirus_top10
-    return min(viral_genes / result.gene_count, 1.0)
+    return min(result.gene_taxonomy_viral_top10 / result.gene_count, 1.0)
 
 
 def _gene_taxonomy_score(result: VerificationResult, viral_fraction: float) -> float:
@@ -1888,7 +1878,7 @@ def _seed_cluster_score(result: VerificationResult) -> float:
 
 def _size_penalty(result: VerificationResult) -> float:
     """Penalize one-to-three-gene candidates without capsid evidence."""
-    if result.has_capsid_evidence:
+    if result.hallmark_assessment.summary.capsid_fraction == 1.0:
         return 0.0
     if result.gene_count <= 1:
         return 0.15
@@ -1921,18 +1911,9 @@ def _component_weights(gene_count: int, use_crf_score: bool) -> dict[str, float]
 def _calculate_confidence_bonuses(
     result: VerificationResult,
     evidence: _ConfidenceEvidence,
-    *,
-    priority_markers: list[str],
-    marker_floor_priority_only: float,
-    marker_floor_priority_plus_family: float,
-    marker_floor_priority_multi_family: float,
-    marker_family_bonus_per_family: float,
-    marker_multi_family_bonus: float,
 ) -> _ConfidenceBonuses:
     """Accumulate score bonuses in their established floating-point order."""
-    marker_score = evidence.component_scores["marker"]
     composition_score = evidence.component_scores["composition"]
-    gene_taxonomy_score = evidence.component_scores["gene_taxonomy"]
     interproscan_score = evidence.component_scores["interpro"]
     seed_cluster_score = evidence.component_scores["seed_cluster"]
     common_bonus = 0.0
@@ -1943,8 +1924,6 @@ def _calculate_confidence_bonuses(
         common_bonus += value
         reference_bonus += value
 
-    if marker_score >= 0.6 and gene_taxonomy_score >= 0.6:
-        add_common_bonus(0.04)
     if seed_cluster_score >= 1.0 and interproscan_score >= 0.5:
         add_common_bonus(0.03)
     composition_bonus = 0.0
@@ -1953,28 +1932,6 @@ def _calculate_confidence_bonuses(
         reference_bonus += composition_bonus
     if evidence.family_consistency_score > 0:
         add_common_bonus(min(evidence.family_consistency_score, 0.05))
-    if result.has_capsid_evidence:
-        add_common_bonus(0.05)
-
-    completeness_ratio = max(
-        result.vp_completeness_ratio,
-        result.ppv_completeness_ratio,
-        result.ncldv_completeness_ratio,
-        result.mirus_completeness_ratio,
-    )
-    if completeness_ratio >= 0.9:
-        add_common_bonus(0.60)
-    elif completeness_ratio >= 0.7:
-        add_common_bonus(0.40)
-    elif completeness_ratio >= 0.5:
-        add_common_bonus(0.20)
-
-    ncldv_core_hits = len({gene.lower() for gene in result.hallmark_genes if gene.lower().startswith("gvogm")})
-    if ncldv_core_hits >= 4:
-        add_common_bonus(0.20)
-    elif ncldv_core_hits >= 3:
-        add_common_bonus(0.10)
-
     if result.clustering_bonus > 0:
         add_common_bonus(result.clustering_bonus)
 
@@ -1998,61 +1955,16 @@ def _calculate_confidence_bonuses(
             viral_enrichment_bonus = min(0.12, viral_fraction_for_bonus * 0.4)
             add_common_bonus(viral_enrichment_bonus)
 
-    has_priority_marker = _has_priority_marker(result, priority_markers)
-    priority_floor = 0.0
-    if has_priority_marker:
-        family_support_count = _family_support_count(result)
-        if family_support_count >= 2:
-            add_common_bonus(marker_multi_family_bonus)
-            priority_floor = marker_floor_priority_multi_family
-        elif family_support_count >= 1:
-            add_common_bonus(marker_family_bonus_per_family)
-            priority_floor = marker_floor_priority_plus_family
-        else:
-            priority_floor = marker_floor_priority_only
-
-    if result.jelly_roll_confidence_bonus > 0:
-        add_common_bonus(result.jelly_roll_confidence_bonus)
+    add_common_bonus(result.hallmark_assessment.summary.coherence_bonus)
 
     return _ConfidenceBonuses(
         common=common_bonus,
         reference=reference_bonus,
         composition=composition_bonus,
-        priority_floor=priority_floor,
-        has_priority_marker=has_priority_marker,
         taxonomy_distribution=taxonomy_distribution_bonus,
         host_divergence=host_divergence_bonus,
         viral_enrichment=viral_enrichment_bonus,
     )
-
-
-def _family_support_count(result: VerificationResult) -> int:
-    """Count viral families supported by marker and taxonomy evidence."""
-    families: set[str] = set()
-    if result.region_classification_ncldv_markers > 0:
-        families.add("NCLDV")
-    if result.region_classification_mirus_markers > 0:
-        families.add("MIRUS")
-    if result.region_classification_vp_plv_markers > 0:
-        families.add("PPV")
-
-    family_tokens = (
-        list(result.hallmark_genes)
-        + list(result.marker_family_hits)
-        + list(result.interproscan_family_hits)
-        + [result.region_classification, result.gene_taxonomy_dominant_family, result.likely_family]
-    )
-    for token in family_tokens:
-        upper = str(token).upper()
-        if "NCLDV" in upper:
-            families.add("NCLDV")
-        elif "MIRUS" in upper:
-            families.add("MIRUS")
-        elif "PPV" in upper or "PLV" in upper:
-            families.add("PPV")
-        elif upper in {"VP", "VIROPHAGE"} or "VP_" in upper or "_VP" in upper:
-            families.add("PPV")
-    return len(families)
 
 
 def _log_confidence_bonuses(
@@ -2094,14 +2006,6 @@ def _log_confidence_bonuses(
             viral_fraction,
             result.host_signature_fraction,
         )
-    if result.jelly_roll_confidence_bonus > 0:
-        logger.debug(
-            "Jelly roll bonus for %s: +%.2f (DJR=%s, avg_conf=%.2f)",
-            result.eve_id,
-            result.jelly_roll_confidence_bonus,
-            result.jelly_roll_djr_count,
-            result.jelly_roll_avg_confidence,
-        )
 
 
 def _assemble_confidence(
@@ -2110,6 +2014,8 @@ def _assemble_confidence(
     bonuses: _ConfidenceBonuses,
     *,
     include_composition: bool,
+    high_threshold: float,
+    low_threshold: float,
 ) -> _CalculatedConfidence:
     """Assemble one score from normalized evidence without mutating the result."""
     component_weights = dict(evidence.component_weights)
@@ -2123,34 +2029,21 @@ def _assemble_confidence(
 
     selected_composition_bonus = bonuses.composition if include_composition else 0.0
     bonus_total = bonuses.reference if include_composition else bonuses.common
-    marker_score = evidence.component_scores["marker"]
-    gene_taxonomy_score = evidence.component_scores["gene_taxonomy"]
-    seed_cluster_score = evidence.component_scores["seed_cluster"]
-
-    cap = 0.95
-    if seed_cluster_score >= 1.0 and gene_taxonomy_score >= 0.6 and marker_score >= 0.6:
-        cap = 0.99
-    composition_cap_active = (
-        include_composition
-        and composition_score >= 0.6
-        and seed_cluster_score >= 1.0
-        and gene_taxonomy_score >= 0.7
-        and marker_score >= 0.7
-        and (evidence.component_scores["crf"] >= 0.9 or not evidence.use_crf_score)
-    )
-    if composition_cap_active:
-        cap = 1.0
-
+    summary = result.hallmark_assessment.summary
     confidence = (
-        weighted_base + bonus_total + (0.15 * evidence.structural_score) - evidence.euk_penalty - evidence.size_penalty
+        weighted_base + bonus_total + 0.15 * evidence.structural_score - evidence.euk_penalty - evidence.size_penalty
     )
-    confidence = min(confidence, cap)
-    if bonuses.priority_floor > 0.0:
-        confidence = max(confidence, bonuses.priority_floor)
-    if evidence.viral_evidence == 0 and not result.has_capsid_evidence:
-        confidence = min(confidence, 0.05)
-    if evidence.gene_count > 0 and not result.has_capsid_evidence and evidence.viral_fraction < 0.05:
-        confidence = min(confidence, 0.19)
+    confidence = min(0.99, max(0.0, confidence))
+    if summary.core_count == 0:
+        confidence = min(confidence, low_threshold - 0.001)
+    if summary.core_count < 2:
+        confidence = min(confidence, high_threshold - 0.001)
+    before_floor = confidence
+    floors = [summary.floor_tier, *(w.tier for w in result.hallmark_assessment.witnesses)]
+    floor = high_threshold if "HIGH" in floors else low_threshold if "MEDIUM" in floors else 0.0
+    confidence = max(confidence, floor)
+    cap = 0.99
+    composition_cap_active = False
 
     return _CalculatedConfidence(
         confidence=max(0.0, min(1.0, confidence)),
@@ -2162,12 +2055,16 @@ def _assemble_confidence(
             "composition_bonus": float(selected_composition_bonus),
             "composition_cap_active": composition_cap_active,
             "composition_evidence_active": include_composition,
-            "priority_floor": float(bonuses.priority_floor),
+            "hallmark_summary": asdict(summary),
+            "hallmark_floor": floor,
+            "before_hallmark_floor": before_floor,
+            "spatial_witness_ids": [w.witness_id for w in result.hallmark_assessment.witnesses],
+            "euk_penalty": evidence.euk_penalty,
+            "size_penalty": evidence.size_penalty,
             "cap": float(cap),
             "family_consistency_bonus": float(evidence.family_consistency_score),
             "has_mcp": bool(result.has_mcp),
             "has_capsid_evidence": bool(result.has_capsid_evidence),
-            "priority_marker_active": bool(bonuses.has_priority_marker),
             "final_confidence_pre_clamp": float(confidence),
         },
     )
@@ -2194,8 +2091,6 @@ def _apply_confidence_result(
 class _PostScoreOutcome:
     confidence: float
     tier: str
-    priority_promoted: bool
-    non_hhg_demoted: bool
 
 
 def _evaluate_post_score_policy(
@@ -2204,7 +2099,6 @@ def _evaluate_post_score_policy(
     *,
     high_threshold: float,
     low_threshold: float,
-    priority_markers: list[str],
 ) -> _PostScoreOutcome:
     """Apply final tier policy to a score without mutating ``result``."""
     tier = _confidence_tier_for_score(
@@ -2212,24 +2106,9 @@ def _evaluate_post_score_policy(
         high=high_threshold,
         low=low_threshold,
     )
-    priority_promoted = _has_priority_marker(result, priority_markers) and tier == "LOW"
-    if priority_promoted:
-        tier = "MEDIUM"
-        confidence = max(confidence, low_threshold)
-
-    non_hhg_demoted = False
-    if tier in {"HIGH", "MEDIUM"} and result.seed_sources and "hhg" not in result.seed_sources:
-        non_hhg_quality_pass = result.hallmark_count >= 3 or (result.hallmark_count >= 1 and result.has_capsid_evidence)
-        if not non_hhg_quality_pass:
-            non_hhg_demoted = True
-            tier = "LOW"
-            confidence = min(confidence, low_threshold - 0.001)
-
     return _PostScoreOutcome(
         confidence=confidence,
         tier=tier,
-        priority_promoted=priority_promoted,
-        non_hhg_demoted=non_hhg_demoted,
     )
 
 
@@ -2505,7 +2384,10 @@ class EvidenceSynthesizer:
         result.hallmark_diversity = len(set(hallmark_genes))
         result.has_virus_specific_marker = True
         result.has_mcp = any(is_mcp_gene(g) for g in hallmark_genes)
-        result.mcp_gene_ids = [info["base_gene"] for info in by_gene.values() if is_mcp_gene(info["hallmark_gene"])]
+        result.mcp_gene_ids = validated_capsid_gene_ids(
+            hit for hit in hallmark_hits if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or ""))
+        )
+        result.capsid_gene_ids = validated_capsid_gene_ids(hallmark_hits)
         bypassed = [
             info
             for info in by_gene.values()
@@ -2935,12 +2817,6 @@ class EvidenceSynthesizer:
             crf_confidence=refined_boundary.confidence,
             tmvec_score=None,
             use_crf_score=self.config.use_crf_in_final_score,
-            priority_markers=self.config.priority_marker_list,
-            marker_floor_priority_only=self.config.marker_floor_priority_only,
-            marker_floor_priority_plus_family=self.config.marker_floor_priority_plus_family,
-            marker_floor_priority_multi_family=self.config.marker_floor_priority_multi_family,
-            marker_family_bonus_per_family=self.config.marker_family_bonus_per_family,
-            marker_multi_family_bonus=self.config.marker_multi_family_bonus,
             ablation_id=self.config.ablation_id,
             high_tier_threshold=self.config.high_tier_threshold,
             low_tier_threshold=self.config.low_tier_threshold,
@@ -2950,7 +2826,6 @@ class EvidenceSynthesizer:
             selected_score,
             high_threshold=self.config.high_tier_threshold,
             low_threshold=self.config.low_tier_threshold,
-            priority_markers=self.config.priority_marker_list,
         )
         result.final_confidence = selected_outcome.confidence
         result.confidence_tier = selected_outcome.tier
@@ -2962,7 +2837,6 @@ class EvidenceSynthesizer:
                 effect.reference_confidence,
                 high_threshold=self.config.high_tier_threshold,
                 low_threshold=self.config.low_tier_threshold,
-                priority_markers=self.config.priority_marker_list,
             )
             result.composition_ablation_effect = evaluate_composition_ablation_effect(
                 ablation_id=self.config.ablation_id,
@@ -2973,21 +2847,6 @@ class EvidenceSynthesizer:
                 low_threshold=self.config.low_tier_threshold,
                 reference_tier=reference_outcome.tier,
                 selected_tier=selected_outcome.tier,
-            )
-
-        if selected_outcome.priority_promoted:
-            logger.info(
-                "%s: promoted to MEDIUM confidence due to priority-marker evidence",
-                result.eve_id,
-            )
-        if selected_outcome.non_hhg_demoted:
-            logger.info(
-                "%s: demoted to LOW — non-HHG seed (sources: %s) with insufficient quality "
-                "(hallmark=%d, has_capsid_evidence=%s)",
-                result.eve_id,
-                result.seed_sources,
-                result.hallmark_count,
-                result.has_capsid_evidence,
             )
 
         # Set status for backward compatibility with existing code
@@ -3014,6 +2873,9 @@ class EvidenceSynthesizer:
         jelly_roll_summary: dict | None = None,
         scaffold_lengths: dict[str, int] | None = None,
         precomputed_tmvec: dict[str, dict] | None = None,
+        hallmark_evidence: list[HallmarkEvidence] | None = None,
+        hallmark_witnesses: list[HallmarkWitness] | None = None,
+        hallmark_support: list[HallmarkSupport] | None = None,
     ) -> VerificationResult:
         """Verify a single EVE candidate through gated escalation.
 
@@ -3035,6 +2897,17 @@ class EvidenceSynthesizer:
         """
         # Initialize result with boundary and seed metadata
         result = self._initialize_result(refined_boundary)
+        result.hallmark_evidence = [
+            h
+            for h in hallmark_evidence or []
+            if h.scaffold == result.scaffold and result.start <= h.start and h.end <= result.end
+        ]
+        result.hallmark_witnesses = [
+            w
+            for w in hallmark_witnesses or []
+            if w.scaffold == result.scaffold and result.start <= w.start and w.end <= result.end
+        ]
+        result.hallmark_support = list(hallmark_support or [])
 
         # Process evidence: contig-edge, hallmarks, taxonomy, interproscan
         self._detect_contig_edge(result, refined_boundary, scaffold_lengths)

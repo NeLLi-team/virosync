@@ -22,6 +22,7 @@ from virosync.output_contract import (
     LINEAGE_EVE_CLASSES,
     normalize_effective_eve_class,
 )
+from virosync.pipeline.hallmark_evidence import has_spatial_rescue
 from virosync.utils.atomic_write import atomic_write
 from virosync.utils.path_safety import (
     require_strict_child,
@@ -122,6 +123,7 @@ def unsupported_eve_ids(accepted_results: list) -> set[str]:
         result.eve_id
         for result in accepted_results
         if normalize_effective_eve_class(result.taxonomy_class) == "UNKNOWN"
+        and not has_spatial_rescue(result)
         and result.cluster_id not in marker_bearing_clusters
     }
     if unsupported:

@@ -91,13 +91,6 @@ phase3:
   high_tier_threshold: 0.7
   low_tier_threshold: 0.2
   use_crf_in_final_score: false
-  priority_marker_list:
-  - mcp
-  marker_floor_priority_only: 0.55
-  marker_floor_priority_plus_family: 0.7
-  marker_floor_priority_multi_family: 0.8
-  marker_family_bonus_per_family: 0.06
-  marker_multi_family_bonus: 0.08
   enable_phylogenetic: false
   skip_structural: true
   use_boltz: false

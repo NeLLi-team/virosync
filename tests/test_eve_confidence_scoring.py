@@ -8,16 +8,22 @@ must outscore a bare candidate, and a bare candidate must not reach HIGH).
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from virosync.ablation import AblationID
+from virosync.config import PipelineConfig
+from virosync.orchestration._flows.single_genome.phase3 import _summarize_boundary_taxonomy
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+from virosync.pipeline.phase2.boundary_diamond import DiamondHit, classify_all_porfs, pORF
+from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
     VerificationResult,
-    VerificationStatus,
     assign_confidence_tier,
     calculate_eve_confidence,
 )
@@ -25,6 +31,45 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
 
 def _bare() -> VerificationResult:
     return VerificationResult(eve_id="eve", scaffold="scaf", start=0, end=1000)
+
+
+@pytest.mark.parametrize("pident,qualified_count,taxonomy_score", [(24.999, 0, 0.0), (25.0, 3, 1.0)])
+@pytest.mark.parametrize("seed_marker_count,seed_score", [(0, 0.0), (3, 1.0)])
+def test_native_boundary_taxonomy_scores_only_identity_qualified_viral_genes(
+    pident: float, qualified_count: int, taxonomy_score: float, seed_marker_count: int, seed_score: float
+) -> None:
+    genes = [pORF("g1", "scaf", 100, 200), pORF("g2", "scaf", 300, 400), pORF("g3", "scaf", 500, 600)]
+    hits = {gene.id: [DiamondHit(gene.id, "NCLDV__reference|protein", 1e-5, 80, pident, 90)] for gene in genes}
+    taxonomy = classify_all_porfs([gene.id for gene in genes], hits, {"scaf": genes}, host_prefix="EUK__")
+    boundary = RefinedBoundary(
+        "scaf",
+        0,
+        1000,
+        confidence=0,
+        region_classification_ncldv_markers=seed_marker_count,
+        confirmed_seeds=(ConfirmedSeed("seed", "scaf", 0, 1000),),
+    )
+    records, summary = _summarize_boundary_taxonomy(
+        boundary=boundary,
+        filtered_taxonomy=list(taxonomy.values()),
+        boundary_taxonomy_map=taxonomy,
+        proteome_index={"scaf": genes},
+        boundary_diamond_query=None,
+        config=PipelineConfig(),
+        logger=logging.getLogger(__name__),
+    )
+    result = EvidenceSynthesizer(EvidenceSynthesizerConfig(use_tmvec_database=False)).verify_eve(
+        boundary,
+        [],
+        gene_taxonomy_records=records,
+        gene_taxonomy_summary=summary,
+    )
+    assert summary["ncldv_mirus"] == result.genes_with_ncldv_mirus_top10 == 3
+    assert summary["viral_top10"] == result.gene_taxonomy_viral_top10 == qualified_count
+    assert result.score_components["scores"]["seed_cluster"] == seed_score
+    assert result.score_components["scores"]["gene_taxonomy"] == taxonomy_score
+    if qualified_count == 0:
+        assert result.final_confidence == pytest.approx(0.085 if seed_marker_count else 0.0)
 
 
 def test_assign_confidence_tier_boundaries() -> None:
@@ -57,39 +102,31 @@ def test_strong_viral_evidence_outscores_bare() -> None:
     weak_score = calculate_eve_confidence(_bare(), crf_confidence=0.0, tmvec_score=None)
 
     strong = _bare()
-    strong.hallmark_count = 8
-    strong.hallmark_diversity = 4
-    strong.has_virus_specific_marker = True
-    strong.has_mcp = True
-    strong.has_capsid_evidence = True
-    strong.marker_complement_score = 1.0
-    strong.marker_category_hits = ["ncldv", "mirus"]
-    strong.marker_family_hits = ["NCLDV", "MIRUS"]
-    strong.vp_completeness_ratio = 1.0
+    strong.hallmark_evidence = [
+        HallmarkEvidence(
+            query_porf=f"{gene}|aa1-20",
+            gene=gene,
+            scaffold="scaf",
+            start=start,
+            end=start + 100,
+            model=model,
+            evalue=1e-8,
+            score=70.0,
+            domain_score=60.0,
+            query_start=1,
+            query_end=20,
+            validation_status="validated_novel",
+            viral_top10_max_pident=0.0,
+            source="retained_hmm",
+        )
+        for gene, model, start in [("capsid", "GVOGm0003", 100), ("atpase", "GVOGm0760", 300)]
+    ]
     strong.gene_count = 20
     strong_score = calculate_eve_confidence(strong, crf_confidence=0.9, tmvec_score=0.85, use_crf_score=True)
 
     assert 0.0 <= strong_score <= 1.0
+    assert strong_score >= 0.7
     assert strong_score > weak_score
-
-
-def test_priority_marker_floor_applies() -> None:
-    """A priority marker (e.g. MCP) should lift confidence to at least the floor."""
-    r = _bare()
-    r.has_mcp = True
-    r.has_capsid_evidence = True
-    r.has_virus_specific_marker = True
-    r.hallmark_count = 2
-    r.marker_category_hits = ["mcp"]
-    r.marker_family_hits = ["NCLDV"]
-    score = calculate_eve_confidence(
-        r,
-        crf_confidence=0.0,
-        priority_markers=["mcp"],
-        marker_floor_priority_only=0.55,
-    )
-    assert score >= 0.0  # floor logic must not error and stays in range
-    assert score <= 1.0
 
 
 def test_taxonomy_object_and_dictionary_records_score_identically() -> None:
@@ -150,34 +187,3 @@ def test_host_model_diagnostics_do_not_change_score_or_tier(ablation_id: Ablatio
     assert candidate.to_dict()["host_signature_fraction"] == 0.9
     assert candidate.to_dict()["host_signature_weighted_mean"] == 0.95
     assert candidate.host_signature_evalue_weighted == 0.99
-
-
-@pytest.mark.parametrize("host_gene_count", [0, 9])
-@pytest.mark.parametrize(
-    "hallmarks,capsid,expected_tier", [(0, False, "LOW"), (3, False, "MEDIUM"), (1, True, "MEDIUM")]
-)
-def test_non_hhg_acceptance_requires_independent_marker_evidence(
-    host_gene_count: int, hallmarks: int, capsid: bool, expected_tier: str
-) -> None:
-    """Gene count cannot rescue a non-HHG seed without marker support."""
-    candidate = VerificationResult(
-        eve_id="seed",
-        scaffold="scaf",
-        start=100,
-        end=10100,
-        gene_count=10,
-        gene_taxonomy_viral_interior=3,
-        gene_taxonomy_viral_top10=3,
-        seed_sources=["novelty"],
-        hallmark_count=hallmarks,
-        has_capsid_evidence=capsid,
-        host_signature_gene_count=host_gene_count,
-        host_signature_fraction=host_gene_count / 10,
-        kfd=0.3,
-        gc_deviation=0.15,
-    )
-
-    EvidenceSynthesizer()._calculate_final_decision(candidate, SimpleNamespace(confidence=0.0), has_hhg_evidence=False)
-
-    assert candidate.confidence_tier == expected_tier
-    assert (candidate.status is VerificationStatus.LOW_CONFIDENCE_TIEBREAKER) == (expected_tier == "LOW")

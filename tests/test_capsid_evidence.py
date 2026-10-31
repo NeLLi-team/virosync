@@ -1,19 +1,21 @@
 """Capsid-type structure-derived profiles count as capsid evidence, not as MCPs.
 
 ``has_capsid_evidence`` is true when ``has_mcp`` is true or any hallmark gene is
-one of the 27 capsid-type ``EVE_CAPSID_NOVEL`` profiles. Scoring and acceptance
-read it where they used to read ``has_mcp``; everything that names a major
-capsid protein keeps ``has_mcp``.
+one of the 27 capsid-type ``EVE_CAPSID_NOVEL`` profiles. Raw annotation and
+strict validation remain separate from catalogue-qualified
+scoring, which requires retained HMM measurements.
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from virosync.orchestration._flows.single_genome.phase1 import _candidate_regions_to_seeds
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence
 from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit as MarkerHit
 from virosync.pipeline.phase1.marker_validation import filter_validated_markers
@@ -26,11 +28,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizer,
     EvidenceSynthesizerConfig,
     VerificationResult,
-    _evaluate_post_score_policy,
-    _has_priority_marker,
-    _size_penalty,
     calculate_eve_confidence,
-    compute_marker_score,
     infer_likely_family,
 )
 from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
@@ -38,17 +36,10 @@ from virosync.pipeline.phase3.phase1_surface import build_phase1_seed_surface
 
 CAPSID_MODEL = "EVE_CAPSID_NOVEL_0008"
 NON_CAPSID_MODEL = "EVE_CAPSID_NOVEL_0001"
-NO_PRIORITY = ["no-such-marker"]
 
 
 def _result(**fields) -> VerificationResult:
     return VerificationResult(eve_id="eve", scaffold="scaf", start=0, end=3000, **fields)
-
-
-def _score(**fields) -> tuple[float, dict]:
-    result = _result(**fields)
-    score = calculate_eve_confidence(result, crf_confidence=0.0, priority_markers=NO_PRIORITY)
-    return score, result.score_components
 
 
 # --- Flag basics ---
@@ -64,6 +55,46 @@ def test_capsid_evidence_flag_defaults_to_false_and_is_reported() -> None:
 
 def _hit(gene: str, porf_id: str = "p1", score: float = 50.0, status: str = "validated") -> dict:
     return {"hallmark_gene": gene, "porf_id": porf_id, "hmm_score": score, "validation_status": status}
+
+
+def test_public_capsid_gene_ids_preserve_validated_annotations_without_scoring_them() -> None:
+    hits = [
+        _hit(CAPSID_MODEL, "capsid|aa1-20"),
+        _hit(NON_CAPSID_MODEL, "capsid|aa1-20", score=90),
+        _hit(CAPSID_MODEL, "novel|aa1-20", status="validated_novel"),
+        _hit(CAPSID_MODEL, "unvalidated", status="unvalidated"),
+        _hit(NON_CAPSID_MODEL, "protease"),
+        _hit("GVOGm0003", "mcp"),
+    ]
+    original_hits = deepcopy(hits)
+    result = _result()
+    EvidenceSynthesizer()._process_hallmark_hits(result, hits)
+    exported = result.to_dict()
+    assert exported["capsid_gene_ids"] == ["capsid", "mcp", "novel"]
+    assert exported["mcp_gene_ids"] == ["mcp"]
+    assert exported["hallmark_evidence"] == []
+    assert hits == original_hits
+    score = calculate_eve_confidence(result, 0)
+    result.capsid_gene_ids = []
+    assert calculate_eve_confidence(result, 0) == score
+
+
+def test_public_mcp_gene_ids_preserve_outscored_validated_mcp_annotations() -> None:
+    hits = [
+        _hit("EVE_CAPSID_NOVEL_0029", "mcp|aa1-20", status="validated_novel"),
+        _hit(NON_CAPSID_MODEL, "mcp|aa1-20", score=90),
+        _hit("EVE_CAPSID_NOVEL_0029", "unvalidated", status="unvalidated"),
+    ]
+    result = _result()
+    EvidenceSynthesizer()._process_hallmark_hits(result, hits)
+
+    assert result.to_dict()["mcp_gene_ids"] == ["mcp"]
+    assert result.to_dict()["capsid_gene_ids"] == ["mcp"]
+    assert result.hallmark_genes == [NON_CAPSID_MODEL, "EVE_CAPSID_NOVEL_0029"]
+    assert result.hallmark_count == 2
+    score = calculate_eve_confidence(result, 0)
+    result.mcp_gene_ids = []
+    assert calculate_eve_confidence(result, 0) == score
 
 
 @pytest.mark.parametrize(
@@ -218,6 +249,24 @@ def test_a1_seed_surface_marks_capsid_evidence_without_an_mcp() -> None:
     assert (capsid.has_capsid_evidence, capsid.has_mcp, capsid.mcp_gene_ids) == (True, False, [])
     assert (mcp.has_capsid_evidence, mcp.has_mcp, mcp.mcp_gene_ids) == (True, True, ["gene-a"])
     assert (other.has_capsid_evidence, other.has_mcp) == (False, False)
+    assert capsid.to_dict()["capsid_gene_ids"] == ["gene-a"]
+    assert mcp.to_dict()["capsid_gene_ids"] == ["gene-a"]
+    assert other.to_dict()["capsid_gene_ids"] == []
+
+
+@pytest.mark.parametrize("status", ["validated", "validated_novel"])
+def test_a1_public_mcp_annotation_survives_a_stronger_non_mcp_profile(status: str) -> None:
+    seed = _seed(
+        _anchor(NON_CAPSID_MODEL, score=90.0),
+        _anchor("EVE_CAPSID_NOVEL_0029", score=40.0, status=status),
+    )
+    result = build_phase1_seed_surface([seed]).results[0]
+
+    assert result.to_dict()["mcp_gene_ids"] == ["gene-a"]
+    assert result.has_mcp is False
+    assert result.hallmark_genes == [NON_CAPSID_MODEL]
+    assert result.hallmark_count == 1
+    assert result.final_confidence == 0.0
 
 
 @pytest.mark.parametrize("status", ["validated", "validated_novel"])
@@ -439,93 +488,45 @@ def test_validated_novel_capsid_hit_alone_seeds_a_region_that_is_not_an_mcp_regi
 # --- Scoring ---
 
 
-def test_capsid_evidence_carries_the_mcp_weight_of_the_marker_score() -> None:
-    plain = _result(hallmark_count=1, hallmark_diversity=1)
-    capsid = _result(hallmark_count=1, hallmark_diversity=1, has_capsid_evidence=True)
-    plain_categories = _result(hallmark_count=1, hallmark_diversity=1, marker_category_hits=["capsid"])
-    capsid_categories = _result(
-        hallmark_count=1,
-        hallmark_diversity=1,
-        marker_category_hits=["capsid"],
-        has_capsid_evidence=True,
+@pytest.mark.parametrize("evalue,expected_penalty", [(1e-8, 0.0), (0.001, 0.15), (0.1, 0.15)])
+def test_small_region_exemption_requires_a_strong_catalogue_capsid(evalue: float, expected_penalty: float) -> None:
+    result = _result(
+        gene_count=1,
+        hallmark_evidence=[
+            HallmarkEvidence(
+                query_porf="p1|aa1-20",
+                gene="p1",
+                scaffold="scaf",
+                start=100,
+                end=200,
+                model="GVOGm0003",
+                evalue=evalue,
+                score=70.0,
+                domain_score=60.0,
+                query_start=1,
+                query_end=20,
+                validation_status="validated_novel",
+                viral_top10_max_pident=0.0,
+                source="retained_hmm",
+            )
+        ],
     )
 
-    assert compute_marker_score(capsid) - compute_marker_score(plain) == pytest.approx(0.50)
-    assert compute_marker_score(capsid_categories) - compute_marker_score(plain_categories) == pytest.approx(0.45)
+    calculate_eve_confidence(result, crf_confidence=0.0)
+
+    assert result.score_components["size_penalty"] == expected_penalty
 
 
-def test_capsid_evidence_adds_the_common_bonus_of_five_hundredths() -> None:
-    _, plain = _score(hallmark_count=2, hallmark_diversity=2)
-    _, capsid = _score(hallmark_count=2, hallmark_diversity=2, has_capsid_evidence=True)
+@pytest.mark.parametrize("gene_count,expected_penalty", [(1, 0.15), (2, 0.08), (3, 0.04), (4, 0.0)])
+def test_raw_capsid_flag_cannot_remove_the_size_penalty(gene_count: int, expected_penalty: float) -> None:
+    result = _result(gene_count=gene_count, has_capsid_evidence=True, has_mcp=True)
 
-    assert capsid["bonus_total"] - plain["bonus_total"] == pytest.approx(0.05)
-    assert capsid["priority_floor"] == 0.0
-    assert capsid["has_capsid_evidence"] is True
-    assert capsid["has_mcp"] is False
+    score = calculate_eve_confidence(result, crf_confidence=0.0)
 
-
-def test_capsid_evidence_lifts_the_no_viral_evidence_cap() -> None:
-    plain_score, _ = _score(hallmark_count=2, hallmark_diversity=2)
-    capsid_score, _ = _score(hallmark_count=2, hallmark_diversity=2, has_capsid_evidence=True)
-
-    assert plain_score <= 0.05
-    assert capsid_score > 0.05
-
-
-def test_capsid_evidence_lifts_the_low_viral_fraction_cap() -> None:
-    fields = {
-        "hallmark_count": 6,
-        "hallmark_diversity": 5,
-        "gene_count": 100,
-        "gene_taxonomy_viral_interior": 1,
-        "gene_taxonomy_viral_top10": 1,
-        "vp_completeness_ratio": 1.0,
-        "marker_complement_score": 1.0,
-        "marker_category_hits": ["capsid", "penton"],
-    }
-
-    plain_score, _ = _score(**fields)
-    capsid_score, _ = _score(**fields, has_capsid_evidence=True)
-
-    assert plain_score <= 0.19
-    assert capsid_score > 0.19
-
-
-def test_capsid_evidence_exempts_small_regions_from_the_size_penalty() -> None:
-    assert _size_penalty(_result(gene_count=1)) == 0.15
-    assert _size_penalty(_result(gene_count=1, has_capsid_evidence=True)) == 0.0
-
-
-def test_capsid_evidence_is_a_priority_marker() -> None:
-    assert _has_priority_marker(_result(), ["mcp"]) is False
-    assert _has_priority_marker(_result(has_capsid_evidence=True), ["mcp"]) is True
-    assert _has_priority_marker(_result(has_capsid_evidence=True), NO_PRIORITY) is False
-
-
-def test_capsid_evidence_lifts_a_region_to_the_priority_floor() -> None:
-    result = _result(hallmark_count=1, hallmark_diversity=1, has_capsid_evidence=True)
-
-    score = calculate_eve_confidence(result, crf_confidence=0.0, priority_markers=["mcp"])
-
-    assert score >= 0.55
-    assert result.score_components["priority_marker_active"] is True
-
-
-def test_capsid_evidence_passes_the_non_hhg_quality_check_with_one_hallmark() -> None:
-    fields = {"seed_sources": ["novelty"], "hallmark_count": 1, "gene_count": 2}
-
-    def tier(**extra) -> str:
-        outcome = _evaluate_post_score_policy(
-            _result(**fields, **extra),
-            0.5,
-            high_threshold=0.7,
-            low_threshold=0.2,
-            priority_markers=NO_PRIORITY,
-        )
-        return outcome.tier
-
-    assert tier() == "LOW"
-    assert tier(has_capsid_evidence=True) == "MEDIUM"
+    assert result.score_components["size_penalty"] == expected_penalty
+    assert result.score_components["scores"]["marker"] == 0.0
+    assert result.score_components["hallmark_floor"] == 0.0
+    assert score < 0.2
 
 
 # --- Acceptance gate ---

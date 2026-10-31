@@ -72,59 +72,28 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
-_REPORT_NCLDV_MCP_MODELS = frozenset(
-    {
-        "og1352",
-        "og484",
-        "vs000086",
-        "vs000309",
-        "gamadvirusmcp",
-        "gvogm0003",
-    }
-)
-_REPORT_MCP_HMM_PREFIXES = (
-    "gamadvirusmcp",
-    "mcp_mirus",
-    "mcp_poli",
-    "mirus_mcp",
-    "plv_mcp",
-    "vp_mcp",
-)
-_REPORT_MCP_HMM_EXACT = _REPORT_NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
-# The 27 capsid-type structure-derived profiles: all 33 except the protease
-# (0001, 0006, 0015, 0020, 0026) and tail-tube (0018) profiles.
-_REPORT_CAPSID_EVIDENCE_MODELS = frozenset(
-    f"eve_capsid_novel_{number:04d}" for number in range(1, 34) if number not in {1, 6, 15, 18, 20, 26}
-)
-_REPORT_MCP_WORD_CHARS_ONLY = re.compile(r"^[a-z0-9_]*$")
 _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
 # Viral-like proteins of eukaryotic genome assemblies: viral, never host, and of no viral lineage.
 _REPORT_EUK_PEVE = "EUK-pEVE"
 _REPORT_PREDICTION_COLOR = "#E3B341"
 
 
-def _report_is_mcp_gene(name: object) -> bool:
-    """Mirror the pipeline MCP detector while keeping this notebook portable."""
-    if not name:
-        return False
-    lower = str(name).lower().strip()
-    if not lower:
-        return False
-    if lower in _REPORT_MCP_HMM_EXACT:
-        return True
-    for prefix in _REPORT_MCP_HMM_PREFIXES:
-        if lower.startswith(prefix):
-            suffix = lower[len(prefix) :]
-            if _REPORT_MCP_WORD_CHARS_ONLY.match(suffix):
-                return True
-    return False
-
-
-def _report_is_capsid_evidence_gene(name: object) -> bool:
-    """Mirror the pipeline capsid-evidence detector while keeping this notebook portable."""
-    if not name:
-        return False
-    return _report_is_mcp_gene(name) or str(name).lower().strip() in _REPORT_CAPSID_EVIDENCE_MODELS
+def _report_profile_hallmarks(profile: Mapping[str, object]) -> list[dict]:
+    """Read qualified core profiles without reclassifying their taxonomy."""
+    assessment = profile.get("hallmark_assessment") or {}
+    qualified = set(assessment.get("summary", {}).get("qualifying_evidence_ids", []))
+    for witness in assessment.get("witnesses", []):
+        qualified.update(witness["evidence_ids"])
+    retained = {}
+    for hit in profile.get("hallmark_evidence", []):
+        if hit["evidence_id"] not in qualified or hit["scaffold"] != profile["scaffold"]:
+            continue
+        if hit["start"] < profile["start"] or hit["end"] > profile["end"]:
+            continue
+        key = hit["gene"], hit["model"]
+        if key not in retained or hit["evalue"] < retained[key]["evalue"]:
+            retained[key] = hit
+    return [retained[key] for key in sorted(retained)]
 
 
 def _csv_values(value: object) -> list[str]:
@@ -554,33 +523,32 @@ if jr_path.exists():
                 classifier_supported_mcp_ids.add(porf_id)
 print(f"MCP classifier records: {len(mcp_classification_map)}")
 
-# 3b. MCP (major capsid protein) marker genes -> porf_id set.
-# Combine supported classifier records with validated HMM marker hits (for
-# example plv_MCP_* and vp_MCP_*). Candidate classifier rows do not set support.
-# Capsid evidence is wider: every MCP, and every gene with a validated hit of a
-# capsid-type structure-derived profile (penton, minor capsid, coat or capsid).
+# 3b. Qualified native HMM evidence, including contained spatial rescues.
+# Roles come from the pipeline's catalogue export; taxonomy is never inferred here.
+profile_hallmarks = {eve_id: _report_profile_hallmarks(profile) for eve_id, profile in profiles.items()}
+hallmark_gene_keys = set()
 mcp_porf_ids = set(classifier_supported_mcp_ids)
 capsid_porf_ids = set()
-_mh_path = BASE / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
-if _mh_path.exists():
-    with _mh_path.open(encoding="utf-8") as f:
-        _hdr = f.readline().rstrip("\n").split("\t")
-        try:
-            _qi = _hdr.index("query_porf")
-            _ti = _hdr.index("hmm_target")
-            _vi = _hdr.index("validation_status")
-        except ValueError:
-            _qi, _ti, _vi = 0, 5, 7
-        for line in f:
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) <= max(_qi, _ti, _vi) or cols[_vi] not in {"validated", "validated_novel"}:
-                continue
-            _m = re.match(r"^(.+)\|aa\d+-\d+$", cols[_qi])
-            _porf_id = _m.group(1) if _m else cols[_qi]
-            if _report_is_mcp_gene(cols[_ti]):
-                mcp_porf_ids.add(_porf_id)
-            if _report_is_capsid_evidence_gene(cols[_ti]):
-                capsid_porf_ids.add(_porf_id)
+# These native annotation IDs also cover independent structure-derived capsid
+# profiles outside the graduated-scoring catalogue. They do not add score weight.
+for profile in profiles.values():
+    mcp_porf_ids.update(profile.get("mcp_gene_ids", []))
+    capsid_porf_ids.update(profile.get("capsid_gene_ids", []))
+for eve_id, hits in profile_hallmarks.items():
+    for hit in hits:
+        key = eve_id, hit["gene"]
+        hallmark_gene_keys.add(key)
+        roles = [role for role in hit["model_roles"] if role["role"] == "core_marker"]
+        if any(role["capsid"] for role in roles):
+            capsid_porf_ids.add(hit["gene"])
+        if any(role["marker"] == "MCP" for role in roles):
+            mcp_porf_ids.add(hit["gene"])
+        function = gene_function_by_gene.setdefault(key, {"label": "", "module": "", "evidence": ""})
+        if not function["label"]:
+            function["label"] = "/".join(sorted({role["marker"] for role in roles}))
+            function["module"] = "/".join(sorted({role["module"] for role in roles}))
+        hmm_evidence = f"{hit['model']} (E={hit['evalue']:.3g}; {hit['validation_status']})"
+        function["evidence"] = "; ".join(filter(None, [function["evidence"], hmm_evidence]))
 capsid_porf_ids |= mcp_porf_ids
 print(f"MCP marker genes: {len(mcp_porf_ids)}")
 print(f"Capsid-evidence genes: {len(capsid_porf_ids)}")
@@ -1305,6 +1273,7 @@ else:
             "function_label": function.get("label", ""),
             "function_module": function.get("module", ""),
             "function_evidence": function.get("evidence", ""),
+            "is_hallmark": (eve_id, porf_id) in hallmark_gene_keys,
         }
 
     eve_genes_extended = {}
@@ -1406,7 +1375,9 @@ else:
     # Capsid evidence, MCPs included: a black outline on the gene shape.
     CAPSID_EDGE = "#000000"
     CAPSID_EDGE_WIDTH = 1.0
-    CAPSID_LEGEND_LABEL = "Black outline: capsid evidence"
+    CAPSID_LEGEND_LABEL = "Thick black outline: capsid evidence"
+    HALLMARK_EDGE_WIDTH = 0.6
+    HALLMARK_LEGEND_LABEL = "Thin black outline: qualifying core HMM"
     EUK_PEVE_LEGEND_LABEL = "EUK-pEVE (viral-like, eukaryotic genome)"
 
     TIER_COLORS = {"HIGH": "#333333", "MEDIUM": "#777777", "LOW": "#BBBBBB"}
@@ -1506,6 +1477,8 @@ else:
                 ]
             is_unsearched = gene["category"] == "UNSEARCHED"
             edgecolor, linewidth = (UNSEARCHED_EDGE, 0.5) if is_unsearched else ("none", 0.0)
+            if gene.get("is_hallmark"):
+                edgecolor, linewidth = CAPSID_EDGE, HALLMARK_EDGE_WIDTH
             if gene.get("is_capsid"):
                 edgecolor, linewidth = CAPSID_EDGE, CAPSID_EDGE_WIDTH
             gene_arrow = mpatches.Polygon(
@@ -1652,6 +1625,12 @@ else:
             label="Taxonomy not searched",
         ),
     ]
+    if hallmark_gene_keys:
+        legend_elements.append(
+            mpatches.Patch(
+                facecolor="white", edgecolor=CAPSID_EDGE, linewidth=HALLMARK_EDGE_WIDTH, label=HALLMARK_LEGEND_LABEL
+            ),
+        )
     if capsid_porf_ids:
         legend_elements.append(
             mpatches.Patch(
@@ -2280,6 +2259,7 @@ else:
         detail_fold_types = set()
         detail_has_supported_mcp = False
         detail_has_capsid = False
+        detail_has_hallmark = False
 
         for ax, (eve_id, eve_info) in zip(axes, detail_eves):
             eve_start = eve_info["eve_start"]
@@ -2327,8 +2307,12 @@ else:
                 unsearched = gene["category"] == "UNSEARCHED"
                 is_capsid = bool(gene.get("is_capsid"))
                 edge = UNSEARCHED_EDGE if unsearched else ("#555555" if gene["region"] != "eve" else "white")
+                outline_width = 0.45
+                if gene.get("is_hallmark"):
+                    edge, outline_width = CAPSID_EDGE, HALLMARK_EDGE_WIDTH
+                    detail_has_hallmark = True
                 if is_capsid:
-                    edge = CAPSID_EDGE
+                    edge, outline_width = CAPSID_EDGE, CAPSID_EDGE_WIDTH
                     detail_has_capsid = True
                 detail_categories.add(gene["category"])
                 ax.add_patch(
@@ -2344,7 +2328,7 @@ else:
                         facecolor=COLORS.get(gene["category"], COLORS["UNKNOWN"]),
                         edgecolor=edge,
                         linestyle=UNSEARCHED_LINESTYLE if unsearched else "solid",
-                        linewidth=CAPSID_EDGE_WIDTH if is_capsid else 0.45,
+                        linewidth=outline_width,
                         alpha=0.82 if gene["region"] != "eve" else 0.96,
                         zorder=4,
                     )
@@ -2449,6 +2433,12 @@ else:
                 label="Gray outline: flanking gene",
             )
         )
+        if detail_has_hallmark:
+            detail_handles.append(
+                mpatches.Patch(
+                    facecolor="white", edgecolor=CAPSID_EDGE, linewidth=HALLMARK_EDGE_WIDTH, label=HALLMARK_LEGEND_LABEL
+                )
+            )
         if detail_has_capsid:
             detail_handles.append(
                 mpatches.Patch(
@@ -2571,11 +2561,11 @@ else:
     from scipy.cluster.hierarchy import leaves_list, linkage
     from scipy.spatial.distance import pdist
 
-    # 1. Build copy-number matrix from hallmark_genes
+    # 1. Count distinct proteins per qualified core HMM model.
     all_marker_names = set()
     marker_copy = {}
     for eve_id in profiles:
-        counts = Counter(profiles[eve_id].get("hallmark_genes", []))
+        counts = Counter(hit["model"] for hit in profile_hallmarks[eve_id])
         marker_copy[eve_id] = counts
         all_marker_names.update(counts.keys())
 
@@ -2759,7 +2749,7 @@ else:
     ipr_keyword_counts = Counter()
 
     for eve_id, profile in profiles.items():
-        for marker in profile.get("hallmark_genes", []):
+        for marker in {hit["model"] for hit in profile_hallmarks[eve_id]}:
             marker_counts[marker] += 1
         for fam in profile.get("marker_family_hits", []):
             family_counts[fam] += 1

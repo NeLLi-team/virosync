@@ -28,8 +28,10 @@ rejected.
 
 Capsid evidence is a wider decision. A hit to one of the capsid-type
 structure-derived profiles (:data:`CAPSID_EVIDENCE_MODELS`) is capsid evidence
-without being an MCP: scoring and acceptance treat it like an MCP, while
-everything that names a major capsid protein still asks :func:`is_mcp_gene`.
+without being an MCP. These annotations support the existing class-specific
+acceptance rules. Graduated scoring and spatial floors require exact roles in
+``hallmark_panels.json``; this broader annotation alone supplies no floor.
+Everything that names a major capsid protein still asks :func:`is_mcp_gene`.
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "7b93efcc769d63c5c6af0545836df4ce5b0d71887e28ffe3049505e48bbd2714",
+  "effective_config_sha256": "d39ba659022d8b72b1f8a09752a8b26e15f405812fe946da693812599f5a8bad",
   "execution": {
     "masking": {
       "backend": "off",
@@ -165,14 +165,6 @@
       "vltf"
     ],
     "low_tier_threshold": 0.2,
-    "marker_family_bonus_per_family": 0.06,
-    "marker_floor_priority_multi_family": 0.8,
-    "marker_floor_priority_only": 0.55,
-    "marker_floor_priority_plus_family": 0.7,
-    "marker_multi_family_bonus": 0.08,
-    "priority_marker_list": [
-      "mcp"
-    ],
     "run_gvclass": false,
     "skip_structural": true,
     "tmvec_database_dir": null,

@@ -1,8 +1,8 @@
 """Gene-function labels for the genes inside accepted EVEs.
 
 A label names a gene with the vocabulary of Bellas and Sommaruga (2026, bioRxiv,
-doi:10.64898/2026.06.19.733378, Fig. 4). Labels never change detection, boundaries,
-scores, tiers or any other output column. The evidence for one gene comes in this
+doi:10.64898/2026.06.19.733378, Fig. 4). Catalogue-mapped interior labels can supply compatible context to the hallmark
+score; they never create core groups, seeds or boundaries. The evidence for one gene comes in this
 order: its best curated ViroSync model (or a renamed OG-backed model whose top Pfam
 domain holds in most sampled members), then its strongest Pfam hit, then its
 strongest VOG hit. The rules are ported from the real-synteny figure of the benchmark
