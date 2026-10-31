@@ -645,7 +645,8 @@ measure independent genomic lesions.
 
 Non-marker components and cellular penalties remain active. Small-region
 penalties use the catalogue's full-weight capsid qualification. A candidate
-without qualifying core evidence is capped below MEDIUM; one with fewer than
+without qualifying core evidence is capped below MEDIUM (except for the
+experimental R2 supplementary route described below); one with fewer than
 two independent core groups is capped below HIGH before floors. A qualified
 capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
 group supplies a HIGH floor without a distance restriction. The spatial rules
@@ -938,6 +939,38 @@ domain architecture. Short junction microhomology alone should not determine
 an integration mechanism.
 
 ### Experimental retained query coverage (31 October 2026)
+
+The R2 experiment adds a supplementary module from the retained full-ORF
+genome-database taxonomy, after the final coordinates are fixed. It requires
+the existing LOW and MEDIUM class resolvers to agree on NCLDV or MIRUS, then
+at least three nonoverlapping, fully contained physical genes supporting that
+exact reference prefix. The unchanged evidence-only family inference runs
+before scoring so both resolvers see the final family. Each gene needs a
+retained hit with identity >=25%,
+E <=1e-5 and query coverage per HSP >=50%, with bitscore strictly above every
+retained cellular hit. Cellular competitors are not filtered by identity,
+E-value or coverage. A missing cellular hit is recorded separately from a
+measured advantage. These are fixed experimental criteria, not calibrated
+cutoffs or evidence of integration.
+
+Exact physical duplicates count once, opposite-strand overlaps cannot both
+count, and abutting half-open intervals can. Sorting by gene end gives the
+maximum nonoverlapping set separately for each prefix. NCLDV and MIRUS counts
+are never added. A second selection using only measured comparisons records
+whether eligibility depends on genes without a retained cellular comparator.
+Missing or misaligned coverage for nonempty retained-hit arrays is an error;
+an empty no-hit record remains valid.
+
+One immutable, interval-bound supplementary record supplies both scoring and
+the output gate, including selected genes, subject IDs, prefix counts and the
+eligibility reason. Eligible modules skip only the zero-core ceiling below
+MEDIUM. They do not change weighted components, bonuses, penalties or floors;
+the separate fewer-than-two-core ceiling below HIGH still applies before the
+existing floors. In the NCLDV/MIRUS LOW gate, an eligible module is an
+alternative to two legacy hallmarks, still requiring length >5,000 bp. A
+module with a score below 0.2 therefore remains LOW. The gate fails if its
+stored interval no longer matches the result. Class-switching and ambiguous
+cases retain baseline policy.
 
 The isolated calibration experiments retain DIAMOND `qcovhsp` percentages in
 rank-aligned gene-taxonomy records and Phase 2 resume state. These are measured

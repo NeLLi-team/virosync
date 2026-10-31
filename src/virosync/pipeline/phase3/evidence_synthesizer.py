@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Literal
 
 from virosync.ablation import AblationID
 from virosync.config import get_config
-from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family
+from virosync.output_contract import LINEAGE_EVE_CLASSES, canonical_family, resolve_effective_eve_class
 from virosync.pipeline.hallmark_evidence import (
     HallmarkAssessment,
     HallmarkEvidence,
@@ -1023,6 +1023,121 @@ def evaluate_composition_ablation_effect(
     )
 
 
+@dataclass(frozen=True)
+class SupplementaryViralEvidence:
+    """R2 evidence from retained GenomeDB hits inside one final interval."""
+
+    scaffold: str
+    start: int
+    end: int
+    low_class: str
+    medium_class: str
+    group: str
+    reason: str
+    prefix_gene_counts: tuple[tuple[str, int], ...]
+    counted_gene_ids: tuple[str, ...]
+    measured_gene_ids: tuple[str, ...]
+    no_cellular_gene_ids: tuple[str, ...]
+    measured_only_gene_ids: tuple[str, ...]
+    subject_ids: tuple[tuple[str, tuple[str, ...]], ...]
+    eligible: bool
+    eligible_without_no_cellular: bool
+
+
+def _assess_supplementary_viral_evidence(result: VerificationResult) -> SupplementaryViralEvidence:
+    """Count independent genes without changing the existing class resolvers."""
+    classes = [
+        resolve_effective_eve_class(
+            confidence_tier=tier,
+            region_classification=result.region_classification,
+            classification=getattr(result, "classification", ""),
+            likely_family=result.likely_family,
+        )
+        for tier in ("LOW", "MEDIUM")
+    ]
+    group = classes[0] if classes[0] == classes[1] and classes[0] in ("NCLDV", "MIRUS") else ""
+    # Merge exact physical aliases before comparing viral and cellular hits.
+    physical = {}
+    fields = ("top10_targets", "top10_prefixes", "top10_bitscores", "top10_pidents", "top10_evalues", "top10_qcovhsp")
+    for record in result.gene_taxonomy_records:
+        record = getattr(record, "__dict__", record)
+        arrays = [record.get(name, []) for name in fields]
+        if len({len(values) for values in arrays}) != 1:
+            raise ValueError("R2 requires aligned retained hit arrays with query coverage")
+        if not arrays[0]:
+            continue
+        start, end = record["start"], record["end"]
+        if record["scaffold"] != result.scaffold or not result.start <= start < end <= result.end:
+            continue
+        key = (start, end)
+        names, hits = physical.setdefault(key, (set(), []))
+        names.add(record["porf_id"])
+        hits.extend(zip(*arrays, strict=True))
+
+    candidates = {"NCLDV": [], "MIRUS": []}
+    cellular = {"EUK", "BAC", "ARC", "MITO", "PLASTID"}
+    for (start, end), (names, hits) in physical.items():
+        cell_bits = [bits for _, prefix, bits, _, _, _ in hits if prefix in cellular]
+        best_cell = max(cell_bits) if cell_bits else None
+        for prefix in candidates:
+            subjects = tuple(
+                sorted(
+                    {
+                        target
+                        for target, label, bits, identity, evalue, coverage in hits
+                        if label == prefix
+                        and target.startswith(prefix + "__")
+                        and identity >= 25
+                        and evalue <= 1e-5
+                        and coverage >= 50
+                        and (best_cell is None or bits > best_cell)
+                    }
+                )
+            )
+            if subjects:
+                candidates[prefix].append((end, start, min(names), best_cell is not None, subjects))
+
+    selected = {}
+    measured_only = {}
+    for prefix, genes in candidates.items():
+        # Earliest finish maximizes the number of nonoverlapping half-open genes.
+        chosen, measured = [], []
+        last_end = measured_end = result.start
+        for gene in sorted(genes):
+            end, start, _, has_cellular, _ = gene
+            if start >= last_end:
+                chosen.append(gene)
+                last_end = end
+            if has_cellular and start >= measured_end:
+                measured.append(gene)
+                measured_end = end
+        selected[prefix] = chosen
+        measured_only[prefix] = measured
+    chosen = selected.get(group, [])
+    measured = measured_only.get(group, [])
+    eligible = len(chosen) >= 3
+    reason = "eligible" if eligible else "insufficient_independent_genes"
+    if not group:
+        reason = "class_not_stable_ncldv_mirus"
+    return SupplementaryViralEvidence(
+        scaffold=result.scaffold,
+        start=result.start,
+        end=result.end,
+        low_class=classes[0],
+        medium_class=classes[1],
+        group=group,
+        reason=reason,
+        prefix_gene_counts=tuple((prefix, len(genes)) for prefix, genes in selected.items()),
+        counted_gene_ids=tuple(gene[2] for gene in chosen),
+        measured_gene_ids=tuple(gene[2] for gene in chosen if gene[3]),
+        no_cellular_gene_ids=tuple(gene[2] for gene in chosen if not gene[3]),
+        measured_only_gene_ids=tuple(gene[2] for gene in measured),
+        subject_ids=tuple((gene[2], gene[4]) for gene in chosen),
+        eligible=eligible,
+        eligible_without_no_cellular=len(measured) >= 3,
+    )
+
+
 @dataclass
 class VerificationResult:
     """Complete verification result for an EVE candidate.
@@ -1048,6 +1163,7 @@ class VerificationResult:
     hallmark_witnesses: list[HallmarkWitness] = field(default_factory=list)
     hallmark_support: list[HallmarkSupport] = field(default_factory=list)
     hallmark_assessment: HallmarkAssessment | None = None
+    supplementary_viral_evidence: SupplementaryViralEvidence | None = None
     gene_function_labels: list = field(default_factory=list)
     gene_function_length_exclusions: list = field(default_factory=list)
 
@@ -1317,6 +1433,9 @@ class VerificationResult:
             ],
             "hallmark_witnesses": [{**asdict(w), "witness_id": w.witness_id} for w in self.hallmark_witnesses],
             "hallmark_assessment": asdict(self.hallmark_assessment) if self.hallmark_assessment else None,
+            "supplementary_viral_evidence": (
+                asdict(self.supplementary_viral_evidence) if self.supplementary_viral_evidence else None
+            ),
             "hallmark_support": [asdict(h) for h in self.hallmark_support],
             "scoring_locus_ids": self.scoring_locus_ids,
             "hallmark_count": self.hallmark_count,
@@ -1658,6 +1777,7 @@ def calculate_eve_confidence(
     if not isinstance(ablation_id, AblationID):
         raise TypeError("ablation_id must be an AblationID")
     result.hallmark_assessment = assess_hallmarks(result)
+    result.supplementary_viral_evidence = _assess_supplementary_viral_evidence(result)
     evidence = _collect_confidence_evidence(
         result,
         crf_confidence=crf_confidence,
@@ -2046,7 +2166,7 @@ def _assemble_confidence(
         weighted_base + bonus_total + 0.15 * evidence.structural_score - evidence.euk_penalty - evidence.size_penalty
     )
     confidence = min(0.99, max(0.0, confidence))
-    if summary.core_count == 0:
+    if summary.core_count == 0 and not result.supplementary_viral_evidence.eligible:
         confidence = min(confidence, low_threshold - 0.001)
     if summary.core_count < 2:
         confidence = min(confidence, high_threshold - 0.001)
@@ -2953,6 +3073,9 @@ class EvidenceSynthesizer:
         self._run_tiebreakers(
             result, refined_boundary, window_features, hallmark_hits, novelty_scores, porf_sequences, precomputed_tmvec
         )
+        # Family inference depends on evidence, not score; bind both tier resolvers
+        # before the supplementary assessment and retain this same family at export.
+        result.likely_family = infer_likely_family(result)
 
         # Phylogenetic rejection override
         if (
@@ -2976,7 +3099,6 @@ class EvidenceSynthesizer:
                     high=self.config.high_tier_threshold,
                     low=self.config.low_tier_threshold,
                 )
-                result.likely_family = infer_likely_family(result)
                 return result
 
         # Override routing. All routes use the same configured score and
@@ -3003,7 +3125,6 @@ class EvidenceSynthesizer:
                     f"{result.eve_id}: {result.confidence_tier} confidence via MCP override "
                     f"(markers={result.hallmark_count}, mcp={result.has_mcp}, genes={result.gene_count}, score={result.final_confidence:.3f})"
                 )
-            result.likely_family = infer_likely_family(result)
             return result
 
         # Final weighted decision
@@ -3013,7 +3134,6 @@ class EvidenceSynthesizer:
             high=self.config.high_tier_threshold,
             low=self.config.low_tier_threshold,
         )
-        result.likely_family = infer_likely_family(result)
         return result
 
     def _run_phylogenetic_validation(

@@ -142,11 +142,18 @@ def _hit(
 
 
 def _gene(porf_id: str, prefixes: str, pidents: str) -> dict:
+    labels = [prefix.rstrip("_") for prefix in prefixes.split(",") if prefix]
     return {
         "porf_id": porf_id,
-        "top10_prefixes": prefixes,
-        "top10_pidents": pidents,
-        "top10_targets": "",
+        "scaffold": "sc",
+        "start": 100,
+        "end": 200,
+        "top10_prefixes": labels,
+        "top10_pidents": [float(value) for value in pidents.split(",") if value],
+        "top10_targets": [f"{label}__reference{i}" for i, label in enumerate(labels)],
+        "top10_bitscores": [100.0] * len(labels),
+        "top10_evalues": [1e-8] * len(labels),
+        "top10_qcovhsp": [80.0] * len(labels),
         "is_flanking": False,
     }
 

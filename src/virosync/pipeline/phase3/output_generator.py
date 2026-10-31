@@ -452,6 +452,13 @@ def _is_atpase_marker(name: str) -> bool:
 
 def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
     """Evaluate one result against the canonical v2 quality gate."""
+    supplementary = getattr(result, "supplementary_viral_evidence", None)
+    if supplementary is not None and (supplementary.scaffold, supplementary.start, supplementary.end) != (
+        result.scaffold,
+        result.start,
+        result.end,
+    ):
+        raise ValueError("R2 supplementary evidence interval differs from final result interval")
     tier = (getattr(result, "confidence_tier", "") or "").upper()
     length = max(0, int(getattr(result, "end", 0)) - int(getattr(result, "start", 0)))
     hallmark = int(getattr(result, "hallmark_count", 0) or 0)
@@ -504,8 +511,11 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
     if tier == "LOW":
         family = eve_class
         if family in ("NCLDV", "MIRUS"):
-            kept = length > 5000 and hallmark >= 2
+            module_support = supplementary is not None and supplementary.eligible and supplementary.group == family
+            kept = length > 5000 and (hallmark >= 2 or module_support)
             reason = "ncldv_mirus_low_promoted" if kept else "ncldv_mirus_low_gate"
+            if kept and hallmark < 2 and module_support:
+                reason = "ncldv_mirus_low_supplementary_module"
             return QualityGateDecision(kept, family, reason, promoted_low=kept)
         # LOW must never be LOOSER than the region's own HIGH/MEDIUM rule, or
         # raising a region's confidence would remove it from the output. These

@@ -219,7 +219,8 @@ def test_raw_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_pat
     assert exported_by_id[evidence[0].evidence_id]["evalue"] == 0.001
     assert exported_by_id[evidence[0].evidence_id]["validation_status"] == "unvalidated"
     result.end -= 1
-    assert not select_phase3_acceptance([result], AblationID.A0).canonical_results
+    with pytest.raises(ValueError, match="supplementary.*interval"):
+        select_phase3_acceptance([result], AblationID.A0)
     assert unsupported_eve_ids([result]) == {result.eve_id}
 
 
@@ -513,6 +514,9 @@ def test_frameshift_alternative_does_not_add_gene_taxonomy_or_family_credit(
         top10_prefixes=["NCLDV__"],
         top10_targets=["NCLDV__reference|protein"],
         top10_pidents=[87.1],
+        top10_bits=[100.0],
+        top10_evalues=[1e-10],
+        top10_qcovhsp=[80.0],
         has_ncldv_mirus=True,
         has_viral=True,
         has_hit=True,
