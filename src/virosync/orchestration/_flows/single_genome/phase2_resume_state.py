@@ -28,7 +28,7 @@ from virosync.utils.atomic_write import atomic_write
 from .phase_state import phase2_state_from_document, phase2_state_to_document
 
 PHASE2_RESUME_STATE_FILENAME = "resume_state.json"
-PHASE2_RESUME_STATE_SCHEMA_VERSION = 5
+PHASE2_RESUME_STATE_SCHEMA_VERSION = 6
 PHASE2_RESUME_STATE_ARTIFACT_TYPE = "virosync.phase2.resume_state"
 PHASE2_RESUME_STATE_SCHEMA = f"{PHASE2_RESUME_STATE_ARTIFACT_TYPE}/v{PHASE2_RESUME_STATE_SCHEMA_VERSION}"
 
@@ -51,7 +51,7 @@ _GENE_STRING_FIELDS = (
 _GENE_INTEGER_FIELDS = ("start", "end")
 _GENE_FLOAT_FIELDS = ("top1_pident", "top1_evalue")
 _GENE_STRING_LIST_FIELDS = ("top10_prefixes", "top10_targets")
-_GENE_FLOAT_LIST_FIELDS = ("top10_bits", "top10_pidents", "top10_evalues")
+_GENE_FLOAT_LIST_FIELDS = ("top10_bits", "top10_pidents", "top10_evalues", "top10_qcovhsp")
 _GENE_BOOLEAN_FIELDS = (
     "has_ncldv_mirus",
     "has_vp_plv",

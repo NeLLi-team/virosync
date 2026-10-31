@@ -936,3 +936,12 @@ occur in endogenous mavirus-like elements
 currently test junction reads, empty loci, attachment sites or retrotransposon
 domain architecture. Short junction microhomology alone should not determine
 an integration mechanism.
+
+### Experimental retained query coverage (31 October 2026)
+
+The isolated calibration experiments retain DIAMOND `qcovhsp` percentages in
+rank-aligned gene-taxonomy records and Phase 2 resume state. These are measured
+alignment coverages, not reconstructed from identities or annotation labels.
+No-hit records carry empty arrays. Resume schema 6 requires the new field;
+older checkpoints are not silently given coverage. This transport alone changes
+no scientific scoring, boundaries or output acceptance.

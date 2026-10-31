@@ -223,6 +223,7 @@ class GeneTaxonomy:
     top10_targets: list[str] = field(default_factory=list)
     top10_bits: list[float] = field(default_factory=list)
     top10_pidents: list[float] = field(default_factory=list)
+    top10_qcovhsp: list[float] = field(default_factory=list)
     top10_evalues: list[float] = field(default_factory=list)
     taxonomy_fingerprint: TaxonomyFingerprint | None = None
     has_ncldv_mirus: bool = False
@@ -257,6 +258,7 @@ class GeneTaxonomyRecord(TypedDict):
     top10_targets: list[str]
     top10_bitscores: list[float]
     top10_pidents: list[float]
+    top10_qcovhsp: list[float]
     top10_evalues: list[float]
     taxonomy_fingerprint: TaxonomyFingerprintRecord | None
     has_ncldv_mirus: bool
@@ -335,6 +337,7 @@ def build_gene_taxonomy_record(
         "top10_targets": tax.top10_targets,
         "top10_bitscores": tax.top10_bits,
         "top10_pidents": tax.top10_pidents,
+        "top10_qcovhsp": tax.top10_qcovhsp,
         "top10_evalues": tax.top10_evalues,
         "taxonomy_fingerprint": fp_dict,
         "has_ncldv_mirus": tax.has_ncldv_mirus,
@@ -1188,6 +1191,7 @@ def classify_all_porfs(
                 top10_targets=top10_targets,
                 top10_bits=top10_bits,
                 top10_pidents=top10_pidents,
+                top10_qcovhsp=[h.qcov for h in top10],
                 top10_evalues=top10_evalues,
                 taxonomy_fingerprint=fingerprint,
                 has_ncldv_mirus=has_ncldv_mirus,
