@@ -941,28 +941,34 @@ an integration mechanism.
 ### Experimental retained query coverage (31 October 2026)
 
 The R2 experiment adds a supplementary module from the retained full-ORF
-genome-database taxonomy, after the final coordinates are fixed. It requires
-the existing LOW and MEDIUM class resolvers to agree on NCLDV or MIRUS, then
-at least three nonoverlapping, fully contained physical genes supporting that
-exact reference prefix. The unchanged evidence-only family inference runs
-before scoring so both resolvers see the final family. Each gene needs a
-retained hit with identity >=25%,
-E <=1e-5 and query coverage per HSP >=50%, with bitscore strictly above every
-retained cellular hit. Cellular competitors are not filtered by identity,
-E-value or coverage. A missing cellular hit is recorded separately from a
-measured advantage. These are fixed experimental criteria, not calibrated
-cutoffs or evidence of integration.
-Competition also recognizes exact `MITO__` and `PLASTID__` target prefixes
-when the native Phase 2 taxonomy label is UNKNOWN. Unrelated UNKNOWN targets
-remain unclassified, and boundary taxonomy labels are not changed.
+genome-database taxonomy, after the final coordinates are fixed. It requires the
+existing LOW and MEDIUM class resolvers to agree on NCLDV or MIRUS, then at
+least three nonoverlapping, fully contained physical genes supporting that exact
+reference prefix. The unchanged evidence-only family inference runs before
+scoring so both resolvers see the final family. Each gene needs a retained hit
+with identity >=25%, E <=1e-5 and query coverage per HSP >=50%, with bitscore
+strictly above every retained non-organelle EUK/BAC/ARC hit. These competitors
+are not filtered by identity, E-value or coverage. A missing non-organelle
+cellular hit is recorded separately from a measured advantage. These are fixed
+experimental criteria, not calibrated cutoffs or evidence of integration.
+Recognized MITO/PLASTID labels or exact `MITO__`/`PLASTID__` target prefixes are
+organelle ambiguity evidence first. They supply neither a viral witness nor a
+non-organelle cellular comparator. Qualifying viral top10 hits remain eligible
+despite stronger organelle hits; no close-score cutoff is used. Selected
+evidence exports organelle targets, scores and the relation to its supporting
+viral score (absent, viral-higher, tied or organelle-higher). Missing
+non-organelle comparators never count as measured wins. Organelle ambiguity can
+coexist with a measured non-organelle win. Unrelated UNKNOWN targets and native
+boundary taxonomy remain unchanged.
 
 Exact physical duplicates count once, opposite-strand overlaps cannot both
 count, and abutting half-open intervals can. Sorting by gene end gives the
 maximum nonoverlapping set separately for each prefix. NCLDV and MIRUS counts
-are never added. A second selection using only measured comparisons records
-whether eligibility depends on genes without a retained cellular comparator.
-Missing or misaligned coverage for nonempty retained-hit arrays is an error;
-an empty no-hit record remains valid.
+are never added. A second independent selection using only non-organelle
+measured comparisons retains its own organelle ambiguity evidence and records
+whether eligibility depends on genes without a retained non-organelle cellular
+comparator. Missing or misaligned coverage for nonempty retained-hit arrays is
+an error; an empty no-hit record remains valid.
 
 One immutable, interval-bound supplementary record supplies both scoring and
 the output gate, including selected genes, subject IDs, prefix counts and the

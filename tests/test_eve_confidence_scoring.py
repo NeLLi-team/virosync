@@ -358,12 +358,22 @@ def test_supplementary_measured_only_selection_is_independent_and_abutting_genes
             _supplementary_gene("c", 30, 40),
         ]
     )
+    hidden_measured = result.gene_taxonomy_records[2]
+    hidden_measured["top10_targets"].append("MITO__ambiguity")
+    hidden_measured["top10_prefixes"].append("UNKNOWN")
+    hidden_measured["top10_bitscores"].append(500)
+    hidden_measured["top10_pidents"].append(10)
+    hidden_measured["top10_evalues"].append(0.5)
+    hidden_measured["top10_qcovhsp"].append(5)
     calculate_eve_confidence(result, 0.0)
     evidence = result.supplementary_viral_evidence
+    assert evidence.measured_only_organelle_evidence[1].gene_id == "b"
+    assert evidence.measured_only_organelle_evidence[1].relation == "organelle_higher"
+    assert evidence.organelle_evidence[1].relation == "absent"
     assert evidence.counted_gene_ids == ("a", "no_cellular", "c")
-    assert evidence.no_cellular_gene_ids == ("no_cellular",)
+    assert evidence.no_non_organelle_cellular_gene_ids == ("no_cellular",)
     assert evidence.measured_only_gene_ids == ("a", "b", "c")
-    assert evidence.eligible_without_no_cellular
+    assert evidence.eligible_with_measured_non_organelle_only
 
 
 @pytest.mark.parametrize(
@@ -490,18 +500,25 @@ def _native_organelle_records(target_prefix, competitor_bits, weak_euk):
 
 
 @pytest.mark.parametrize("prefix", ["MITO__", "PLASTID__"])
-@pytest.mark.parametrize("bits", [120, 100, 80])
+@pytest.mark.parametrize("bits,relation", [(120, "organelle_higher"), (100, "tied"), (80, "viral_higher")])
 @pytest.mark.parametrize("weak_euk", [False, True])
-def test_native_unknown_organelle_competes_without_viral_filters(prefix, bits, weak_euk):
+def test_native_unknown_organelle_is_ambiguity(prefix, bits, relation, weak_euk):
     records = _native_organelle_records(prefix, bits, weak_euk)
     candidate = _supplementary_candidate(records=records)
     calculate_eve_confidence(candidate, 0.0)
     evidence = candidate.supplementary_viral_evidence
-    assert evidence.eligible is (bits < 100)
-    assert len(evidence.counted_gene_ids) == (3 if bits < 100 else 0)
-    assert len(evidence.measured_gene_ids) == (3 if bits < 100 else 0)
-    assert evidence.no_cellular_gene_ids == ()
-    assert evidence.eligible_without_no_cellular is (bits < 100)
+    assert evidence.eligible
+    assert len(evidence.counted_gene_ids) == 3
+    assert len(evidence.measured_gene_ids) == (3 if weak_euk else 0)
+    assert len(evidence.no_non_organelle_cellular_gene_ids) == (0 if weak_euk else 3)
+    assert evidence.eligible_with_measured_non_organelle_only is weak_euk
+    witness = evidence.organelle_evidence[0]
+    assert witness.relation == relation
+    assert witness.hits == ((f"{prefix}reference|native1", "UNKNOWN", bits),)
+    assert witness.viral_bitscore == 100
+    assert len(evidence.measured_only_organelle_evidence) == (3 if weak_euk else 0)
+    exported = candidate.to_dict()["supplementary_viral_evidence"]
+    assert exported["organelle_evidence"][0]["relation"] == relation
 
 
 @pytest.mark.parametrize("prefix", ["MITOLOGY__", "PLASTIDLIKE__", "XMITO__"])
@@ -511,5 +528,37 @@ def test_unrelated_unknown_target_is_not_an_organelle_competitor(prefix):
     calculate_eve_confidence(candidate, 0.0)
     evidence = candidate.supplementary_viral_evidence
     assert evidence.eligible
-    assert len(evidence.no_cellular_gene_ids) == 3
-    assert not evidence.eligible_without_no_cellular
+    assert len(evidence.no_non_organelle_cellular_gene_ids) == 3
+    assert not evidence.eligible_with_measured_non_organelle_only
+
+
+@pytest.mark.parametrize("label", ["UNKNOWN", "EUK", "NCLDV", "MITO", "PLASTID"])
+def test_supplementary_organelle_roles_are_disjoint(label):
+    row = _supplementary_gene("a", 100, 200)
+    row["top10_targets"][0] = "PLASTID__mislabelled"
+    row["top10_prefixes"][0] = label
+    candidate = _supplementary_candidate(records=[row])
+    calculate_eve_confidence(candidate, 0.0)
+    assert candidate.supplementary_viral_evidence.counted_gene_ids == ()
+    genuine = _supplementary_gene("a", 100, 200)
+    genuine["top10_targets"][1] = "PLASTID__mislabelled"
+    genuine["top10_prefixes"][1] = label
+    genuine["top10_bitscores"][1] = 500
+    candidate = _supplementary_candidate(records=[genuine])
+    calculate_eve_confidence(candidate, 0.0)
+    evidence = candidate.supplementary_viral_evidence
+    assert evidence.counted_gene_ids == ("a",)
+    assert evidence.measured_gene_ids == ()
+    assert evidence.organelle_evidence[0].relation == "organelle_higher"
+
+
+def test_supplementary_labelled_organelle_keeps_viral_evidence():
+    row = _supplementary_gene("a", 100, 200)
+    row["top10_prefixes"][1] = "MITO"
+    row["top10_bitscores"][1] = 500
+    candidate = _supplementary_candidate(records=[row])
+    calculate_eve_confidence(candidate, 0.0)
+    evidence = candidate.supplementary_viral_evidence
+    assert evidence.counted_gene_ids == ("a",)
+    assert evidence.measured_gene_ids == ()
+    assert evidence.organelle_evidence[0].relation == "organelle_higher"

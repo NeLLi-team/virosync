@@ -1024,6 +1024,16 @@ def evaluate_composition_ablation_effect(
 
 
 @dataclass(frozen=True)
+class OrganelleCompetition:
+    """Retained organelle ambiguity for one selected physical gene."""
+
+    gene_id: str
+    viral_bitscore: float
+    hits: tuple[tuple[str, str, float], ...]
+    relation: str
+
+
+@dataclass(frozen=True)
 class SupplementaryViralEvidence:
     """R2 evidence from retained GenomeDB hits inside one final interval."""
 
@@ -1037,11 +1047,13 @@ class SupplementaryViralEvidence:
     prefix_gene_counts: tuple[tuple[str, int], ...]
     counted_gene_ids: tuple[str, ...]
     measured_gene_ids: tuple[str, ...]
-    no_cellular_gene_ids: tuple[str, ...]
+    no_non_organelle_cellular_gene_ids: tuple[str, ...]
     measured_only_gene_ids: tuple[str, ...]
     subject_ids: tuple[tuple[str, tuple[str, ...]], ...]
+    organelle_evidence: tuple[OrganelleCompetition, ...]
+    measured_only_organelle_evidence: tuple[OrganelleCompetition, ...]
     eligible: bool
-    eligible_without_no_cellular: bool
+    eligible_with_measured_non_organelle_only: bool
 
 
 def _assess_supplementary_viral_evidence(result: VerificationResult) -> SupplementaryViralEvidence:
@@ -1075,31 +1087,47 @@ def _assess_supplementary_viral_evidence(result: VerificationResult) -> Suppleme
         hits.extend(zip(*arrays, strict=True))
 
     candidates = {"NCLDV": [], "MIRUS": []}
-    cellular = {"EUK", "BAC", "ARC", "MITO", "PLASTID"}
+    cellular = {"EUK", "BAC", "ARC"}
     for (start, end), (names, hits) in physical.items():
-        cell_bits = [
-            bits
-            for target, prefix, bits, _, _, _ in hits
-            if prefix in cellular or target.startswith(("MITO__", "PLASTID__"))
+        organelles = tuple(
+            sorted(
+                {
+                    (target, prefix, bits)
+                    for target, prefix, bits, _, _, _ in hits
+                    if prefix in {"MITO", "PLASTID"} or target.startswith(("MITO__", "PLASTID__"))
+                }
+            )
+        )
+        other_hits = [
+            hit for hit in hits if hit[1] not in {"MITO", "PLASTID"} and not hit[0].startswith(("MITO__", "PLASTID__"))
         ]
+        cell_bits = [bits for _, prefix, bits, _, _, _ in other_hits if prefix in cellular]
         best_cell = max(cell_bits) if cell_bits else None
         for prefix in candidates:
-            subjects = tuple(
-                sorted(
-                    {
-                        target
-                        for target, label, bits, identity, evalue, coverage in hits
-                        if label == prefix
-                        and target.startswith(prefix + "__")
-                        and identity >= 25
-                        and evalue <= 1e-5
-                        and coverage >= 50
-                        and (best_cell is None or bits > best_cell)
-                    }
-                )
-            )
-            if subjects:
-                candidates[prefix].append((end, start, min(names), best_cell is not None, subjects))
+            viral = [
+                (target, bits)
+                for target, label, bits, identity, evalue, coverage in other_hits
+                if label == prefix
+                and target.startswith(prefix + "__")
+                and identity >= 25
+                and evalue <= 1e-5
+                and coverage >= 50
+                and (best_cell is None or bits > best_cell)
+            ]
+            if not viral:
+                continue
+            subjects = tuple(sorted({target for target, _ in viral}))
+            viral_bits = max(bits for _, bits in viral)
+            relation = "absent"
+            if organelles:
+                organelle_bits = max(bits for _, _, bits in organelles)
+                relation = "tied"
+                if viral_bits > organelle_bits:
+                    relation = "viral_higher"
+                elif viral_bits < organelle_bits:
+                    relation = "organelle_higher"
+            ambiguity = OrganelleCompetition(min(names), viral_bits, organelles, relation)
+            candidates[prefix].append((end, start, min(names), best_cell is not None, subjects, ambiguity))
 
     selected = {}
     measured_only = {}
@@ -1108,7 +1136,7 @@ def _assess_supplementary_viral_evidence(result: VerificationResult) -> Suppleme
         chosen, measured = [], []
         last_end = measured_end = result.start
         for gene in sorted(genes):
-            end, start, _, has_cellular, _ = gene
+            end, start, _, has_cellular, _, _ = gene
             if start >= last_end:
                 chosen.append(gene)
                 last_end = end
@@ -1134,11 +1162,13 @@ def _assess_supplementary_viral_evidence(result: VerificationResult) -> Suppleme
         prefix_gene_counts=tuple((prefix, len(genes)) for prefix, genes in selected.items()),
         counted_gene_ids=tuple(gene[2] for gene in chosen),
         measured_gene_ids=tuple(gene[2] for gene in chosen if gene[3]),
-        no_cellular_gene_ids=tuple(gene[2] for gene in chosen if not gene[3]),
+        no_non_organelle_cellular_gene_ids=tuple(gene[2] for gene in chosen if not gene[3]),
         measured_only_gene_ids=tuple(gene[2] for gene in measured),
         subject_ids=tuple((gene[2], gene[4]) for gene in chosen),
+        organelle_evidence=tuple(gene[5] for gene in chosen),
+        measured_only_organelle_evidence=tuple(gene[5] for gene in measured),
         eligible=eligible,
-        eligible_without_no_cellular=len(measured) >= 3,
+        eligible_with_measured_non_organelle_only=len(measured) >= 3,
     )
 
 
