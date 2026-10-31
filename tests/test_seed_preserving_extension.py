@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed
 
@@ -65,8 +67,9 @@ def test_long_supported_gene_cannot_jump_over_overlapping_host_block():
             gene("h3", 2300, 2500, host=True),
         ]
     )
-    assert boundary.end == 2100
+    assert boundary.end == 2000
     assert boundary.right_stop_reason == "host_stop"
+    assert boundary.confirmed_seeds == (ConfirmedSeed("original", "s", 1000, 2000),)
 
 
 def test_host_block_crossing_core_stops_at_core_edge():
@@ -101,6 +104,8 @@ def test_missing_taxonomy_stops_growth_but_searched_no_hit_is_pending():
         "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
     )
     unknown = gene("u", 2100, 2200)
+    unknown.top10_prefixes = []
+    unknown.top10_pidents = []
     positive = gene("v", 2300, 2400, viral=True)
     missing = extend_confirmed_seed(seed, [unknown, positive], {"v": positive}, (0, 10000), None, 0.35)
     searched = extend_confirmed_seed(seed, [unknown, positive], {"u": unknown, "v": positive}, (0, 10000), None, 0.35)
@@ -147,7 +152,13 @@ def test_ablation_disables_host_stop_without_losing_core():
     assert boundary.right_stop is None
 
 
-def test_phase2_ml_failure_and_off_keep_complete_original_seed(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("family", "mapped", "expected_end"),
+    [("NCLDV", True, 9000), ("CRESS", True, 2000), ("NCLDV", False, 2000)],
+)
+def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
+    tmp_path, monkeypatch, family, mapped, expected_end
+):
     import logging
 
     from virosync.config import PipelineConfig
@@ -155,11 +166,13 @@ def test_phase2_ml_failure_and_off_keep_complete_original_seed(tmp_path, monkeyp
     from virosync.pipeline.phase2 import taxonomy_ml_refiner
     from virosync.pipeline.phase2.boundary_diamond import GenomeDiamondQuery, SeedGeneMapping
 
-    genes = [gene("v", 2300, 2500, viral=True)]
+    genes = [gene("v", 8500, 9000, viral=True)]
     query = GenomeDiamondQuery(
         seed_gene_mappings={
             "original": SeedGeneMapping("original", "s", 1000, 2000, flank_start_bp=0, flank_end_bp=10000)
         }
+        if mapped
+        else {}
     )
     monkeypatch.setattr(phase2, "build_proteome_index", lambda _: {"s": genes})
     monkeypatch.setattr(phase2, "_require_phase2b_gene_taxonomy_db", lambda *args, **kwargs: tmp_path / "db")
@@ -190,7 +203,12 @@ def test_phase2_ml_failure_and_off_keep_complete_original_seed(tmp_path, monkeyp
     off = phase2._run_phase2_subflow(
         merged_seeds=[
             MergedSeed(
-                "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
+                "s",
+                1000,
+                2000,
+                seed_id="original",
+                predicted_family=family,
+                confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),),
             )
         ],
         config=config,
@@ -199,14 +217,19 @@ def test_phase2_ml_failure_and_off_keep_complete_original_seed(tmp_path, monkeyp
     failed = phase2._run_phase2_subflow(
         merged_seeds=[
             MergedSeed(
-                "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
+                "s",
+                1000,
+                2000,
+                seed_id="original",
+                predicted_family=family,
+                confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),),
             )
         ],
         config=config.with_overrides(boundary_taxonomy_ml_enabled=True),
         **arguments,
     )
     assert off.refined_boundaries == failed.refined_boundaries
-    assert (off.refined_boundaries[0].start, off.refined_boundaries[0].end) == (1000, 2500)
+    assert (off.refined_boundaries[0].start, off.refined_boundaries[0].end) == (1000, expected_end)
     assert off.refined_boundaries[0].confirmed_seeds[0].end == 2000
 
 
@@ -346,7 +369,7 @@ def test_left_crossing_supported_gene_cannot_jump_host_block():
             gene("h3", 600, 700, host=True),
         ]
     )
-    assert result.start == 900
+    assert result.start == 1000
     assert result.left_stop == 900
     assert result.left_stop_reason == "host_stop"
 
@@ -380,3 +403,49 @@ def test_independent_seed_outputs_can_overlap_without_loss_or_stop_crossing():
     assert outputs[0].end <= outputs[0].right_stop == 3300
     assert outputs[0].confirmed_seeds == left_seed.confirmed_seeds
     assert outputs[1].confirmed_seeds == right_seed.confirmed_seeds
+
+
+@pytest.mark.parametrize("missing_taxonomy", [False, True])
+def test_supported_gene_crossing_limit_does_not_commit_partial_growth(missing_taxonomy):
+    seed = MergedSeed(
+        "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
+    )
+    near = gene("near", 2100, 2300, viral=True)
+    long = gene("long", 2200, 6000, viral=True)
+    unknown = gene("unknown", 3000, 3100)
+    genes = [near, long, unknown] if missing_taxonomy else [near, long]
+    result = extend_confirmed_seed(seed, genes, {"near": near, "long": long}, (0, 5000), None, 0.35)
+    assert (result.start, result.end) == (1000, 2300)
+    assert result.right_stop_reason == ("taxonomy_unavailable" if missing_taxonomy else "search_envelope")
+    assert result.confirmed_seeds == seed.confirmed_seeds
+
+
+def test_three_seed_merge_keeps_stop_inside_independent_core_and_exact_ownership():
+    from virosync.pipeline.phase2.seed_extension import merge_reachable_boundaries, validate_source_membership
+
+    left = MergedSeed("s", 1000, 2000, seed_id="left", confirmed_seeds=(ConfirmedSeed("left", "s", 1000, 2000),))
+    middle = MergedSeed("s", 3000, 5000, seed_id="middle", confirmed_seeds=(ConfirmedSeed("middle", "s", 3000, 5000),))
+    right = MergedSeed("s", 5500, 6500, seed_id="right", confirmed_seeds=(ConfirmedSeed("right", "s", 5500, 6500),))
+    genes = [
+        gene("left", 800, 900, viral=True),
+        gene("shared", 2100, 3200, viral=True),
+        gene("h1", 3300, 3400, host=True),
+        gene("h2", 3500, 3600, host=True),
+        gene("h3", 3700, 3800, host=True),
+        gene("bridge", 4800, 5600, viral=True),
+        gene("right", 6600, 6700, viral=True),
+    ]
+    with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda g, m: float(g.host)):
+        boundaries = [
+            extend_confirmed_seed(
+                seed, genes, {g.id: g for g in genes}, envelope, SimpleNamespace(token_weights={"host": 1}), 0.35
+            )
+            for seed, envelope in zip((left, middle, right), ((0, 4000), (2100, 6700), (4800, 7000)), strict=True)
+        ]
+    outputs = merge_reachable_boundaries(boundaries)
+    assert [(item.start, item.end) for item in outputs] == [(800, 3200), (2100, 6700)]
+    assert outputs[0].right_stop == 3300
+    assert middle.start < outputs[0].right_stop < middle.end
+    assert outputs[0].confirmed_seeds == left.confirmed_seeds
+    assert outputs[1].confirmed_seeds == middle.confirmed_seeds + right.confirmed_seeds
+    validate_source_membership([left, middle, right], outputs)

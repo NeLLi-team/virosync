@@ -137,7 +137,8 @@ def _walk(
         if start >= limit:
             break
         if support:
-            accepted = max(accepted, min(end, limit))
+            if end <= limit:
+                accepted = max(accepted, end)
             pending = 0
         else:
             pending += 1

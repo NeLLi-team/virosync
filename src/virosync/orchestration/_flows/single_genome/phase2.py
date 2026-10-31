@@ -667,14 +667,13 @@ def _run_phase2_subflow(
             logger.warning("Taxonomy ML failed (%s); using deterministic extension", exc)
 
     refined_boundaries = []
-    extension_bp = config.phase1.extension_kb * 1000
     for seed in merged_seeds:
         mapping = boundary_diamond_query.seed_gene_mappings.get(seed.seed_id) if boundary_diamond_query else None
         envelope = (seed.start, seed.end)
         if mapping is not None and seed.predicted_family != "CRESS":
             envelope = (
-                max(0, seed.start - extension_bp, min(seed.start, mapping.flank_start_bp)),
-                min(seed.end + extension_bp, max(seed.end, mapping.flank_end_bp)),
+                min(seed.start, mapping.flank_start_bp),
+                max(seed.end, mapping.flank_end_bp),
             )
         kwargs = dict(
             seed=seed,

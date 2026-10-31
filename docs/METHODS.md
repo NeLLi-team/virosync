@@ -503,6 +503,11 @@ The complete assembled Phase 1 interval, including its padding, or the exact
 full-gene hull of a hallmark-rescue witness, is the protected seed. Its original identity and coordinates remain attached to every
 derived candidate. The searched flanking envelope is separate from the EVE:
 finding the first or last predicted gene does not remove gene-free seed ends.
+For ordinary non-CRESS seeds, extension can use the complete searched flanking
+gene interval together with the protected core. The Phase 1 `extension_kb`
+setting still supplies the terminal-repeat and annotation radius; it does not
+cap this outward walk. CRESS seeds and seeds without a searched mapping keep
+their core as the extension envelope.
 
 One controller starts at the seed and walks flanking genes in genomic order,
 independently on each side. Identity-qualified viral hits provide positive
@@ -521,8 +526,16 @@ extension before the first gene in the run. A single eukaryotic best hit does
 not establish this stop. A missing model or missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
+A new exterior endpoint must retain the complete supported gene. A gene that
+crosses a host stop, missing-taxonomy edge or search limit cannot commit a
+partial extension. This does not trim a gene or any sequence already inside
+the confirmed core.
 A host block crossing the seed edge can stop new growth at that edge, but
 cannot cut the seed.
+An independently confirmed seed remains protected beyond another seed's stop.
+If merging would cross that stop, the candidates stay separate even when their
+retained intervals overlap. A wider searched envelope can therefore expose a
+stop and split a merge that a shorter envelope had allowed.
 Phase 3 reports the retained coordinates directly. It does not export a second
 candidate interval or reduction fields. Integration-gene scans use the retained
 interval plus the configured Phase 1 extension flank.
