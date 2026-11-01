@@ -278,8 +278,8 @@ anchors of each seed, which carry the status of their marker hit. This flag
 describes the existing marker and structural evidence and supplies the capsid
 shortcuts of the class-specific acceptance gate. Graduated hallmark scoring and
 spatial rescue use the separate exact-model catalogue described under
-[Confidence and limitations](#confidence-and-limitations). A structural-anchor
-exemption is distinct from a catalogue capsid assignment. Neither the flag nor
+[Confidence and limitations](#confidence-and-limitations). A catalogue structural
+anchor is distinct from a catalogue capsid assignment. Neither the flag nor
 a model-name substring adds an unlisted model to that catalogue.
 
 A region whose viral hits are all `EUK-pEVE`, in the marker
@@ -599,9 +599,12 @@ E-values, query envelopes and measured domain scores are carried through Phase 1
 resume state. Unmeasured diagnostics are absent, including those unavailable
 from frameshift evidence. HMM envelopes do not define genomic seed bounds.
 
-Graduated core evidence requires E <= 0.01 and either `validated_novel`, a viral
-top-10 reference hit at >=25% identity, or a catalogue structural-anchor
-exemption. Maximum family-to-protein matching prevents repeated profiles,
+Graduated core evidence requires E <= 0.01 and validated marker evidence.
+An ordinary validated marker must have a viral top-10 reference hit at >=25%
+identity; the existing `validated_novel` criteria remain separate. Supported
+or unvalidated hits remain diagnostic records and cannot supply qualifying
+cores, confidence floors or rescue seeds, including structural-anchor models.
+Maximum family-to-protein matching prevents repeated profiles,
 families or one protein from counting twice. Strong evidence has E <= 1e-5.
 Three or more independent core groups receive weight 1 each. A pair receives
 weight 1 per strong group and 0.5 per weak group, using the valid assignment

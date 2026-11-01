@@ -115,8 +115,8 @@ def test_mcp_substring_does_not_earn_the_catalogue_floor() -> None:
                 60.0,
                 1,
                 20,
-                "unvalidated",
-                0.0,
+                "validated",
+                30.0,
                 "retained_hmm",
             )
         ]

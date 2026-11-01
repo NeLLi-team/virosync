@@ -63,9 +63,11 @@ Graduated hallmark scoring and additive spatial rescue use the exact-model
 catalogue in `virosync/data/hallmark_panels.json`. Catalogue structural anchors
 and capsids are separate roles: a penton or other structural profile does not
 automatically become an MCP or receive the capsid-alone floor. Only mapped
-core evidence can supply graduated marker weight or a spatial witness. A
-qualifying spatial witness retains its original DIAMOND status, including
-`unvalidated`, and its full-gene coordinates. A fully retained witness can pass
+core evidence with a production validation status (`validated` or
+`validated_novel`) can supply graduated marker weight or a spatial witness.
+Supported and unvalidated hits remain diagnostic records, including hits to
+catalogue structural anchors. A qualifying spatial witness retains its original
+validation status and full-gene coordinates. A fully retained witness can pass
 the native gate with an explicit rescue reason without changing its taxonomy.
 See [Confidence and limitations](../METHODS.md#confidence-and-limitations) for
 the weighting, containment and floor rules.

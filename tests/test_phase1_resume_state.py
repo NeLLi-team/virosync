@@ -197,7 +197,8 @@ def _terminal_payload(result: object) -> dict[str, object]:
     return result.result
 
 
-def test_unvalidated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status", ["validated", "unvalidated"])
+def test_only_validated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeypatch, status):
     from virosync.orchestration.tasks import marker_validation_task, region_assembly_task
 
     output_dir = tmp_path / "output"
@@ -214,9 +215,9 @@ def test_unvalidated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monk
     marker = _complete_marker()
     marker.query_porf = "s_1|aa1-20"
     marker.scaffold, marker.start, marker.end = "s", 101, 999
-    marker.validation_status = "unvalidated"
-    marker.top10_prefixes = "EUK__"
-    marker.top10_pidents = "90"
+    marker.validation_status = status
+    marker.top10_prefixes = "NCLDV__" if status == "validated" else "EUK__"
+    marker.top10_pidents = "30" if status == "validated" else "90"
     raw = HMMHit("s_1", marker.hmm_target, marker.hmm_score, marker.hmm_evalue, 62.123456789, 1, 20)
 
     def fake_call(task, **kw):
@@ -225,7 +226,7 @@ def test_unvalidated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monk
         if task is marker_validation_task:
             return [marker]
         if task is region_assembly_task:
-            assert kw["validated_markers"] == []
+            assert kw["validated_markers"] == [marker]
             return []
         if task is phase1_module.generate_outputs_task:
             return {}
@@ -235,9 +236,12 @@ def test_unvalidated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monk
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kw: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kw: None)
     fresh = _run_phase1_subflow(**kwargs)
+    if status == "unvalidated":
+        assert _terminal_payload(fresh)["predictions"] == 0
+        return
     assert not isinstance(fresh, Phase1Terminal)
     assert [(s.start, s.end) for s in fresh.merged_seeds] == [(101, 999)]
-    assert fresh.validated_markers[0].validation_status == "unvalidated"
+    assert fresh.validated_markers[0].validation_status == "validated"
     config.execution.resume = True
     kwargs["resume_authorized"] = True
     resumed = _run_phase1_subflow(**kwargs)

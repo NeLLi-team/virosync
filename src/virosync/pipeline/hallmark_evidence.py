@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
+from virosync.pipeline.phase1.marker_roles import PRODUCTION_VALIDATION_STATUSES
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
@@ -318,12 +319,6 @@ def summarize_hallmarks(
     loci = scoring_locus_ids or {}
     core, context = defaultdict(list), defaultdict(list)
     for hit, link in _linked(evidence):
-        if (
-            hit.validation_status != "validated_novel"
-            and hit.viral_top10_max_pident < 25
-            and not link["structural_anchor"]
-        ):
-            continue
         context[link["panel"]].append((hit, link))
         if link["role"] == "core_marker":
             core[link["panel"]].append((hit, link))
@@ -390,7 +385,7 @@ def _catalogue() -> dict[tuple[str, str], list[dict]]:
 
 def _linked(evidence: Sequence[HallmarkEvidence]) -> Iterable[tuple[HallmarkEvidence, dict]]:
     for hit in evidence:
-        if hit.evalue > WEAK_EVALUE:
+        if hit.validation_status not in PRODUCTION_VALIDATION_STATUSES or not 0 <= hit.evalue <= WEAK_EVALUE:
             continue
         for link in hit.model_roles:
             if not link["excluded_from_scoring"] and link["marker"] not in EXCLUDED_FAMILIES:

@@ -17,7 +17,7 @@ from virosync.ablation import AblationID
 DEFAULT_A2_SINGLE_MARKER_MIN_SCORE: Final = 50.0
 A2_MAX_HMM_EVALUE: Final = 1e-5
 
-_PRODUCTION_VALIDATION_STATUSES: Final = frozenset({"validated", "validated_novel"})
+PRODUCTION_VALIDATION_STATUSES: Final = frozenset({"validated", "validated_novel"})
 _A2_BYPASS_VALIDATION_STATUSES: Final = frozenset({"supported", "unvalidated"})
 
 
@@ -126,7 +126,7 @@ def decide_marker_role(
 
     floor = _validate_single_marker_min_score(single_marker_min_score)
 
-    if validation_status in _PRODUCTION_VALIDATION_STATUSES:
+    if validation_status in PRODUCTION_VALIDATION_STATUSES:
         role = MarkerRole.PRODUCTION_VALIDATED
     elif (
         ablation_id is AblationID.A2

@@ -127,7 +127,8 @@ class ValidatedMarkerHit:
 
         Rationale:
         - All HMM hits are validated via marker_validation.py (Diamond top-10 taxonomy)
-        - validated_novel has InterProScan/TMVec support but no Diamond hits
+        - validated_novel has no Diamond hits; HMM score, coverage and configured
+          nearby-marker checks passed in marker_validation.py
         - MCP and capsid-type markers are highly specific for viral detection
         - Low-marker regions undergo taxonomy expansion validation (Step 4.5)
 

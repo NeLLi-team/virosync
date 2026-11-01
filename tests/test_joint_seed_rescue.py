@@ -215,17 +215,30 @@ def test_one_core_cannot_donate_all_selected_witnesses() -> None:
     assert not joint_result_supported(result, (child("a", 0, 1000), child("b", 2000, 6000)))
 
 
-@pytest.mark.parametrize("models,blocked", [(("GVOGm0003", "GVOGm0760"), True), (("GVOGm0760", "GVOGm0760"), False)])
+@pytest.mark.parametrize(
+    "models,status,blocked",
+    [
+        (("GVOGm0003", "GVOGm0760"), "validated", True),
+        (("GVOGm0760", "GVOGm0760"), "validated", False),
+        (("GVOGm0003", "GVOGm0760"), "unvalidated", False),
+    ],
+)
 def test_two_native_multi_marker_groups_stay_separate(
-    pair_inputs: dict, models: tuple[str, str], blocked: bool
+    pair_inputs: dict, models: tuple[str, str], status: str, blocked: bool
 ) -> None:
     from test_native_hallmark_evidence import hit
 
     from virosync.pipeline.hallmark_evidence import find_spatial_witnesses
 
     left, right = pair_inputs["results"]
-    left.hallmark_evidence = [hit("a", models[0], 200, 400), hit("b", models[1], 500, 700)]
-    right.hallmark_evidence = [hit("c", models[0], 1600, 1800), hit("d", models[1], 1900, 2100)]
+    left.hallmark_evidence = [
+        hit("a", models[0], 200, 400, status=status),
+        hit("b", models[1], 500, 700, status=status),
+    ]
+    right.hallmark_evidence = [
+        hit("c", models[0], 1600, 1800, status=status),
+        hit("d", models[1], 1900, 2100, status=status),
+    ]
     left.hallmark_witnesses = find_spatial_witnesses(left.hallmark_evidence)
     right.hallmark_witnesses = find_spatial_witnesses(right.hallmark_evidence)
     assert bool(eligible_joint_pairs(**pair_inputs)) is not blocked

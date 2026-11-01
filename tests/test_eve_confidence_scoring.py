@@ -426,14 +426,14 @@ def test_supplementary_preserves_existing_capsid_floor_and_original_status():
             domain_score=60,
             query_start=1,
             query_end=20,
-            validation_status="unvalidated",
-            viral_top10_max_pident=0,
+            validation_status="validated",
+            viral_top10_max_pident=30,
             source="retained_hmm",
         )
     ]
     assert calculate_eve_confidence(result, 0.0) == pytest.approx(0.2)
     assert result.supplementary_viral_evidence.eligible
-    assert result.hallmark_evidence[0].validation_status == "unvalidated"
+    assert result.hallmark_evidence[0].validation_status == "validated"
 
 
 def test_supplementary_alias_cellular_competitor_blocks_duplicate_viral_record():

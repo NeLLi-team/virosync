@@ -36,7 +36,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
 from virosync.pipeline.phase3.output_generator import OutputGenerator
 
 
-def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="unvalidated", identity=0):
+def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="validated", identity=30):
     return HallmarkEvidence(
         query_porf=f"{gene}|aa1-20",
         gene=gene,
@@ -53,6 +53,64 @@ def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="unvalidated",
         viral_top10_max_pident=identity,
         source="retained_hmm",
     )
+
+
+@pytest.mark.parametrize("model", ["VP_MCP_6", "VS000792"])
+@pytest.mark.parametrize("evalue", [0.0021, 1e-8])
+@pytest.mark.parametrize("status,identity", [("unvalidated", 0), ("supported", 20), ("unvalidated", 30)])
+def test_unvalidated_capsid_cannot_supply_core_floor_or_rescue_seed(model, evalue, status, identity):
+    evidence = [hit("capsid", model, evalue=evalue, status=status, identity=identity)]
+    original = evidence[0]
+
+    summary = summarize_hallmarks(evidence)
+    witnesses = find_spatial_witnesses(evidence)
+
+    assert summary.core_count == 0
+    assert summary.qualifying_evidence_ids == ()
+    assert summary.floor_tier == ""
+    assert witnesses == []
+    assert add_rescue_seeds([], witnesses) == []
+    assert evidence == [original]
+
+
+def test_stale_unvalidated_witness_cannot_rescue_or_appear_in_hallmark_column(tmp_path):
+    original = hit("capsid", "VP_MCP_6", evalue=0.0021)
+    witnesses = find_spatial_witnesses([original])
+    (seed,) = add_rescue_seeds([], witnesses)
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    evidence = [replace(original, validation_status="unvalidated", viral_top10_max_pident=0)]
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    selection = select_phase3_acceptance([result], AblationID.A0)
+    generator = OutputGenerator(tmp_path / "export")
+    detailed_path = generator.write_predictions_detailed_tsv([result])
+    profiles_path = generator.write_evidence_profiles([result])
+
+    assert result.hallmark_assessment.summary.core_count == 0
+    assert result.hallmark_assessment.summary.floor_tier == ""
+    assert result.hallmark_assessment.witnesses == ()
+    assert selection.canonical_results == ()
+    assert selection.normal_gate_decisions[0].reason != "hallmark_spatial_rescue_pass"
+    with detailed_path.open() as stream:
+        assert next(csv.DictReader(stream, delimiter="\t"))["qualifying_hallmark_genes"] == "."
+    profile = json.loads(profiles_path.read_text())[result.eve_id]
+    assert profile["hallmark_evidence"][0]["validation_status"] == "unvalidated"
+
+
+def test_validated_frameshift_twin_supplies_core_without_unvalidated_ordinary_copy():
+    raw = hit("ordinary", "GVOGm0003", evalue=1e-20, status="unvalidated", identity=0)
+    rescued = replace(hit("rescued", "GVOGm0003", evalue=1e-10), source="frameshift")
+
+    summary = summarize_hallmarks([raw, rescued], scoring_locus_ids={"rescued": "ordinary"})
+    (witness,) = find_spatial_witnesses([raw, rescued])
+
+    assert summary.core_count == summary.strong_count == 1
+    assert summary.qualifying_evidence_ids == (rescued.evidence_id,)
+    assert witness.evidence_ids == (rescued.evidence_id,)
 
 
 @pytest.mark.parametrize("extended", [False, True])
@@ -101,7 +159,7 @@ def test_qualifying_hallmark_genes_export_does_not_infer_from_raw_hits(tmp_path,
         end=10000,
         hallmark_genes=["GVOGm0760", "VS000151"],
         hallmark_evidence=[
-            hit("unvalidated_atpase", "GVOGm0760", evalue=1e-8),
+            hit("unvalidated_atpase", "GVOGm0760", evalue=1e-8, status="unvalidated", identity=0),
             hit("context", "VS000151", evalue=1e-8, identity=30),
         ],
     )
@@ -258,8 +316,9 @@ def test_nested_new_hulls_keep_all_witnesses_but_one_confirmed_seed():
     assert (seed.start, seed.end) == (100, 2000)
 
 
-def test_raw_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_path):
-    evidence = [hit("a", "GVOGm0003")]
+@pytest.mark.parametrize("status,identity", [("validated", 30), ("validated_novel", 0)])
+def test_validated_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_path, status, identity):
+    evidence = [hit("a", "GVOGm0003", status=status, identity=identity)]
     witnesses = find_spatial_witnesses(evidence)
     (seed,) = add_rescue_seeds([], witnesses)
     boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
@@ -272,7 +331,8 @@ def test_raw_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_pat
     assert result.confirmed_seeds == seed.confirmed_seeds
     assert result.confidence_tier == "MEDIUM"
     assert result.taxonomy_class == "UNKNOWN"
-    assert result.hallmark_evidence[0].validation_status == "unvalidated"
+    assert result.hallmark_evidence[0].validation_status == status
+    assert result.hallmark_assessment.summary.weighted_core_count == 0.25
     selection = select_phase3_acceptance([result], AblationID.A0)
     assert selection.canonical_results == (result,)
     assert selection.normal_gate_decisions[0].reason == "hallmark_spatial_rescue_pass"
@@ -284,7 +344,7 @@ def test_raw_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_pat
     assert member_ids == set(exported_by_id)
     assert set(exported["hallmark_assessment"]["summary"]["qualifying_evidence_ids"]) <= set(exported_by_id)
     assert exported_by_id[evidence[0].evidence_id]["evalue"] == 0.001
-    assert exported_by_id[evidence[0].evidence_id]["validation_status"] == "unvalidated"
+    assert exported_by_id[evidence[0].evidence_id]["validation_status"] == status
     result.end -= 1
     with pytest.raises(ValueError, match="supplementary.*interval"):
         select_phase3_acceptance([result], AblationID.A0)
@@ -292,7 +352,10 @@ def test_raw_rescue_survives_normal_extension_scoring_acceptance_and_ani(tmp_pat
 
 
 def test_json_exports_catalogue_roles_without_turning_portal_into_capsid(tmp_path):
-    evidence = [hit("mcp", "Mirus_MCP"), hit("portal", "Mirus_Portal")]
+    evidence = [
+        hit("mcp", "Mirus_MCP", status="unvalidated", identity=0),
+        hit("portal", "Mirus_Portal", status="unvalidated", identity=0),
+    ]
     result = VerificationResult("eve", "s", 0, 2000, hallmark_evidence=evidence)
     export_path = OutputGenerator(tmp_path).write_evidence_profiles([result])
     exported = json.loads(export_path.read_text())["eve"]["hallmark_evidence"]
