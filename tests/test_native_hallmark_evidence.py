@@ -1,5 +1,6 @@
 """Native retained-hallmark scoring and protected spatial rescue contracts."""
 
+import csv
 import json
 import logging
 from dataclasses import replace
@@ -11,6 +12,7 @@ from virosync.ablation import AblationID
 from virosync.pipeline.hallmark_evidence import (
     HallmarkEvidence,
     add_rescue_seeds,
+    assess_hallmarks,
     collect_hallmark_evidence,
     find_spatial_witnesses,
     summarize_hallmarks,
@@ -51,6 +53,71 @@ def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="unvalidated",
         viral_top10_max_pident=identity,
         source="retained_hmm",
     )
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("published_class", ["NCLDV", "MIRUS"])
+def test_qualifying_hallmark_genes_export_uses_scored_panel(tmp_path, extended, published_class):
+    result = VerificationResult(
+        eve_id="eve",
+        scaffold="s",
+        start=0,
+        end=10000,
+        taxonomy_class=published_class,
+        confidence_tier="LOW",
+        final_confidence=0.2,
+        hallmark_evidence=[
+            hit("capsid", "GVOGm0003", evalue=1e-8),
+            hit("atpase", "GVOGm0760", evalue=1e-8, identity=30),
+            hit("atpase_copy", "GVOGm0760", evalue=1e-8, identity=30),
+            hit("context", "VS000151", evalue=1e-8, identity=30),
+            hit("outside", "GVOGm0054", start=9990, end=11000, identity=30),
+        ],
+    )
+    result.hallmark_assessment = assess_hallmarks(result)
+    assessment = result.hallmark_assessment
+    generator = OutputGenerator(tmp_path, extended_output=extended)
+
+    canonical_path = generator.write_predictions_tsv([result])
+    detailed_path = generator.write_predictions_detailed_tsv([result])
+
+    with canonical_path.open() as stream:
+        canonical = next(csv.DictReader(stream, delimiter="\t"))
+    with detailed_path.open() as stream:
+        detailed = next(csv.DictReader(stream, delimiter="\t"))
+    assert canonical["qualifying_hallmark_genes"] == "A32|MCP"
+    assert detailed["qualifying_hallmark_genes"] == "A32|MCP"
+    assert canonical["effective_eve_class"] == published_class
+    assert result.hallmark_assessment is assessment
+    assert result.final_confidence == 0.2
+
+
+@pytest.mark.parametrize("assessed", [False, True])
+def test_qualifying_hallmark_genes_export_does_not_infer_from_raw_hits(tmp_path, assessed):
+    result = VerificationResult(
+        eve_id="eve",
+        scaffold="s",
+        start=0,
+        end=10000,
+        hallmark_genes=["GVOGm0760", "VS000151"],
+        hallmark_evidence=[
+            hit("unvalidated_atpase", "GVOGm0760", evalue=1e-8),
+            hit("context", "VS000151", evalue=1e-8, identity=30),
+        ],
+    )
+    if assessed:
+        result.hallmark_assessment = assess_hallmarks(result)
+    generator = OutputGenerator(tmp_path)
+
+    canonical_path = generator.write_predictions_tsv([result])
+    detailed_path = generator.write_predictions_detailed_tsv([result])
+
+    with canonical_path.open() as stream:
+        canonical = next(csv.DictReader(stream, delimiter="\t"))
+    with detailed_path.open() as stream:
+        detailed = next(csv.DictReader(stream, delimiter="\t"))
+    assert canonical["qualifying_hallmark_genes"] == "."
+    assert detailed["qualifying_hallmark_genes"] == "."
 
 
 @pytest.mark.parametrize("evalue,weighted", [(1e-5, 1.0), (1.000001e-5, 0.25), (0.01, 0.25), (0.01000001, 0.0)])

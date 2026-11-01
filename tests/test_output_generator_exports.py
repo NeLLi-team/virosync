@@ -69,6 +69,7 @@ CANONICAL_BASE_FIELDS = (
     "gc_deviation",
     "hallmark_total",
     "hallmark_unique",
+    "qualifying_hallmark_genes",
     "hallmark_non_atpase",
     "has_virus_specific",
     "has_structural_support",

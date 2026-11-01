@@ -1,7 +1,7 @@
 """Versioned public coordinate, class, and output conventions."""
 
 COORDINATE_SCHEMA_VERSION = 2
-OUTPUT_SCHEMA_VERSION = 11
+OUTPUT_SCHEMA_VERSION = 12
 COORDINATE_CONVENTION = "0-based, half-open [start, end)"
 
 # The PUBLISHED class partition. Every surface that reports an EVE's class to a
@@ -145,6 +145,7 @@ DETAILED_PREDICTION_COLUMNS = (
     # Marker evidence
     "hallmark_total",
     "hallmark_unique",
+    "qualifying_hallmark_genes",
     "mcp_gene_ids",
     "tier1_bypassed_marker_count",
     "tier1_bypassed_marker_ids",

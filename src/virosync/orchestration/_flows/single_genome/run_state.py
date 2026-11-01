@@ -170,10 +170,10 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v7",
     "phase2/resume_state.json": "virosync.phase2.resume_state/v7",
-    "virosync_predictions.tsv": "canonical-predictions-v7",
-    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v7",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v8",
-    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v8"),
+    "virosync_predictions.tsv": "canonical-predictions-v8",
+    "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v8",
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v9",
+    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v9"),
     "virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
     "phase3_synthesis/virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
@@ -503,8 +503,8 @@ def _observe_artifact(
                 if row_mode == "table":
                     if nonempty_rows == 0:
                         if schema in {
-                            "canonical-predictions-v7",
-                            "detailed-predictions-v8",
+                            "canonical-predictions-v8",
+                            "detailed-predictions-v9",
                             "virosync.repeat_candidates/v1",
                         }:
                             raise ValueError(f"final evidence table has no header: {relative_path}")

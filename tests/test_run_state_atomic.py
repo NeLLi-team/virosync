@@ -152,10 +152,10 @@ def test_joint_provenance_artifact_schema_rejects_old_tags_and_headerless_tables
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("eve_id\tjoint_seed_provenance\n")
     schema = _artifact_schema(path, tmp_path)
-    assert schema == "detailed-predictions-v8"
+    assert schema == "detailed-predictions-v9"
     artifact = run_state.build_artifact_identity(path, root=tmp_path, schema=schema)
     run_state._require_known_artifact_schemas({relative_path: artifact})
-    with pytest.raises(ValueError, match="must use schema 'detailed-predictions-v8'"):
+    with pytest.raises(ValueError, match="must use schema 'detailed-predictions-v9'"):
         run_state._require_known_artifact_schemas({relative_path: replace(artifact, schema="detailed-predictions-v7")})
     path.write_text("")
     with pytest.raises(ValueError, match="final evidence table has no header"):

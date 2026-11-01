@@ -565,9 +565,9 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "ablation_events.json":
         return "virosync.ablation_events/v1"
     if path.name == "virosync_predictions.tsv":
-        return "canonical-predictions-v7"
+        return "canonical-predictions-v8"
     if path.name == "virosync_predictions_detailed.tsv":
-        return "detailed-predictions-v8"
+        return "detailed-predictions-v9"
     if path.name == "virosync_repeat_candidates.tsv":
         return "virosync.repeat_candidates/v1"
     if path.name == "virosync_predictions.bed":

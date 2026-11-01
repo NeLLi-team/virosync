@@ -37,7 +37,7 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
     resolve_effective_eve_class,
 )
-from virosync.pipeline.hallmark_evidence import has_spatial_rescue
+from virosync.pipeline.hallmark_evidence import EXCLUDED_FAMILIES, has_spatial_rescue
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
@@ -435,6 +435,27 @@ def _published_eve_class(result: VerificationResult) -> str:
     carries MIXED and drives acceptance only.
     """
     return normalize_effective_eve_class(getattr(result, "taxonomy_class", "UNKNOWN"))
+
+
+def _qualifying_hallmark_genes(result: VerificationResult) -> str:
+    """Name qualifying core families in the scored panel, before ANI class transfer."""
+    assessment = result.hallmark_assessment
+    if assessment is None:
+        return "."
+    qualifying_ids = set(assessment.summary.qualifying_evidence_ids)
+    names = set()
+    for hit in result.hallmark_evidence:
+        if hit.evidence_id not in qualifying_ids:
+            continue
+        for role in hit.model_roles:
+            if (
+                role["panel"] == assessment.summary.panel
+                and role["role"] == "core_marker"
+                and not role["excluded_from_scoring"]
+                and role["marker"] not in EXCLUDED_FAMILIES
+            ):
+                names.add(role["marker"])
+    return "|".join(sorted(names)) or "."
 
 
 _ATPASE_HALLMARK_NAMES = {"plv_pc_054", "gvogm0760"}
@@ -1638,6 +1659,7 @@ class OutputGenerator:
             f"{result.gc_deviation:.4f}",
             str(hallmark_total if hallmark_total else result.hallmark_count),
             str(hallmark_unique if hallmark_unique else result.hallmark_diversity),
+            _qualifying_hallmark_genes(result),
             str(sum(1 for gene in (result.hallmark_genes or []) if not _is_atpase_marker(gene))),
             _tsv_flag(result.has_virus_specific_marker),
             _tsv_flag(result.has_structural_support),
@@ -1736,6 +1758,7 @@ class OutputGenerator:
             "gc_deviation",
             "hallmark_total",
             "hallmark_unique",
+            "qualifying_hallmark_genes",
             "hallmark_non_atpase",
             "has_virus_specific",
             "has_structural_support",
@@ -1909,6 +1932,7 @@ class OutputGenerator:
             **_integration_evidence_row(result),
             "hallmark_total": str(hallmark_total if hallmark_total else result.hallmark_count),
             "hallmark_unique": str(hallmark_unique if hallmark_unique else result.hallmark_diversity),
+            "qualifying_hallmark_genes": _qualifying_hallmark_genes(result),
             "mcp_gene_ids": "|".join(result.mcp_gene_ids) if result.mcp_gene_ids else ".",
             "tier1_bypassed_marker_count": str(len(result.tier1_bypassed_marker_ids)),
             "tier1_bypassed_marker_ids": (

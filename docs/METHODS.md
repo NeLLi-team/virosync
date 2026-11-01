@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 11. The repeat-evidence groups below comprise 18
+Both tables use output schema 12. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -92,6 +92,7 @@ columns in each table; they are separate from the 17-column
 | `confidence_tier`, `final_confidence` | Both | Rule-based evidence tier and score. |
 | `effective_eve_class` | Both | Published region class. |
 | `hallmark_total`, `hallmark_unique`, `mcp_gene_ids` | Both | Viral hallmark and major capsid protein evidence. |
+| `qualifying_hallmark_genes` | Both | Sorted, distinct hallmark gene families from the qualifying core evidence in the scored panel, separated by a pipe (for example, `A32`). A dot means none qualify. Raw model hits and context-only markers are excluded. ANI class transfer does not change this evidence list. |
 | `gene_taxonomy_viral_interior`, `gene_taxonomy_cellular` | Accepted | Viral and cellular gene support inside the region. |
 | `taxonomy_best_hits`, `ncldv_top10_proteins`, `mirus_top10_proteins`, `ppv_top10_proteins`, `cress_top10_proteins` | Detailed | Gene-level taxonomy counts. |
 | `kfd`, `gc_deviation` | Both | Sequence-composition differences from the host background used by scoring. |
@@ -148,12 +149,12 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 11 |
+| Public output schema | 12 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
 | Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
 | Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v7` |
 | Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v7` |
-| Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v8` |
+| Accepted and detailed prediction artifacts | `canonical-predictions-v8` and `detailed-predictions-v9` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
 
 Resume validates the input, configuration, software, environment, resources,
