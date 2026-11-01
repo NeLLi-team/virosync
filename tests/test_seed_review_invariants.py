@@ -76,10 +76,18 @@ def test_support_on_fifth_gene_connects_but_sixth_does_not(direction, positive_p
 def test_partition_updates_container_identity_and_rejects_overlaps():
     parent = boundary("a", 100, 900)
     parent.confirmed_seeds = (ConfirmedSeed("a", "s", 100, 200), ConfirmedSeed("b", "s", 700, 800))
-    children = accept_seed_partition(parent, [replace(parent, start=100, end=400), replace(parent, start=500, end=900)])
+    children = accept_seed_partition(
+        parent,
+        [replace(parent, start=100, end=400), replace(parent, start=500, end=900)],
+        allowed_interval=(parent.start, parent.end),
+    )
     assert [child.seed_id for child in children] == ["a", "b"]
     assert (
-        accept_seed_partition(parent, [replace(parent, start=100, end=600), replace(parent, start=500, end=900)])
+        accept_seed_partition(
+            parent,
+            [replace(parent, start=100, end=600), replace(parent, start=500, end=900)],
+            allowed_interval=(parent.start, parent.end),
+        )
         is None
     )
 
@@ -166,7 +174,11 @@ def test_child_uses_full_parent_taxonomy_coverage_after_identity_update():
 
     parent = boundary("a", 100, 900)
     parent.confirmed_seeds = (ConfirmedSeed("a", "s", 100, 200), ConfirmedSeed("b", "s", 700, 800))
-    children = accept_seed_partition(parent, [replace(parent, start=100, end=400), replace(parent, start=500, end=900)])
+    children = accept_seed_partition(
+        parent,
+        [replace(parent, start=100, end=400), replace(parent, start=500, end=900)],
+        allowed_interval=(parent.start, parent.end),
+    )
     expanded = GeneTaxonomy("expanded", "s", 550, 600)
     core = GeneTaxonomy("core", "s", 750, 780)
     assert children[1].seed_id == "b"
@@ -177,7 +189,11 @@ def test_partition_keeps_parent_when_original_cores_overlap():
     parent = boundary("a", 100, 900)
     parent.confirmed_seeds = (ConfirmedSeed("a", "s", 100, 400), ConfirmedSeed("b", "s", 300, 800))
     assert (
-        accept_seed_partition(parent, [replace(parent, start=100, end=400), replace(parent, start=300, end=900)])
+        accept_seed_partition(
+            parent,
+            [replace(parent, start=100, end=400), replace(parent, start=300, end=900)],
+            allowed_interval=(parent.start, parent.end),
+        )
         is None
     )
 
@@ -246,3 +262,22 @@ def test_successful_ml_support_uses_shared_controller_and_host_stop(tmp_path, mo
     assert result.refined_boundaries[0].right_stop == 2300
     assert result.refined_boundaries[0].right_stop_reason == "host_stop"
     assert result.refined_boundaries[0].confirmed_seeds == seed.confirmed_seeds
+
+
+@pytest.mark.parametrize(
+    ("allowed", "stop", "accepted"),
+    [((0, 1000), None, True), ((101, 1000), None, False), ((0, 1000), 110, False), ((100, 1000), 100, True)],
+)
+def test_partition_outward_authority_and_recorded_stop(allowed, stop, accepted):
+    parent = boundary("a", 120, 900)
+    parent.confirmed_seeds = (ConfirmedSeed("a", "s", 150, 850),)
+    parent.left_stop = stop
+    child = replace(parent, start=100)
+    result = accept_seed_partition(parent, [child], allowed_interval=allowed)
+    assert (result is not None) is accepted
+
+
+def test_partition_rejects_authority_that_does_not_contain_parent():
+    parent = boundary("a", 120, 900)
+    with pytest.raises(ValueError, match="allowed interval must contain parent"):
+        accept_seed_partition(parent, [parent], allowed_interval=(121, 900))

@@ -11,6 +11,7 @@ from Bio import SeqIO
 
 from virosync.config import PipelineConfig
 from virosync.orchestration._flows.single_genome import phase2
+from virosync.orchestration._flows.single_genome.phase_state import load_phase2_state, write_phase2_state
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2 import terminal_repeats
 from virosync.pipeline.phase2.boundary_diamond import (
@@ -447,6 +448,7 @@ def test_unique_repeat_changes_only_reachable_noncore_flanks(
 
     refined = refine_boundaries_with_terminal_repeats(
         [boundary],
+        allowed_intervals=[(boundary.start, boundary.end)],
         raw_genome_path=genome_path,
         validated_markers=[_Marker("contig", 250, 270, "marker-1")],
         boundary_diamond_query=_query(len(sequence)),
@@ -480,6 +482,7 @@ def test_coverage_veto_retains_candidate_without_changing_boundary(tmp_path: Pat
 
     refined = refine_boundaries_with_terminal_repeats(
         [boundary],
+        allowed_intervals=[(boundary.start, boundary.end)],
         raw_genome_path=genome_path,
         validated_markers=[_Marker("contig", 250, 270, "marker-1")],
         boundary_diamond_query=_query(len(sequence)),
@@ -511,6 +514,7 @@ def test_no_marker_anchor_is_explicit_and_coordinate_neutral(tmp_path: Path) -> 
 
     refined = refine_boundaries_with_terminal_repeats(
         [boundary],
+        allowed_intervals=[(boundary.start, boundary.end)],
         raw_genome_path=genome_path,
         validated_markers=[],
         boundary_diamond_query=_query(len(sequence)),
@@ -525,15 +529,17 @@ def test_no_marker_anchor_is_explicit_and_coordinate_neutral(tmp_path: Path) -> 
     assert refined.tir_candidate_count == 0
 
 
+@pytest.mark.parametrize("parent_start", [0, 120])
 def test_disjoint_tir_pairs_partition_parent_and_keep_marker_neighbor(
     tmp_path: Path,
+    parent_start: int,
 ) -> None:
     sequence, expected_pairs = _adjacent_repeat_sequence()
     genome_path = tmp_path / "raw.fna"
     genome_path.write_text(f">contig\n{sequence}\n")
     parent = RefinedBoundary(
         scaffold="contig",
-        start=0,
+        start=parent_start,
         end=len(sequence),
         seed_id="seed-1",
         original_start=200,
@@ -563,6 +569,7 @@ def test_disjoint_tir_pairs_partition_parent_and_keep_marker_neighbor(
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(0, len(sequence))],
         raw_genome_path=genome_path,
         validated_markers=markers,
         boundary_diamond_query=_query(len(sequence)),
@@ -592,7 +599,7 @@ def test_disjoint_tir_pairs_partition_parent_and_keep_marker_neighbor(
         (980, 1100),
     ]
     assert [boundary.confirmed_seeds[0].seed_id for boundary in refined] == ["seed-1", "seed-2", "seed-3"]
-    assert all((boundary.pre_tir_start, boundary.pre_tir_end) == (0, len(sequence)) for boundary in refined)
+    assert all((boundary.pre_tir_start, boundary.pre_tir_end) == (parent_start, len(sequence)) for boundary in refined)
     assert [boundary.seed_id for boundary in refined] == ["seed-1", "seed-2", "seed-3"]
     assert all(boundary.confidence == 0.0 for boundary in refined)
     assert all(boundary.posterior_probability == 0.0 for boundary in refined)
@@ -636,6 +643,7 @@ def test_partition_cannot_split_whole_seed_for_viral_taxonomy_neighbor(tmp_path:
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=markers,
         boundary_diamond_query=_query(len(sequence)),
@@ -671,6 +679,7 @@ def test_partition_retains_parent_when_marker_neighbor_has_no_confirmed_seed(
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=[
             _Marker("contig", 220, 240, "tir-marker"),
@@ -724,6 +733,7 @@ def test_partition_cannot_emit_unseeded_call_beyond_parent(tmp_path: Path) -> No
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=[_Marker("contig", 620, 640, "tir-marker")],
         boundary_diamond_query=_query(len(sequence)),
@@ -756,6 +766,7 @@ def test_identical_tir_cross_pair_keeps_parent_ambiguous(tmp_path: Path) -> None
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=[
             _Marker("contig", 220, 240, "first"),
@@ -826,6 +837,7 @@ def test_crossing_porf_does_not_override_tir_partition(tmp_path: Path) -> None:
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=[
             _Marker("contig", 220, 240, "first"),
@@ -870,6 +882,7 @@ def test_partition_vetoes_complete_marker_group_crossing_child_boundary(
 
     refined = refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=[
             _Marker("contig", 220, 240, "first"),
@@ -889,7 +902,12 @@ def test_partition_vetoes_complete_marker_group_crossing_child_boundary(
     assert refined[0].tir_candidate_count == 2
 
 
-def test_shared_pair_does_not_collapse_distinct_boundaries(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("allowed", "status"), [([(180, 245), (260, 340)], "ambiguous"), ([(0, 520), (0, 520)], "shared_pair")]
+)
+def test_shared_pair_does_not_collapse_distinct_boundaries(
+    tmp_path: Path, allowed: list[tuple[int, int]], status: str
+) -> None:
     sequence, expected = _planted_repeat()
     genome_path = tmp_path / "raw.fna"
     genome_path.write_text(f">contig\n{sequence}\n")
@@ -922,6 +940,7 @@ def test_shared_pair_does_not_collapse_distinct_boundaries(tmp_path: Path) -> No
 
     refined = refine_boundaries_with_terminal_repeats(
         boundaries,
+        allowed_intervals=allowed,
         raw_genome_path=genome_path,
         validated_markers=[
             _Marker("contig", 220, 230, "marker-1"),
@@ -934,13 +953,16 @@ def test_shared_pair_does_not_collapse_distinct_boundaries(tmp_path: Path) -> No
     )
 
     assert [(boundary.start, boundary.end) for boundary in refined] == [(180, 245), (260, 340)]
-    assert {boundary.tir_status for boundary in refined} == {"ambiguous"}
+    assert {boundary.tir_status for boundary in refined} == {status}
     assert all(boundary.tir_present for boundary in refined)
     assert not any(boundary.tir_boundary_override for boundary in refined)
     assert {(boundary.tir_left_start, boundary.tir_right_end) for boundary in refined} == {(expected[0], expected[3])}
 
 
-def test_outward_tir_proposal_does_not_replace_existing_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("allowed_first", "status"), [((180, 245), "ambiguous"), ((0, 520), "shared_pair")])
+def test_outward_tir_proposal_does_not_replace_existing_candidate(
+    tmp_path: Path, allowed_first: tuple[int, int], status: str
+) -> None:
     sequence, expected = _planted_repeat()
     genome_path = tmp_path / "raw.fna"
     genome_path.write_text(f">contig\n{sequence}\n")
@@ -976,6 +998,7 @@ def test_outward_tir_proposal_does_not_replace_existing_candidate(tmp_path: Path
 
     refined = refine_boundaries_with_terminal_repeats(
         [proposing, untouched],
+        allowed_intervals=[allowed_first, (untouched.start, untouched.end)],
         raw_genome_path=genome_path,
         validated_markers=[_Marker("contig", 220, 230, "marker-1")],
         boundary_diamond_query=GenomeDiamondQuery(seed_gene_mappings=mappings),
@@ -989,10 +1012,14 @@ def test_outward_tir_proposal_does_not_replace_existing_candidate(tmp_path: Path
         (proposing.start, proposing.end),
     ]
     by_seed = {boundary.seed_id: boundary for boundary in refined}
-    assert by_seed["seed-1"].tir_status == "ambiguous"
+    assert by_seed["seed-1"].tir_status == status
     assert by_seed["seed-1"].tir_boundary_override is False
     assert by_seed["seed-2"].tir_status == "detected"
     assert by_seed["seed-2"].tir_boundary_override is False
+
+    state_path = tmp_path / "refined_state.json"
+    write_phase2_state(state_path, refined)
+    assert load_phase2_state(state_path) == refined
 
 
 def test_shared_pair_resolution_handles_restoration_collision() -> None:
@@ -1046,9 +1073,12 @@ def test_shared_pair_resolution_handles_restoration_collision() -> None:
     assert not any(boundary.tir_boundary_override for boundary in resolved)
 
 
+@pytest.mark.parametrize(("stops", "expected_allowed"), [((None, None), (0, 700)), ((50, 650), (50, 650))])
 def test_phase2_applies_tir_after_merge_before_downstream_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stops: tuple[int | None, int | None],
+    expected_allowed: tuple[int, int],
 ) -> None:
     events: list[tuple[str, object]] = []
     retained_marker = SimpleNamespace(
@@ -1072,11 +1102,12 @@ def test_phase2_applies_tir_after_merge_before_downstream_evidence(
             scaffold="contig",
             seed_start=start,
             seed_end=end,
-            flank_start_bp=0,
-            flank_end_bp=800,
+            flank_start_bp=0 if seed_id == "seed-1" else 200,
+            flank_end_bp=600 if seed_id == "seed-1" else 700,
         )
         for seed_id, start, end in (("seed-1", 100, 250), ("seed-2", 300, 450))
     }
+    mappings["separate"] = SeedGeneMapping("separate", "contig", 200, 300, flank_start_bp=0, flank_end_bp=800)
     query = GenomeDiamondQuery(seed_gene_mappings=mappings)
     taxonomy = GeneTaxonomy(porf_id="tax", scaffold="contig", start=150, end=160)
 
@@ -1102,11 +1133,14 @@ def test_phase2_applies_tir_after_merge_before_downstream_evidence(
                 original_start=100,
                 original_end=450,
                 confirmed_seeds=boundaries[0].confirmed_seeds + boundaries[1].confirmed_seeds,
+                left_stop=stops[0],
+                right_stop=stops[1],
             )
         ]
 
     def fake_tir(boundaries: list[RefinedBoundary], **kwargs: object) -> list[RefinedBoundary]:
         assert kwargs["validated_markers"][0] is retained_marker
+        assert kwargs["allowed_intervals"] == [expected_allowed]
         events.append(("tir", (boundaries[0].start, boundaries[0].end, kwargs["raw_genome_path"])))
         boundary = boundaries[0]
         return [
@@ -1182,3 +1216,318 @@ def test_phase2_applies_tir_after_merge_before_downstream_evidence(
     ]
     assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (90, 460)
     assert (tmp_path / "phase2" / "refined_boundaries.bed").read_text().startswith("contig\t90\t460\t")
+
+
+@pytest.mark.parametrize(
+    ("parent_bounds", "allowed", "stop", "expected"),
+    [
+        ((120, 400), (0, 520), None, (100, 420)),
+        ((100, 400), (0, 520), None, (100, 420)),
+        ((50, 400), (0, 520), None, (100, 420)),
+        ((120, 400), (101, 520), None, (120, 400)),
+        ((120, 400), (100, 420), None, (100, 420)),
+        ((120, 400), (0, 520), 410, (120, 400)),
+        ((120, 400), (0, 520), 420, (100, 420)),
+    ],
+)
+def test_outward_tir_respects_walked_interval_and_stop(
+    tmp_path: Path,
+    parent_bounds: tuple[int, int],
+    allowed: tuple[int, int],
+    stop: int | None,
+    expected: tuple[int, int],
+) -> None:
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    parent = RefinedBoundary(
+        "contig",
+        *parent_bounds,
+        seed_id="seed-1",
+        original_start=150,
+        original_end=350,
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
+        right_stop=stop,
+    )
+    query = _query(len(sequence))
+
+    result = refine_boundaries_with_terminal_repeats(
+        [parent],
+        allowed_intervals=[allowed],
+        raw_genome_path=genome,
+        validated_markers=[_Marker("contig", 250, 270, "marker-1")],
+        boundary_diamond_query=query,
+        boundary_taxonomy_map={},
+        proteome_index={"contig": []},
+        extension_bp=500,
+    )
+    phase2._annotate_boundary_repeats(result, raw_genome_path=genome, boundary_diamond_query=query, extension_bp=500)
+    state = tmp_path / "refined.json"
+    write_phase2_state(state, result)
+    loaded = load_phase2_state(state)
+
+    assert (result[0].start, result[0].end) == expected
+    assert result[0].confirmed_seeds == parent.confirmed_seeds
+    assert (result[0].pre_tir_start, result[0].pre_tir_end) == parent_bounds
+    assert result[0].repeat_evidence is not None
+    assert (result[0].repeat_evidence.assessed_start, result[0].repeat_evidence.assessed_end) == expected
+    assert (result[0].repeat_evidence.parent_start, result[0].repeat_evidence.parent_end) == parent_bounds
+    assert loaded == result
+
+
+@pytest.mark.parametrize(
+    ("parent_bounds", "marker_span", "expected"),
+    [
+        ((120, 400), (410, 450), (120, 400, "ambiguous")),
+        ((120, 400), (410, 700), (120, 400, "ambiguous")),
+        ((120, 400), (0, 110), (120, 400, "ambiguous")),
+        ((50, 470), (410, 700), (100, 420, "detected")),
+        ((100, 420), (410, 700), (100, 420, "detected")),
+    ],
+)
+def test_flank_marker_veto_applies_only_to_new_outward_endpoints(
+    tmp_path: Path,
+    parent_bounds: tuple[int, int],
+    marker_span: tuple[int, int],
+    expected: tuple[int, int, str],
+) -> None:
+    sequence, _ = _planted_repeat()
+    sequence += "A" * 300
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    parent = RefinedBoundary(
+        "contig",
+        *parent_bounds,
+        seed_id="seed-1",
+        original_start=150,
+        original_end=350,
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
+    )
+    result = refine_boundaries_with_terminal_repeats(
+        [parent],
+        allowed_intervals=[(0, 520)],
+        raw_genome_path=genome,
+        validated_markers=[_Marker("contig", 250, 270, "anchor"), _Marker("contig", *marker_span, "flank")],
+        boundary_diamond_query=_query(len(sequence)),
+        boundary_taxonomy_map={},
+        proteome_index={"contig": []},
+        extension_bp=500,
+    )
+    assert (result[0].start, result[0].end, result[0].tir_status) == expected
+
+
+def _outward_proposal(parent: RefinedBoundary, start: int, end: int) -> RefinedBoundary:
+    return replace(
+        parent,
+        start=start,
+        end=end,
+        pre_tir_start=parent.start,
+        pre_tir_end=parent.end,
+        tir_present=True,
+        tir_status="detected",
+        tir_left_start=start,
+        tir_left_end=start + 30,
+        tir_right_start=end - 30,
+        tir_right_end=end,
+        tir_identity=1.0,
+        tir_boundary_override=True,
+        tir_alignment_length=30,
+        tir_candidate_count=1,
+    )
+
+
+@pytest.mark.parametrize(("end", "expected_end", "status"), [(300, 200, "ambiguous"), (250, 250, "detected")])
+@pytest.mark.parametrize("neighbor_bounds", [(250, 400), (260, 395)])
+def test_new_partial_overlap_reverts_but_touching_neighbor_is_allowed(
+    end: int, expected_end: int, status: str, neighbor_bounds: tuple[int, int]
+) -> None:
+    left = RefinedBoundary("s", 100, 200, seed_id="left", confirmed_seeds=(ConfirmedSeed("left", "s", 120, 180),))
+    right = RefinedBoundary("s", 250, 400, seed_id="right", confirmed_seeds=(ConfirmedSeed("right", "s", 260, 390),))
+    neighbor = right if neighbor_bounds == (250, 400) else _outward_proposal(right, *neighbor_bounds)
+    result = terminal_repeats._resolve_partition_conflicts(
+        [left, right], [[_outward_proposal(left, 100, end)], [neighbor]]
+    )
+    assert (result[0].end, result[0].tir_status) == (expected_end, status)
+    assert result[1] == neighbor
+    assert result[0].confirmed_seeds == left.confirmed_seeds
+
+
+def test_partial_overlap_restoration_exposes_another_conflict() -> None:
+    parents = [
+        RefinedBoundary(
+            "s", start, end, seed_id=str(start), confirmed_seeds=(ConfirmedSeed(str(start), "s", start + 10, end - 10),)
+        )
+        for start, end in [(100, 200), (250, 350), (20, 80)]
+    ]
+    parents[0].confirmed_seeds = (ConfirmedSeed("100", "s", 160, 180),)
+    plans = [[_outward_proposal(parents[0], 150, 280)], [parents[1]], [_outward_proposal(parents[2], 20, 140)]]
+    result = terminal_repeats._resolve_partition_conflicts(parents, plans)
+    assert [(boundary.start, boundary.end) for boundary in result] == [(20, 80), (100, 200), (250, 350)]
+    assert [boundary.tir_status for boundary in result] == ["ambiguous", "ambiguous", "not_assessed"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_allowed", "expected_bounds"),
+    [
+        ("no_host", (0, 520), (100, 420)),
+        ("CRESS", (150, 350), (150, 350)),
+        ("A4", (0, 520), (100, 420)),
+        ("host", (0, 360), (150, 350)),
+    ],
+)
+def test_phase2_real_tir_uses_walked_authority_and_final_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    expected_allowed: tuple[int, int],
+    expected_bounds: tuple[int, int],
+) -> None:
+    from virosync.pipeline.host_signatures import HostSignatureModel
+    from virosync.pipeline.phase2 import seed_extension
+
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    genes = [pORF(f"host-{start}", "contig", start, start + 10) for start in (360, 380, 400)]
+    taxonomy = {
+        gene.id: GeneTaxonomy(porf_id=gene.id, scaffold="contig", start=gene.start, end=gene.end) for gene in genes
+    }
+    query = _query(len(sequence))
+    marker = SimpleNamespace(
+        scaffold="contig",
+        start=250,
+        end=270,
+        query_porf="anchor",
+        validation_status="validated",
+        hmm_target="GVOGm0003",
+        hmm_score=100.0,
+        hmm_evalue=1e-20,
+        top10_prefixes="NCLDV__",
+        top10_pidents="50.0",
+        top10_targets="",
+    )
+    monkeypatch.setattr(phase2, "build_proteome_index", lambda _path: {"contig": genes})
+    monkeypatch.setattr(phase2, "_require_phase2b_gene_taxonomy_db", lambda *_args, **_kwargs: tmp_path / "db")
+    monkeypatch.setattr(
+        phase2,
+        "_run_boundary_diamond",
+        lambda **_kwargs: phase2._BoundaryEvidence(taxonomy_map=taxonomy, control_stats=None, query=query),
+    )
+    monkeypatch.setattr(seed_extension, "host_lineage_share", lambda *_args: 1.0)
+    native_refiner = terminal_repeats.refine_boundaries_with_terminal_repeats
+    native_composition = phase2._recalculate_boundary_composition
+    seen = []
+
+    def check_refiner(boundaries, **kwargs):
+        assert kwargs["allowed_intervals"] == [expected_allowed]
+        return native_refiner(boundaries, **kwargs)
+
+    def check_composition(boundaries, **kwargs):
+        seen.extend((boundary.start, boundary.end) for boundary in boundaries)
+        native_composition(boundaries, **kwargs)
+
+    monkeypatch.setattr(terminal_repeats, "refine_boundaries_with_terminal_repeats", check_refiner)
+    monkeypatch.setattr(phase2, "_recalculate_boundary_composition", check_composition)
+    config = PipelineConfig().with_overrides(
+        resume=False,
+        gene_taxonomy_faa_db=tmp_path / "db",
+        boundary_host_trim_enabled=mode != "no_host",
+        boundary_taxonomy_ml_enabled=False,
+        ablation_id="A4" if mode == "A4" else "A0",
+        threads=1,
+        gene_taxonomy_threads=1,
+    )
+    core = ConfirmedSeed("seed-1", "contig", 150, 350)
+    result = phase2._run_phase2_subflow(
+        masked_path=genome,
+        raw_genome_path=genome,
+        proteome_path=tmp_path / "proteome.faa",
+        merged_seeds=[
+            MergedSeed(
+                "contig",
+                150,
+                350,
+                seed_id="seed-1",
+                confirmed_seeds=(core,),
+                predicted_family="CRESS" if mode == "CRESS" else "NCLDV",
+            )
+        ],
+        validated_markers=[marker],
+        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}),
+        output_dir=tmp_path,
+        genome_id="genome",
+        config=config,
+        genome_start_time=0.0,
+        logger=logging.getLogger(__name__),
+    )
+    final = result.refined_boundaries[0]
+    assert (final.start, final.end) == expected_bounds
+    assert seen == [expected_bounds]
+    assert final.confirmed_seeds == (core,)
+    assert final.region_classification_ncldv_markers == 1
+    assert final.candidate_id == f"EVE_contig_{expected_bounds[0]}-{expected_bounds[1]}"
+    assert final.repeat_evidence is not None
+    assert (final.repeat_evidence.assessed_start, final.repeat_evidence.assessed_end) == expected_bounds
+    assert (final.repeat_evidence.parent_start, final.repeat_evidence.parent_end) == (150, 350)
+    assert load_phase2_state(tmp_path / "phase2/refined_state.json") == result.refined_boundaries
+
+
+def test_outward_tir_missing_taxonomy_in_added_flank_vetoes_change(tmp_path: Path) -> None:
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    parent = RefinedBoundary(
+        "contig",
+        120,
+        400,
+        seed_id="seed-1",
+        original_start=150,
+        original_end=350,
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
+    )
+    result = refine_boundaries_with_terminal_repeats(
+        [parent],
+        allowed_intervals=[(0, 520)],
+        raw_genome_path=genome,
+        validated_markers=[_Marker("contig", 250, 270, "anchor")],
+        boundary_diamond_query=_query(len(sequence)),
+        boundary_taxonomy_map={},
+        proteome_index={"contig": [pORF("missing", "contig", 405, 415)]},
+        extension_bp=500,
+    )
+    assert (result[0].start, result[0].end, result[0].tir_status) == (120, 400, "taxonomy_incomplete")
+
+
+def test_shared_pair_restoration_retains_identical_not_partial_collision_evidence() -> None:
+    first = ConfirmedSeed("a1", "s", 220, 260)
+    second = ConfirmedSeed("a2", "s", 520, 560)
+    parent = RefinedBoundary("s", 200, 600, seed_id="a1", confirmed_seeds=(first, second))
+    neighbor = RefinedBoundary("s", 50, 150, seed_id="b", confirmed_seeds=(ConfirmedSeed("b", "s", 70, 90),))
+    peer = RefinedBoundary("s", 620, 680, seed_id="c", confirmed_seeds=(ConfirmedSeed("c", "s", 630, 650),))
+    partial = replace(
+        _outward_proposal(parent, 100, 300), confirmed_seeds=(first,), tir_identity=0.93, tsd_sequence="TGCA"
+    )
+    identical = replace(
+        _outward_proposal(parent, 500, 700),
+        seed_id="a2",
+        confirmed_seeds=(second,),
+        tir_identity=0.97,
+        tsd_sequence="ACGT",
+    )
+
+    resolved = terminal_repeats._resolve_partition_conflicts(
+        [parent, neighbor, peer],
+        [[partial, identical], [neighbor], [_outward_proposal(peer, 500, 700)]],
+    )
+    restored = next(boundary for boundary in resolved if boundary.seed_id == "a1")
+
+    assert (restored.start, restored.end, restored.tir_status) == (200, 600, "shared_pair")
+    assert restored.confirmed_seeds == (first, second)
+    assert (
+        restored.tir_left_start,
+        restored.tir_left_end,
+        restored.tir_right_start,
+        restored.tir_right_end,
+        restored.tir_identity,
+        restored.tsd_sequence,
+    ) == (500, 530, 670, 700, 0.97, "ACGT")

@@ -56,8 +56,9 @@ class RefinedBoundary:
     original_end: int = 0
 
     # Terminal inverted-repeat evidence. Coordinates are 0-based, half-open.
-    # ``pre_tir_*`` preserves the heuristic boundary that the accepted repeat
-    # pair replaced, while ``tir_scan_*`` records the searched interval.
+    # ``pre_tir_*`` preserves the parent boundary before repeat refinement;
+    # ``tir_boundary_override`` records whether an accepted pair changed it.
+    # A detected pair may already match it. ``tir_scan_*`` is the searched interval.
     pre_tir_start: int | None = None
     pre_tir_end: int | None = None
     tir_present: bool = False

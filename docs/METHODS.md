@@ -101,10 +101,10 @@ columns in each table; they are separate from the 17-column
 | `ani_cluster_id`, `ani_cluster_size`, `ani_max_percent` | Detailed | Within-genome ANI cluster assignment. A dot marks no clustered relative where applicable. |
 | `taxonomy_class_before_ani`, `taxonomy_class_propagated_from` | Detailed | Class before ANI-based transfer and the donor EVE, when transfer occurred. |
 | `tir_present`, `tir_status`, `tir_candidate_count` | Both | Terminal inverted-repeat evidence and whether a pair can define the boundary. Presence alone does not mean the boundary was changed. |
-| `tir_left_start`, `tir_left_end`, `tir_right_start`, `tir_right_end`, `tir_identity` | Both | Coordinates of the matched repeat segments and their identity after reverse complementation. Segments may cover only part of a long or gapped repeat. For ambiguous results, these describe the best candidate pair. |
+| `tir_left_start`, `tir_left_end`, `tir_right_start`, `tir_right_end`, `tir_identity` | Both | Coordinates of the matched repeat segments and their identity after reverse complementation. Segments may cover only part of a long or gapped repeat. For ambiguous results, these describe a candidate pair. |
 | `tir_scan_start`, `tir_scan_end` | Both | Genomic interval searched for repeat pairs. |
 | `tir_alignment_capped`, `tir_alignment_length` | Both | Whether the reported arms were shortened to 500 bp, and the full ungapped alignment length used to select their outer ends. |
-| `tir_boundary_override`, `pre_tir_start`, `pre_tir_end` | Both | Whether a repeat pair controls the final boundary, and the parent coordinates before repeat refinement. Split children share these parent coordinates. |
+| `tir_boundary_override`, `pre_tir_start`, `pre_tir_end` | Both | Whether an accepted repeat pair changed the final coordinates, and the parent coordinates before repeat refinement. Split children share these parent coordinates. |
 | `tsd_sequence` | Both | Candidate 3–9 bp duplication immediately outside the retained TIR anchors, when found. Check `tsd_assessment_status` before interpreting it at a changed endpoint. |
 | `repeat_evidence_id`, `repeat_input_id`, `repeat_assessed_start`, `repeat_assessed_end`, `repeat_parent_start`, `repeat_parent_end` | Both | Stable evidence and input-seed linkage, the interval actually assessed, and its parent before TIR partitioning. |
 | `repeat_left_status`, `repeat_right_status`, `repeat_left_assessment`, `repeat_right_assessment` | Both | Per-end status and JSON with requested and searched host windows, clipping reasons and ambiguous-base counts. A completed search is relative to the recorded method and windows. |
@@ -774,6 +774,19 @@ table includes children that independently pass the usual acceptance rules.
 If a proposed child lacks a confirmed seed, overlaps another child or leaves
 a source seed unassigned, the whole split is rejected and the parent is kept.
 The parent coordinates remain in `pre_tir_start` and `pre_tir_end`.
+Repeat-defined children may extend beyond the parent within the interval that
+Phase 2 checked during seed extension, clipped to any recorded host stops.
+Merged parents use only the checked intervals of their contributing seeds.
+CRESS seeds retain their Phase 1 seed interval. An unavailable host model adds no
+host stop; missing gene-taxonomy records inside a child still veto refinement.
+A host run extending beyond the checked interval cannot be evaluated past that
+interval, just as in gene-walk extension. Repeat scanning and candidate conflict
+detection use their existing search windows; the checked interval limits which
+partitions can be accepted. Phase 3 joint rescue retains its fixed hull.
+For `tir_status=detected`, exactly one pair must match the final outer endpoints,
+and both pre-TIR coordinates must be recorded. `tir_boundary_override` is true
+exactly when the final interval differs from that pre-TIR interval. A qualifying
+pair can therefore be detected without changing an already matching boundary.
 
 Identical repeats on neighboring elements can also form a pair spanning both.
 When local and spanning pairs compete, the scanner retains the unsplit parent
@@ -786,6 +799,14 @@ They retain their full coordinates under the usual interval-overlap rules,
 so one crossing gene can appear in both
 neighboring regions. Repeat boundaries that conflict across separate parent
 candidates retain the original candidates.
+Bases added outside a parent must not overlap a final child of another parent.
+Plans adding such overlaps revert as a whole; a merely inward or unchanged
+neighbor is retained. Identical final intervals retain the shared-pair veto
+and are recorded as `shared_pair`; the restored parent reports the identical
+pair's evidence. Other new overlaps are `ambiguous`.
+Touching endpoints and pre-existing overlaps do not create a new conflict.
+An outward endpoint cannot cut a validated marker protein in the checked flank.
+These flank markers veto cuts but do not create new seed anchors or ownership.
 
 The search uses exact 7 bp seeds and ungapped matches of at least 50 bp at 90%
 identity or better. It scores matches at +2 and mismatches at −4 and uses the

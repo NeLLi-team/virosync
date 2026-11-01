@@ -307,7 +307,12 @@ def test_partial_rescue_does_not_merge_across_host_stop_or_split_its_core():
     boundaries[0].right_stop, boundaries[0].right_stop_reason = 1500, "host_stop"
     assert len(merge_reachable_boundaries(boundaries)) == 2
     assert boundaries[1].confirmed_seeds == seeds[1].confirmed_seeds
-    assert accept_seed_partition(boundaries[1], [replace(boundaries[1], end=1600)]) is None
+    assert (
+        accept_seed_partition(
+            boundaries[1], [replace(boundaries[1], end=1600)], allowed_interval=(boundaries[1].start, boundaries[1].end)
+        )
+        is None
+    )
 
 
 def test_nested_new_hulls_keep_all_witnesses_but_one_confirmed_seed():

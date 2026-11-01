@@ -254,13 +254,18 @@ def _validate_tir_contract(boundary: dict[str, object], context: str) -> None:
         raise Phase2StateError(f"{context}.tir_alignment_capped must agree with the full alignment length")
 
     override = boundary["tir_boundary_override"]
-    if override:
-        if status != "detected" or candidate_count != 1:
-            raise Phase2StateError(f"{context}.tir_boundary_override requires one detected candidate")
+    if override and status != "detected":
+        raise Phase2StateError(f"{context}.tir_boundary_override requires one detected candidate")
+    if status == "detected":
+        if candidate_count != 1:
+            raise Phase2StateError(f"{context}.tir_status detected requires exactly one candidate")
         if boundary["start"] != boundary["tir_left_start"] or boundary["end"] != boundary["tir_right_end"]:
-            raise Phase2StateError(f"{context} overridden bounds must match the terminal repeats")
-    if status == "detected" and not override:
-        raise Phase2StateError(f"{context}.tir_status detected requires tir_boundary_override")
+            raise Phase2StateError(f"{context} detected bounds must match the terminal repeats")
+        if boundary["pre_tir_start"] is None or boundary["pre_tir_end"] is None:
+            raise Phase2StateError(f"{context}.tir_status detected requires pre-TIR coordinates")
+        changed = (boundary["start"], boundary["end"]) != (boundary["pre_tir_start"], boundary["pre_tir_end"])
+        if override != changed:
+            raise Phase2StateError(f"{context}.tir_boundary_override must match the pre-TIR coordinate change")
     if status == "ambiguous" and (not present or override):
         raise Phase2StateError(f"{context}.tir_status ambiguous requires non-authoritative candidate evidence")
     if status == "shared_pair" and (not present or candidate_count != 1 or override):

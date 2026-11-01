@@ -667,6 +667,7 @@ def _run_phase2_subflow(
             logger.warning("Taxonomy ML failed (%s); using deterministic extension", exc)
 
     refined_boundaries = []
+    walked_intervals: dict[str, tuple[int, int]] = {}
     for seed in merged_seeds:
         mapping = boundary_diamond_query.seed_gene_mappings.get(seed.seed_id) if boundary_diamond_query else None
         envelope = (seed.start, seed.end)
@@ -675,6 +676,8 @@ def _run_phase2_subflow(
                 min(seed.start, mapping.flank_start_bp),
                 max(seed.end, mapping.flank_end_bp),
             )
+        for core in seed.confirmed_seeds:
+            walked_intervals[core.seed_id] = envelope
         kwargs = dict(
             seed=seed,
             genes=proteome_index.get(seed.scaffold, []),
@@ -694,6 +697,17 @@ def _run_phase2_subflow(
             )
         refined_boundaries.append(boundary)
     refined_boundaries = merge_reachable_boundaries(refined_boundaries)
+    allowed_intervals = []
+    for boundary in refined_boundaries:
+        spans = [walked_intervals[core.seed_id] for core in boundary.confirmed_seeds]
+        start, end = min(span[0] for span in spans), max(span[1] for span in spans)
+        if boundary.left_stop is not None:
+            start = max(start, boundary.left_stop)
+        if boundary.right_stop is not None:
+            end = min(end, boundary.right_stop)
+        if not start <= boundary.start < boundary.end <= end:
+            raise ValueError("allowed interval must contain parent")
+        allowed_intervals.append((start, end))
 
     # Terminal repeats are read from the raw genome because Phase 0 hard-masks
     # repeats. Run this after every heuristic coordinate change and merge, but
@@ -710,6 +724,7 @@ def _run_phase2_subflow(
 
         refined_boundaries = refine_boundaries_with_terminal_repeats(
             refined_boundaries,
+            allowed_intervals=allowed_intervals,
             raw_genome_path=raw_genome_path,
             validated_markers=validated_markers,
             boundary_diamond_query=boundary_diamond_query,

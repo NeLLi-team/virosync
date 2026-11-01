@@ -507,10 +507,11 @@ def find_terminal_inverted_repeats(
     return TerminalRepeatScan(ordered, pairing_capped)
 
 
-def _shared_pair_parent(
+def _conflicting_pair_parent(
     parent: RefinedBoundary,
     children: list[RefinedBoundary],
     colliding_intervals: set[tuple[str, int, int]],
+    status: str,
 ) -> RefinedBoundary:
     """Return a parent carrying the best conflicting TIR as evidence."""
     candidate = next(
@@ -526,7 +527,7 @@ def _shared_pair_parent(
         pre_tir_start=parent.start,
         pre_tir_end=parent.end,
         tir_present=True,
-        tir_status="shared_pair",
+        tir_status=status,
         tir_left_start=candidate.tir_left_start,
         tir_left_end=candidate.tir_left_end,
         tir_right_start=candidate.tir_right_start,
@@ -546,20 +547,41 @@ def _resolve_partition_conflicts(
     parents: list[RefinedBoundary],
     plans: list[list[RefinedBoundary]],
 ) -> list[RefinedBoundary]:
-    """Revert split plans that would create duplicate final coordinates."""
+    """Revert changed plans whose added bases overlap another plan's child."""
     resolved = [list(plan) for plan in plans]
     while True:
-        owners_by_interval: dict[tuple[str, int, int], set[int]] = defaultdict(set)
-        for parent_index, children in enumerate(resolved):
-            for child in children:
-                owners_by_interval[(child.scaffold, child.start, child.end)].add(parent_index)
         colliding_by_parent: dict[int, set[tuple[str, int, int]]] = defaultdict(set)
-        for interval, owners in owners_by_interval.items():
-            if len(owners) < 2:
-                continue
-            for parent_index in owners:
-                if any(child.tir_boundary_override for child in resolved[parent_index]):
-                    colliding_by_parent[parent_index].add(interval)
+        identical_by_parent: dict[int, set[tuple[str, int, int]]] = defaultdict(set)
+        statuses: dict[int, str] = {}
+        active: list[tuple[int, RefinedBoundary]] = []
+        ordered = sorted(
+            ((index, child) for index, children in enumerate(resolved) for child in children),
+            key=lambda item: (item[1].scaffold, item[1].start, item[1].end),
+        )
+        for index, child in ordered:
+            active = [
+                (other_index, other)
+                for other_index, other in active
+                if other.scaffold == child.scaffold and other.end > child.start
+            ]
+            for other_index, other in active:
+                if index == other_index:
+                    continue
+                same = (child.start, child.end) == (other.start, other.end)
+                overlap_start, overlap_end = max(child.start, other.start), min(child.end, other.end)
+                for owner, candidate in ((index, child), (other_index, other)):
+                    if not same and parents[owner].start <= overlap_start and overlap_end <= parents[owner].end:
+                        continue
+                    if any(item.tir_boundary_override for item in resolved[owner]):
+                        colliding_by_parent[owner].add((candidate.scaffold, candidate.start, candidate.end))
+                        if same:
+                            identical_by_parent[owner].add((candidate.scaffold, candidate.start, candidate.end))
+                        if same or owner not in statuses:
+                            statuses[owner] = "shared_pair" if same else "ambiguous"
+            active.append((index, child))
+        # Restore identical pairs first; restoration can expose another identical pair.
+        if identical_by_parent:
+            colliding_by_parent = identical_by_parent
         if not colliding_by_parent:
             return sorted(
                 (child for children in resolved for child in children),
@@ -567,10 +589,11 @@ def _resolve_partition_conflicts(
             )
         for parent_index, colliding_intervals in colliding_by_parent.items():
             resolved[parent_index] = [
-                _shared_pair_parent(
+                _conflicting_pair_parent(
                     parents[parent_index],
                     resolved[parent_index],
                     colliding_intervals,
+                    statuses[parent_index],
                 )
             ]
 
@@ -1195,9 +1218,27 @@ def _candidate_evidence_parent(
     )
 
 
+def _cuts_flank_marker(children: list[RefinedBoundary], markers: list[object], parent: RefinedBoundary) -> bool:
+    """Veto new outward endpoints cutting validated proteins, without new anchors."""
+    spans: dict[str, tuple[int, int]] = {}
+    for marker in markers:
+        if marker.scaffold != parent.scaffold or marker.validation_status not in ("validated", "validated_novel"):
+            continue
+        identity = _base_protein_id(marker.query_porf)
+        start, end = spans.get(identity, (marker.start, marker.end))
+        spans[identity] = (min(start, marker.start), max(end, marker.end))
+    return any(
+        (child.start < parent.start and start < child.start < end)
+        or (child.end > parent.end and start < child.end < end)
+        for start, end in spans.values()
+        for child in children
+    )
+
+
 def _plan_boundary_partition(
     boundary: RefinedBoundary,
     *,
+    allowed_interval: tuple[int, int],
     sequence: str,
     validated_markers: list[object],
     boundary_diamond_query: GenomeDiamondQuery,
@@ -1325,7 +1366,11 @@ def _plan_boundary_partition(
         taxonomy_map=boundary_taxonomy_map,
         proteome_index=proteome_index,
     )
-    partition = accept_seed_partition(boundary, partition) if partition is not None else None
+    if partition is not None and _cuts_flank_marker(partition, validated_markers, boundary):
+        partition = None
+    partition = (
+        accept_seed_partition(boundary, partition, allowed_interval=allowed_interval) if partition is not None else None
+    )
     if partition is None:
         return [
             _candidate_evidence_parent(
@@ -1344,6 +1389,7 @@ def _plan_boundary_partition(
 def refine_boundaries_with_terminal_repeats(
     boundaries: list[RefinedBoundary],
     *,
+    allowed_intervals: list[tuple[int, int]],
     raw_genome_path: Path,
     validated_markers: list[object],
     boundary_diamond_query: GenomeDiamondQuery,
@@ -1355,13 +1401,16 @@ def refine_boundaries_with_terminal_repeats(
     scaffold_index = SeqIO.index(str(raw_genome_path), "fasta")
     try:
         plans: list[list[RefinedBoundary]] = []
-        for boundary in boundaries:
+        for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
+            if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
+                raise ValueError("allowed interval must contain parent")
             if boundary.scaffold not in scaffold_index:
                 raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
             sequence = str(scaffold_index[boundary.scaffold].seq).upper()
             plans.append(
                 _plan_boundary_partition(
                     boundary,
+                    allowed_interval=allowed_interval,
                     sequence=sequence,
                     validated_markers=validated_markers,
                     boundary_diamond_query=boundary_diamond_query,

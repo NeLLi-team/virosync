@@ -606,3 +606,59 @@ def test_active_selection_rejection_preserves_children_despite_raw_gate_pass() -
     assert not select_phase3_acceptance([result], AblationID.A0).canonical_results
     assert result.canonical_selection_outcome == "rescue_marker_excluded"
     assert _replace_accepted_joints(originals, [result], [(boundary, children)], ablation_id=AblationID.A0) == originals
+
+
+def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) -> None:
+    from test_terminal_repeats import _planted_repeat
+
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome.phase3 import _prepare_joint_boundaries
+    from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
+
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "joint.fna"
+    genome.write_text(f">s\n{sequence}\n", encoding="utf-8")
+    children = (child("a", 150, 200), child("b", 300, 350))
+    query = GenomeDiamondQuery(
+        seed_gene_mappings={
+            name: SeedGeneMapping(name, "s", start, end, flank_start_bp=0, flank_end_bp=len(sequence))
+            for name, start, end in (("a", 150, 200), ("b", 300, 350))
+        }
+    )
+    markers = [
+        ValidatedMarkerHit(
+            name,
+            "s",
+            start,
+            end,
+            "+",
+            "GVOGm0760",
+            100,
+            1e-10,
+            "validated",
+            "NCLDV__",
+            f"NCLDV__{name}",
+            35,
+            100,
+            1,
+            0,
+            0,
+            0,
+            1,
+        )
+        for name, start, end in (("a", 160, 180), ("b", 310, 330))
+    ]
+    prepared = _prepare_joint_boundaries(
+        [children],
+        raw_genome_path=genome,
+        masked_path=genome,
+        validated_markers=markers,
+        boundary_diamond_query=query,
+        boundary_taxonomy_map={},
+        proteome_index={"s": []},
+        config=PipelineConfig(),
+    )
+    assert len(prepared) == 1
+    joint = prepared[0][0]
+    assert (joint.start, joint.end, joint.tir_status, joint.tir_boundary_override) == (150, 350, "ambiguous", False)
+    assert joint.confirmed_seeds == children[0].confirmed_seeds + children[1].confirmed_seeds

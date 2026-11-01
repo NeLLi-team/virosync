@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -159,6 +159,45 @@ def test_phase2_state_file_round_trip_preserves_every_boundary_field(
     assert payload["boundaries"][0]["state_posteriors"]["dtype"] == "float32"
     assert {"candidate_start", "candidate_end"}.isdisjoint(payload["boundaries"][0])
     assert {"candidate_start", "candidate_end"}.isdisjoint(original.__dataclass_fields__)
+
+
+def test_phase2_state_round_trip_preserves_detected_unchanged_boundary() -> None:
+    boundary = replace(
+        _complete_boundary(), pre_tir_start=101, pre_tir_end=999, tir_boundary_override=False, repeat_evidence=None
+    )
+
+    loaded = phase2_state_from_document(phase2_state_to_document([boundary]))
+
+    _assert_boundaries_equal(boundary, loaded[0])
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"tir_candidate_count": 2}, "boundaries[0].tir_status detected requires exactly one candidate"),
+        (
+            {"tir_boundary_override": False},
+            "boundaries[0].tir_boundary_override must match the pre-TIR coordinate change",
+        ),
+        (
+            {"pre_tir_start": 101, "pre_tir_end": 999},
+            "boundaries[0].tir_boundary_override must match the pre-TIR coordinate change",
+        ),
+        (
+            {"pre_tir_start": None, "pre_tir_end": None},
+            "boundaries[0].tir_status detected requires pre-TIR coordinates",
+        ),
+        ({"start": 100}, "boundaries[0] detected bounds must match the terminal repeats"),
+    ],
+)
+def test_phase2_state_rejects_inconsistent_detected_contract(changes: dict, message: str) -> None:
+    document = phase2_state_to_document([replace(_complete_boundary(), repeat_evidence=None)])
+    document["boundaries"][0].update(changes)
+
+    with pytest.raises(Phase2StateError) as error:
+        phase2_state_from_document(document)
+
+    assert str(error.value) == message
 
 
 def test_phase2_state_round_trip_preserves_none_and_empty_posterior_shape() -> None:

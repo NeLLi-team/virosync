@@ -120,9 +120,24 @@ def test_repeat_partition_cannot_cut_core_or_create_unseeded_residual():
     from virosync.pipeline.phase2.seed_extension import accept_seed_partition
 
     parent = grow([gene("v", 2100, 2500, viral=True)])
-    assert accept_seed_partition(parent, [replace(parent, start=1100)]) is None
-    assert accept_seed_partition(parent, [replace(parent, end=2000), replace(parent, start=2000)]) is None
-    assert accept_seed_partition(parent, [replace(parent, end=2200)])[0].confirmed_seeds == parent.confirmed_seeds
+    assert (
+        accept_seed_partition(parent, [replace(parent, start=1100)], allowed_interval=(parent.start, parent.end))
+        is None
+    )
+    assert (
+        accept_seed_partition(
+            parent,
+            [replace(parent, end=2000), replace(parent, start=2000)],
+            allowed_interval=(parent.start, parent.end),
+        )
+        is None
+    )
+    assert (
+        accept_seed_partition(parent, [replace(parent, end=2200)], allowed_interval=(parent.start, parent.end))[
+            0
+        ].confirmed_seeds
+        == parent.confirmed_seeds
+    )
 
 
 def test_independent_seeds_sharing_search_envelopes_remain_independent():

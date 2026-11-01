@@ -217,15 +217,23 @@ def _merge_pair(previous: RefinedBoundary, boundary: RefinedBoundary) -> Refined
     )
 
 
-def accept_seed_partition(parent: RefinedBoundary, proposed: list[RefinedBoundary]) -> list[RefinedBoundary] | None:
+def accept_seed_partition(
+    parent: RefinedBoundary, proposed: list[RefinedBoundary], *, allowed_interval: tuple[int, int]
+) -> list[RefinedBoundary] | None:
     """Accept only reachable children owning each complete core exactly once."""
+    if not allowed_interval[0] <= parent.start < parent.end <= allowed_interval[1]:
+        raise ValueError("allowed interval must contain parent")
     ordered = sorted(proposed, key=lambda child: (child.start, child.end))
     if any(left.end > right.start for left, right in zip(ordered, ordered[1:])):
         return None
     assigned: list[ConfirmedSeed] = []
     accepted = []
     for child in proposed:
-        if child.scaffold != parent.scaffold or child.start < parent.start or child.end > parent.end:
+        if child.scaffold != parent.scaffold or child.start < allowed_interval[0] or child.end > allowed_interval[1]:
+            return None
+        if (parent.left_stop is not None and child.start < parent.left_stop) or (
+            parent.right_stop is not None and child.end > parent.right_stop
+        ):
             return None
         cores = tuple(core for core in parent.confirmed_seeds if child.start <= core.start and core.end <= child.end)
         if not cores or any(core in assigned for core in cores):

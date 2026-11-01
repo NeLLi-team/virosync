@@ -1385,6 +1385,7 @@ def _prepare_joint_boundaries(
         try:
             finalized = refine_boundaries_with_terminal_repeats(
                 [joint],
+                allowed_intervals=[(joint.start, joint.end)],
                 raw_genome_path=raw_genome_path,
                 validated_markers=validated_markers,
                 boundary_diamond_query=boundary_diamond_query,

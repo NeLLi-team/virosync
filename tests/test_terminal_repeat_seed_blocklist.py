@@ -25,6 +25,7 @@ def _partition(tmp_path: Path, markers: list[_Marker], cores: tuple[ConfirmedSee
     )
     return refine_boundaries_with_terminal_repeats(
         [parent],
+        allowed_intervals=[(parent.start, parent.end)],
         raw_genome_path=genome_path,
         validated_markers=markers,
         boundary_diamond_query=_query(len(sequence)),
