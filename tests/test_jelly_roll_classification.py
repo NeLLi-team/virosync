@@ -308,6 +308,30 @@ def test_multi_domain_uses_supported_status_without_changing_output_id(tmp_path:
     assert rows["mixed|aa1-100"]["type"] == "UNKNOWN"
 
 
+@pytest.mark.parametrize(
+    "status,expected_fold", [("validated", "HK97"), ("validated_novel", "HK97"), ("unvalidated", "UNKNOWN")]
+)
+def test_mirus_vs_alias_cannot_use_length_or_multiple_domains_as_djr(
+    tmp_path: Path, status: str, expected_fold: str
+) -> None:
+    marker_hits_path, sequences_path = _write_inputs(
+        tmp_path,
+        [
+            ("long", "VS000005", status),
+            ("multi|aa1-100", "VS000005", status),
+            ("multi|aa150-250", "VS000005", status),
+        ],
+        [("long", "M" * 500), ("multi", "M" * 300)],
+    )
+    output_path = tmp_path / "mirus_alias.tsv"
+
+    classify_jelly_roll_task(marker_hits_path, sequences_path, output_path)
+
+    rows = {row["protein_id"]: row for row in _read_rows(output_path)}
+    assert rows["long"]["type"] == expected_fold
+    assert rows["multi|aa1-100"]["type"] == expected_fold
+
+
 def test_foldseek_hk97_requires_quality_and_exact_query_match(tmp_path: Path) -> None:
     cases = [
         ("qualified", "HK97", "structure_supported"),

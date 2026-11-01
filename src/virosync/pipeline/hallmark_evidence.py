@@ -319,6 +319,8 @@ def summarize_hallmarks(
     loci = scoring_locus_ids or {}
     core, context = defaultdict(list), defaultdict(list)
     for hit, link in _linked(evidence):
+        if link["role"] == "support_only" and hit.evalue > STRONG_EVALUE:
+            continue
         context[link["panel"]].append((hit, link))
         if link["role"] == "core_marker":
             core[link["panel"]].append((hit, link))

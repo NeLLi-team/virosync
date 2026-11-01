@@ -72,11 +72,72 @@ the native gate with an explicit rescue reason without changing its taxonomy.
 See [Confidence and limitations](../METHODS.md#confidence-and-limitations) for
 the weighting, containment and floor rules.
 
-The current catalogue does not include the 33 `EVE_CAPSID_NOVEL_*` profiles,
-including the structure-derived MCP `0029`. Their validated capsid annotations
-and class-specific acceptance rules remain, but those profiles alone do not
-supply the new marker component or MEDIUM/HIGH floors. A viral DIAMOND hit does
-not add a model to the catalogue.
+The catalogue resolves all 33 `EVE_CAPSID_NOVEL_*` profiles by exact ID.
+The older profiles `VS000652`, `VS000745`, `VS000783`, `VS000788` and
+`VS000791` are exact MCP aliases in Nucleocytoviricota and Polinton-like virus
+panels; `VS000652` and `VS000783` also match the Virophages MCP family.
+Direct MCP-chain and archived PLV-reference matches support these links.
+Each uses the existing MCP capsid bonus and spatial floors after viral-reference
+qualification. Aliases count as one MCP family. Runtime MCP recognition and
+gene-function labels use these exact IDs without assigning an NCLDV lineage.
+The existing MCP core aliases `VS000236`, `VS000496` and `VS000005` also have
+exact runtime MCP recognition and explicit MCP gene-function labels. Their
+catalogue roles and panel assignments are unchanged.
+For fold classification, `VS000005` is an exact HK97 alias: a validated hit can
+infer HK97; an unvalidated hit stays UNKNOWN without independent fold evidence.
+Generic length or multiple-HMM-domain heuristics do not turn this alias into DJR.
+The 22 penton profiles share one function: `0019` and `0027` are minor capsid
+aliases of Penton. All except `0002` belong to the Virophages `Penton` core
+family, based on broad direct mavirus minor-capsid matches. `0002` retains an
+`Unresolved_Penton` core and supplies support-only Virophages Penton context;
+its broad adenovirus Penton match does not establish Virophage compatibility
+at the same level. All 22 supply support-only `mCP` context in the
+Polinton-like virus and Maverick panels, matching the existing V18-19 family.
+Penton evidence can contribute one core but cannot anchor a capsid bonus,
+capsid-alone floor or capsid spatial witness. Virophages pentons can join
+three-core witnesses with a MEDIUM floor or partner a capsid MCP within 5 kb
+for a HIGH floor. A structural match to an adintovirus penton, including
+`0031`, does not assign an NCLDV or PLV type.
+
+The four other capsid or coat profiles have one-family unresolved panels and
+`capsid=false`. Each unresolved panel supplies at most one core and contains
+no scoring context from another family. This keeps uncertain lineage evidence
+from combining with established panels, but can also withhold credit for real
+combinations. Protease profiles `0001`, `0006`, `0015`, `0020` and `VS000374`
+supply support-only `Protease` context in Virophages, Polinton-like viruses and
+Mavericks. `0026` (assemblin/pUL26N-like protease) and `0018` (gp54 baseplate/tail
+apparatus) remain excluded from core and context scoring.
+
+`VS000375` and `VS000151` supply one `D5_primase_domain` context family in
+Nucleocytoviricota. `VS000146`, `VS000149`, `VS000072` and `VS000164` supply one
+`mRNA_capping` context family there. These partial-domain assignments do not
+establish complete protein architecture or viral specificity. Support-only links
+cannot create a core, spatial witness or seed; their families and physical loci
+are deduplicated with other evidence. Fusion-family exclusions remain in force.
+
+Retained Phase 3 labels also supply exact VOG support: `VOG03169`, `VOG05151`,
+`VOG45855` and `VOG50158` for Nucleocytoviricota MCP; `VOG21003` for A32;
+`VOG04885` for TFIIB; and `VOG23436` for PolB in Nucleocytoviricota and
+Mirusviricota. `VOG37123` supplies Virophages Penton and Polinton-like/Maverick
+`mCP` context. Partial reference-domain matches support these functional links,
+not viral specificity. Only the retained label reaches scoring, at its existing
+profile cutoff and within the final interval; raw unretained hits add nothing.
+
+The putative MCP `0029` maps to the existing `MCP` family in the
+Nucleocytoviricota and Polinton-like virus panels with `capsid=false`. A validated
+hit contributes core credit, including discounted credit for weak evidence at
+E <= 0.01. The catalogue flag withholds the graduated capsid term, catalogue
+capsid-alone floor and capsid spatial witness. Its separate MCP registration in
+`mcp_detection.py` still governs MCP annotation, Phase 1 seed confidence,
+class-vote overrides and output keep rules. It can join ordinary three-core witnesses within 15 kb for a MEDIUM
+floor. Available controls contain no qualified positive 0029 hit to justify
+enabling those capsid effects. Catalogue tests establish software behavior, not
+biological specificity. A viral DIAMOND hit does not add a model to the catalogue.
+
+Explicit support-only links require E <= 1e-5 for scoring context in both
+Phase 1 and Phase 3. They add coherence only to a panel with a qualifying core;
+they cannot supply an independent core, catalogue floor or rescue witness.
+Family and physical-locus matching prevents duplicate context credit.
 
 `has_mcp` describes the region's marker summary. `mcp_gene_ids` lists every
 protein with a `validated` or `validated_novel` MCP hit, even when another
@@ -84,7 +145,7 @@ profile scored higher on that protein. These plotting IDs do not add confidence
 or alter taxonomy. Both fields refer only to major capsid proteins. The
 class-vote override, ANI class transfer, jelly-roll classification, Boltz input
 selection and the Phase 1 `high` seed confidence still need an MCP. The profile
-`0029` remains the only structure-derived MCP.
+`0029` remains the only `EVE_CAPSID_NOVEL_*` MCP.
 
 The six other profiles (`0001`, `0006`, `0015`, `0020`, `0026` and `0018`) stay
 viral markers. They validate and seed like any marker, but they give no capsid

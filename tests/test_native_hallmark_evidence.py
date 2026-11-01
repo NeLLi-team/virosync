@@ -10,7 +10,9 @@ import pytest
 
 from virosync.ablation import AblationID
 from virosync.pipeline.hallmark_evidence import (
+    CATALOGUE_PATH,
     HallmarkEvidence,
+    HallmarkSupport,
     add_rescue_seeds,
     assess_hallmarks,
     collect_hallmark_evidence,
@@ -55,7 +57,7 @@ def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="validated", i
     )
 
 
-@pytest.mark.parametrize("model", ["VP_MCP_6", "VS000792"])
+@pytest.mark.parametrize("model", ["VP_MCP_6", "VS000792", "VS000652", "VS000745", "VS000783", "VS000788", "VS000791"])
 @pytest.mark.parametrize("evalue", [0.0021, 1e-8])
 @pytest.mark.parametrize("status,identity", [("unvalidated", 0), ("supported", 20), ("unvalidated", 30)])
 def test_unvalidated_capsid_cannot_supply_core_floor_or_rescue_seed(model, evalue, status, identity):
@@ -431,11 +433,18 @@ def test_invalid_witness_does_not_gain_an_acceptance_exception(mutation):
     assert not select_phase3_acceptance([result], AblationID.A0).canonical_results
 
 
-def test_context_scans_run_once_before_scoring_and_exclude_partial_genes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("use_vog", [False, True])
+def test_context_scans_run_once_before_scoring_and_exclude_partial_genes(tmp_path, monkeypatch, use_vog):
     from virosync.config import PipelineConfig
     from virosync.orchestration._flows.single_genome import phase3
     from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
-    from virosync.pipeline.phase3.gene_functions import GeneFunction, GeneFunctionResult
+    from virosync.pipeline.phase3.gene_functions import (
+        GeneFunction,
+        GeneFunctionResult,
+        Profile,
+        ProfileHit,
+        label_gene,
+    )
 
     boundary = RefinedBoundary("s", 100, 3000, confidence=0)
     identity = boundary_candidate_id(boundary)
@@ -462,6 +471,24 @@ def test_context_scans_run_once_before_scoring_and_exclude_partial_genes(tmp_pat
 
     def label(genes, *args, **kwargs):
         calls.append(genes)
+        if use_vog:
+            labelled = label_gene(
+                identity,
+                "inside",
+                model_hits=[],
+                profile_hits=[ProfileHit("VOG03169", 1e-10), ProfileHit("VOG05151", 1e-9)],
+                model_annotations={},
+                profiles={
+                    "VOG03169": Profile(
+                        "VOG03169", "VOGDB latest-2025-09-30", "MCP", "capsid", 1e-9, "Major capsid protein"
+                    ),
+                    "VOG05151": Profile(
+                        "VOG05151", "VOGDB latest-2025-09-30", "MCP", "capsid", 1e-9, "Major capsid protein"
+                    ),
+                },
+            )
+            assert labelled is not None
+            return GeneFunctionResult([labelled], [])
         return GeneFunctionResult([GeneFunction(identity, "inside", "ATPase", "capsid", "Pfam:Pox_A32", 1e-8)], [])
 
     monkeypatch.setattr(phase3, "label_core_genes", label)
@@ -480,6 +507,17 @@ def test_context_scans_run_once_before_scoring_and_exclude_partial_genes(tmp_pat
     assert calls == [[(identity, "inside")]]
     assert {h.gene for h in annotations[identity]["hallmark_support"]} == {"inside"}
     assert len(annotations[identity]["gene_function_labels"]) == 1
+    if use_vog:
+        support = annotations[identity]["hallmark_support"]
+        assert {(row.model, row.stage) for row in support} == {
+            ("VOG03169", "phase3_function"),
+            ("rve", "phase3_integration"),
+        }
+        summary = summarize_hallmarks([hit("core", "GVOGm0760", evalue=1e-8)], support)
+        assert summary.core_count == 1
+        assert summary.compatible_count == 2
+        assert summary.capsid_fraction == 0
+        assert summary.floor_tier == ""
 
 
 def test_batched_verification_routes_contained_evidence_and_witnesses_in_input_order(tmp_path, monkeypatch):
@@ -859,3 +897,404 @@ def test_linked_translations_cannot_supply_two_independent_catalogue_cores(
     assert reassessed.summary.floor_tier == expected_tier
     assert any(witness.tier == "HIGH" for witness in reassessed.witnesses) == independent_partner
     assert result.start <= seed.start < seed.end <= result.end
+
+
+@pytest.mark.parametrize("model", [f"EVE_CAPSID_NOVEL_{index:04d}" for index in range(1, 34)] + ["VS000382"])
+def test_completed_catalogue_resolves_exact_models_and_excludes_noncapsid_context(model: str) -> None:
+    """Every retained model resolves, including explicit non-scoring records."""
+    evidence = hit("g", model, evalue=1e-8)
+    assert evidence.model_roles
+    excluded = {
+        "EVE_CAPSID_NOVEL_0018",
+        "EVE_CAPSID_NOVEL_0026",
+    }
+    assert all(role["excluded_from_scoring"] for role in evidence.model_roles) == (model in excluded)
+    summary = summarize_hallmarks([evidence])
+    noncore = excluded | {
+        "EVE_CAPSID_NOVEL_0001",
+        "EVE_CAPSID_NOVEL_0006",
+        "EVE_CAPSID_NOVEL_0015",
+        "EVE_CAPSID_NOVEL_0020",
+    }
+    assert summary.core_count == (0 if model in noncore else 1)
+    assert summary.compatible_count == (0 if model in noncore else 1)
+    assert summary.coherence_bonus == 0
+    assert summary.floor_tier == ""
+    assert summary.capsid_fraction == 0
+    assert find_spatial_witnesses([evidence]) == []
+
+
+@pytest.mark.parametrize(
+    "models,loci",
+    [
+        (["EVE_CAPSID_NOVEL_0016", "VP_Penton_1", "EVE_CAPSID_NOVEL_0032"], {}),
+        (["EVE_CAPSID_NOVEL_0031", "EVE_CAPSID_NOVEL_0028"], {}),
+        (["EVE_CAPSID_NOVEL_0027", "EVE_CAPSID_NOVEL_0028"], {}),
+        (["VS000382", "VS000106"], {}),
+        (["EVE_CAPSID_NOVEL_0029", "GVOGm0760"], {"g0": "one", "g1": "one"}),
+    ],
+)
+def test_completed_catalogue_deduplicates_families_and_scoring_loci(models: list[str], loci: dict[str, str]) -> None:
+    evidence = [hit(f"g{index}", model, evalue=1e-8) for index, model in enumerate(models)]
+    summary = summarize_hallmarks(evidence, scoring_locus_ids=loci)
+    assert summary.core_count == summary.compatible_count == 1
+    assert summary.coherence_bonus == 0
+    assert summary.floor_tier == ""
+    assert summary.capsid_fraction == 0
+
+
+@pytest.mark.parametrize("model", ["EVE_CAPSID_NOVEL_0031", "EVE_CAPSID_NOVEL_0029"])
+@pytest.mark.parametrize(
+    "status,evalue,weighted",
+    [
+        ("unvalidated", 1e-8, 0),
+        ("supported", 1e-8, 0),
+        ("validated", -1, 0),
+        ("validated", 0.010001, 0),
+        ("validated", 0.01, 0.25),
+        ("validated_novel", 0.01, 0.25),
+    ],
+)
+def test_completed_catalogue_keeps_validation_and_evalue_gates(
+    model: str, status: str, evalue: float, weighted: float
+) -> None:
+    evidence = [hit("g", model, status=status, evalue=evalue)]
+    summary = summarize_hallmarks(evidence)
+    assert summary.weighted_core_count == weighted
+    if weighted == 0:
+        assert summary.qualifying_evidence_ids == ()
+        assert summary.floor_tier == ""
+        assert find_spatial_witnesses(evidence) == []
+    elif model == "EVE_CAPSID_NOVEL_0031":
+        assert summary.marker_score == pytest.approx(0.05)
+        assert summary.capsid_fraction == 0
+        assert summary.floor_tier == ""
+        assert find_spatial_witnesses(evidence) == []
+
+
+def test_completed_catalogue_unresolved_panel_cannot_combine_with_established_cores() -> None:
+    evidence = [
+        hit("penton", "EVE_CAPSID_NOVEL_0002", evalue=1e-8),
+        hit("atpase", "GVOGm0760", evalue=1e-8),
+        hit("protease", "EVE_CAPSID_NOVEL_0001", evalue=1e-8),
+    ]
+    result = VerificationResult("eve", "s", 0, 2000, hallmark_evidence=evidence)
+    result.hallmark_assessment = assess_hallmarks(result)
+    summary = result.hallmark_assessment.summary
+    assert summary.core_count == summary.compatible_count == 1
+    assert summary.marker_score == pytest.approx(0.2)
+    assert summary.coherence_bonus == summary.capsid_fraction == 0
+    assert summary.floor_tier == ""
+    assert find_spatial_witnesses(evidence) == []
+
+
+@pytest.mark.parametrize("status", ["validated", "validated_novel", "unvalidated"])
+def test_completed_catalogue_putative_mcp_keeps_core_credit_without_catalogue_capsid_effects(status: str) -> None:
+    capsid = hit("capsid", "EVE_CAPSID_NOVEL_0029", evalue=0.01, status=status)
+    partner = hit("atpase", "GVOGm0760", 1100, 1400, evalue=0.01)
+    singleton = summarize_hallmarks([capsid])
+    pair = summarize_hallmarks([capsid, partner])
+    witnesses = find_spatial_witnesses([capsid, partner])
+    assert singleton.floor_tier == pair.floor_tier == ""
+    assert singleton.capsid_fraction == pair.capsid_fraction == 0
+    assert witnesses == []
+    if status == "unvalidated":
+        assert singleton.core_count == 0
+        assert pair.core_count == 1
+    else:
+        assert singleton.core_count == 1
+        assert singleton.weighted_core_count == 0.25
+        assert singleton.marker_score == pytest.approx(0.05)
+        assert pair.panel == "Nucleocytoviricota"
+        assert pair.core_count == 2
+        assert pair.weighted_core_count == 1
+        assert pair.marker_score == pytest.approx(0.2)
+
+
+def test_completed_catalogue_penton_writer_formats_outputs_and_preserves_seed(tmp_path: Path) -> None:
+    """Injected validation tests output formatting and seed retention, not acceptance."""
+    from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+
+    marker = ValidatedMarkerHit(
+        query_porf="penton|aa1-20",
+        scaffold="s",
+        start=100,
+        end=1000,
+        strand="+",
+        hmm_target="EVE_CAPSID_NOVEL_0031",
+        hmm_score=70,
+        hmm_evalue=1e-8,
+        validation_status="validated_novel",
+        top10_prefixes="",
+        best_hit_target="",
+        best_hit_pident=0,
+        best_hit_bits=0,
+        has_ncldv=0,
+        has_mirus=0,
+        has_plv=0,
+        has_vp=0,
+        has_viral=0,
+    )
+    evidence = collect_hallmark_evidence([marker], [HMMHit("penton", marker.hmm_target, 70, 1e-8, 60, 1, 20)])
+    seed = ConfirmedSeed("original", "s", 50, 1500)
+    boundary = RefinedBoundary("s", 50, 1500, confirmed_seeds=(seed,))
+    result = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    ).verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=find_spatial_witnesses(evidence))
+    generator = OutputGenerator(tmp_path / "export")
+    canonical_path = generator.write_predictions_tsv([result])
+    detailed_path = generator.write_predictions_detailed_tsv([result])
+    profiles_path = generator.write_evidence_profiles([result])
+
+    assert len(evidence) == 1
+    assert result.hallmark_assessment.summary.core_count == 1
+    assert result.hallmark_assessment.summary.marker_score == pytest.approx(0.2)
+    assert result.hallmark_assessment.summary.floor_tier == ""
+    assert result.hallmark_assessment.witnesses == ()
+    assert result.confirmed_seeds == (seed,)
+    assert (result.start, result.end) == (50, 1500)
+    with canonical_path.open() as stream:
+        assert next(csv.DictReader(stream, delimiter="\t"))["qualifying_hallmark_genes"] == "Penton"
+    with detailed_path.open() as stream:
+        assert next(csv.DictReader(stream, delimiter="\t"))["qualifying_hallmark_genes"] == "Penton"
+    profile = json.loads(profiles_path.read_text())[result.eve_id]
+    assert profile["hallmark_evidence"][0]["model_roles"][0]["panel"] == "Virophages"
+    assert profile["hallmark_evidence"][0]["validation_status"] == "validated_novel"
+
+
+def test_completed_catalogue_has_unique_consistent_noncapsid_links() -> None:
+    links = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))["links"]
+    stage_keys = [(link["stage"], link["model"], link["panel"]) for link in links]
+    unresolved = {link["model"] for link in links if link["panel"].startswith("Unresolved_")}
+    established = {
+        link["model"] for link in links if not link["panel"].startswith("Unresolved_") and link["role"] == "core_marker"
+    }
+    added = [link for link in links if link["model"].startswith("EVE_CAPSID_NOVEL_") or link["model"] == "VS000382"]
+    pairs = [(link["model"], link["panel"]) for link in added]
+
+    assert len(stage_keys) == len(set(stage_keys))
+    assert len(pairs) == len(set(pairs))
+    assert unresolved.isdisjoint(established)
+    assert len({link["model"] for link in added}) == 34
+    assert all(link["capsid"] is False for link in added)
+
+
+@pytest.mark.parametrize(
+    "model,panels",
+    [
+        ("VS000652", {"Nucleocytoviricota", "Polinton_like_viruses", "Virophages"}),
+        ("VS000783", {"Nucleocytoviricota", "Polinton_like_viruses", "Virophages"}),
+        ("VS000745", {"Nucleocytoviricota", "Polinton_like_viruses"}),
+        ("VS000788", {"Nucleocytoviricota", "Polinton_like_viruses"}),
+        ("VS000791", {"Nucleocytoviricota", "Polinton_like_viruses"}),
+    ],
+)
+def test_shared_mcp_alias_supplies_existing_capsid_permissions(model, panels):
+    evidence = hit("capsid", model, evalue=1e-8)
+    summary = summarize_hallmarks([evidence])
+    witnesses = find_spatial_witnesses([evidence])
+
+    assert {role["panel"] for role in evidence.model_roles} == panels
+    assert summary.core_count == 1
+    assert summary.capsid_fraction == 1
+    assert summary.floor_tier == "MEDIUM"
+    assert {w.rule for w in witnesses} == {"capsid"}
+    assert add_rescue_seeds([], witnesses)
+
+
+@pytest.mark.parametrize("same_locus", [False, True])
+def test_shared_mcp_aliases_do_not_multiply_family_or_locus(same_locus):
+    evidence = [hit("a", "VS000652", evalue=1e-8), hit("b", "VS000783", evalue=1e-8)]
+    summary = summarize_hallmarks(evidence, scoring_locus_ids={"b": "a"} if same_locus else {})
+    assert summary.core_count == summary.compatible_count == 1
+    assert summary.coherence_bonus == 0
+
+
+@pytest.mark.parametrize("model", ["EVE_CAPSID_NOVEL_0019", "EVE_CAPSID_NOVEL_0027", "EVE_CAPSID_NOVEL_0031"])
+def test_penton_alias_joins_virophage_core_without_extra_minor_capsid_family(model):
+    evidence = [hit("penton", model, evalue=1e-8), hit("other", "VP_Penton_1", evalue=1e-8)]
+    assert summarize_hallmarks(evidence[:1]).panel == "Virophages"
+    summary = summarize_hallmarks(evidence)
+    assert summary.panel == "Virophages"
+    assert summary.core_count == summary.compatible_count == 1
+    assert summary.capsid_fraction == 0
+    assert find_spatial_witnesses(evidence) == []
+
+
+@pytest.mark.parametrize(
+    "models,core",
+    [
+        (["EVE_CAPSID_NOVEL_0001", "VS000374"], "VP_ATPase_1"),
+        (["VS000151", "VS000375"], "GVOGm0760"),
+        (["VS000146", "VS000149", "VS000072", "VS000164"], "GVOGm0760"),
+    ],
+)
+def test_real_context_families_count_once_without_creating_core_or_witness(models, core):
+    context = [hit(f"g{i}", model, evalue=1e-8) for i, model in enumerate(models)]
+    alone = summarize_hallmarks(context)
+    combined = summarize_hallmarks([hit("core", core, evalue=1e-8), *context])
+
+    assert alone.core_count == alone.compatible_count == 0
+    assert alone.marker_score == 0
+    assert find_spatial_witnesses(context) == []
+    assert add_rescue_seeds([], find_spatial_witnesses(context)) == []
+    assert combined.core_count == 1
+    assert combined.compatible_count == 2
+    assert combined.coherence_bonus == pytest.approx(0.05)
+    assert combined.floor_tier == ""
+    assert find_spatial_witnesses([hit("core", core, evalue=1e-8), *context]) == []
+
+
+@pytest.mark.parametrize(
+    "evalue,status,loci,compatible",
+    [
+        (1e-5, "validated", {}, 2),
+        (1.1e-5, "validated", {}, 1),
+        (1e-8, "unvalidated", {}, 1),
+        (1e-8, "validated", {"context": "core"}, 1),
+    ],
+)
+def test_real_context_keeps_strength_validation_and_locus_gates(evalue, status, loci, compatible):
+    evidence = [hit("core", "GVOGm0760", evalue=1e-8), hit("context", "VS000375", evalue=evalue, status=status)]
+    summary = summarize_hallmarks(evidence, scoring_locus_ids=loci)
+    assert summary.core_count == 1
+    assert summary.compatible_count == compatible
+    assert summary.floor_tier == ""
+
+
+def test_ncldv_context_cannot_support_virophage_core():
+    evidence = [hit("core", "VP_ATPase_1", evalue=1e-8), hit("context", "VS000375", evalue=1e-8)]
+    summary = summarize_hallmarks(evidence)
+    assert summary.panel == "Virophages"
+    assert summary.compatible_count == summary.core_count == 1
+    assert summary.coherence_bonus == 0
+
+
+@pytest.mark.parametrize(
+    "models,panel",
+    [
+        (["EVE_CAPSID_NOVEL_0029", "GVOGm0760", "VS000106"], "Nucleocytoviricota"),
+        (["EVE_CAPSID_NOVEL_0016", "VP_ATPase_1", "VP_PRO_1"], "Virophages"),
+    ],
+)
+def test_completed_catalogue_noncapsid_cores_join_three_core_medium_witnesses(models: list[str], panel: str) -> None:
+    evidence = [hit(f"g{index}", model, index * 1100, index * 1100 + 1000) for index, model in enumerate(models)]
+    witnesses = find_spatial_witnesses(evidence)
+    result = VerificationResult(
+        "eve", "s", 0, 4000, gene_count=5, hallmark_evidence=evidence, hallmark_witnesses=witnesses
+    )
+
+    calculate_eve_confidence(result, 0)
+
+    assert result.hallmark_assessment.summary.core_count == 3
+    assert result.hallmark_assessment.summary.capsid_fraction == 0
+    assert result.hallmark_assessment.summary.floor_tier == ""
+    assert {(w.panel, w.rule, w.tier) for w in result.hallmark_assessment.witnesses} == {
+        (panel, "three_core_15kb", "MEDIUM")
+    }
+    assert result.score_components["hallmark_floor"] == pytest.approx(0.2)
+
+
+def test_completed_catalogue_virophage_penton_partners_real_mcp_for_high_floor() -> None:
+    evidence = [hit("penton", "EVE_CAPSID_NOVEL_0016"), hit("mcp", "VP_MCP_6", 1100, 2000)]
+    witnesses = find_spatial_witnesses(evidence)
+    result = VerificationResult(
+        "eve", "s", 0, 3000, gene_count=5, hallmark_evidence=evidence, hallmark_witnesses=witnesses
+    )
+
+    confidence = calculate_eve_confidence(result, 0)
+
+    assert result.hallmark_assessment.summary.core_count == 2
+    assert {(w.rule, w.tier) for w in result.hallmark_assessment.witnesses} == {
+        ("capsid", "MEDIUM"),
+        ("capsid_partner_5kb", "HIGH"),
+    }
+    assert result.score_components["hallmark_floor"] == pytest.approx(0.7)
+    assert confidence >= 0.7
+
+
+@pytest.fixture
+def explicit_support_catalogue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Add synthetic exact links without assigning a biological model function."""
+    from virosync.pipeline import hallmark_evidence
+
+    catalogue = dict(hallmark_evidence._catalogue())
+    link = {
+        "panel": "Nucleocytoviricota",
+        "marker": "Synthetic_context",
+        "module": "context",
+        "role": "support_only",
+        "capsid": False,
+        "structural_anchor": False,
+        "excluded_from_scoring": False,
+    }
+    catalogue["phase1_marker", "TEST_SUPPORT_A"] = [link]
+    catalogue["phase1_marker", "TEST_SUPPORT_B"] = [link]
+    catalogue["gene_function", "TEST_SUPPORT_A"] = [link]
+    monkeypatch.setattr(hallmark_evidence, "_catalogue", lambda: catalogue)
+
+
+def test_explicit_support_alone_cannot_supply_core_score_witness_or_seed(explicit_support_catalogue: None) -> None:
+    evidence = [hit("context", "TEST_SUPPORT_A", evalue=1e-8)]
+
+    summary = summarize_hallmarks(evidence)
+    witnesses = find_spatial_witnesses(evidence)
+
+    assert summary.core_count == summary.compatible_count == 0
+    assert summary.marker_score == summary.coherence_bonus == 0
+    assert summary.qualifying_evidence_ids == ()
+    assert summary.floor_tier == ""
+    assert witnesses == []
+    assert add_rescue_seeds([], witnesses) == []
+
+
+@pytest.mark.parametrize("evalue,compatible", [(1e-5, 2), (1.0001e-5, 1), (0.01, 1)])
+@pytest.mark.parametrize("status", ["validated", "validated_novel"])
+def test_explicit_support_requires_same_strong_threshold_in_both_stages(
+    explicit_support_catalogue: None, evalue: float, compatible: int, status: str
+) -> None:
+    core = hit("core", "GVOGm0760", evalue=0.01)
+    context = hit("context", "TEST_SUPPORT_A", evalue=evalue, status=status)
+
+    phase1 = summarize_hallmarks([core, context])
+    phase3 = summarize_hallmarks([core], [HallmarkSupport("context", "TEST_SUPPORT_A", evalue, "gene_function")])
+
+    assert phase1 == phase3
+    assert phase1.compatible_count == compatible
+    assert phase1.core_count == 1
+    assert phase1.weighted_core_count == 0.25
+
+
+@pytest.mark.parametrize("loci,compatible,bonus", [({}, 2, 0.05), ({"core": "one", "a": "one", "b": "one"}, 1, 0)])
+def test_explicit_support_deduplicates_function_and_physical_locus(
+    explicit_support_catalogue: None, loci: dict[str, str], compatible: int, bonus: float
+) -> None:
+    core = hit("core", "GVOGm0760", evalue=1e-8)
+    evidence = [core, hit("a", "TEST_SUPPORT_A", evalue=1e-8), hit("b", "TEST_SUPPORT_B", evalue=1e-8)]
+
+    summary = summarize_hallmarks(evidence, scoring_locus_ids=loci)
+
+    assert summary.core_count == 1
+    assert summary.compatible_count == compatible
+    assert summary.coherence_bonus == bonus
+    assert summary.qualifying_evidence_ids == (core.evidence_id,)
+    assert find_spatial_witnesses(evidence) == []
+
+
+@pytest.mark.parametrize("other_bonus,base_score,supported_score", [(0.1, 0.175, 0.225), (0.9, 0.699, 0.699)])
+def test_explicit_support_changes_single_core_score_without_bypassing_high_cap(
+    explicit_support_catalogue: None, other_bonus: float, base_score: float, supported_score: float
+) -> None:
+    core = hit("core", "GVOGm0760", evalue=1e-8)
+    baseline = VerificationResult(
+        "eve", "s", 0, 2000, gene_count=5, hallmark_evidence=[core], clustering_bonus=other_bonus
+    )
+    supported = replace(baseline, hallmark_evidence=[core, hit("context", "TEST_SUPPORT_A", evalue=1e-8)])
+
+    assert calculate_eve_confidence(baseline, 0) == pytest.approx(base_score)
+    assert calculate_eve_confidence(supported, 0) == pytest.approx(supported_score)
+    assert supported.hallmark_assessment.summary.core_count == 1
+    assert supported.hallmark_assessment.summary.coherence_bonus == pytest.approx(0.05)
+    assert supported.hallmark_assessment.summary.floor_tier == ""
+    assert supported.hallmark_assessment.witnesses == ()

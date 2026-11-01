@@ -126,7 +126,9 @@ class JellyRollClassification:
 def is_hk97_marker(marker_name: str) -> bool:
     """Return True for known Mirus MCP or explicit HK97 capsid marker names."""
     normalized = re.sub(r"[^a-z0-9]+", "_", marker_name.lower()).strip("_")
-    return normalized == "mirus_mcp" or bool(re.fullmatch(r"hk97_(?:major_)?capsid(?:_protein)?", normalized))
+    return normalized in {"mirus_mcp", "vs000005"} or bool(
+        re.fullmatch(r"hk97_(?:major_)?capsid(?:_protein)?", normalized)
+    )
 
 
 def is_mcp_marker(marker_name: str) -> bool:

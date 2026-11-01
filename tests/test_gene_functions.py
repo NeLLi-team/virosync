@@ -122,6 +122,45 @@ def _model(name: str, evalue: float = 1e-30, score: float = 100.0) -> list[Model
 
 
 @pytest.mark.parametrize(
+    "model", ["VS000652", "VS000745", "VS000783", "VS000788", "VS000791", "VS000236", "VS000496", "VS000005"]
+)
+def test_structure_supported_mcp_alias_has_explicit_function(model):
+    labelled = _label(_model(model), [])
+    assert labelled is not None
+    assert labelled.label == "MCP"
+    assert labelled.module == "capsid"
+
+
+def test_retained_vog_exact_id_supplies_one_mcp_context_family():
+    from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkSupport, summarize_hallmarks
+
+    profiles = {name: _vog_profile(name, "MCP", "capsid", "Major capsid protein") for name in ("VOG03169", "VOG05151")}
+    labelled = label_gene(
+        "eve",
+        "capsid",
+        model_hits=[],
+        profile_hits=[ProfileHit("VOG03169", 1e-9)],
+        model_annotations={},
+        profiles=profiles,
+    )
+    assert labelled is not None
+    assert labelled.evidence == "VOG:VOG03169"
+    core = HallmarkEvidence(
+        "core|aa1-20", "core", "s", 0, 100, "GVOGm0760", 1e-8, 70, 60, 1, 20, "validated", 30, "retained_hmm"
+    )
+    support = [
+        HallmarkSupport("capsid", labelled.evidence.split(":", 1)[-1], labelled.evalue, "phase3_function"),
+        HallmarkSupport("second_capsid", "VOG05151", 1e-9, "phase3_function"),
+    ]
+    summary = summarize_hallmarks([core], support)
+    assert summary.core_count == 1
+    assert summary.compatible_count == 2
+    assert summary.capsid_fraction == 0
+    assert summary.floor_tier == ""
+    assert summarize_hallmarks([], support).marker_score == 0
+
+
+@pytest.mark.parametrize(
     ("model", "label", "module"),
     [
         ("VP_Penton_1", "mCP", "capsid"),

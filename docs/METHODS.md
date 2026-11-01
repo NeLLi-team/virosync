@@ -592,20 +592,70 @@ without changing its reported tier. Several score terms reuse marker or
 taxonomy evidence, so they are not independent observations.
 
 The packaged `hallmark_panels.json` records exact model aliases, core and
-support roles, structural anchors, capsids and excluded profiles for seven
-compatible panels. Panels group evidence; they do not assign taxonomy. The
+support roles, structural anchors, capsids and excluded profiles for established
+and unresolved panels. Panels group evidence; they do not assign taxonomy. The
 catalogue is part of the run's resource fingerprint. Exact retained HMM scores,
 E-values, query envelopes and measured domain scores are carried through Phase 1
 resume state. Unmeasured diagnostics are absent, including those unavailable
 from frameshift evidence. HMM envelopes do not define genomic seed bounds.
 
-Graduated core evidence requires E <= 0.01 and validated marker evidence.
+`VS000652`, `VS000745`, `VS000783`, `VS000788` and `VS000791` match the existing
+MCP family in Nucleocytoviricota and Polinton-like virus panels; `VS000652` and
+`VS000783` also match Virophages. These exact aliases receive MCP annotation,
+gene-function labels and existing capsid scoring permissions. Panel compatibility
+does not assign a hit's lineage, and multiple aliases supply only one MCP family.
+The existing MCP core aliases `VS000236`, `VS000496` and `VS000005` also receive
+exact runtime MCP recognition and explicit MCP labels, with their catalogue
+roles and panel assignments unchanged.
+
+All 33 `EVE_CAPSID_NOVEL_*` models resolve by exact ID. Penton models share
+the `Penton` family and cannot anchor a capsid bonus or capsid-alone floor.
+Virophages pentons can join three-core witnesses for a MEDIUM floor or partner
+a capsid MCP within 5 kb for a HIGH floor. Profiles
+without an established panel assignment use one-family unresolved panels,
+with no scoring context from other families. They cannot combine with
+established-panel cores, so true combinations can remain undercounted.
+Of the 22 novel Penton profiles, `0002` retains an unresolved core with
+support-only Virophages Penton context; the other 21 use the Virophages Penton
+core family. All 22 supply support-only `mCP` context in Polinton-like virus
+and Maverick panels. Profiles `0019` and `0027` are Penton aliases, not
+independent minor-capsid families.
+Protease profiles `0001`, `0006`, `0015`, `0020` and `VS000374` supply support-only
+`Protease` context in those three panels. Profiles `0018` (gp54 baseplate/tail
+apparatus) and `0026` (assemblin/pUL26N-like protease) remain excluded from scoring.
+`VS000375` and `VS000151` share one Nucleocytoviricota `D5_primase_domain`
+context family. `VS000146`, `VS000149`, `VS000072` and `VS000164` share one
+`mRNA_capping` context family. Partial-domain evidence does not establish
+complete architecture or viral specificity, and excluded fusion families remain
+excluded. None of these support-only assignments creates a core or spatial seed.
+Exact retained VOG labels supply additional support-only links: four MCP models
+(`VOG03169`, `VOG05151`, `VOG45855`, `VOG50158`), A32 (`VOG21003`) and TFIIB
+(`VOG04885`) in Nucleocytoviricota; PolB (`VOG23436`) in Nucleocytoviricota and
+Mirusviricota; and Penton/mCP (`VOG37123`) in Virophages/Polinton-like/Maverick
+panels. Existing label precedence, per-profile cutoffs and final-coordinate
+containment apply. These domain assignments do not establish viral specificity.
+`VS000382` aliases the existing Nucleocytoviricota `VLTF3` family and adds no
+independent family. The putative MCP `EVE_CAPSID_NOVEL_0029` belongs to the
+existing `MCP` family in Nucleocytoviricota and Polinton-like virus panels.
+It contributes core credit with `capsid=false`, which withholds the graduated
+capsid term, catalogue capsid-alone floor and capsid spatial witness. Its separate
+MCP registration in `mcp_detection.py` still governs MCP annotation, Phase 1 seed
+confidence, class-vote overrides and output keep rules. It can join ordinary three-core
+witnesses within 15 kb for a MEDIUM floor. Available controls contain no
+qualified positive 0029 hit to justify enabling those capsid effects;
+catalogue tests alone do not validate this biological assignment.
+
+Graduated core evidence requires 0 <= E <= 0.01 and validated marker evidence.
 An ordinary validated marker must have a viral top-10 reference hit at >=25%
 identity; the existing `validated_novel` criteria remain separate. Supported
 or unvalidated hits remain diagnostic records and cannot supply qualifying
 cores, confidence floors or rescue seeds, including structural-anchor models.
 Maximum family-to-protein matching prevents repeated profiles,
 families or one protein from counting twice. Strong evidence has E <= 1e-5.
+Support-only links require this strong threshold in both Phase 1 and Phase 3.
+They add coherence only within a panel with a qualifying core and cannot add
+cores, catalogue floors or rescue witnesses. Coherence can raise a single-core
+score, but the fewer-than-two-core cap still prevents a HIGH score.
 Three or more independent core groups receive weight 1 each. A pair receives
 weight 1 per strong group and 0.5 per weak group, using the valid assignment
 with the most strong groups. A singleton receives weight 1 if strong and 0.25

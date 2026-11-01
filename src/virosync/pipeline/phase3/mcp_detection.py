@@ -14,7 +14,9 @@ The canonical corpus is:
 
 - **Exact matches** (``MCP_HMM_EXACT``): the NCLDV MCP models
   (``OG1352``/``VS000086``, ``OG484``/``VS000309``, ``gamadvirusMCP``,
-  ``GVOGm0003``), the curated structure-derived model
+  ``GVOGm0003``), existing curated MCP aliases ``VS000005``, ``VS000236`` and
+  ``VS000496``, the shared MCP aliases ``VS000652``, ``VS000745``,
+  ``VS000783``, ``VS000788`` and ``VS000791``, the curated structure-derived model
   ``EVE_CAPSID_NOVEL_0029``, and the bare symbolic token ``"mcp"`` emitted
   by some pipeline metadata. The structure-derived model carries no lineage
   assignment.
@@ -60,7 +62,20 @@ MCP_HMM_PREFIXES: tuple[str, ...] = (
 )
 
 
-MCP_HMM_EXACT: frozenset[str] = NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
+MCP_HMM_EXACT: frozenset[str] = NCLDV_MCP_MODELS | frozenset(
+    {
+        "eve_capsid_novel_0029",
+        "mcp",
+        "vs000005",
+        "vs000236",
+        "vs000496",
+        "vs000652",
+        "vs000745",
+        "vs000783",
+        "vs000788",
+        "vs000791",
+    }
+)
 
 
 # The 27 capsid-type structure-derived profiles: those whose curated function in

@@ -10,10 +10,12 @@ everything else is a negative, including names that contain the trigram
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pytest
 
+from virosync.pipeline.hallmark_evidence import CATALOGUE_PATH
 from virosync.pipeline.phase3.evidence_synthesizer import (
     load_marker_annotation_index,
     mcp_vote_classes,
@@ -27,6 +29,7 @@ from virosync.pipeline.phase3.mcp_detection import (
     is_capsid_evidence_gene,
     is_mcp_gene,
     is_mcp_model,
+    structure_profile_class,
 )
 
 CURATION_TABLE = (
@@ -138,14 +141,53 @@ def test_canonical_constants_contents() -> None:
     assert "gamadvirusmcp" in NCLDV_MCP_MODELS
     assert "gvogm0003" in NCLDV_MCP_MODELS
     assert "eve_capsid_novel_0029" not in NCLDV_MCP_MODELS
-    assert MCP_HMM_EXACT == NCLDV_MCP_MODELS | frozenset({"eve_capsid_novel_0029", "mcp"})
-    # Family prefixes registered
+    assert MCP_HMM_EXACT == NCLDV_MCP_MODELS | {
+        "eve_capsid_novel_0029",
+        "mcp",
+        "vs000005",
+        "vs000236",
+        "vs000496",
+        "vs000652",
+        "vs000745",
+        "vs000783",
+        "vs000788",
+        "vs000791",
+    }
     assert "plv_mcp" in MCP_HMM_PREFIXES
     assert "vp_mcp" in MCP_HMM_PREFIXES
     assert "mirus_mcp" in MCP_HMM_PREFIXES
     assert "mcp_mirus" in MCP_HMM_PREFIXES
     assert "mcp_poli" in MCP_HMM_PREFIXES
     assert "gamadvirusmcp" in MCP_HMM_PREFIXES
+
+
+@pytest.mark.parametrize("model", ["VS000652", "VS000745", "VS000783", "VS000788", "VS000791"])
+def test_shared_mcp_alias_recognition_does_not_assign_lineage(model):
+    assert is_mcp_gene(model)
+    assert is_capsid_evidence_gene(model)
+    assert model.lower() not in NCLDV_MCP_MODELS
+    assert structure_profile_class(model) == ""
+    assert not is_mcp_gene(f"{model}_unassessed")
+
+
+def test_every_phase1_mcp_core_has_runtime_mcp_recognition():
+    links = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))["links"]
+    core_models = {
+        link["model"]
+        for link in links
+        if link["stage"] == "phase1_marker"
+        and link["role"] == "core_marker"
+        and link["marker"] == "MCP"
+        and not link["excluded_from_scoring"]
+    }
+    assert {model for model in core_models if not is_mcp_gene(model)} == set()
+
+
+@pytest.mark.parametrize("model", ["VS000236", "VS000496", "VS000005"])
+def test_restored_mcp_alias_does_not_gain_automatic_lineage(model):
+    assert is_mcp_gene(model)
+    assert model.lower() not in NCLDV_MCP_MODELS
+    assert structure_profile_class(model) == ""
 
 
 @pytest.mark.parametrize(
@@ -237,9 +279,23 @@ def test_non_mcp_structure_candidates_keep_annotated_functions(
     assert summary["dominant_family"] == "UNKNOWN"
 
 
-def test_structure_derived_mcp_votes_only_with_sequence_taxonomy() -> None:
+@pytest.mark.parametrize(
+    "model",
+    [
+        "EVE_CAPSID_NOVEL_0029",
+        "VS000005",
+        "VS000236",
+        "VS000496",
+        "VS000652",
+        "VS000745",
+        "VS000783",
+        "VS000788",
+        "VS000791",
+    ],
+)
+def test_structure_supported_mcp_votes_only_with_sequence_taxonomy(model) -> None:
     hit = {
-        "hallmark_gene": "EVE_CAPSID_NOVEL_0029",
+        "hallmark_gene": model,
         "porf_id": "protein_1",
         "top10_prefixes": "",
         "top10_pidents": "",
