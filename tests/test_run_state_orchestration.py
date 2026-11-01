@@ -1562,7 +1562,7 @@ def test_old_phase2_checkpoint_schemas_restart_phase2(
     )
     assert stale_plan.reusable_phases == (0, 1)
     assert stale_plan.restart_phase == 2
-    assert "must use schema 'virosync.phase2.refined_boundaries/v6'" in (stale_plan.reason or "")
+    assert "must use schema 'virosync.phase2.refined_boundaries/v7'" in (stale_plan.reason or "")
 
     result = mocked_pipeline.run()
 

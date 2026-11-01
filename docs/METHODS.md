@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 10. The repeat-evidence groups below comprise 18
+Both tables use output schema 11. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -96,6 +96,7 @@ columns in each table; they are separate from the 17-column
 | `taxonomy_best_hits`, `ncldv_top10_proteins`, `mirus_top10_proteins`, `ppv_top10_proteins`, `cress_top10_proteins` | Detailed | Gene-level taxonomy counts. |
 | `kfd`, `gc_deviation` | Both | Sequence-composition differences from the host background used by scoring. |
 | `canonical_selection_outcome` | Detailed | Reason for keeping or excluding a candidate. |
+| `joint_seed_provenance` | Detailed | JSON audit of a successful joint rescue, including original child IDs, coordinates, scores, tiers, classes and stop reasons; `.` otherwise. |
 | `ani_cluster_id`, `ani_cluster_size`, `ani_max_percent` | Detailed | Within-genome ANI cluster assignment. A dot marks no clustered relative where applicable. |
 | `taxonomy_class_before_ani`, `taxonomy_class_propagated_from` | Detailed | Class before ANI-based transfer and the donor EVE, when transfer occurred. |
 | `tir_present`, `tir_status`, `tir_candidate_count` | Both | Terminal inverted-repeat evidence and whether a pair can define the boundary. Presence alone does not mean the boundary was changed. |
@@ -147,12 +148,12 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 10 |
+| Public output schema | 11 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
-| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v3` |
-| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v5` |
-| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v6` |
-| Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v7` |
+| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v7` |
+| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v7` |
+| Accepted and detailed prediction artifacts | `canonical-predictions-v7` and `detailed-predictions-v8` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
 
 Resume validates the input, configuration, software, environment, resources,
@@ -992,5 +993,49 @@ The coverage transport also covers cached full-pORF hit materialization and the
 native region-search producer. Physical scaffold/start/end come from the parsed
 proteome header and region mapping; query coverage comes only from actual
 GeneDiamondHit.qcov values. The native completion registry accepts the current
-Phase2 resume schema6. This corrects transport/publication consistency and does
+Phase2 resume schema7. This corrects transport/publication consistency and does
 not change scientific thresholds or invent coverage for old checkpoints.
+
+### Bounded joint assessment of rejected seeds
+
+After ordinary Phase 3 scoring, one nonrecursive pass may assess disjoint,
+adjacent rejected LOW candidates of the same effective NCLDV or MIRUS class.
+Their stored `flank_start_bp`/`flank_end_bp` taxonomy-search envelopes must
+overlap, every overlapping ORF
+in the joint hull must have been queried, and all original confirmed seed
+objects remain intact. A missing or empty host model or ambiguous/missing DNA
+in the inter-core gap prevents rescue. Recorded host stops and three consecutive exterior
+host-positive genes without qualifying viral support block a pair. A third
+seed or accepted-call conflict blocks rescue. After full native reassessment,
+all passing proposals that share a child with another passing proposal are
+discarded. Unsupported neighbors do not block an otherwise eligible proposal.
+
+The unchanged R2 supplementary predicate must select three independent physical
+genes, with at least one selected gene wholly inside each child's original
+confirmed cores. Only then may this assessment cross a support gap. Two
+separately supported multi-marker groups remain separate: both children must
+retain a native `capsid_partner_5kb` or `three_core_15kb` witness matching their
+effective panel to trigger this veto. Native distinct-marker and distinct-locus
+requirements apply; a duplicated single hallmark or lone capsid does not suffice.
+
+The native terminal inverted-repeat detector scans raw sequence across the hull
+and its configured Phase 1 context (5 kb by default), clipped to the contig.
+A pair bracketing one child's validated marker evidence, excluding the other,
+with an endpoint between their validated marker spans blocks rescue. This
+endpoint may fall in padded core sequence; the veto never trims a core. A pair enclosing the whole hull
+does not. Missing, failed or pairing-capped scans abstain. These checks introduce
+no new repeat, taxonomy, distance, or score threshold.
+
+Joint coordinates receive native classification, composition, repeat evidence,
+annotation, and verification again. Rejected children are replaced only when the
+joint result passes the per-candidate active native acceptance selection, including
+rescue-marker containment, and the joint supplementary check. Third-candidate
+overlap exclusion and noncompeting fixed hulls prevent arbitration conflicts.
+A rejected joint leaves its ordinary children intact.
+The complete confirmed seeds and JSON `joint_seed_provenance` retain child
+coordinates, stop reasons, original score, tier and effective class in final
+profiles and the detailed table. Boundary serialization retains proposal
+provenance and all cores; Phase 3 derives proposals again from ordinary
+boundaries on an authorized resume.
+Other candidates retain ordinary scoring. Changed source requires a fresh native
+run; old completion fingerprints do not authorize reuse.

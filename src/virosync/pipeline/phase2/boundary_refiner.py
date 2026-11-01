@@ -43,6 +43,7 @@ class RefinedBoundary:
     end: int
     candidate_id: str = field(default="", kw_only=True)
     confirmed_seeds: tuple[ConfirmedSeed, ...] = field(default=(), kw_only=True)
+    joint_seed_provenance: str = field(default="", kw_only=True)
     left_stop_reason: str = field(default="", kw_only=True)
     right_stop_reason: str = field(default="", kw_only=True)
     left_stop: int | None = field(default=None, kw_only=True)

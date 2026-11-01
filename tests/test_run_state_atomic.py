@@ -135,3 +135,28 @@ def test_phase_artifact_fsyncs_file_and_directory_chain(
         state_path.parent.parent,
         root,
     ]
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["virosync_predictions_detailed.tsv", "phase3_synthesis/virosync_predictions_detailed.tsv"],
+)
+def test_joint_provenance_artifact_schema_rejects_old_tags_and_headerless_tables(
+    tmp_path: Path, relative_path: str
+) -> None:
+    from dataclasses import replace
+
+    from virosync.orchestration._flows.single_genome.orchestrator import _artifact_schema
+
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("eve_id\tjoint_seed_provenance\n")
+    schema = _artifact_schema(path, tmp_path)
+    assert schema == "detailed-predictions-v8"
+    artifact = run_state.build_artifact_identity(path, root=tmp_path, schema=schema)
+    run_state._require_known_artifact_schemas({relative_path: artifact})
+    with pytest.raises(ValueError, match="must use schema 'detailed-predictions-v8'"):
+        run_state._require_known_artifact_schemas({relative_path: replace(artifact, schema="detailed-predictions-v7")})
+    path.write_text("")
+    with pytest.raises(ValueError, match="final evidence table has no header"):
+        run_state.build_artifact_identity(path, root=tmp_path, schema=schema)

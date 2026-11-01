@@ -168,12 +168,12 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/frameshift_screening/confirmed_frameshift_proteins.faa": ("frameshift-rescued-proteins-v1"),
     "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": ("frameshift-rescued-markers-v1"),
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
-    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v6",
-    "phase2/resume_state.json": "virosync.phase2.resume_state/v6",
+    "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v7",
+    "phase2/resume_state.json": "virosync.phase2.resume_state/v7",
     "virosync_predictions.tsv": "canonical-predictions-v7",
     "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v7",
-    "virosync_predictions_detailed.tsv": "detailed-predictions-v7",
-    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v7"),
+    "virosync_predictions_detailed.tsv": "detailed-predictions-v8",
+    "phase3_synthesis/virosync_predictions_detailed.tsv": ("detailed-predictions-v8"),
     "virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
     "phase3_synthesis/virosync_repeat_candidates.tsv": "virosync.repeat_candidates/v1",
     "virosync_predictions.bed": "canonical-predictions-bed-v1",
@@ -504,7 +504,7 @@ def _observe_artifact(
                     if nonempty_rows == 0:
                         if schema in {
                             "canonical-predictions-v7",
-                            "detailed-predictions-v7",
+                            "detailed-predictions-v8",
                             "virosync.repeat_candidates/v1",
                         }:
                             raise ValueError(f"final evidence table has no header: {relative_path}")

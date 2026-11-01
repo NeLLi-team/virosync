@@ -1186,6 +1186,7 @@ class VerificationResult:
     end: int
 
     confirmed_seeds: tuple[ConfirmedSeed, ...] = field(default=(), kw_only=True)
+    joint_seed_provenance: str = field(default="", kw_only=True)
     left_stop_reason: str = field(default="", kw_only=True)
     right_stop_reason: str = field(default="", kw_only=True)
     left_stop: int | None = field(default=None, kw_only=True)
@@ -1442,6 +1443,7 @@ class VerificationResult:
         return {
             "eve_id": self.eve_id,
             "confirmed_seeds": [asdict(seed) for seed in self.confirmed_seeds],
+            "joint_seed_provenance": self.joint_seed_provenance,
             "left_stop_reason": self.left_stop_reason,
             "right_stop_reason": self.right_stop_reason,
             "left_stop": self.left_stop,
@@ -2421,6 +2423,7 @@ class EvidenceSynthesizer:
             start=refined_boundary.start,
             end=refined_boundary.end,
             confirmed_seeds=refined_boundary.confirmed_seeds,
+            joint_seed_provenance=refined_boundary.joint_seed_provenance,
             left_stop_reason=refined_boundary.left_stop_reason,
             right_stop_reason=refined_boundary.right_stop_reason,
             left_stop=refined_boundary.left_stop,

@@ -1892,6 +1892,7 @@ class OutputGenerator:
         published_class = _published_eve_class(result)
         ppv_subtype = result.ppv_subtype if published_class == "PPV" and result.ppv_subtype in {"VP", "PLV"} else "."
         row_values = {
+            "joint_seed_provenance": result.joint_seed_provenance or ".",
             "eve_id": result.eve_id,
             "scaffold": result.scaffold,
             "start": str(result.start),

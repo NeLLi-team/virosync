@@ -43,7 +43,7 @@ def _public_candidate_union(
             scan_end=scan_end,
             marker_start=group.start,
             marker_end=group.end,
-        ):
+        ).candidates:
             terminal_repeats._retain_best_outer_pair(candidates, candidate)
     return sorted(
         candidates.values(),

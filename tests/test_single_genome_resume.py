@@ -333,7 +333,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
         for path, schema in (
             (ablation_events, "virosync.ablation_events/v1"),
             (canonical, "canonical-predictions-v7"),
-            (detailed, "detailed-predictions-v7"),
+            (detailed, "detailed-predictions-v8"),
             (repeat_candidates, "virosync.repeat_candidates/v1"),
             (bed, "canonical-predictions-bed-v1"),
             (gff, "canonical-predictions-gff3-v1"),

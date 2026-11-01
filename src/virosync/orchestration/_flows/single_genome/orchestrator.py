@@ -567,7 +567,7 @@ def _artifact_schema(path: Path, output_dir: Path) -> str:
     if path.name == "virosync_predictions.tsv":
         return "canonical-predictions-v7"
     if path.name == "virosync_predictions_detailed.tsv":
-        return "detailed-predictions-v7"
+        return "detailed-predictions-v8"
     if path.name == "virosync_repeat_candidates.tsv":
         return "virosync.repeat_candidates/v1"
     if path.name == "virosync_predictions.bed":
@@ -1791,6 +1791,7 @@ def _single_genome_flow_impl(
 
     # === PHASE 3: Evidence Synthesis ===
     phase3_result = _run_phase3_subflow(
+        raw_genome_path=genome_path,
         masked_path=masked_path,
         proteome_path=proteome_path,
         validated_markers=validated_markers,

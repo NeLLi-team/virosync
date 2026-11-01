@@ -120,7 +120,7 @@ def test_scanner_recovers_exact_planted_coordinates(
         scan_end=len(sequence),
         marker_start=250,
         marker_end=270,
-    )
+    ).candidates
 
     assert len(candidates) == 1
     candidate = candidates[0]
@@ -150,7 +150,7 @@ def test_scanner_enforces_minimum_arm_length(arm_length: int, detected: bool) ->
         scan_end=len(sequence),
         marker_start=marker_start,
         marker_end=marker_start + 20,
-    )
+    ).candidates
 
     assert bool(candidates) is detected
     if detected:
@@ -182,7 +182,7 @@ def test_long_repeat_cap_preserves_outer_boundary_coordinates(
         scan_end=len(sequence),
         marker_start=marker_start,
         marker_end=marker_start + 20,
-    )
+    ).candidates
 
     assert len(candidates) == 1
     assert candidates[0].left_start == len(left_flank)
@@ -213,7 +213,7 @@ def test_capped_repeat_rejects_subthreshold_reported_arm() -> None:
             scan_end=len(sequence),
             marker_start=marker_start,
             marker_end=marker_start + 20,
-        )
+        ).candidates
         == []
     )
 
@@ -230,7 +230,7 @@ def test_target_site_duplication_is_descriptive_only() -> None:
         scan_end=len(sequence),
         marker_start=250,
         marker_end=270,
-    )[0]
+    ).candidates[0]
 
     assert find_target_site_duplication(sequence, candidate) == "GAGGCT"
 
@@ -246,7 +246,7 @@ def test_mavirus_terminal_repeats_recover_published_outer_boundary() -> None:
         scan_end=35190,
         marker_start=15000,
         marker_end=25000,
-    )
+    ).candidates
 
     assert len(candidates) == 1
     candidate = candidates[0]
@@ -268,7 +268,7 @@ def test_scanner_rejects_random_and_short_period_sequences() -> None:
                 scan_end=len(sequence),
                 marker_start=390,
                 marker_end=410,
-            )
+            ).candidates
             == []
         )
 
@@ -287,7 +287,7 @@ def test_scanner_rejects_random_and_short_period_sequences() -> None:
             scan_end=len(sequence),
             marker_start=250,
             marker_end=270,
-        )
+        ).candidates
         == []
     )
 
@@ -312,7 +312,7 @@ def test_scanner_rejects_at_rich_composition_matched_arms() -> None:
             scan_end=len(sequence),
             marker_start=250,
             marker_end=270,
-        )
+        ).candidates
         == []
     )
 
@@ -359,12 +359,12 @@ def test_shared_scan_index_preserves_candidates() -> None:
         "marker_end": 815,
     }
 
-    uncached = find_terminal_inverted_repeats(sequence, **arguments)
+    uncached = find_terminal_inverted_repeats(sequence, **arguments).candidates
     cached = find_terminal_inverted_repeats(
         sequence,
         **arguments,
         _scan_seed_index=terminal_repeats._build_scan_seed_index(sequence[scan_start:scan_end]),
-    )
+    ).candidates
 
     assert cached == uncached
 
@@ -394,7 +394,7 @@ def test_duplicate_repeat_pairs_are_ambiguous() -> None:
         scan_end=len(sequence),
         marker_start=250,
         marker_end=270,
-    )
+    ).candidates
 
     assert len(candidates) == 2
     assert {(candidate.left_start, candidate.right_end) for candidate in candidates} == {

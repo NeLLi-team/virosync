@@ -1,11 +1,14 @@
 """Phase 3 subflow: evidence synthesis, verification, tiering."""
 
 import json
+import logging
 from bisect import bisect_left
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from Bio import SeqIO
 
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.config.pipeline_config import PipelineConfig
@@ -17,6 +20,7 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
 )
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkSupport, HallmarkWitness
+from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
@@ -29,8 +33,11 @@ from virosync.pipeline.phase2.boundary_diamond import (
 )
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
+    assign_boundary_candidate_ids,
     boundary_candidate_id,
 )
+from virosync.pipeline.phase2.seed_extension import refresh_boundary_classification
+from virosync.pipeline.phase2.terminal_repeats import refine_boundaries_with_terminal_repeats
 from virosync.pipeline.phase3.acceptance_selection import (
     select_phase3_acceptance,
 )
@@ -39,8 +46,15 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
     recluster_survivors,
     unsupported_eve_ids,
 )
-from virosync.pipeline.phase3.evidence_synthesizer import validate_results_seed_containment
+from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult, validate_results_seed_containment
 from virosync.pipeline.phase3.gene_functions import find_gene_function_resources, label_core_genes
+from virosync.pipeline.phase3.joint_seed_rescue import (
+    effective_class,
+    eligible_joint_pairs,
+    has_clear_internal_boundary_scan,
+    joint_boundary,
+    joint_result_supported,
+)
 from virosync.utils.path_safety import safe_filename_components
 
 from .loaders import (
@@ -48,6 +62,7 @@ from .loaders import (
     _load_tmvec_cache,
     _serialize_tmvec_cache,
 )
+from .phase2 import _annotate_boundary_repeats, _recalculate_boundary_composition
 
 _ScaffoldStartIndex = dict[
     str,
@@ -761,6 +776,98 @@ def _run_verification(
     )
 
 
+def _verify_native_boundaries(
+    refined_boundaries: list[RefinedBoundary],
+    *,
+    boundary_taxonomy_map: dict,
+    validated_markers: list[ValidatedMarkerHit],
+    proteome_index: dict,
+    boundary_diamond_query: object,
+    interproscan_map: dict,
+    use_precomputed_taxonomy: bool,
+    proteome_path: Path,
+    config: PipelineConfig,
+    logger: logging.Logger,
+    hallmark_evidence: list[HallmarkEvidence],
+    hallmark_witnesses: list[HallmarkWitness],
+    output_dir: Path,
+    jelly_roll_map: dict,
+    masked_path: Path,
+    host_signatures: set,
+    host_signature_model_payload: dict | None,
+    precomputed_tmvec: dict | None,
+    tmvec_device: str,
+    interproscan_path: Path | None = None,
+) -> list[VerificationResult]:
+    """Rebuild coordinate evidence, annotations and scores for one native batch."""
+    # ==================================================
+    # Build maps for batched verification
+    # ==================================================
+    hallmark_hits_map = {}
+    gene_taxonomy_map_batched = {}
+    interproscan_map_batched = {}
+    boundary_taxonomy_index = _build_scaffold_start_index(boundary_taxonomy_map.values())
+    validated_marker_index = _build_scaffold_start_index(validated_markers)
+
+    logger.info(
+        "Phase 3: Preparing data for batched verification of %d boundaries",
+        len(refined_boundaries),
+    )
+    for boundary in refined_boundaries:
+        evidence = _build_boundary_evidence(
+            boundary=boundary,
+            taxonomy_index=boundary_taxonomy_index,
+            marker_index=validated_marker_index,
+            boundary_taxonomy_map=boundary_taxonomy_map,
+            proteome_index=proteome_index,
+            boundary_diamond_query=boundary_diamond_query,
+            interproscan_map=interproscan_map,
+            use_precomputed_taxonomy=use_precomputed_taxonomy,
+            proteome_path=proteome_path,
+            config=config,
+            logger=logger,
+        )
+        hallmark_hits_map[evidence.boundary_id] = evidence.hallmarks
+        if evidence.gene_taxonomy:
+            gene_taxonomy_map_batched[evidence.boundary_id] = evidence.gene_taxonomy
+        if evidence.interproscan:
+            interproscan_map_batched[evidence.boundary_id] = evidence.interproscan
+
+    # ==================================================
+    # Run batched verification
+    # ==================================================
+    candidate_annotations = _prepare_candidate_annotations(
+        refined_boundaries,
+        gene_taxonomy_map_batched,
+        hallmark_evidence,
+        proteome_path=proteome_path,
+        validated_markers=validated_markers,
+        validated_marker_index=validated_marker_index,
+        output_dir=output_dir,
+        config=config,
+        interproscan_path=interproscan_path,
+    )
+    logger.info("Phase 3: Running batched verification with %d threads", config.compute.effective_threads())
+    return _run_verification(
+        boundaries=refined_boundaries,
+        hallmark_hits_map=hallmark_hits_map,
+        hallmark_evidence=hallmark_evidence,
+        hallmark_witnesses=hallmark_witnesses,
+        candidate_annotations=candidate_annotations,
+        gene_taxonomy_map=gene_taxonomy_map_batched,
+        interproscan_map=interproscan_map_batched,
+        jelly_roll_map=jelly_roll_map,
+        masked_path=masked_path,
+        proteome_path=proteome_path,
+        output_dir=output_dir,
+        host_signatures=host_signatures,
+        host_signature_model_payload=host_signature_model_payload,
+        precomputed_tmvec=precomputed_tmvec,
+        tmvec_device=tmvec_device,
+        config=config,
+    )
+
+
 def _run_phase3_subflow(
     masked_path: Path,
     proteome_path: Path,
@@ -779,6 +886,7 @@ def _run_phase3_subflow(
     validated_hits_tsv: Path,
     logger: object,
     resume_authorized: bool = False,
+    raw_genome_path: Path | None = None,
 ) -> Phase3Result:
     """Phase 3: Evidence synthesis and verification.
 
@@ -818,7 +926,6 @@ def _run_phase3_subflow(
 
     # Load validated markers on resume if needed
     if (not validated_markers) and resume and resume_authorized and validated_hits_tsv.exists():
-        from virosync.pipeline.host_signatures import HostSignatureModel
         from virosync.pipeline.phase1.marker_validation import (
             collect_host_signatures,
             load_validated_marker_hits,
@@ -891,71 +998,86 @@ def _run_phase3_subflow(
         logger=logger,
     )
 
-    # ==================================================
-    # Build maps for batched verification
-    # ==================================================
-    hallmark_hits_map = {}
-    gene_taxonomy_map_batched = {}
-    interproscan_map_batched = {}
-    boundary_taxonomy_index = _build_scaffold_start_index(boundary_taxonomy_map.values())
-    validated_marker_index = _build_scaffold_start_index(validated_markers)
-
-    logger.info(
-        "Phase 3: Preparing data for batched verification of %d boundaries",
-        len(refined_boundaries),
-    )
-    for boundary in refined_boundaries:
-        evidence = _build_boundary_evidence(
-            boundary=boundary,
-            taxonomy_index=boundary_taxonomy_index,
-            marker_index=validated_marker_index,
-            boundary_taxonomy_map=boundary_taxonomy_map,
-            proteome_index=proteome_index,
-            boundary_diamond_query=boundary_diamond_query,
-            interproscan_map=interproscan_map,
-            use_precomputed_taxonomy=use_precomputed_taxonomy,
-            proteome_path=proteome_path,
-            config=config,
-            logger=logger,
-        )
-        hallmark_hits_map[evidence.boundary_id] = evidence.hallmarks
-        if evidence.gene_taxonomy:
-            gene_taxonomy_map_batched[evidence.boundary_id] = evidence.gene_taxonomy
-        if evidence.interproscan:
-            interproscan_map_batched[evidence.boundary_id] = evidence.interproscan
-
-    # ==================================================
-    # Run batched verification
-    # ==================================================
-    candidate_annotations = _prepare_candidate_annotations(
-        refined_boundaries,
-        gene_taxonomy_map_batched,
-        hallmark_evidence,
-        proteome_path=proteome_path,
+    verification_context = dict(
+        boundary_taxonomy_map=boundary_taxonomy_map,
         validated_markers=validated_markers,
-        validated_marker_index=validated_marker_index,
-        output_dir=output_dir,
+        proteome_index=proteome_index,
+        boundary_diamond_query=boundary_diamond_query,
+        interproscan_map=interproscan_map,
+        use_precomputed_taxonomy=use_precomputed_taxonomy,
+        proteome_path=proteome_path,
         config=config,
-    )
-    logger.info("Phase 3: Running batched verification with %d threads", threads)
-    verification_results = _run_verification(
-        boundaries=refined_boundaries,
-        hallmark_hits_map=hallmark_hits_map,
+        logger=logger,
         hallmark_evidence=hallmark_evidence,
         hallmark_witnesses=hallmark_witnesses,
-        candidate_annotations=candidate_annotations,
-        gene_taxonomy_map=gene_taxonomy_map_batched,
-        interproscan_map=interproscan_map_batched,
+        output_dir=output_dir,
         jelly_roll_map=jelly_roll_map,
         masked_path=masked_path,
-        proteome_path=proteome_path,
-        output_dir=output_dir,
         host_signatures=host_signatures,
         host_signature_model_payload=host_signature_model_payload,
         precomputed_tmvec=precomputed_tmvec,
         tmvec_device=tmvec_device,
-        config=config,
     )
+    verification_results = _verify_native_boundaries(refined_boundaries, **verification_context)
+    if raw_genome_path is not None:
+        pairs = eligible_joint_pairs(
+            refined_boundaries,
+            verification_results,
+            boundary_diamond_query,
+            proteome_index,
+            boundary_taxonomy_map,
+            HostSignatureModel.from_dict(host_signature_model_payload)
+            if host_signature_model_payload and config.phase2.host_trim_enabled and ablation_id is not AblationID.A4
+            else None,
+            config.phase2.host_trim_score_threshold,
+            accepted_ids=frozenset(
+                r.eve_id for r in select_phase3_acceptance(verification_results, ablation_id).canonical_results
+            ),
+        )
+        joints = _prepare_joint_boundaries(
+            pairs,
+            raw_genome_path=raw_genome_path,
+            masked_path=masked_path,
+            validated_markers=validated_markers,
+            boundary_diamond_query=boundary_diamond_query,
+            boundary_taxonomy_map=boundary_taxonomy_map,
+            proteome_index=proteome_index,
+            config=config,
+        )
+        if joints:
+            joint_output = output_dir / "phase3" / "joint_seed_rescue"
+            joint_interproscan = _run_interproscan(
+                regions=[
+                    {"eve_id": boundary_candidate_id(b), "scaffold": b.scaffold, "start": b.start, "end": b.end}
+                    for b, _ in joints
+                ],
+                proteome_path=proteome_path,
+                output_dir=joint_output,
+                config=config,
+                resume_authorized=False,
+                logger=logger,
+            )
+            joint_tmvec, joint_device = _precompute_tmvec(
+                refined_boundaries=[b for b, _ in joints],
+                proteome_path=proteome_path,
+                output_dir=joint_output,
+                config=config,
+                resume_authorized=False,
+                logger=logger,
+            )
+            joint_results = _verify_native_boundaries(
+                [b for b, _ in joints],
+                **{
+                    **verification_context,
+                    "interproscan_map": joint_interproscan,
+                    "precomputed_tmvec": joint_tmvec,
+                    "tmvec_device": joint_device,
+                    "interproscan_path": joint_output / "phase3" / "interproscan" / "interproscan_batch.tsv",
+                },
+            )
+            verification_results = _replace_accepted_joints(
+                verification_results, joint_results, joints, ablation_id=ablation_id
+            )
 
     validate_results_seed_containment(verification_results)
     acceptance_selection = select_phase3_acceptance(verification_results, ablation_id)
@@ -1094,6 +1216,7 @@ def _scan_candidate_integration(
     validated_markers: list[ValidatedMarkerHit],
     output_dir: Path,
     config: PipelineConfig,
+    interproscan_path: Path | None = None,
 ) -> dict:
     """Scan candidate intervals once and return their integration annotations."""
     from virosync.pipeline.phase3.integration_genes import (
@@ -1123,7 +1246,7 @@ def _scan_candidate_integration(
         if config.databases.hmm_database
         else None
     )
-    interproscan_path = output_dir / "phase3" / "interproscan" / "interproscan_batch.tsv"
+    interproscan_path = interproscan_path or output_dir / "phase3" / "interproscan" / "interproscan_batch.tsv"
     hits.extend(
         collect_annotated_integration_genes(
             proteome_path,
@@ -1161,6 +1284,7 @@ def _prepare_candidate_annotations(
     validated_marker_index: _ScaffoldStartIndex,
     output_dir: Path,
     config: PipelineConfig,
+    interproscan_path: Path | None = None,
 ) -> dict:
     """Run context scans before scoring and retain their outputs for publication."""
     annotations = _scan_candidate_integration(
@@ -1169,6 +1293,7 @@ def _prepare_candidate_annotations(
         validated_markers=validated_markers,
         output_dir=output_dir,
         config=config,
+        interproscan_path=interproscan_path,
     )
     hallmark_index = _build_scaffold_start_index(hallmark_evidence)
     genes = []
@@ -1227,3 +1352,111 @@ def _prepare_candidate_annotations(
         )
         annotation["hallmark_support"] = support
     return annotations
+
+
+def _prepare_joint_boundaries(
+    pairs: list[tuple[RefinedBoundary, RefinedBoundary]],
+    *,
+    raw_genome_path: Path,
+    masked_path: Path,
+    validated_markers: list[ValidatedMarkerHit],
+    boundary_diamond_query: object,
+    boundary_taxonomy_map: dict,
+    proteome_index: dict,
+    config: PipelineConfig,
+) -> list[tuple[RefinedBoundary, tuple[RefinedBoundary, RefinedBoundary]]]:
+    """Finalize fixed joint hulls through the existing coordinate evidence path."""
+    if not pairs or not raw_genome_path.is_file() or not config.phase2.terminal_repeat_enabled:
+        return []
+    scaffolds = {left.scaffold for left, _ in pairs}
+    sequences = {
+        record.id: str(record.seq) for record in SeqIO.parse(raw_genome_path, "fasta") if record.id in scaffolds
+    }
+    prepared = []
+    for children in pairs:
+        if not has_clear_internal_boundary_scan(
+            children,
+            sequences.get(children[0].scaffold),
+            validated_markers,
+            config.phase1.extension_kb * 1000,
+        ):
+            continue
+        joint = joint_boundary(children)
+        try:
+            finalized = refine_boundaries_with_terminal_repeats(
+                [joint],
+                raw_genome_path=raw_genome_path,
+                validated_markers=validated_markers,
+                boundary_diamond_query=boundary_diamond_query,
+                boundary_taxonomy_map=boundary_taxonomy_map,
+                proteome_index=proteome_index,
+                extension_bp=config.phase1.extension_kb * 1000,
+            )
+        except (OSError, RuntimeError) as error:
+            logging.getLogger(__name__).warning("Joint repeat finalization unavailable: %s", error)
+            continue
+
+        # Rescue assesses this fixed hull; a different native repeat partition is
+        # a different proposal and cannot inherit the eligibility checks above.
+        if len(finalized) != 1 or (finalized[0].start, finalized[0].end) != (joint.start, joint.end):
+            continue
+        finalized[0].joint_seed_provenance = joint.joint_seed_provenance
+        refresh_boundary_classification(finalized, validated_markers, ablation_id=config.ablation.id)
+        _recalculate_boundary_composition(finalized, masked_path=masked_path)
+        finalized = assign_boundary_candidate_ids(finalized)
+        try:
+            _annotate_boundary_repeats(
+                finalized,
+                raw_genome_path=raw_genome_path,
+                boundary_diamond_query=boundary_diamond_query,
+                extension_bp=config.phase1.extension_kb * 1000,
+            )
+        except (OSError, RuntimeError) as error:
+            logging.getLogger(__name__).warning("Joint repeat annotation unavailable: %s", error)
+            continue
+
+        prepared.append((finalized[0], children))
+    return prepared
+
+
+def _replace_accepted_joints(
+    originals: list[VerificationResult],
+    joint_results: list[VerificationResult],
+    joints: list[tuple[RefinedBoundary, tuple[RefinedBoundary, RefinedBoundary]]],
+    *,
+    ablation_id: AblationID,
+) -> list[VerificationResult]:
+    """Replace rejected children only after native support and final gate pass."""
+    children_by_id = {boundary_candidate_id(boundary): children for boundary, children in joints}
+    original_by_id = {result.eve_id: result for result in originals}
+    qualified = []
+    for result in joint_results:
+        children = children_by_id[result.eve_id]
+        expected = tuple(core for child in children for core in child.confirmed_seeds)
+        if result.confirmed_seeds != expected:
+            raise ValueError("joint rescue changed confirmed seed ownership")
+        family = effective_class(original_by_id[boundary_candidate_id(children[0])])
+        if effective_class(result) != family or not joint_result_supported(result, children):
+            continue
+        if not select_phase3_acceptance([result], ablation_id).canonical_results:
+            continue
+        qualified.append(result)
+    counts = Counter(boundary_candidate_id(child) for result in qualified for child in children_by_id[result.eve_id])
+    accepted = [
+        result
+        for result in qualified
+        if all(counts[boundary_candidate_id(child)] == 1 for child in children_by_id[result.eve_id])
+    ]
+    boundaries_by_id = {boundary_candidate_id(boundary): boundary for boundary, _ in joints}
+    for result in accepted:
+        provenance = json.loads(boundaries_by_id[result.eve_id].joint_seed_provenance)
+        for child in provenance["children"]:
+            original = original_by_id[child["candidate_id"]]
+            child.update(
+                final_confidence=original.final_confidence,
+                confidence_tier=original.confidence_tier,
+                effective_class=effective_class(original),
+            )
+        result.joint_seed_provenance = json.dumps(provenance, sort_keys=True)
+    removed = {boundary_candidate_id(child) for result in accepted for child in children_by_id[result.eve_id]}
+    return [result for result in originals if result.eve_id not in removed] + accepted

@@ -77,6 +77,14 @@ class TerminalRepeat:
 
 
 @dataclass(frozen=True, slots=True)
+class TerminalRepeatScan:
+    """Native candidates and whether the pairing cap omitted search work."""
+
+    candidates: list[TerminalRepeat]
+    pairing_capped: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _MarkerGroup:
     """Validated hits belonging to one predicted protein."""
 
@@ -166,7 +174,7 @@ def _matching_diagonals(
     reverse_right: str,
     *,
     scan_seed_index: _ScanSeedIndex | None = None,
-) -> dict[int, tuple[int, ...]]:
+) -> tuple[dict[int, tuple[int, ...]], bool]:
     """Return alignment diagonals and the exact seeds that support them."""
     if scan_seed_index is None:
         left_index = _kmer_index(left)
@@ -177,11 +185,13 @@ def _matching_diagonals(
         left_index = _index_prefix(scan_seed_index.forward, left_limit)
         right_index = _index_prefix(scan_seed_index.reverse, right_limit)
 
+    pairing_capped = False
     diagonal_seeds: dict[int, set[int]] = defaultdict(set)
     for kmer in left_index.keys() & right_index.keys():
         left_positions = left_index[kmer]
         right_positions = right_index[kmer]
         if len(left_positions) * len(right_positions) > _MAX_SEED_PAIRINGS:
+            pairing_capped = True
             continue
         for left_position in left_positions:
             for right_position in right_positions:
@@ -194,7 +204,7 @@ def _matching_diagonals(
             later - earlier <= MAX_TIR_ARM_BP - _KMER_BP for earlier, later in zip(ordered, ordered[1:], strict=False)
         ):
             supported[diagonal] = tuple(ordered)
-    return supported
+    return supported, pairing_capped
 
 
 def _seed_search_intervals(
@@ -452,7 +462,7 @@ def find_terminal_inverted_repeats(
     marker_start: int,
     marker_end: int,
     _scan_seed_index: _ScanSeedIndex | None = None,
-) -> list[TerminalRepeat]:
+) -> TerminalRepeatScan:
     """Find non-low-complexity repeat pairs that bracket a marker span."""
     sequence = sequence.upper()
     if (
@@ -467,14 +477,15 @@ def find_terminal_inverted_repeats(
     left = sequence[scan_start:marker_start]
     reverse_right = _reverse_complement(sequence[marker_end:scan_end])
     if len(left) < MIN_TIR_ARM_BP or len(reverse_right) < MIN_TIR_ARM_BP:
-        return []
+        return TerminalRepeatScan([])
 
     candidates: dict[tuple[int, int], TerminalRepeat] = {}
-    for diagonal, seed_positions in _matching_diagonals(
+    diagonals, pairing_capped = _matching_diagonals(
         left,
         reverse_right,
         scan_seed_index=_scan_seed_index,
-    ).items():
+    )
+    for diagonal, seed_positions in diagonals.items():
         for candidate in _diagonal_candidates(
             left,
             reverse_right,
@@ -484,7 +495,7 @@ def find_terminal_inverted_repeats(
             right_end=scan_end,
         ):
             _retain_best_outer_pair(candidates, candidate)
-    return sorted(
+    ordered = sorted(
         candidates.values(),
         key=lambda candidate: (
             -candidate.arm_length,
@@ -493,6 +504,7 @@ def find_terminal_inverted_repeats(
             candidate.right_end,
         ),
     )
+    return TerminalRepeatScan(ordered, pairing_capped)
 
 
 def _shared_pair_parent(
