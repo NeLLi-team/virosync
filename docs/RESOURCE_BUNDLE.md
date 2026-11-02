@@ -13,14 +13,13 @@ profiles, and 190,562 taxonomy labels. The marker profiles include 33
 capsid-type curated function and give capsid evidence; `EVE_CAPSID_NOVEL_0029`
 is the only putative MCP.
 
-Changes from v1.1.0:
+Curation of this bundle:
 
 - Both DIAMOND databases are dereplicated within each genome. Exact repeats are
   removed first. DIAMOND 2.2.1 `cluster --approx-id 90 --member-cover 80` then
   groups the remaining proteins of each genome, and the longest member of each
-  cluster is kept. No proteins are merged across genomes. The marker database
-  falls from 3,867,592 to 2,917,745 proteins and the proteome database from
-  46,765,751 to 44,070,936.
+  cluster is kept. No proteins are merged across genomes. Dereplication leaves
+  2,917,745 marker proteins and 44,070,936 proteome proteins.
 - 1,258 proteome entries that copy prokaryotic contaminants removed from
   eukaryotic references in GVClass resource v2.1.0
   ([Zenodo](https://doi.org/10.5281/zenodo.23381313)) are removed with their
@@ -28,15 +27,13 @@ Changes from v1.1.0:
   coverage to an EUK-labelled entry of the same assembly. The marker database
   holds none of them.
 - The 3,011 eukaryote-labelled reference hits of the 33 structure-derived
-  profiles move from `EUK__<assembly>` to `EUK-pEVE__<assembly>` in both
-  databases, each with its cluster (1,031 marker and 1,892 proteome
-  representatives). Their label is the lineage of the assembly with every named
+  profiles carry the label `EUK-pEVE__<assembly>` in both databases, each with
+  its cluster (1,031 marker and 1,892 proteome representatives). Their label is the lineage of the assembly with every named
   rank suffixed `-pEVE`, for example `EUK-pEVE|Evosea-pEVE|...`, as in GVClass.
   ViroSync counts `EUK-pEVE` as viral and never as host (see
   [Methods](METHODS.md)).
-- Eukaryotic lineages are rewritten from NCBI ranks
-  (`scripts/harmonize_taxonomy_labels.py`, 2,839 rows changed), and 245
-  `EUK-pEVE` rows are added.
+- Eukaryotic lineages come from NCBI ranks
+  (`scripts/harmonize_taxonomy_labels.py`), and 245 rows carry `EUK-pEVE` lineages.
 - `models/gene_function.hmm` and `models/gene_function_labels.tsv` hold 412 Pfam
   and VOGDB profiles that label core genes.
 

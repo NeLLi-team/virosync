@@ -5,42 +5,47 @@ acceptance gate. `final_confidence` is a rule-based score, not a calibrated
 probability. A confidence tier and acceptance are different decisions: a LOW
 candidate can be accepted, and a MEDIUM candidate can be rejected.
 
-All evidence is computed on the final retained coordinates. A gene counts only
-when it lies wholly inside the interval. [Outputs](../METHODS.md) defines the
-result files, and the [workflow map](https://github.com/NeLLi-team/virosync#workflow)
+All evidence is computed on the final retained coordinates. Catalogue hallmarks,
+support annotations and supplementary-module genes must lie wholly inside the
+interval. Gene-taxonomy and marker counts use interval overlap.
+[Outputs](../METHODS.md) defines the result files, and the [workflow map](https://github.com/NeLLi-team/virosync#workflow)
 shows where each step runs.
 
 ## Steps from marker to accepted EVE
 
-1. **Validate markers.** A marker HMM hit is `validated` when its protein has a
-   viral reference among its ten best DIAMOND matches at 25% identity or more.
-   A hit with no DIAMOND match can be `validated_novel` under separate HMM rules.
-   `supported` and `unvalidated` hits stay diagnostic and earn no credit below.
+1. **Validate markers.** A marker HMM hit is `validated` when one of its ten best
+   DIAMOND matches has the prefix `NCLDV`, `MIRUS`, `PLV`, `VP`, `PPV`, `CRESS` or
+   `EUK-pEVE` at 25% identity or more. `GVMAG` and `PHAGE` matches do not validate
+   a hit. A hit with no DIAMOND match can be `validated_novel` under separate HMM
+   rules. `supported` and `unvalidated` hits stay diagnostic and earn no credit
+   below.
 2. **Find spatial witnesses.** Validated hits at E ≤ 0.01 to catalogue core models
-   can form a witness (see [Spatial witnesses](#spatial-witnesses)). A witness
-   outside every ordinary seed becomes a seed of its own.
+   can form a witness (see [Spatial witnesses](#spatial-witnesses)). The widest
+   witnesses outside ordinary seeds become seeds; nested or identical ones add no
+   further seed.
 3. **Set the interval.** Phase 2 extends each seed and sets its boundaries. Scoring
    reads the result; it does not move the coordinates.
 4. **Collect context.** Interior integration genes and gene-function labels that
    the catalogue maps to a panel become support evidence at E ≤ 1e-5.
 5. **Assess hallmarks.** One compatible panel is selected and gives the marker
    score, the coherence bonus and a possible floor.
-6. **Assess the supplementary module.** The module asks whether at least three
-   independent genes support a stable NCLDV or MIRUS class.
+6. **Assess the supplementary module.** For each candidate that reaches
+   confidence scoring, the module asks whether at least three independent genes
+   support a stable NCLDV or MIRUS class.
 7. **Combine the components.** Weighted components, bonuses and penalties give a
    score, clipped to 0–0.99.
 8. **Apply caps, then floors.** Missing hallmark evidence caps the score, and
    qualified evidence sets a minimum.
 9. **Assign the tier.** HIGH is 0.7 or above, MEDIUM is 0.2 to below 0.7, and LOW
    is below 0.2.
-10. **Apply the acceptance gate.** The class and evidence decide whether the
-    candidate is kept.
+10. **Apply the acceptance gate and selection.** The class and evidence decide
+    whether a candidate is kept, and overlapping rescue and ordinary candidates are
+    arbitrated.
 11. **Reassess rejected neighbors.** One pass can join two adjacent rejected LOW
-    candidates and score the joined interval.
-12. **Select, cluster and filter.** Overlapping rescue and ordinary candidates are
-    arbitrated, accepted EVEs are clustered by ANI, an agreed MCP class can transfer
-    within a cluster, and candidates without viral evidence are removed unless a
-    marker-bearing relative or a spatial witness supports them.
+    candidates and score the joined interval. The gate and selection then run again.
+12. **Cluster and filter.** Accepted EVEs are clustered by ANI, an agreed MCP class
+    can transfer within a cluster, and candidates without viral evidence are
+    removed unless a marker-bearing relative or a spatial witness supports them.
 
 ## Hallmark assessment
 
@@ -54,7 +59,7 @@ family-to-protein matching enforces both limits. Repeated profiles of one family
 or several families on one protein, do not add cores.
 
 The panel with the most cores wins. Ties go to more strong cores, then capsid
-presence, then more compatible families, then panel name.
+presence, then more compatible families, then the panel name that sorts last.
 
 | Quantity | Rule |
 | --- | --- |
@@ -142,17 +147,17 @@ to 0.06 for two genes or fewer. It is off by default.
 | --- | --- | --- |
 | Domain agreement | Seed cluster 1 and InterProScan score ≥ 0.5 | +0.03 |
 | Boundary and composition | Boundary confidence ≥ 0.9 and composition ≥ 0.6 | +0.03 |
-| Family consistency | Region, taxonomy, marker and domain families agree | up to +0.05 |
-| Viral taxonomy distribution | Viral score ≥ 0.6 | min(0.15, (score − 0.4) × 0.5) |
-| Host divergence | Divergence from the host baseline ≥ 0.5 | min(0.20, 0.05 + (divergence − 0.5) × 0.3) |
+| Family consistency | Two region, taxonomy, marker or domain votes for one NCLDV, MIRUS or PPV family; three or more | +0.04; +0.05 |
 | Viral enrichment | Viral-gene fraction ≥ 0.15 | min(0.12, fraction × 0.4) |
 | Hallmark coherence | Compatible families beyond the first | See the table above |
 | Structural | Optional structural analysis | 0.15 × structural score |
-| EUK penalty | Genes with three high-identity eukaryotic hits and no viral hit | up to −0.12 |
-| Size penalty | One, two or three genes, without a strong capsid core | −0.15, −0.08 or −0.04 |
+| EUK penalty | Fraction of genes with three eukaryotic hits at 70% identity or more and no viral hit, × 0.20; or, above 80% high-identity eukaryotic genes and below 10% viral genes, that fraction × 0.12. The larger term applies | up to −0.12 |
+| Size penalty | One, two or three genes, without full capsid credit (capsid fraction 1) | −0.15, −0.08 or −0.04 |
 
-A viral taxonomy-distribution score of 0.4 or more reduces the EUK penalty by that
-score, with the reduction capped at 0.8.
+A family vote from taxonomy needs a dominant-family fraction of 0.25 or more, and a
+marker vote needs a positive marker-complement score. The scorer also holds
+taxonomy-distribution and host-divergence bonuses. The default flow does not
+produce their inputs, so both stay at zero.
 
 ### Caps and floors
 
@@ -172,15 +177,17 @@ Floors then raise the score:
 
 ### Supplementary module
 
-The module runs for every candidate and lifts only the zero-core cap and the LOW
-gate below. It adds no score term. A candidate is eligible when:
+The module runs for every candidate that reaches confidence scoring, and it lifts
+only the zero-core cap and the LOW gate below. It adds no score term. A candidate
+is eligible when:
 
 - The LOW and MEDIUM class resolvers agree on `NCLDV` or `MIRUS`.
 - At least three nonoverlapping genes inside the interval each have a retained
   hit of that class at 25% identity or more, E ≤ 1e-5 and query coverage of 50%
   or more per alignment.
 - The viral bitscore of each counted gene exceeds its best nuclear or prokaryotic
-  hit. Organelle hits are reported as ambiguity and are not comparators.
+  hit, when the gene has one. Organelle hits are reported as ambiguity and are not
+  comparators.
 
 ## Acceptance gate
 

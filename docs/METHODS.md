@@ -206,8 +206,8 @@ ViroSync accepted.
 
 `ppv_subtype` is `VP` or `PLV` only when subtype-specific marker evidence
 supports that label. A dot means unresolved or not applicable. An accepted
-`UNKNOWN` region requires support from an ANI cluster with a marker-bearing
-EVE; this support alone does not prove viral origin.
+`UNKNOWN` region requires a contained spatial witness or support from an ANI
+cluster with a marker-bearing EVE; this support alone does not prove viral origin.
 
 `EUK-pEVE` is a reference class, not a published class. It marks viral-like
 proteins that sit in eukaryotic genome assemblies (resource bundle v1.2.0 and
@@ -463,9 +463,10 @@ top-hit search and uses no filter.
 ### Seed markers
 
 An `EUK-pEVE` reference hit with at least 25% identity validates a marker like a
-viral reference. A marker with no DIAMOND match (`validated_novel`) can start a
-region only when its model is an MCP or gives
-[capsid evidence](#capsid-evidence).
+viral reference. Ordinary region assembly lets a marker with no DIAMOND match
+(`validated_novel`) start a region only when its model is an MCP or gives
+[capsid evidence](#capsid-evidence). Catalogue-qualified `validated_novel` core
+markers can also form a three-core spatial witness.
 
 A validated marker can start a candidate region unless its HMM model is a host
 kinase family: `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`
@@ -498,10 +499,10 @@ fully contained records and witness memberships to each final boundary in their
 original order. Functional annotation uses the same boundary coordinates and
 the retained-marker index, including rescued frameshift genes.
 
-Each witness not wholly contained in an ordinary confirmed seed becomes a
-separate confirmed seed with a stable identity and its exact full-gene hull.
-Partial overlap does not trim either seed. A fully contained witness needs no
-duplicate seed. Ordinary seeds keep their original identities. The normal
+The widest witnesses not wholly contained in an ordinary confirmed seed become
+separate confirmed seeds with a stable identity and the exact full-gene hull.
+Partial overlap does not trim either seed. A witness contained in a seed or in
+another witness, or with an identical hull, adds no seed. Ordinary seeds keep their original identities. The normal
 extension, merge and repeat-partition rules preserve every assigned seed.
 
 ### Seed-preserving extension
@@ -981,13 +982,8 @@ clipped or ambiguous controls. `null_assessed` counts the usable offsets and
 `null_matches` counts those with a qualifying short match.
 These correlated comparisons summarize local matching frequency; they do not
 estimate independent boundary accuracy or a calibrated chance probability.
-A Phase-3 readmission that changes an endpoint retains its parent
-evidence and pair alternatives, marks that endpoint unassessed, clears the
-display representative and records `not_assessed_endpoint_changed` for the
-short-flank assessment. Its sidecar rows carry the final EVE identifier, while
-the assessed and parent coordinates continue to describe the source assessment.
-At unchanged retained TIR anchors, the matched sequence agrees with
-`tsd_sequence`.
+Joint rescue reassesses repeat evidence on its fixed hull. At retained TIR anchors,
+the matched sequence agrees with `tsd_sequence`.
 
 ### Interpreting integration signatures
 
@@ -1020,12 +1016,13 @@ an integration mechanism.
 
 ### Supplementary viral module
 
-The supplementary module runs for every candidate. It reads the retained full-ORF
+The supplementary module runs for every candidate that reaches confidence
+scoring. It reads the retained full-ORF
 genome-database taxonomy after the final coordinates are fixed. It requires the
 existing LOW and MEDIUM class resolvers to agree on NCLDV or MIRUS, then at
 least three nonoverlapping, fully contained physical genes supporting that exact
-reference prefix. The unchanged evidence-only family inference runs before
-scoring so both resolvers see the final family. Each gene needs a retained hit
+reference prefix. Evidence-only family inference runs before scoring so both
+resolvers see the final family. Each gene needs a retained hit
 with identity >=25%, E <=1e-5 and query coverage per HSP >=50%, with bitscore
 strictly above every retained non-organelle EUK/BAC/ARC hit. These competitors
 are not filtered by identity, E-value or coverage. A missing non-organelle
@@ -1086,7 +1083,7 @@ seed or accepted-call conflict blocks rescue. After full native reassessment,
 all passing proposals that share a child with another passing proposal are
 discarded. Unsupported neighbors do not block an otherwise eligible proposal.
 
-The unchanged R2 supplementary predicate must select three independent physical
+The supplementary module must select three independent physical
 genes, with at least one selected gene wholly inside each child's original
 confirmed cores. Only then may this assessment cross a support gap. Two
 separately supported multi-marker groups remain separate: both children must
@@ -1100,8 +1097,7 @@ A pair bracketing one child's validated marker evidence, excluding the other,
 with an endpoint between their validated marker spans blocks rescue. This
 endpoint may fall in padded core sequence; the veto never trims a core. A pair
 enclosing the whole hull does not. A missing, failed or pairing-capped scan blocks
-rescue. These checks introduce no new repeat, taxonomy, distance, or score
-threshold.
+rescue.
 
 Joint coordinates receive native classification, composition, repeat evidence,
 annotation, and verification again. Rejected children are replaced only when the

@@ -149,7 +149,7 @@ def test_riser_problems_ignore_a_line_below_the_bands() -> None:
     assert wm.riser_problems([route]) == []
 
 
-@pytest.mark.parametrize("label_start", ["Integration genes", "Spatial\nseeds"])
+@pytest.mark.parametrize("label_start", ["Integration\ngenes", "Spatial\nwitnesses"])
 def test_stops_on_the_hallmark_line_feed_scoring(label_start: str) -> None:
     assert _stop(label_start).tracks == (wm.HALLMARK,)
 
@@ -184,8 +184,8 @@ def test_layout_problems_accepts_the_shipped_map() -> None:
     ("label_start", "changes", "expected"),
     [
         ("Composition", {"x": 322.0}, "too close"),
-        ("Gene\ntaxonomy", {"x": 240.0}, "leaves phase 2"),
-        ("Domains", {"x": 552.0}, "nearer to"),
+        ("Gene\ntaxonomy", {"x": 244.0}, "leaves phase 2"),
+        ("Structures", {"x": 552.0}, "nearer to"),
     ],
 )
 def test_layout_problems_reports_a_misplaced_label(label_start: str, changes: dict, expected: str) -> None:
