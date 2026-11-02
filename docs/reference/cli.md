@@ -51,7 +51,7 @@ Relative paths in a list file start at the current working directory.
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
 | `--clean-run` | Start again without reusing completed output. Otherwise, resume when the input, settings and saved outputs still match. |
 | `-w N`, `--workers N` | Run up to N genomes at once. Minimum: 1. The shipped config sets 6. |
-| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. |
+| `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. ViroSync lowers the value to `compute.max_threads` (48 in the shipped config) divided by the genome limit and prints a warning. |
 | `--max-concurrent-genomes N` | Set the same genome limit as `--workers`. Minimum: 1. Both values must agree if you supply both. |
 | `-v`, `--verbose` | Show the effective config and diagnostic logs instead of the progress display. |
 

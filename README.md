@@ -41,8 +41,8 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must report `status=success`, `predictions=6`, and
-`accepted=1` with resource bundle v1.2.0.
+The `test-1` row must report `status=success`, `predictions=7`, and
+`accepted=2` with resource bundle v1.2.0.
 
 ## Run your own genomes
 
@@ -51,7 +51,7 @@ pixi run virosync \
   -i genomes/ \
   -o results/my_run \
   --config config/orchestration.yaml \
-  -w 4 \
+  -w 3 \
   --threads-per-worker 16
 ```
 

@@ -68,8 +68,8 @@ jobs:
           pixi run python scripts/ci/validate_example_run.py \
             results/ci_example \
             --write-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
-            --expect-predictions 9 \
-            --expect-accepted 4
+            --expect-predictions 7 \
+            --expect-accepted 2
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
 
       - name: Run unchanged resume
@@ -87,8 +87,8 @@ jobs:
             results/ci_example \
             --compare-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
             --require-resume \
-            --expect-predictions 9 \
-            --expect-accepted 4
+            --expect-predictions 7 \
+            --expect-accepted 2
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
 
       - name: Run clean frameshift example

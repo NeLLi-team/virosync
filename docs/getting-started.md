@@ -90,8 +90,8 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must report `status=success`, `predictions=6`, and
-`accepted=1`.
+The `test-1` row must report `status=success`, `predictions=7`, and
+`accepted=2`.
 
 ## Run your genome
 

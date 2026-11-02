@@ -357,9 +357,11 @@ classes tie and leave the region `VIRAL_UNKNOWN` with the likely family `MIXED`.
 
 A resource bundle of v1.2.0 or later lets ViroSync name the genes inside each
 accepted EVE. Labels follow the gene vocabulary of Bellas and Sommaruga (2026,
-bioRxiv, doi:10.64898/2026.06.19.733378, Fig. 4). They are labels only. They
-never change detection, boundaries, scores, tiers or any other output column.
-Flanking genes get no label.
+bioRxiv, doi:10.64898/2026.06.19.733378, Fig. 4). Labels never change detection
+or boundaries. A label that the hallmark catalogue maps to a panel at E ≤ 1e-5
+adds compatible context to the [hallmark score](reference/scoring.md#hallmark-assessment),
+so it can raise `final_confidence` and the tier. It cannot add a core family, a
+floor or a seed. Flanking genes get no label.
 
 ViroSync picks one label per core gene from the first source that gives one:
 
@@ -423,6 +425,8 @@ The last phase combines marker, taxonomy, composition, and optional
 domain or structure evidence. Acceptance rules then select the reported
 regions. Within each genome, ANI clustering can transfer a class from
 MCP-bearing members that meet the transfer rules and agree on the class.
+[Scoring and acceptance](reference/scoring.md) gives each step, the weights and
+the model assignments.
 
 Optional InterProScan, TMVec2, and Boltz/Foldseek analyses annotate and score
 existing candidates. They do not create regions without marker-seeded
@@ -476,9 +480,10 @@ A blocked marker can still appear in marker counts when another marker seeded
 the region that contains it. Only catalogue-qualified evidence contributes to
 the graduated hallmark score.
 
-The additive hallmark rescue examines retained Phase 1 marker records, including
-`supported` and `unvalidated` records, at E <= 0.01. It does not recover HMM
-models discarded by marker retention. Three independent core families on three
+The additive hallmark rescue examines retained Phase 1 marker records with status
+`validated` or `validated_novel`, at E <= 0.01. `supported` and `unvalidated`
+records stay diagnostic. The rescue does not recover HMM models discarded by marker
+retention. Three independent core families on three
 proteins in one compatible panel and scaffold, within a full-gene span of at
 most 15,000 bp, give a provisional MEDIUM floor. A mapped MCP or CRESS capsid
 alone gives a MEDIUM floor; a distinct compatible core family on a different
@@ -549,9 +554,8 @@ The configured taxonomy weighting applies to these hit shares, including the
 stored per-hit bitscores when `taxonomy_weight_mode` is `bitscore`.
 
 The existing `phase2.host_trim_enabled` and `host_trim_score_threshold`
-settings now control this exterior stop. The former window, step, host-fraction,
-viral-fraction, buffer and overlap-score settings belonged to the removed
-trimming stages and are no longer accepted configuration keys.
+settings control this exterior stop. ViroSync rejects window, step, host-fraction,
+viral-fraction, buffer and overlap-score keys in `phase2`.
 
 The controller distinguishes a host stop, a support gap and the search-envelope
 limit. A later ML, merge, repeat or rescue operation cannot cross a host stop.
@@ -700,8 +704,8 @@ measure independent genomic lesions.
 
 Non-marker components and cellular penalties remain active. Small-region
 penalties use the catalogue's full-weight capsid qualification. A candidate
-without qualifying core evidence is capped below MEDIUM (except for the
-experimental R2 supplementary route described below); one with fewer than
+without qualifying core evidence is capped below MEDIUM, unless it has an eligible
+[supplementary module](#supplementary-viral-module); one with fewer than
 two independent core groups is capped below HIGH before floors. A qualified
 capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
 group supplies a HIGH floor without a distance restriction. The spatial rules
@@ -1014,10 +1018,10 @@ currently test junction reads, empty loci, attachment sites or retrotransposon
 domain architecture. Short junction microhomology alone should not determine
 an integration mechanism.
 
-### Experimental retained query coverage (31 October 2026)
+### Supplementary viral module
 
-The R2 experiment adds a supplementary module from the retained full-ORF
-genome-database taxonomy, after the final coordinates are fixed. It requires the
+The supplementary module runs for every candidate. It reads the retained full-ORF
+genome-database taxonomy after the final coordinates are fixed. It requires the
 existing LOW and MEDIUM class resolvers to agree on NCLDV or MIRUS, then at
 least three nonoverlapping, fully contained physical genes supporting that exact
 reference prefix. The unchanged evidence-only family inference runs before
@@ -1026,7 +1030,7 @@ with identity >=25%, E <=1e-5 and query coverage per HSP >=50%, with bitscore
 strictly above every retained non-organelle EUK/BAC/ARC hit. These competitors
 are not filtered by identity, E-value or coverage. A missing non-organelle
 cellular hit is recorded separately from a measured advantage. These are fixed
-experimental criteria, not calibrated cutoffs or evidence of integration.
+criteria, not calibrated cutoffs or evidence of integration.
 Recognized MITO/PLASTID labels or exact `MITO__`/`PLASTID__` target prefixes are
 organelle ambiguity evidence first. They supply neither a viral witness nor a
 non-organelle cellular comparator. Qualifying viral top10 hits remain eligible
@@ -1057,19 +1061,15 @@ module with a score below 0.2 therefore remains LOW. The gate fails if its
 stored interval no longer matches the result. Class-switching and ambiguous
 cases retain baseline policy.
 
-The isolated calibration experiments retain DIAMOND `qcovhsp` percentages in
-rank-aligned gene-taxonomy records and Phase 2 resume state. These are measured
-alignment coverages, not reconstructed from identities or annotation labels.
-No-hit records carry empty arrays. Resume schema 6 requires the new field;
-older checkpoints are not silently given coverage. This transport alone changes
-no scientific scoring, boundaries or output acceptance.
+Gene-taxonomy records and the Phase 2 resume state retain DIAMOND `qcovhsp`
+percentages, aligned by rank. These are measured alignment coverages, not
+reconstructed from identities or annotation labels. No-hit records carry empty
+arrays. The Phase 2 resume schema requires this field; older checkpoints are not
+given coverage.
 
-The coverage transport also covers cached full-pORF hit materialization and the
-native region-search producer. Physical scaffold/start/end come from the parsed
-proteome header and region mapping; query coverage comes only from actual
-GeneDiamondHit.qcov values. The native completion registry accepts the current
-Phase2 resume schema7. This corrects transport/publication consistency and does
-not change scientific thresholds or invent coverage for old checkpoints.
+Cached full-pORF hits and the native region search carry the same coverage.
+Physical scaffold, start and end come from the parsed proteome header and region
+mapping; query coverage comes only from measured `GeneDiamondHit.qcov` values.
 
 ### Bounded joint assessment of rejected seeds
 
@@ -1079,8 +1079,9 @@ Their stored `flank_start_bp`/`flank_end_bp` taxonomy-search envelopes must
 overlap, every overlapping ORF
 in the joint hull must have been queried, and all original confirmed seed
 objects remain intact. A missing or empty host model or ambiguous/missing DNA
-in the inter-core gap prevents rescue. Recorded host stops and three consecutive exterior
-host-positive genes without qualifying viral support block a pair. A third
+in the inter-core gap prevents rescue. Recorded host stops and three consecutive
+host-positive genes between the candidates, without qualifying viral support, block
+a pair. A third
 seed or accepted-call conflict blocks rescue. After full native reassessment,
 all passing proposals that share a child with another passing proposal are
 discarded. Unsupported neighbors do not block an otherwise eligible proposal.
@@ -1097,9 +1098,10 @@ The native terminal inverted-repeat detector scans raw sequence across the hull
 and its configured Phase 1 context (5 kb by default), clipped to the contig.
 A pair bracketing one child's validated marker evidence, excluding the other,
 with an endpoint between their validated marker spans blocks rescue. This
-endpoint may fall in padded core sequence; the veto never trims a core. A pair enclosing the whole hull
-does not. Missing, failed or pairing-capped scans abstain. These checks introduce
-no new repeat, taxonomy, distance, or score threshold.
+endpoint may fall in padded core sequence; the veto never trims a core. A pair
+enclosing the whole hull does not. A missing, failed or pairing-capped scan blocks
+rescue. These checks introduce no new repeat, taxonomy, distance, or score
+threshold.
 
 Joint coordinates receive native classification, composition, repeat evidence,
 annotation, and verification again. Rejected children are replaced only when the

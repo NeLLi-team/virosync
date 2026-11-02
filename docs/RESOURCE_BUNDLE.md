@@ -106,10 +106,11 @@ gene-function files, so it logs one INFO line and writes no
 `gene_functions.tsv`. The [output reference](METHODS.md#gene-function-labels)
 describes how a run uses the profiles.
 
-The profiles label genes. They never change detection, boundaries, scores,
-tiers or any existing output column. The label vocabulary follows Fig. 4 of
-Bellas and Sommaruga (2026, bioRxiv, doi:10.64898/2026.06.19.733378). Each
-label belongs to one module:
+The profiles label genes. Labels never change detection or boundaries, and a
+label that the hallmark catalogue maps to a panel adds
+[compatible context](reference/scoring.md#hallmark-assessment) to the score. The
+label vocabulary follows Fig. 4 of Bellas and Sommaruga (2026, bioRxiv,
+doi:10.64898/2026.06.19.733378). Each label belongs to one module:
 
 | Module | Labels |
 | --- | --- |

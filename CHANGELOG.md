@@ -6,6 +6,22 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- An exact-model hallmark catalogue, `src/virosync/data/hallmark_panels.json`,
+  with 332 links in 13 panels. It defines core and support-only families, capsid
+  roles and excluded models for graduated scoring and spatial seeds. Its hash is
+  part of the run fingerprint. [Scoring and acceptance](docs/reference/scoring.md)
+  lists every step, weight and assignment.
+- Spatial seeds from validated catalogue hits: one capsid, three independent core
+  families within 15 kb, or a capsid with a distinct core within 5 kb. A witness
+  outside every ordinary seed becomes a seed, and a contained witness sets a floor
+  and can pass acceptance with the reason `hallmark_spatial_rescue_pass`.
+- A supplementary viral module for NCLDV and MIRUS candidates: at least three
+  independent genes with qualifying viral hits, including 50% query coverage, lift
+  the zero-core cap and offer an alternative in the LOW gate. It adds no score term.
+- Joint rescue: one pass can join two adjacent rejected LOW candidates and score
+  the joined interval. `joint_seed_provenance` records the result.
+- The output column `qualifying_hallmark_genes` lists the core families that
+  qualified in the scored panel.
 - Gene-function labels for the core genes of accepted EVEs (including confirmed
   frameshift-rescued proteins), in the vocabulary of
   Bellas and Sommaruga (2026): MCP, mCP, ATPase, Protease, Portal, Terminase,
@@ -15,8 +31,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   top Pfam domain holds in half of its sampled members, then from Pfam and VOGDB
   profile hits. Phase 3 writes `phase3_synthesis/gene_functions.tsv`. The report
   prints the labels under the core genes of the static gene map and records them
-  in the Syntviz figure. Labels never change detection, boundaries, scores,
-  tiers or existing columns. The new files `models/gene_function.hmm` and
+  in the Syntviz figure. Labels never change detection or boundaries, and a label
+  that the catalogue maps to a panel adds compatible context to the score. The
+  new files `models/gene_function.hmm` and
   `models/gene_function_labels.tsv` are required in runtime bundles of v1.2.0 and
   later (`scripts/build_gene_function_profiles.py` builds them from Pfam-A and
   VOGDB; both are credited in the bundle README). A run on an older bundle
@@ -50,10 +67,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Give the 27 capsid-type structure-derived profiles (penton, capsid and coat;
   `CAPSID_EVIDENCE_MODELS`) the role of capsid evidence. A `validated_novel`
   hit of such a profile can seed a region, and the new flag
-  `has_capsid_evidence` replaces `has_mcp` in scoring and acceptance: the marker
-  score, the common bonus, the small-region penalty exemption, the confidence
-  caps, the priority-marker floors, the non-HHG quality pass and the v2 gate
-  shortcuts. `has_mcp`, `mcp_gene_ids`, the class vote, ANI class transfer,
+  `has_capsid_evidence` replaces `has_mcp` in the v2 gate shortcuts. The marker
+  score, penalties, caps and floors read the hallmark catalogue. `has_mcp`, `mcp_gene_ids`, the class vote, ANI class transfer,
   jelly-roll classification and Boltz input selection still need an MCP, and
   `EVE_CAPSID_NOVEL_0029` stays the only structure-derived MCP. The six other
   profiles (`0001`, `0006`, `0015`, `0018`, `0020`, `0026`) stay viral markers
@@ -75,7 +90,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   with a lineage reference gets nothing from its profile. An `EUK-pEVE`-only MCP
   profile ranks by score in the per-protein deduplication of the vote. The A1 seed
   export applies the same marker votes.
-- The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v3`: each seed
+- The Phase 1 checkpoint moves to `virosync.phase1.resume_state/v4`: each seed
   anchor records the validation status and the top-10 prefixes, identities and
   targets of its marker hit. The A1 seed export counts capsid evidence from validated hits only and
   publishes the class of the marker vote for a seed whose validated markers have
@@ -83,10 +98,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   `VIRAL_UNKNOWN` with the likely family `MIXED`. Each seed also retains its
   original identity and complete confirmed interval. Earlier checkpoint
   schemas cannot be reused.
-- Public output schema 10 records the seed-preserving boundary results and
+- Public output schema 12 records the seed-preserving boundary results and
   removes unused candidate-coordinate fields. The full Phase 2 checkpoint is
-  `virosync.phase2.resume_state/v5`; the refined-boundary checkpoint is
-  `virosync.phase2.refined_boundaries/v6`. Coordinate schema 2 is unchanged.
+  `virosync.phase2.resume_state/v7`; the refined-boundary checkpoint is
+  `virosync.phase2.refined_boundaries/v7`. Coordinate schema 2 is unchanged.
+- Terminal inverted repeats can refine a boundary outward as well as inward,
+  within the interval Phase 2 checked, while complete seeds, host stops and
+  neighboring elements stay intact.
 - Show both changes in the report. A gene whose qualifying viral hits are all
   `EUK-pEVE` gets the category `EUK-pEVE` in the gene maps and the category
   distribution, with its own color (`#882255`) and the legend entry "EUK-pEVE
@@ -95,11 +113,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   as host. A black outline marks each gene with capsid evidence in the
   overview, the detailed contexts and the Syntviz figure, where the new style
   group `capsid` sits beside `mcp`. The gold circle still marks a supported MCP.
-- Redraw the README workflow map from the current data flow, adding direct
-  repeats, acceptance with ANI class transfer and gene-function labels.
-  `scripts/plot_workflow_map.py` writes `docs/virosync_workflow.png` only when
-  each station touches exactly the lines it lists, no label, station or line
-  touches another, and all text renders at 12 px or more at README width.
+- Redraw the README workflow map from the current data flow, with a hallmark
+  evidence line, spatial seeds, seed-preserving extension and joint rescue.
+  Integration genes and function labels feed scoring on that line; only direct
+  repeats stay annotation-only. `scripts/plot_workflow_map.py` writes
+  `docs/virosync_workflow.png` only when each station touches exactly the lines it
+  lists, no label, station or line touches another except at a declared crossing,
+  and all text renders at 12 px or more at README width. `draw_on` draws the same
+  map on any axes, for the manuscript figure.
 
 ### Fixed
 

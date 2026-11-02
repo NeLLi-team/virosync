@@ -6,6 +6,8 @@ eukaryotic genomes.
 - [Get started](getting-started.md) covers installation and first runs.
 - [Outputs](METHODS.md) defines the output files, including the default
   [direct-repeat assessment](METHODS.md#direct-repeat-assessment).
+- [Scoring and acceptance](reference/scoring.md) gives each scoring step, the
+  weights and the model assignments.
 - [Command-line reference](reference/cli.md) lists commands and options.
 - [Optional analyses](optional-features.md) covers optional evidence layers.
 - [Performance](performance.md) shows benchmarks.
