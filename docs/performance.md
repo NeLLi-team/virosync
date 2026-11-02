@@ -26,18 +26,21 @@ so the plot does not report specificity or accuracy.*
 
 ## Published GEVE coverage
 
-ViralRecall v3.1.0 covered more of all three published giant endogenous viral
-elements (GEVEs) than ViroSync. Coverage is the percentage of each published
-element overlapped by calls, so it does not measure precision. ViroSync is shown
-with its HIGH- and MEDIUM-confidence calls and the other tools with all calls. The
+ViroSync's HIGH- and MEDIUM-confidence calls covered less of all three published
+giant endogenous viral elements (GEVEs) than the calls of ViralRecall v3.1.0. Adding
+LOW-confidence calls puts ViroSync ahead of ViralRecall v3.1.0 on the *R. irregularis*
+GEVE only. ViralRecall v2 covered the most of that element.
+
+Coverage is the percentage of each published element overlapped by calls, so it does
+not measure precision or validate a call. Comparator columns use all calls. The
 *T. socialis* and *R. irregularis* elements were delimited with ViralRecall, so
 their coverage partly measures agreement with that tool.
 
-| Published element | Size | ViroSync | ViralRecall v3.1.0 | ViralRecall v2 | DetectEVE | EEfinder |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| *T. socialis* GEVEs | 3.21 Mb | 52.0% | 90.3% | 85.6% | 10.0% | 13.8% |
-| *R. irregularis* GEVE | 1.55 Mb | 24.8% | 36.5% | 70.8% | 4.4% | 3.0% |
-| *C. reinhardtii* GEVE | 617 kb | 57.1% | 84.2% | 75.6% | 10.2% | 5.0% |
+| Published element | Size | ViroSync HIGH and MEDIUM | ViroSync all tiers | ViralRecall v3.1.0 | ViralRecall v2 | DetectEVE | EEfinder |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| *T. socialis* GEVEs | 3.21 Mb | 52.0% | 71.3% | 90.3% | 85.6% | 10.0% | 13.8% |
+| *R. irregularis* GEVE | 1.55 Mb | 24.8% | 39.6% | 36.5% | 70.8% | 4.4% | 3.0% |
+| *C. reinhardtii* GEVE | 617 kb | 57.1% | 57.1% | 84.2% | 75.6% | 10.2% | 5.0% |
 
 ## Runtime and peak memory
 
