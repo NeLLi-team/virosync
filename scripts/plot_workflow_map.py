@@ -5,11 +5,12 @@ The map follows the data flow of the single-genome flow in
 ``virosync.orchestration._flows.single_genome``: a step sits after the steps
 whose output it reads. Before it writes the PNG, the script checks the drawing.
 Every station must touch exactly the lines it lists, every line must attach
-where it says it does, no two stations or lines may touch elsewhere, and every
-label must sit inside its phase band, nearer its own station than any other and
-clear of all other marks. All text must render at 12 px or more in the README.
-The map needs the Liberation Sans font (Debian and Ubuntu package
-``fonts-liberation``).
+where it says it does, no two stations or lines may touch elsewhere except at a
+declared crossing, and every label must sit inside its phase band, nearer its own
+station than any other and clear of all other marks. All text must render at
+12 px or more in the README. The map needs the Liberation Sans font (Debian and
+Ubuntu package ``fonts-liberation``). ``draw_on`` draws the same map on any axes,
+which is how the manuscript's Figure 1 uses it.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "docs" / "virosync_workfl
 README_WIDTH_PX = 830  # README column of GitHub in a desktop browser
 MIN_TEXT_PX = 12.0
 WIDTH_PT = 672.0
-HEIGHT_PT = 228.0
+HEIGHT_PT = 240.0
 DPI = 216  # three pixels per point, so whole-point sizes give whole pixels
 FONT = "Liberation Sans"
 LABEL_PT = 9.75
@@ -66,13 +67,14 @@ SAMPLE_PT = 0.5  # spacing of the points that stand for a line in the checks
 
 BAND_BOTTOM = 24.0
 BAND_TOP = HEIGHT_PT - 4.0
-Y_MAIN = 83.0
+Y_MAIN = 81.0
 Y_HOST = Y_MAIN - 11.0
-Y_OPTIONAL = Y_MAIN + 50.0
+Y_HALLMARK = Y_MAIN + 11.0
+Y_OPTIONAL = Y_MAIN + 61.0
 Y_ANNOTATION = Y_OPTIONAL + 18.0
 Y_LEGEND = 12.0
-ANNOTATION_RISER_X = 462.0
-OPTIONAL_RISER_X = 482.0
+ANNOTATION_RISER_X = 398.0
+OPTIONAL_RISER_X = 426.0
 
 Point: TypeAlias = tuple[float, float]
 
@@ -89,9 +91,10 @@ class Track:
 
 
 MAIN = Track("main", "Main path", "#24292F", 4.6)
-HOST = Track("host", "Host and taxonomy evidence", "#009E73", 4.0)
+HOST = Track("host", "Host and taxonomy", "#009E73", 4.0)
+HALLMARK = Track("hallmark", "Hallmark evidence", "#0072B2", 3.2)
 OPTIONAL = Track("optional", "Optional, off by default", "#CC79A7", 3.2, (2.2, 1.3))
-ANNOTATION = Track("annotation", "Annotation only, no score effect", "#D55E00", 2.2)
+ANNOTATION = Track("annotation", "Annotation only", "#D55E00", 2.2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,9 +114,9 @@ class Phase:
 
 PHASES = (
     Phase(0, "Preprocessing", 8.0, 76.0),
-    Phase(1, "Markers and seeds", 79.0, 258.0),
-    Phase(2, "Boundaries", 261.0, 492.0),
-    Phase(3, "Scoring and output", 495.0, 664.0),
+    Phase(1, "Markers and seeds", 79.0, 232.0),
+    Phase(2, "Boundaries", 235.0, 416.0),
+    Phase(3, "Scoring and output", 419.0, 664.0),
 )
 
 
@@ -138,44 +141,44 @@ class Stop:
     is_optional: bool = False
 
 
+SCORED_TRACKS = (MAIN, HOST, HALLMARK, OPTIONAL)
+BOUNDARY_TRACKS = (MAIN, HOST)
+
 GENOME = Stop("Genome\nassembly", 20.0, Y_MAIN, Y_OPTIONAL, (MAIN, OPTIONAL), "below", "terminal", "left")
-VALIDATION = Stop(
-    "Marker\nvalidation\nPfam, DIAMOND", 146.0, Y_HOST, Y_OPTIONAL, (MAIN, HOST, OPTIONAL), "below", "interchange"
-)
+VALIDATION = Stop("Marker\nvalidation\nPfam, DIAMOND", 141.0, Y_HOST, Y_OPTIONAL, SCORED_TRACKS, "below", "interchange")
 SYNTHESIS = Stop(
-    "Evidence\nsynthesis,\nconfidence tiers", 557.0, Y_HOST, Y_OPTIONAL, (MAIN, HOST, OPTIONAL), "below", "interchange"
+    "Evidence synthesis,\nhallmark score,\nconfidence tiers",
+    572.0,
+    Y_HOST,
+    Y_OPTIONAL,
+    SCORED_TRACKS,
+    "below",
+    "interchange",
+    "right",
 )
 OUTPUTS = Stop(
-    "BED, GFF3,\nTSV, FASTA,\nreport", 653.0, Y_MAIN, Y_ANNOTATION, (MAIN, ANNOTATION), "below", "terminal", "right"
+    "BED, GFF3,\nTSV, FASTA,\nreport", 653.0, Y_MAIN, Y_ANNOTATION, (MAIN, ANNOTATION), "above", "terminal", "right"
 )
 
 STOPS = (
     GENOME,
-    Stop("Gene\nprediction", 51.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
-    Stop("Codon-aware\nDNA scan", 112.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "above"),
-    Stop("Marker\nHMM scan", 112.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Gene\nprediction", 52.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Codon-aware\nDNA scan", 110.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "above"),
+    Stop("Marker\nHMM scan", 105.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
     VALIDATION,
-    Stop("Host\nsignature\nmodel", 210.0, Y_HOST, Y_HOST, (HOST,), "below"),
-    Stop("Candidate\nregions", 229.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
-    Stop("Host\nsignature\ntrim", 288.0, Y_HOST, Y_MAIN, (MAIN, HOST), "above", "interchange"),
-    Stop("Extension,\ngene taxonomy,\nDIAMOND", 324.0, Y_HOST, Y_MAIN, (MAIN, HOST), "below", "interchange"),
-    Stop("Boundary\nrefinement", 358.0, Y_HOST, Y_MAIN, (MAIN, HOST), "above", "interchange"),
-    Stop("Gap merge,\nTIR ends, splits", 396.0, Y_HOST, Y_MAIN, (MAIN, HOST), "below", "interchange"),
-    Stop("Composition\nGC, k-mer", 430.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
-    Stop("Direct\nrepeats", 472.0, Y_ANNOTATION, Y_ANNOTATION, (ANNOTATION,), "above"),
-    Stop("Domains,\nstructures,\nphylogeny", 506.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "below", "dot", "left"),
+    Stop("Spatial\nseeds", 172.0, Y_HALLMARK, Y_HALLMARK, (HALLMARK,), "above"),
+    Stop("Host\nsignature\nmodel", 204.0, Y_HOST, Y_HOST, (HOST,), "below"),
+    Stop("Seed\nregions", 211.0, Y_MAIN, Y_HALLMARK, (MAIN, HALLMARK), "above", "interchange"),
+    Stop("Gene\ntaxonomy,\nDIAMOND", 262.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
+    Stop("Seed-preserving\nextension,\nhost stop", 296.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "above", "interchange"),
+    Stop("Merge,\nTIR ends,\nsplits", 336.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
+    Stop("Composition\nGC, k-mer", 366.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Direct\nrepeats", 406.0, Y_ANNOTATION, Y_ANNOTATION, (ANNOTATION,), "above", "dot", "right"),
+    Stop("Integration genes,\nfunction labels", 470.0, Y_HALLMARK, Y_HALLMARK, (HALLMARK,), "above"),
+    Stop("Domains,\nstructures,\nphylogeny", 538.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "below"),
     SYNTHESIS,
-    Stop("Integration\ngenes", 570.0, Y_ANNOTATION, Y_ANNOTATION, (ANNOTATION,), "above", "dot", "right"),
-    Stop("Acceptance,\nANI class\ntransfer", 594.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
-    Stop(
-        "Gene-function\nlabels, bundle\n≥ v1.2.0",
-        622.0,
-        Y_ANNOTATION,
-        Y_ANNOTATION,
-        (ANNOTATION,),
-        "above",
-        is_optional=True,
-    ),
+    Stop("Joint rescue\nof rejected\nseeds", 612.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Acceptance,\nANI class\ntransfer", 634.0, Y_MAIN, Y_MAIN, (MAIN,), "below"),
     OUTPUTS,
 )
 
@@ -186,19 +189,20 @@ class Route:
 
     An end attaches to a stop when it lies on that stop, or to a track when the
     line branches from that track's line there. None leaves an end free, as for
-    the legend handles.
+    the legend handles. ``crosses`` names the lines this one may pass over.
     """
 
     track: Track
     points: tuple[Point, ...]
     start: Stop | Track | None
     end: Stop | Track | None
+    crosses: tuple[Track, ...] = ()
 
 
 def branch(track: Track, riser_x: float, y: float, end: Stop) -> Route:
     """Return a line that leaves the main path at *riser_x*, rises to *y* and runs to *end*."""
     points = ((riser_x - CORNER_RADIUS, Y_MAIN), (riser_x, Y_MAIN), (riser_x, y), (end.x, y))
-    return Route(track, points, MAIN, end)
+    return Route(track, points, MAIN, end, crosses=(HALLMARK,))
 
 
 # Each line starts on the stop or line that feeds it and ends where it is read.
@@ -206,9 +210,20 @@ ROUTES = (
     Route(OPTIONAL, ((GENOME.x + STOP_HALF, Y_OPTIONAL), (VALIDATION.x, Y_OPTIONAL)), GENOME, VALIDATION),
     branch(OPTIONAL, OPTIONAL_RISER_X, Y_OPTIONAL, SYNTHESIS),
     Route(HOST, ((VALIDATION.x, Y_HOST), (SYNTHESIS.x, Y_HOST)), VALIDATION, SYNTHESIS),
+    Route(HALLMARK, ((VALIDATION.x, Y_HALLMARK), (SYNTHESIS.x, Y_HALLMARK)), VALIDATION, SYNTHESIS),
     branch(ANNOTATION, ANNOTATION_RISER_X, Y_ANNOTATION, OUTPUTS),
     Route(MAIN, ((GENOME.x, Y_MAIN), (OUTPUTS.x, Y_MAIN)), GENOME, OUTPUTS),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Canvas:
+    """The axes the map draws on, its font, and the scales for lines and text."""
+
+    axes: Axes
+    font: str = FONT
+    line_scale: float = 1.0
+    text_scale: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,30 +250,34 @@ class Drawn:
 
 
 def draw_map(stops: Sequence[Stop] = STOPS, routes: Sequence[Route] = ROUTES) -> tuple[Figure, Drawn]:
-    """Draw the bands, routes, stops, labels and legend on a new figure."""
+    """Draw the map on a new figure of its own size."""
     figure = Figure(figsize=(WIDTH_PT / 72, HEIGHT_PT / 72), dpi=DPI, facecolor="white")
     FigureCanvasAgg(figure)
-    axes = figure.add_axes((0, 0, 1, 1))
-    axes.set_xlim(0, WIDTH_PT)
-    axes.set_ylim(0, HEIGHT_PT)
-    axes.set_axis_off()
-    labels = draw_phases(axes)
+    return figure, draw_on(Canvas(figure.add_axes((0, 0, 1, 1)), font=font_family()), stops, routes)
+
+
+def draw_on(canvas: Canvas, stops: Sequence[Stop] = STOPS, routes: Sequence[Route] = ROUTES) -> Drawn:
+    """Draw the bands, routes, stops, labels and legend on *canvas*."""
+    canvas.axes.set_xlim(0, WIDTH_PT)
+    canvas.axes.set_ylim(0, HEIGHT_PT)
+    canvas.axes.set_axis_off()
+    labels = draw_phases(canvas)
     for route in routes:
-        draw_route(axes, route)
+        draw_route(canvas, route)
     for stop in stops:
-        draw_stop(axes, stop)
-        labels.append(Label(draw_label(axes, stop, routes), stop, phase_of(stop.x)))
-    legend_labels, legend_stop, legend_routes = draw_legend(axes)
+        draw_stop(canvas, stop)
+        labels.append(Label(draw_label(canvas, stop, routes), stop, phase_of(stop.x)))
+    legend_labels, legend_stop, legend_routes = draw_legend(canvas)
     labels += legend_labels
-    return figure, Drawn(labels, [*stops, legend_stop], [*routes, *legend_routes])
+    return Drawn(labels, [*stops, legend_stop], [*routes, *legend_routes])
 
 
-def draw_phases(axes: Axes) -> list[Label]:
+def draw_phases(canvas: Canvas) -> list[Label]:
     """Draw one light band per phase with its number and title on top."""
     headings = []
     for phase in PHASES:
         band = phase.box
-        axes.add_patch(
+        canvas.axes.add_patch(
             FancyBboxPatch(
                 (band.x0, band.y0),
                 band.width,
@@ -270,26 +289,26 @@ def draw_phases(axes: Axes) -> list[Label]:
             )
         )
         centre = (phase.x0 + phase.x1) / 2
-        number = write(axes, centre, BAND_TOP - 5.0, f"Phase {phase.number}", weight="bold", size=HEADING_PT)
-        title = write(axes, centre, BAND_TOP - 17.5, phase.title, color=MUTED_COLOR)
+        number = write(canvas, centre, BAND_TOP - 5.0, f"Phase {phase.number}", weight="bold", size=HEADING_PT)
+        title = write(canvas, centre, BAND_TOP - 17.5, phase.title, color=MUTED_COLOR)
         headings += [Label(number, None, phase), Label(title, None, phase)]
     return headings
 
 
-def draw_route(axes: Axes, route: Route) -> None:
+def draw_route(canvas: Canvas, route: Route) -> None:
     """Draw one line with rounded bends."""
     patch = PathPatch(
         rounded_path(route.points),
         facecolor="none",
         edgecolor=route.track.color,
-        linewidth=route.track.width,
+        linewidth=route.track.width * canvas.line_scale,
         capstyle="butt",
         joinstyle="round",
         zorder=3 if route.track == MAIN else 2,
     )
     if route.track.dashes is not None:
         patch.set_linestyle((0, route.track.dashes))
-    axes.add_patch(patch)
+    canvas.axes.add_patch(patch)
 
 
 def rounded_path(points: Sequence[Point]) -> MplPath:
@@ -321,13 +340,13 @@ def toward(start: Point, end: Point, distance: float) -> Point:
     return (start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction)
 
 
-def draw_stop(axes: Axes, stop: Stop) -> None:
+def draw_stop(canvas: Canvas, stop: Stop) -> None:
     """Draw one stop: a ring on one line, a capsule across lines or a terminal bar."""
     fill = OUTLINE_COLOR if stop.kind == "terminal" else "white"
     edge = OUTLINE_COLOR
     if stop.kind == "dot":
         edge = OPTIONAL.color if stop.is_optional else stop.tracks[0].color
-    axes.add_patch(
+    canvas.axes.add_patch(
         FancyBboxPatch(
             (stop.x - STOP_RADIUS, stop.y_low - STOP_RADIUS),
             2 * STOP_RADIUS,
@@ -335,7 +354,7 @@ def draw_stop(axes: Axes, stop: Stop) -> None:
             boxstyle=f"round,pad=0,rounding_size={STOP_RADIUS}",
             facecolor=fill,
             edgecolor=edge,
-            linewidth=STOP_EDGE,
+            linewidth=STOP_EDGE * canvas.line_scale,
             zorder=4,
         )
     )
@@ -346,14 +365,24 @@ def stop_box(stop: Stop) -> Bbox:
     return Bbox.from_extents(stop.x - STOP_HALF, stop.y_low - STOP_HALF, stop.x + STOP_HALF, stop.y_high + STOP_HALF)
 
 
-def draw_label(axes: Axes, stop: Stop, routes: Sequence[Route]) -> Text:
+def draw_label(canvas: Canvas, stop: Stop, routes: Sequence[Route]) -> Text:
     """Write the label of *stop* above it, or below the lowest line under it."""
     offset = STOP_HALF + LABEL_GAP
     x = {"left": stop.x - STOP_HALF, "center": stop.x, "right": stop.x + STOP_HALF}[stop.align]
     if stop.side == "above":
-        return write(axes, x, stop.y_high + offset, stop.label, ha=stop.align, va="bottom")
+        ceiling = Y_HALLMARK if under_hallmark_line(stop, routes) else stop.y_high
+        return write(canvas, x, ceiling + offset, stop.label, ha=stop.align, va="bottom")
     floor = min([stop.y_low, *lines_below(stop, routes)]) if stop.y_low <= Y_MAIN else stop.y_low
-    return write(axes, x, floor - offset, stop.label, ha=stop.align, va="top")
+    return write(canvas, x, floor - offset, stop.label, ha=stop.align, va="top")
+
+
+def under_hallmark_line(stop: Stop, routes: Sequence[Route]) -> bool:
+    """Return whether the hallmark line passes over *stop*, between it and its label."""
+    return stop.y_high < Y_HALLMARK and any(
+        route.track == HALLMARK and min(x0, x1) <= stop.x <= max(x0, x1)
+        for route in routes
+        for (x0, _), (x1, _) in itertools.pairwise(route.points)
+    )
 
 
 def lines_below(stop: Stop, routes: Sequence[Route]) -> Iterator[float]:
@@ -364,25 +393,25 @@ def lines_below(stop: Stop, routes: Sequence[Route]) -> Iterator[float]:
                 yield y0
 
 
-def draw_legend(axes: Axes) -> tuple[list[Label], Stop, list[Route]]:
-    """Draw the key in one row under the bands: four lines and the shared step."""
-    handle = 22.0
-    x = 14.0
+def draw_legend(canvas: Canvas) -> tuple[list[Label], Stop, list[Route]]:
+    """Draw the key in one row under the bands: five lines and the shared step."""
+    handle = 20.0
+    x = 12.0
     labels, routes = [], []
-    for track in (MAIN, HOST, OPTIONAL, ANNOTATION):
+    for track in (MAIN, HOST, HALLMARK, OPTIONAL, ANNOTATION):
         routes.append(Route(track, ((x, Y_LEGEND), (x + handle, Y_LEGEND)), None, None))
-        text = write(axes, x + handle + 5.0, Y_LEGEND, track.legend, ha="left", va="center_baseline")
+        text = write(canvas, x + handle + 4.0, Y_LEGEND, track.legend, ha="left", va="center_baseline")
         labels.append(Label(text, None, None))
-        x = text_box(axes.figure, text).x1 + 14.0
+        x = text_box(canvas.axes.figure, text).x1 + 11.0
     sample = Stop("", x + 13.0, Y_LEGEND - 3.6, Y_LEGEND + 3.6, (MAIN, HOST), "above", "interchange")
     routes += [
         Route(MAIN, ((x, sample.y_high), (x + 26.0, sample.y_high)), None, None),
         Route(HOST, ((x, sample.y_low), (x + 26.0, sample.y_low)), None, None),
     ]
     for route in routes:
-        draw_route(axes, route)
-    draw_stop(axes, sample)
-    text = write(axes, x + 31.0, Y_LEGEND, "Shared step", ha="left", va="center_baseline")
+        draw_route(canvas, route)
+    draw_stop(canvas, sample)
+    text = write(canvas, x + 30.0, Y_LEGEND, "Shared step", ha="left", va="center_baseline")
     labels.append(Label(text, None, None))
     return labels, sample, routes
 
@@ -390,11 +419,11 @@ def draw_legend(axes: Axes) -> tuple[list[Label], Stop, list[Route]]:
 def text_box(figure: Figure, text: Text) -> Bbox:
     """Return the box *text* covers, in data units."""
     renderer = figure.canvas.get_renderer()
-    return text.get_window_extent(renderer).transformed(figure.axes[0].transData.inverted())
+    return text.get_window_extent(renderer).transformed(text.axes.transData.inverted())
 
 
 def write(
-    axes: Axes,
+    canvas: Canvas,
     x: float,
     y: float,
     content: str,
@@ -406,16 +435,16 @@ def write(
     weight: str = "normal",
 ) -> Text:
     """Place one text in the house font."""
-    return axes.text(
+    return canvas.axes.text(
         x,
         y,
         content,
         ha=ha,
         va=va,
         color=color,
-        fontsize=size,
+        fontsize=size * canvas.text_scale,
         fontweight=weight,
-        fontfamily=font_family(),
+        fontfamily=canvas.font,
         linespacing=1.15,
         multialignment=ha,
         zorder=5,
@@ -457,6 +486,8 @@ def topology_problems(stops: Sequence[Stop], routes: Sequence[Route]) -> list[st
     for route, _points in sampled:
         problems += attachment_problems(route, sampled)
     for (first, points_a), (second, points_b) in itertools.combinations(sampled, 2):
+        if second.track in first.crosses or first.track in second.crosses:
+            continue
         if lines_touch(first, points_a, second, points_b):
             problems.append(f"the {first.track.name} line and the {second.track.name} line touch")
     return problems + riser_problems(routes)

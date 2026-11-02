@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from PIL import Image
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -84,7 +86,7 @@ def test_topology_problems_reports_a_line_that_only_passes_a_stop_corner() -> No
 
 
 def test_topology_problems_reports_stops_that_touch() -> None:
-    stops = _moved("Composition", x=_stop("Gap merge").x + 6)
+    stops = _moved("Composition", x=_stop("Merge").x + 6)
 
     problems = wm.topology_problems(stops, wm.ROUTES)
 
@@ -133,10 +135,41 @@ def test_topology_problems_reports_a_riser_on_a_band_edge() -> None:
     assert any("runs along the edge of phase" in problem for problem in problems)
 
 
+def test_topology_problems_accepts_a_declared_crossing_only() -> None:
+    routes = tuple(dataclasses.replace(route, crosses=()) for route in wm.ROUTES)
+
+    problems = wm.topology_problems(wm.STOPS, routes)
+
+    assert any("annotation line" in problem and "hallmark line" in problem for problem in problems)
+
+
 def test_riser_problems_ignore_a_line_below_the_bands() -> None:
     route = wm.Route(wm.MAIN, ((wm.PHASES[1].x0, 4.0), (wm.PHASES[1].x0, 18.0)), None, None)
 
     assert wm.riser_problems([route]) == []
+
+
+@pytest.mark.parametrize("label_start", ["Integration genes", "Spatial\nseeds"])
+def test_stops_on_the_hallmark_line_feed_scoring(label_start: str) -> None:
+    assert _stop(label_start).tracks == (wm.HALLMARK,)
+
+
+def test_annotation_line_serves_only_direct_repeats() -> None:
+    served = [stop for stop in wm.STOPS if stop.tracks == (wm.ANNOTATION,)]
+
+    assert [stop.label for stop in served] == ["Direct\nrepeats"]
+
+
+def test_draw_on_scales_text_and_lines_separately() -> None:
+    _needs_font()
+    figure = Figure(figsize=(7.2, 2.6))
+    FigureCanvasAgg(figure)
+    axes = figure.add_axes((0, 0, 1, 1))
+
+    wm.draw_on(wm.Canvas(axes, font=wm.FONT, line_scale=0.5, text_scale=0.8))
+
+    assert sorted({round(text.get_fontsize(), 3) for text in axes.texts}) == [7.8, 8.0]
+    assert max(patch.get_linewidth() for patch in axes.patches) == pytest.approx(wm.MAIN.width * 0.5)
 
 
 def test_layout_problems_accepts_the_shipped_map() -> None:
@@ -150,9 +183,9 @@ def test_layout_problems_accepts_the_shipped_map() -> None:
 @pytest.mark.parametrize(
     ("label_start", "changes", "expected"),
     [
-        ("Composition", {"x": 400.0}, "too close"),
-        ("Host\nsignature\ntrim", {"x": 266.0}, "leaves phase 2"),
-        ("Domains", {"x": 535.0}, "nearer to"),
+        ("Composition", {"x": 322.0}, "too close"),
+        ("Gene\ntaxonomy", {"x": 240.0}, "leaves phase 2"),
+        ("Domains", {"x": 552.0}, "nearer to"),
     ],
 )
 def test_layout_problems_reports_a_misplaced_label(label_start: str, changes: dict, expected: str) -> None:
