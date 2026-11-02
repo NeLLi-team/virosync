@@ -1,53 +1,67 @@
 # Performance
 
-The October 23 benchmark used ViroSync 1.0.2 at commit `ec60050` with resource
-bundle v1.2.0, the bundle that public builds install. Its source SHA-256 was
-`79d53ca1b507d5a9e099661b85fdb12ee660d5993a35b0e3f4085d38e8797bbc`.
-That campaign ran with one worker and 16 threads per input, at most two inputs
-at once, and no optional analyses. All figures below describe that campaign;
-the [paired repeat-annotation regression](#paired-repeat-annotation-regression)
-is reported separately. Select a figure to open the full-size image.
+The November 2 benchmark used ViroSync 1.0.2 at commit `84eb6bb` with resource
+bundle v1.2.0, the bundle that public builds install. ViroSync ran with one worker
+and 16 threads per input and no optional analyses. Comparator outputs come from
+earlier runs and were not repeated. All figures below describe that benchmark; the
+[paired repeat-annotation regression](#paired-repeat-annotation-regression) is
+reported separately. Select a figure to open the full-size image.
 
 ## Synthetic boundary recovery
 
 The synthetic set contains 60 loci and 3,365.2 kb of inserted sequence. Mean
-best-call boundary recall was 0.774 for ViroSync, 0.596 for ViralRecall v3.1.0,
-0.307 for ViralRecall v2, 0.056 for DetectEVE v1.4.0, and 0.066 for EEfinder
-v1.1.1.
+best-call boundary recall was 0.775 for ViroSync, 0.596 for ViralRecall v3.1.0,
+0.307 for ViralRecall v2 and 0.056 for DetectEVE v1.4.0. EEfinder v1.1.1 has no
+pooled mean, because only 58 of its 60 inputs have usable output. ViroSync credited
+57 of the 60 loci with 77 calls, of which 18 were redundant and 2 spurious.
 
 [![Synthetic boundary recovery and call burden](assets/performance/benchmark_fig2_syn2_detection_performance.png)](assets/performance/benchmark_fig2_syn2_detection_performance.png)
 
 *Boundary recovery and call burden across 60 synthetic loci. Panel a credits
 the call with the highest Jaccard index at each locus. Panel b compares missed
 and outside-truth sequence. Panel c partitions calls at a 500 bp one-to-one
-threshold. Missed-locus labels use recovery after the union of call fragments,
-which can recover a locus without a credited one-to-one call. The test excludes
-30 prior-discovery loci whose source elements ViroSync found before this
-comparison. Region detection has no true negative,
+threshold. The test excludes 30 prior-discovery loci whose source elements
+ViroSync found before this comparison. Region detection has no true negative,
 so the plot does not report specificity or accuracy.*
+
+## Published GEVE coverage
+
+ViralRecall v3.1.0 covered more of all three published giant endogenous viral
+elements (GEVEs) than ViroSync. Coverage is the percentage of each published
+element overlapped by calls, so it does not measure precision. ViroSync is shown
+with its HIGH- and MEDIUM-confidence calls and the other tools with all calls. The
+*T. socialis* and *R. irregularis* elements were delimited with ViralRecall, so
+their coverage partly measures agreement with that tool.
+
+| Published element | Size | ViroSync | ViralRecall v3.1.0 | ViralRecall v2 | DetectEVE | EEfinder |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| *T. socialis* GEVEs | 3.21 Mb | 52.0% | 90.3% | 85.6% | 10.0% | 13.8% |
+| *R. irregularis* GEVE | 1.55 Mb | 24.8% | 36.5% | 70.8% | 4.4% | 3.0% |
+| *C. reinhardtii* GEVE | 617 kb | 57.1% | 84.2% | 75.6% | 10.2% | 5.0% |
 
 ## Runtime and peak memory
 
-Mean wall time across 30 SynEVEs-2 inputs was 102.0 seconds for ViroSync and
-12.3 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
-were 529.9 and 1,705.5 seconds. Campaign concurrency differed, so these values
-do not give a general speed ranking.
+Mean wall time across 30 SynEVEs-2 inputs was 137.0 seconds for ViroSync and
+18.9 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
+were 689.6 and 2,039.6 seconds. Mean peak memory on the real genomes was 6.0 GB
+for ViroSync and 2.1 GB for ViralRecall v3.1.0. Each run had 16 allocated CPUs on
+the same cluster, but jobs ran on different nodes and dates, so these values do not
+give a general speed ranking.
 
 [![Runtime and peak resident memory](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)](assets/performance/benchmark_figS1_runtime_memory_with_vr30.png)
 
 *Per-input wall time and peak resident memory for 30 SynEVEs-2 inputs and five
-real-genome inputs. All tools used 16 threads or cores on the same 64-core
-host, but campaign concurrency differed. All ViroSync timings come from the
-October 23 campaign. Wall time includes contention and database caching.
-Peak RSS is shown in decimal GB for the largest single
-process, not the process tree. EEfinder is absent because its campaign used
-different load and concurrency.*
+real-genome inputs, each with 16 allocated CPUs. Wall time includes contention and
+database caching. Peak RSS is shown in decimal GB for the largest single process,
+not the process tree. EEfinder is absent because its outputs are retained from a
+campaign with different load, and ViralRecall v2 shows the two real genomes with
+comparable measurements.*
 
 ## Real-genome output
 
-ViroSync accepted 527 regions across the five real genomes. These inputs have
-no complete region-level truth set. The figure describes output burden and
-gene content, not detection accuracy.
+ViroSync accepted 609 regions across the five real genomes: 66 HIGH, 258 MEDIUM
+and 285 LOW. These inputs have no complete region-level truth set. The figure
+describes output burden and gene content, not detection accuracy.
 
 [![Real-genome candidate burden and gene composition](assets/performance/benchmark_fig3_real_burden_composition.png)](assets/performance/benchmark_fig3_real_burden_composition.png)
 
