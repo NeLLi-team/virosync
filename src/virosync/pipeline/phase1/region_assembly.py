@@ -31,8 +31,8 @@ from virosync.pipeline.phase0.prodigal import GenePrediction, load_gene_predicti
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
+    is_cellular_marker_model,
     is_identity_qualified_cress_marker,
-    is_seed_blocked_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,14 +116,14 @@ class ValidatedMarkerHit:
     def is_valid_seed_marker(self) -> bool:
         """Check if marker is a valid seed for region assembly.
 
-        UPDATED (Jan 2026): Expanded to allow ALL validated markers to seed regions,
-        with taxonomy-based expansion filtering false positives in Step 4.5.
+        Validated noncellular markers can seed regions. Taxonomy-based expansion
+        then assesses the surrounding evidence in Step 4.5.
 
         Seeding rules:
         1. validation_status="validated" (NCLDV/MIRUS/PLV/VP/EUK-pEVE in Diamond top-10) → CAN SEED
         2. validation_status="validated_novel" (HMM-only, no Diamond hits) → CAN SEED ONLY IF
            MCP OR CAPSID EVIDENCE (a capsid-type structure-derived profile)
-        3. Models in SEED_BLOCKED_MARKER_MODELS → NEVER SEED (host kinase families)
+        3. Cellular housekeeping and host kinase models → NEVER SEED
 
         Rationale:
         - All HMM hits are validated via marker_validation.py (Diamond top-10 taxonomy)
@@ -136,7 +136,7 @@ class ValidatedMarkerHit:
             True if marker can seed an EVE region
         """
         # Blocked models still count inside a region another marker seeded.
-        if is_seed_blocked_model(self.hmm_target):
+        if is_cellular_marker_model(self.hmm_target):
             return False
 
         # Validated markers with Diamond top-10 viral taxonomy → auto-seed

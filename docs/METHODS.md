@@ -538,13 +538,15 @@ viral reference. Ordinary region assembly lets a marker with no DIAMOND match
 [capsid evidence](#capsid-evidence). Catalogue-qualified `validated_novel` core
 markers can also form a three-core spatial witness.
 
-A validated marker can start a candidate region unless its HMM model is a host
-kinase family: `VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`
-(protein kinase and ABC1 kinase models). These families share distant homologs
-with NCLDV kinases, so host kinases pass marker validation. A marker from one of
-these models never seeds a region. Model names match without case and without a
-suffix after the first `_` or `.`. The terminal-repeat step in Phase 2 follows the
-same rule. Every repeat-bounded child must also receive at least one complete
+A validated marker can start a candidate region unless its HMM model is cellular:
+a COG or eukaryotic BUSCO housekeeping model, or a host kinase family
+(`VS000084`, `VS000087`, `VS000094`, `VS000191` and `VS000319`). These models
+cannot seed a region even when a viral or `EUK-pEVE` reference validates the
+protein. Housekeeping models use the same `COG` prefix and `at2759` identifier
+rule as the host signature. Kinase model names match without case and without a
+suffix after the first `_` or `.`. Seed assembly, viral-marker support and the
+terminal-repeat step in Phase 2 share this cellular-model exclusion.
+Every repeat-bounded child must also receive at least one complete
 confirmed seed. A viral hit alone cannot turn an unseeded residual slice into
 an EVE. A partition that cuts or loses a confirmed seed keeps the parent whole.
 A blocked marker can still appear in marker counts when another marker seeded

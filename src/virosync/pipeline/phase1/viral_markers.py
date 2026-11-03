@@ -383,7 +383,7 @@ def is_seed_blocked_model(model_name: str) -> bool:
     return model_id.upper() in SEED_BLOCKED_MARKER_MODELS
 
 
-def _is_cellular_marker_model(model_name: str) -> bool:
+def is_cellular_marker_model(model_name: str) -> bool:
     """Return whether a model is a host kinase or a cellular housekeeping marker."""
     return is_seed_blocked_model(model_name) or is_host_marker(model_name)
 
@@ -399,7 +399,7 @@ def viral_marker_gene_ids(markers: "Iterable[ValidatedMarkerHit]") -> frozenset[
         base_marker_gene_id(marker.query_porf)
         for marker in markers
         if marker.validation_status == "validated"
-        and not _is_cellular_marker_model(marker.hmm_target)
+        and not is_cellular_marker_model(marker.hmm_target)
         and base_marker_gene_id(marker.query_porf)
     )
 

@@ -1,7 +1,8 @@
-"""Blocked kinase markers never make a repeat-bounded or residual candidate."""
+"""Cellular markers never make a repeat-bounded or residual candidate."""
 
 from pathlib import Path
 
+import pytest
 from test_terminal_repeats import _adjacent_repeat_sequence, _Marker, _query
 
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
@@ -101,10 +102,11 @@ def test_blocked_marker_in_a_residual_with_a_real_marker_stays_in_that_residual(
     assert [span[0] for span in _spans(refined)] == [100, 520, 840]
 
 
-def test_parent_stays_whole_when_every_repeat_pair_holds_only_blocked_markers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("model", ["VS000087", "COG0532", "123at2759"])
+def test_parent_stays_whole_when_every_repeat_pair_holds_only_blocked_markers(tmp_path: Path, model: str) -> None:
     markers = [
-        _Marker("contig", 220, 250, "first|aa1-30", hmm_target="VS000087"),
-        _Marker("contig", 640, 660, "second|aa1-20", hmm_target="VS000084"),
+        _Marker("contig", 220, 250, "first|aa1-30", hmm_target=model),
+        _Marker("contig", 640, 660, "second|aa1-20", hmm_target=model),
     ]
 
     refined = _partition(tmp_path, markers, (ConfirmedSeed("independent-source", "contig", 430, 500),))

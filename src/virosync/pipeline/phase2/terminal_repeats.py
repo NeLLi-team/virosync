@@ -24,7 +24,7 @@ from numpy.typing import NDArray
 
 from virosync.pipeline.phase1.viral_markers import (
     get_region_classification_summary,
-    is_seed_blocked_model,
+    is_cellular_marker_model,
 )
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
@@ -657,7 +657,9 @@ def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_Ma
                 start=min(marker.start for marker in hits),
                 end=max(marker.end for marker in hits),
                 marker_names=frozenset(marker.hmm_target for marker in hits if getattr(marker, "hmm_target", "")),
-                is_seed_eligible=any(not is_seed_blocked_model(getattr(marker, "hmm_target", "")) for marker in hits),
+                is_seed_eligible=any(
+                    not is_cellular_marker_model(getattr(marker, "hmm_target", "")) for marker in hits
+                ),
                 profile_classes=_profile_classes(hits),
             )
             for protein_id, hits in grouped.items()
@@ -976,7 +978,7 @@ def _is_independent_candidate(
 ) -> bool:
     """Return whether a repeat pair may become a candidate of its own.
 
-    A pair whose only marker evidence comes from blocked kinase models, with no
+    A pair whose only marker evidence comes from cellular models, with no
     identity-qualified viral gene inside, stays inside its parent instead.
     """
     inside = _groups_within(groups, candidate.left_start, candidate.right_end)
@@ -1059,7 +1061,7 @@ def _has_residual_evidence(
 ) -> bool:
     """Return whether a non-TIR slice retains local viral evidence.
 
-    Marker groups from blocked kinase models do not count: they never start a
+    Marker groups from cellular models do not count: they never start a
     candidate, so a slice they alone support is dropped.
     """
     if any(group.is_seed_eligible and group.start < end and group.end > start for group in groups):
@@ -1095,7 +1097,7 @@ def _partition_is_complete(
 ) -> bool:
     """Return whether a split preserves markers and independent evidence.
 
-    A blocked-only marker group outside every child is allowed: its slice was
+    A cellular-only marker group outside every child is allowed: its slice was
     dropped as non-independent. Every other group needs exactly one owner.
     """
     for group in groups:

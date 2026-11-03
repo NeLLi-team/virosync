@@ -1,4 +1,4 @@
-"""Kinase marker models never seed a region but still count inside one."""
+"""Cellular marker models never seed a region but still count inside one."""
 
 from pathlib import Path
 
@@ -80,6 +80,43 @@ def test_two_blocked_markers_do_not_seed_a_region(tmp_path: Path) -> None:
     regions = _assemble(tmp_path, markers)
 
     assert regions == []
+
+
+@pytest.mark.parametrize("model", ["COG0532", "123at2759"])
+def test_validated_housekeeping_marker_does_not_seed_a_region(tmp_path: Path, model: str) -> None:
+    regions = _assemble(tmp_path, [_marker("ctgA_1", "ctgA", 1000, 1300, model)])
+
+    assert regions == []
+
+
+def test_validated_housekeeping_and_kinase_cluster_does_not_seed(tmp_path: Path) -> None:
+    markers = [
+        _marker("ctgB_1", "ctgB", 1000, 1300, BLOCKED_MODEL),
+        _marker("ctgB_2", "ctgB", 1500, 1800, "COG0532"),
+    ]
+
+    assert _assemble(tmp_path, markers) == []
+
+
+@pytest.mark.parametrize("model", ["COG0532", "123at2759"])
+def test_housekeeping_companion_stays_inside_a_viral_seed(tmp_path: Path, model: str) -> None:
+    markers = [
+        _marker("ctgD_1", "ctgD", 1000, 1300, SEED_MODEL),
+        _marker("ctgD_2", "ctgD", 1500, 1800, model),
+    ]
+
+    regions = _assemble(tmp_path, markers)
+
+    assert [(r.start, r.end, [m.hmm_target for m in r.markers]) for r in regions] == [(0, 10000, [SEED_MODEL, model])]
+
+
+def test_nonhousekeeping_low_candidate_seed_is_unchanged(tmp_path: Path) -> None:
+    markers = [
+        _marker("ctgD_1", "ctgD", 1000, 1300, "VS000229"),
+        _marker("ctgD_2", "ctgD", 1500, 1800, "VS000229"),
+    ]
+
+    assert [(r.start, r.end) for r in _assemble(tmp_path, markers)] == [(0, 10000)]
 
 
 def test_other_marker_alone_still_seeds_a_region(tmp_path: Path) -> None:
