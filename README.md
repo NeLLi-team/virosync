@@ -1,6 +1,6 @@
 # ViroSync
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
@@ -28,8 +28,8 @@ pixi run setup-prodigal-gv
 pixi run setup-virosync-resources
 ```
 
-Resources download about 5.3 GB, use about 11.4 GB when installed, and need about
-17 GB during setup. Allow more space for the Pixi environment and results.
+Resources download about 11.6 GB, use about 25.7 GB when installed, and need about
+37.3 GB during setup. Allow more space for the Pixi environment and results.
 Native setup builds the pinned Prodigal-GV capacity correction. The
 [installation guide](docs/getting-started.md) covers its runtime directory and
 direct Python or console use.
@@ -78,6 +78,6 @@ Frameshift-sensitive marker detection is off by default. Add
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.0.2 uses resource bundle v1.2.0.
+ViroSync 1.3.0 uses resource bundle v1.3.0.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

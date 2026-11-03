@@ -24,13 +24,13 @@ from virosync.utils.resource_manifest import (
     load_resource_manifest,
 )
 
-SOFTWARE_VERSION = "1.0.2"
-DATABASE_VERSION = "v1.2.0"
-RESOURCE_ARCHIVE = "resources_v1_2_0_runtime.tar.gz"
+SOFTWARE_VERSION = "1.3.0"
+DATABASE_VERSION = "v1.3.0"
+RESOURCE_ARCHIVE = "resources_v1_3_0_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"
-RESOURCE_ARCHIVE_SHA256 = "054c28445e179a74eeddd07fa73c9d137f7a0c7eeef5cbd2b2929e5e06f2fea9"
-RESOURCE_MANIFEST_SHA256 = "d8048752f355fd1cdfcf26b25ad233d5659c5a2e9544128befe67980ad41295b"
-RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_2_0/RESOURCE_MANIFEST.json")
+RESOURCE_ARCHIVE_SHA256 = "c62b364f9b89a813444066544a2f5166c3caecc0cb80f86ae580d4f31c6b1c37"
+RESOURCE_MANIFEST_SHA256 = "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+RELEASE_MANIFEST_PATH = Path("release-manifests/resources_v1_3_0/RESOURCE_MANIFEST.json")
 RESOURCE_IDENTITY = (
     RESOURCE_URL,
     DATABASE_VERSION,
@@ -254,8 +254,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("marker_proteins") == 2917745,
-            "tracked release manifest marker count must be 2917745",
+            manifest.semantic_counts.get("marker_proteins") == 7046156,
+            "tracked release manifest marker count must be 7046156",
             failures,
         )
         require(
@@ -264,8 +264,8 @@ def check_resource_version(failures: list[str]) -> None:
             failures,
         )
         require(
-            manifest.semantic_counts.get("taxonomy_labels") == 190562,
-            "tracked release manifest taxonomy count must be 190562",
+            manifest.semantic_counts.get("taxonomy_labels") == 200597,
+            "tracked release manifest taxonomy count must be 200597",
             failures,
         )
 

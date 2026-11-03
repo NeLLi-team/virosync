@@ -71,8 +71,8 @@ def test_resource_verify_cli_is_fast_by_default(
     def fake_verify(cls, database_path, **kwargs):
         calls.append({"database_path": Path(database_path), **kwargs})
         return ResourceValidationResult(
-            version="v1.2.0",
-            manifest_sha256=MANIFEST_SHA256,
+            version="v1.3.0",
+            manifest_sha256="b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354",
             semantic_counts={},
             files_verified=9,
             full=kwargs["full"],
@@ -99,8 +99,8 @@ def test_resource_verify_cli_is_fast_by_default(
     assert calls == [
         {
             "database_path": tmp_path / "virosync",
-            "expected_version": "v1.2.0",
-            "manifest_sha256": MANIFEST_SHA256,
+            "expected_version": "v1.3.0",
+            "manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354",
             "full": False,
         }
     ]
@@ -616,8 +616,8 @@ def test_fresh_setup_prompts_before_starting_progress(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Download size: 5.27 GB (5,267,046,975 bytes)" in result.output
-    assert "Resource payload: 11.43 GB (11,431,709,805 bytes)" in result.output
+    assert "Download size: 11.57 GB (11,566,470,914 bytes)" in result.output
+    assert "Resource payload: 25.74 GB (25,737,231,020 bytes)" in result.output
     assert result.output.index("Download and install to") < result.output.index("Progress:")
 
 

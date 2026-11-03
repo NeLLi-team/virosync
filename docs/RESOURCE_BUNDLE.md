@@ -1,44 +1,21 @@
 # ViroSync resource bundle
 
-The current core resource version is `v1.2.0`, supplied as
-`resources_v1_2_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
+The candidate core resource version is `v1.3.0`, supplied as
+`resources_v1_3_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
 gene-function profiles, marker and broad reference-proteome DIAMOND databases,
 taxonomy labels, and marker annotations used for EVE detection, boundary
 refinement, classification, and gene labels.
 
-The bundle contains 2,917,745 marker proteins, 44,069,720 reference-proteome
+The bundle contains 7,046,156 marker proteins, 67,759,249 reference-proteome
 proteins, 1,086 marker profiles, 937 Pfam screening profiles, 412 gene-function
-profiles, and 190,562 taxonomy labels. The marker profiles include 33
-[structure-derived candidates](reference/capsid-models.md). Of these, 27 have a
-capsid-type curated function and give capsid evidence; `EVE_CAPSID_NOVEL_0029`
-is the only putative MCP.
+profiles, and 200,597 taxonomy labels. These counts are recorded in the runtime
+manifest. See [Methods](METHODS.md) for how ViroSync uses reference evidence and
+[Structure-derived capsids](reference/capsid-models.md) for the profile catalogue.
 
-Curation of this bundle:
-
-- Both DIAMOND databases are dereplicated within each genome. Exact repeats are
-  removed first. DIAMOND 2.2.1 `cluster --approx-id 90 --member-cover 80` then
-  groups the remaining proteins of each genome, and the longest member of each
-  cluster is kept. No proteins are merged across genomes. Dereplication leaves
-  2,917,745 marker proteins and 44,070,936 proteome proteins.
-- 1,258 proteome entries that copy prokaryotic contaminants removed from
-  eukaryotic references in GVClass resource v2.1.0
-  ([Zenodo](https://doi.org/10.5281/zenodo.23381313)) are removed with their
-  clusters (1,216 representatives). A match needs at least 95% identity and 80%
-  coverage to an EUK-labelled entry of the same assembly. The marker database
-  holds none of them.
-- The 3,011 eukaryote-labelled reference hits of the 33 structure-derived
-  profiles carry the label `EUK-pEVE__<assembly>` in both databases, each with
-  its cluster (1,031 marker and 1,892 proteome representatives). Their label is the lineage of the assembly with every named
-  rank suffixed `-pEVE`, for example `EUK-pEVE|Evosea-pEVE|...`, as in GVClass.
-  ViroSync counts `EUK-pEVE` as viral and never as host (see
-  [Methods](METHODS.md)).
-- Eukaryotic lineages come from NCBI ranks
-  (`scripts/harmonize_taxonomy_labels.py`), and 245 rows carry `EUK-pEVE` lineages.
-- `models/gene_function.hmm` and `models/gene_function_labels.tsv` hold 412 Pfam
-  and VOGDB profiles that label core genes.
-
-`release-manifests/resources_v1_2_0/` holds the runtime manifest and the build
-record (`build_provenance.json`).
+`release-manifests/resources_v1_3_0/` holds the exact runtime and source manifests
+and their archive identities. These files describe a private candidate; they do
+not establish scientific acceptance or public availability. Historical v1.2.0
+build evidence remains in `release-manifests/resources_v1_2_0/`.
 
 Marker references contain full proteins with identifiers linked to reference
 genomes. The resource build tree stores these sequences in
@@ -46,14 +23,10 @@ genomes. The resource build tree stores these sequences in
 archive contains the DIAMOND database; the matching source companion contains
 the FASTA. Both encode the same marker reference set.
 
-Update your ViroSync checkout before installing v1.2.0. Older checkouts treat
-`EUK-pEVE` hits as unknown and give the 27 capsid-type profiles no capsid
-evidence.
-
-Setup downloads about 5.3 GB and installs about 11.4 GB. The archive and
-installed data can use about 17 GB at the same time. Allow extra space for the
-Pixi environment, results, filesystem overhead, optional resources, and
-retained older versions.
+Use the matching ViroSync 1.3.0 source for this candidate. The exact archive and
+payload sizes are recorded in the release manifest provenance. Allow space for
+both the archive and extracted resources, plus the environment and results.
+Public installation requires the release gate and published archive first.
 
 Install the core resources:
 
@@ -139,7 +112,7 @@ pixi run python scripts/build_gene_function_profiles.py \
 
 The script streams both HMM files, so it does not load the 4 GB VOGDB file
 into memory. Copy the two outputs into `models/` of the resource tree before
-`scripts/build_resource_bundle.py --split --version v1.2.0`.
+`scripts/build_resource_bundle.py --split --version v1.3.0`.
 
 ### Credits
 

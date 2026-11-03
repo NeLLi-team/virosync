@@ -4,6 +4,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-03
+
+Private release candidate; the date records preparation, not publication.
+
+### Resources
+
+- Bind the rebuilt v1.3.0 runtime and source bundles by their admitted manifests
+  and archive checksums. Publication and scientific qualification remain pending.
+
 ### Added
 
 - Reference masking: every run ignores DIAMOND hits to its own assembly, named by

@@ -63,14 +63,14 @@ See [optional analyses](optional-features.md) for configuration and data setup.
 
 ## Install the core resources
 
-Resources download about 5.3 GB, use about 11.4 GB when installed, and need about
-17 GB during setup. Allow more space for the Pixi environment and results.
+Resources download about 11.6 GB, use about 25.7 GB when installed, and need about
+37.3 GB during setup. Allow more space for the Pixi environment and results.
 
 ```bash
 pixi run setup-virosync-resources
 ```
 
-Setup installs resource bundle v1.2.0 in `resources/virosync` by default.
+Setup installs resource bundle v1.3.0 in `resources/virosync` by default.
 See [Databases](RESOURCE_BUNDLE.md) to use another location.
 
 Verify the install:
@@ -81,7 +81,7 @@ pixi run virosync orchestrate resources verify \
   --full
 ```
 
-The output must include `Version: v1.2.0`.
+The output must include `Version: v1.3.0`.
 
 ## Run the example
 
@@ -90,8 +90,9 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must report `status=success`, `predictions=7`, and
-`accepted=2`.
+The previous v1.2.0 example check expected `status=success`, `predictions=7`, and
+`accepted=2` for `test-1`. Expected counts for the final v1.3.0 (b611) bundle
+remain pending its actual example, resume, and frameshift smoke validation.
 
 ## Run your genome
 

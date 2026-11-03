@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "resource_version": "v1.3.0",
+  "status": "private_candidate_not_published",
+  "scientific_acceptance": false,
+  "built": "2026-11-03",
+  "root_admission_sha256": "d111fdfdf1b02bae40c1d01d38b2575f77013abd6bc74b46b45952223d32e2b1",
+  "runtime": {
+    "filename": "resources_v1_3_0_runtime.tar.gz",
+    "archive_sha256": "c62b364f9b89a813444066544a2f5166c3caecc0cb80f86ae580d4f31c6b1c37",
+    "archive_size_bytes": 11566470914,
+    "payload_size_bytes": 25737231020,
+    "manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+  },
+  "source": {
+    "filename": "resources_v1_3_0_source.tar.gz",
+    "archive_sha256": "cb3f07153b45b9c5ffac0048574424c58d0d3c19824585ba24f43e46b5de6130",
+    "archive_size_bytes": 1917838631,
+    "manifest_sha256": "98a19d78ee1ae5a84302720d910523bc085edbb43a9fa441b1c3b730642d285a",
+    "runtime_manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+  },
+  "semantic_counts": {
+    "gene_function_labels": 412,
+    "gene_function_models": 412,
+    "hmm_index_files": 4,
+    "hmm_models": 1086,
+    "marker_diamond_sequences": 7046156,
+    "marker_proteins": 7046156,
+    "model_annotations": 1086,
+    "og_marker_mappings": 808,
+    "pfam_models": 937,
+    "proteome_diamond_sequences": 67759249,
+    "taxonomy_labels": 200597
+  },
+  "limits": "Exact admitted native resource bytes; package not rebuilt. Public availability and final scientific gates remain pending."
+}
