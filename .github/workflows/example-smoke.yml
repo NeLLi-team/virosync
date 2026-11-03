@@ -63,13 +63,18 @@ jobs:
             --threads-per-worker 4 \
             --clean-run
 
+      # Operational fixture pins for resource bundle v1.3.0.
       - name: Validate clean completion artifacts
         run: |
           pixi run python scripts/ci/validate_example_run.py \
             results/ci_example \
             --write-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
-            --expect-predictions 7 \
-            --expect-accepted 2
+            --expect-predictions 17 \
+            --expect-accepted 4 \
+            --expect-canonical-eve-id EVE_JAVCPM010000101.1_18774-183450 \
+            --expect-canonical-eve-id EVE_JAVCPM010000101.1_186992-260195 \
+            --expect-canonical-eve-id EVE_JAVCPM010000104.1_155745-177353 \
+            --expect-canonical-eve-id EVE_JAVCPM010000088.1_866408-889630
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
 
       - name: Run unchanged resume
@@ -87,8 +92,12 @@ jobs:
             results/ci_example \
             --compare-snapshot "$RUNNER_TEMP/virosync-example-snapshot.json" \
             --require-resume \
-            --expect-predictions 7 \
-            --expect-accepted 2
+            --expect-predictions 17 \
+            --expect-accepted 4 \
+            --expect-canonical-eve-id EVE_JAVCPM010000101.1_18774-183450 \
+            --expect-canonical-eve-id EVE_JAVCPM010000101.1_186992-260195 \
+            --expect-canonical-eve-id EVE_JAVCPM010000104.1_155745-177353 \
+            --expect-canonical-eve-id EVE_JAVCPM010000088.1_866408-889630
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example
 
       - name: Run clean frameshift example
@@ -106,10 +115,13 @@ jobs:
         run: |
           pixi run python scripts/ci/validate_example_run.py \
             results/ci_example_frameshift \
-            --expect-predictions 1 \
-            --expect-accepted 1 \
-            --expect-canonical-eve-id EVE_DS113200.1_129254-157637 \
-            --expect-detailed-eve-id EVE_DS113200.1_129254-157637
+            --expect-predictions 3 \
+            --expect-accepted 2 \
+            --expect-canonical-eve-id EVE_DS113200.1_129254-160024 \
+            --expect-canonical-eve-id EVE_DS113389.1_40007-58661 \
+            --expect-detailed-eve-id EVE_DS113200.1_129254-160024 \
+            --expect-detailed-eve-id EVE_DS113389.1_40007-58661 \
+            --expect-detailed-eve-id EVE_DS113495.1_28148-43271
           pixi run python scripts/ci/check_coordinate_outputs.py results/ci_example_frameshift
           test -s results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv
           awk 'END { exit NR < 2 }' results/ci_example_frameshift/*/phase1/frameshift_screening/confirmed_frameshift_markers.tsv

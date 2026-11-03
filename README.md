@@ -41,8 +41,8 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-The `test-1` row must report `status=success`, `predictions=7`, and
-`accepted=2` with resource bundle v1.2.0.
+With resource bundle v1.3.0, the `test-1` row reports `status=success`,
+`predictions=17`, and `accepted=4`.
 
 ## Run your own genomes
 

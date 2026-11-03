@@ -79,14 +79,19 @@ def test_release_smoke_runs_full_clean_and_unchanged_resume_checks() -> None:
     assert "--write-snapshot" in workflow
     assert "--compare-snapshot" in workflow
     assert "--require-resume" in workflow
-    assert workflow.count("--expect-predictions 7") == 2
-    assert workflow.count("--expect-predictions 1") == 1
-    assert workflow.count("--expect-accepted 2") == 2
-    assert workflow.count("--expect-accepted 1") == 1
-    assert workflow.count("--expect-canonical-eve-id") == 1
-    assert workflow.count("--expect-detailed-eve-id") == 1
+    assert re.findall(r"--expect-predictions (\d+)(?=\s|$)", workflow) == ["17", "17", "3"]
+    assert re.findall(r"--expect-accepted (\d+)(?=\s|$)", workflow) == ["4", "4", "2"]
+    clean_ids = [
+        "EVE_JAVCPM010000101.1_18774-183450",
+        "EVE_JAVCPM010000101.1_186992-260195",
+        "EVE_JAVCPM010000104.1_155745-177353",
+        "EVE_JAVCPM010000088.1_866408-889630",
+    ]
+    frameshift_ids = ["EVE_DS113200.1_129254-160024", "EVE_DS113389.1_40007-58661"]
+    assert re.findall(r"--expect-canonical-eve-id (\S+)", workflow) == clean_ids * 2 + frameshift_ids
+    assert re.findall(r"--expect-detailed-eve-id (\S+)", workflow) == frameshift_ids + ["EVE_DS113495.1_28148-43271"]
     assert "EVE_DS113495.1_18305-37386" not in workflow
-    assert "EVE_DS113200.1_129254-157637" in workflow
+    assert "EVE_DS113200.1_129254-157637" not in workflow
     assert "EVE_DS113200.1_129184-157630" not in workflow
     assert "EVE_DS113495.1_58468-89417" not in workflow
     assert workflow.count("check_coordinate_outputs.py") == 3
