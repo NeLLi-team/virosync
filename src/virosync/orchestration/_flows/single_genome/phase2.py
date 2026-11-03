@@ -8,7 +8,7 @@ from virosync.ablation import AblationID, InterventionCounts
 from virosync.config import PipelineConfig
 from virosync.orchestration.runtime import call_task
 from virosync.orchestration.tasks import generate_outputs_task
-from virosync.pipeline.phase1.viral_markers import get_assembly_mode
+from virosync.pipeline.phase1.viral_markers import get_assembly_mode, viral_marker_gene_ids
 from virosync.pipeline.phase2.boundary_diamond import (
     BoundaryDiamondConfig,
     ControlStats,
@@ -37,6 +37,7 @@ from virosync.pipeline.phase2.seed_extension import (
     validate_source_membership,
 )
 from virosync.pipeline.phase2.terminal_repeats import TerminalRepeat
+from virosync.pipeline.reference_mask import ReferenceMask
 from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
@@ -307,6 +308,9 @@ def _run_boundary_diamond(
     config: PipelineConfig,
     superset_diamond_hits: dict | None,
     logger: object,
+    reference_mask: ReferenceMask = ReferenceMask(),
+    superset_viral_veto_hits: dict | None = None,
+    viral_marker_genes: frozenset[str] = frozenset(),
 ) -> _BoundaryEvidence:
     """Classify the shared seed, flank, and control protein query."""
     phase2 = config.phase2
@@ -324,12 +328,14 @@ def _run_boundary_diamond(
         control_min_distance=control_min_distance,
         control_region_genes=11,
         top_k=phase2.diamond_top_k,
+        viral_hit_depth=phase2.viral_hit_depth,
         chunk_size=phase2.diamond_chunk_size,
         threads=threads,
         random_seed=phase2.diamond_random_seed,
         host_prefix=f"{config.host.label}__",
         taxonomy_weight_mode=phase2.taxonomy_weight_mode,
         search_backend=config.compute.search_backend.value,
+        masked_genomes=reference_mask.genome_keys,
     )
     query = collect_query_proteins(
         merged_seeds=merged_seeds,
@@ -360,6 +366,7 @@ def _run_boundary_diamond(
         taxonomy_map = classify_cached_diamond_query(
             query=query,
             diamond_hits=superset_diamond_hits,
+            viral_veto_hits=superset_viral_veto_hits,
             proteome_index=proteome_index,
             config=diamond_config,
             taxonomy_lookup=tax_lookup,
@@ -375,6 +382,9 @@ def _run_boundary_diamond(
             taxonomy_lookup=tax_lookup,
         )
     logger.info("Phase 2b: Diamond complete (%d pORFs classified)", len(taxonomy_map))
+
+    for porf_id, tax in taxonomy_map.items():
+        tax.phase1_validated_viral_marker = porf_id in viral_marker_genes
 
     control_taxonomy = [taxonomy_map[pid] for pid in query.control_porf_ids if pid in taxonomy_map]
     control_stats = compute_control_stats(control_taxonomy, diamond_config.host_prefix)
@@ -409,6 +419,7 @@ def _run_phase2_subflow(
     resume_authorized: bool = False,
     threads: int | None = None,
     raw_genome_path: Path | None = None,
+    reference_mask: ReferenceMask = ReferenceMask(),
 ) -> Phase2Result | Phase2Terminal:
     """Search bounded gene context and extend complete confirmed seeds outward.
 
@@ -418,6 +429,7 @@ def _run_phase2_subflow(
     Args:
         masked_path: Path to masked genome FASTA
         raw_genome_path: Optional unmasked genome FASTA used for repeat evidence.
+        reference_mask: Genomes whose reference rows the gene-taxonomy searches drop.
         proteome_path: Path to protein FASTA
         merged_seeds: List of MergedSeed objects from Phase 1
         validated_markers: List of validated marker hits from Phase 1
@@ -448,7 +460,6 @@ def _run_phase2_subflow(
     boundary_taxonomy_ml_model = phase2.taxonomy_ml_model
     boundary_taxonomy_ml_threshold = phase2.taxonomy_ml_threshold
     boundary_taxonomy_ml_neighbor_window = phase2.taxonomy_ml_neighbor_window
-    boundary_diamond_top_k = phase2.diamond_top_k
     boundary_diamond_random_seed = phase2.diamond_random_seed
     boundary_diamond_superset_prototype_enabled = phase2.diamond_superset_prototype_enabled
     gene_taxonomy_threads = compute.gene_taxonomy_threads
@@ -506,6 +517,7 @@ def _run_phase2_subflow(
         )
 
     superset_diamond_hits = None
+    superset_viral_veto_hits = None
     superset_proteome_index = None
     if boundary_diamond_superset_prototype_enabled and not (resume and resume_authorized) and merged_seeds:
         superset_db = _require_phase2b_gene_taxonomy_db(
@@ -513,19 +525,29 @@ def _run_phase2_subflow(
             has_seeds=True,
         )
         superset_proteome_index = build_proteome_index(proteome_path)
-        superset_top_k = max(10, boundary_diamond_top_k)
         logger.info(
-            "Phase 2 superset prototype: searching the full proteome once (top_k=%d)",
-            superset_top_k,
+            "Phase 2 superset prototype: original full-proteome search (top_k=%d)",
+            phase2.diamond_top_k,
         )
         superset_diamond_hits = run_full_proteome_diamond(
             proteome_fasta=proteome_path,
             diamond_db=superset_db,
             output_dir=output_dir / "phase2" / "superset_diamond",
-            max_target_seqs=superset_top_k,
+            max_target_seqs=max(10, phase2.diamond_top_k),
             threads=gene_taxonomy_threads or threads,
             search_backend=search_backend,
+            masked_genomes=reference_mask.genome_keys,
         )
+        if phase2.viral_hit_depth > 10:
+            superset_viral_veto_hits = run_full_proteome_diamond(
+                proteome_fasta=proteome_path,
+                diamond_db=superset_db,
+                output_dir=output_dir / "phase2" / "superset_viral_veto",
+                max_target_seqs=phase2.viral_hit_depth,
+                threads=gene_taxonomy_threads or threads,
+                search_backend=search_backend,
+                masked_genomes=reference_mask.genome_keys,
+            )
     if resume and resume_authorized:
         missing_state = [path for path in (phase2_state_path, phase2_resume_state_path) if not path.is_file()]
         if missing_state:
@@ -555,6 +577,7 @@ def _run_phase2_subflow(
                 genome_id=genome_id,
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
+                host_credit_threshold=config.phase2.host_trim_score_threshold,
             ),
         }
         _write_empty_run_log(
@@ -616,6 +639,7 @@ def _run_phase2_subflow(
     # Run Diamond ONCE per genome on ALL seeds + flanking genes + control genes
     # Phase 2b is MANDATORY for flanking gene integration - provides taxonomy for all genes
     # within the max boundary extension range (+/-flank_genes from each seed)
+    viral_marker_genes = viral_marker_gene_ids(validated_markers)
     boundary_taxonomy_map: dict[str, GeneTaxonomy] = {}
     boundary_control_stats: ControlStats | None = None
     boundary_diamond_query: GenomeDiamondQuery | None = None
@@ -634,6 +658,7 @@ def _run_phase2_subflow(
             sum(len(porfs) for porfs in proteome_index.values()),
         )
         boundary_evidence = _run_boundary_diamond(
+            viral_marker_genes=viral_marker_genes,
             merged_seeds=merged_seeds,
             proteome_index=proteome_index,
             proteome_path=proteome_path,
@@ -641,7 +666,9 @@ def _run_phase2_subflow(
             output_dir=output_dir,
             config=config,
             superset_diamond_hits=superset_diamond_hits,
+            superset_viral_veto_hits=superset_viral_veto_hits,
             logger=logger,
+            reference_mask=reference_mask,
         )
         boundary_taxonomy_map = boundary_evidence.taxonomy_map
         boundary_control_stats = boundary_evidence.control_stats
@@ -686,6 +713,7 @@ def _run_phase2_subflow(
             host_model=host_signature_model if boundary_host_trim_enabled else None,
             host_threshold=boundary_host_trim_score_threshold,
             ml_support=ml_support.get(seed.seed_id, frozenset()),
+            viral_marker_genes=viral_marker_genes,
         )
         boundary = extend_confirmed_seed(**kwargs, disable_host_stop=ablation_id is AblationID.A4)
         if ablation_id is AblationID.A4:
@@ -829,6 +857,7 @@ def _run_phase2_subflow(
                 genome_id=genome_id,
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
+                host_credit_threshold=config.phase2.host_trim_score_threshold,
             ),
         }
         _write_empty_run_log(

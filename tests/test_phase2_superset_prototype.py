@@ -26,6 +26,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.phase3 import gene_taxonomy
+from virosync.pipeline.reference_mask import ReferenceMask
 
 
 def _hit(query: str, target: str, bits: float) -> DiamondHit:
@@ -226,6 +227,9 @@ def _run_phase2(
     database: Path,
     prototype_enabled: bool,
     merged_seeds: list[MergedSeed] | None = None,
+    reference_mask: ReferenceMask = ReferenceMask(),
+    viral_hit_depth: int | None = None,
+    validated_markers: list | None = None,
 ) -> phase2.Phase2Result:
     config = PipelineConfig().with_overrides(
         resume=False,
@@ -242,6 +246,8 @@ def _run_phase2(
     config.phase2.diamond_control_min_distance = 1
     config.phase2.diamond_chunk_size = 2
     config.phase2.diamond_superset_prototype_enabled = prototype_enabled
+    if viral_hit_depth is not None:
+        config.phase2.viral_hit_depth = viral_hit_depth
     return phase2._run_phase2_subflow(
         masked_path=masked,
         proteome_path=proteome,
@@ -258,13 +264,14 @@ def _run_phase2(
                 confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 100, 350),),
             )
         ],
-        validated_markers=[],
-        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}),
+        validated_markers=validated_markers or [],
+        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}, lineage_weights={"euk|host": 1.0}),
         output_dir=output_dir,
         genome_id="genome",
         config=config,
         genome_start_time=time.time(),
         logger=logging.getLogger(__name__),
+        reference_mask=reference_mask,
     )
 
 
@@ -299,6 +306,7 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         return classify_cached_diamond_query(
             query=kwargs["query"],
             diamond_hits=raw_hits,
+            viral_veto_hits=raw_hits,
             proteome_index=kwargs["proteome_index"],
             config=kwargs["config"],
             taxonomy_lookup=kwargs["taxonomy_lookup"],
@@ -330,7 +338,7 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         prototype_enabled=True,
     )
 
-    assert search_counts == {"legacy": 1, "prototype": 1}
+    assert search_counts == {"legacy": 1, "prototype": 2}
     assert phase2_state_to_document(legacy.refined_boundaries) == (
         phase2_state_to_document(prototype.refined_boundaries)
     )
@@ -342,6 +350,9 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         2,
     )
     assert "phase2/superset_diamond/full_proteome.tsv" in {artifact.relative_path for artifact in prototype_artifacts}
+    assert "phase2/superset_viral_veto/full_proteome.tsv" in {
+        artifact.relative_path for artifact in prototype_artifacts
+    }
 
 
 @pytest.mark.parametrize("prototype_enabled", [False, True], ids=["legacy", "superset"])
@@ -400,6 +411,134 @@ def test_phase2_preserves_independent_duplicate_coordinate_seeds(
     assert [(boundary.start, boundary.end) for boundary in result.refined_boundaries] == [(0, 2087), (0, 2087)]
     candidate_ids = [boundary.candidate_id for boundary in result.refined_boundaries]
     assert len(candidate_ids) == len(set(candidate_ids)) == 2
+
+
+@pytest.mark.parametrize("prototype_enabled", [False, True], ids=["legacy", "superset"])
+def test_phase2_gives_the_reference_mask_to_its_gene_taxonomy_search(
+    tmp_path: Path,
+    monkeypatch,
+    prototype_enabled: bool,
+) -> None:
+    masked = tmp_path / "masked.fna"
+    masked.write_text(">contig\n" + "ACGT" * 200 + "\n")
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome)
+    database = tmp_path / "combined.dmnd"
+    database.write_bytes(b"database")
+    masks_seen: list[frozenset[str]] = []
+    monkeypatch.setattr(
+        phase2,
+        "run_batched_diamond",
+        lambda **kwargs: masks_seen.append(kwargs["config"].masked_genomes) or {},
+    )
+    monkeypatch.setattr(
+        phase2,
+        "run_full_proteome_diamond",
+        lambda **kwargs: masks_seen.append(kwargs["masked_genomes"]) or {},
+    )
+    masked_genomes = frozenset({"GCA-000001-1", "EP00001"})
+
+    _run_phase2(
+        output_dir=tmp_path / "result",
+        masked=masked,
+        proteome=proteome,
+        database=database,
+        prototype_enabled=prototype_enabled,
+        reference_mask=ReferenceMask(genome_keys=masked_genomes),
+    )
+
+    assert masks_seen == [masked_genomes] * (2 if prototype_enabled else 1)
+
+
+@pytest.mark.parametrize("depth", [10, 37])
+@pytest.mark.parametrize("prototype_enabled", [False, True], ids=["legacy", "superset"])
+def test_phase2_searches_viral_hit_depth_hits_per_gene(
+    tmp_path: Path,
+    monkeypatch,
+    prototype_enabled: bool,
+    depth: int,
+) -> None:
+    masked = tmp_path / "masked.fna"
+    masked.write_text(">contig\n" + "ACGT" * 200 + "\n")
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome)
+    database = tmp_path / "combined.dmnd"
+    database.write_bytes(b"database")
+    depths_seen: list[int] = []
+    monkeypatch.setattr(
+        phase2,
+        "run_batched_diamond",
+        lambda **kwargs: depths_seen.append(kwargs["config"].viral_hit_depth) or {},
+    )
+    monkeypatch.setattr(
+        phase2,
+        "run_full_proteome_diamond",
+        lambda **kwargs: depths_seen.append(kwargs["max_target_seqs"]) or {},
+    )
+
+    _run_phase2(
+        output_dir=tmp_path / "result",
+        masked=masked,
+        proteome=proteome,
+        database=database,
+        prototype_enabled=prototype_enabled,
+        viral_hit_depth=depth,
+    )
+
+    assert depths_seen == ([10, depth] if prototype_enabled and depth > 10 else [depth])
+
+
+def test_phase2_gives_the_validated_viral_markers_to_seed_extension(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    masked = tmp_path / "masked.fna"
+    masked.write_text(">contig\n" + "ACGT" * 200 + "\n")
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome)
+    database = tmp_path / "combined.dmnd"
+    database.write_bytes(b"database")
+    seen: list[frozenset[str]] = []
+
+    class StopAfterExtension(Exception):
+        pass
+
+    def spy(**kwargs):
+        seen.append(kwargs["viral_marker_genes"])
+        assert kwargs["taxonomy"]["contig_3"].phase1_validated_viral_marker is True
+        assert kwargs["taxonomy"]["contig_4"].phase1_validated_viral_marker is False
+        assert "unsearched" not in kwargs["taxonomy"]
+        raise StopAfterExtension
+
+    markers = [
+        SimpleNamespace(query_porf="contig_3|aa1", validation_status="validated", hmm_target="GVOGm0003"),
+        SimpleNamespace(query_porf="contig_4", validation_status="supported", hmm_target="GVOGm0003"),
+    ]
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
+
+    monkeypatch.setattr(
+        phase2,
+        "run_batched_diamond",
+        lambda **_kwargs: {name: GeneTaxonomy(name, "contig", 200, 300) for name in ["contig_3", "contig_4"]},
+    )
+    monkeypatch.setattr(phase2, "extend_confirmed_seed", spy)
+
+    with pytest.raises(StopAfterExtension):
+        _run_phase2(
+            output_dir=tmp_path / "result",
+            masked=masked,
+            proteome=proteome,
+            database=database,
+            prototype_enabled=False,
+            validated_markers=markers,
+        )
+
+    assert seen == [frozenset({"contig_3"})]
+    import csv
+
+    with (tmp_path / "result/phase2/boundary_diamond/taxonomy_map.tsv").open() as handle:
+        rows = {row["porf_id"]: row for row in csv.DictReader(handle, delimiter="\t")}
+    assert rows["contig_3"]["phase1_validated_viral_marker"] == "1"
+    assert rows["contig_4"]["phase1_validated_viral_marker"] == "0"
 
 
 def test_superset_opt_in_round_trips_and_changes_provenance_fingerprint() -> None:

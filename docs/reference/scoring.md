@@ -151,7 +151,7 @@ to 0.06 for two genes or fewer. It is off by default.
 | Viral enrichment | Viral-gene fraction ≥ 0.15 | min(0.12, fraction × 0.4) |
 | Hallmark coherence | Compatible families beyond the first | See the table above |
 | Structural | Optional structural analysis | 0.15 × structural score |
-| EUK penalty | Fraction of genes with three eukaryotic hits at 70% identity or more and no viral hit, × 0.20; or, above 80% high-identity eukaryotic genes and below 10% viral genes, that fraction × 0.12. The larger term applies | up to −0.12 |
+| EUK penalty | Fraction of genes with three eukaryotic hits at 70% identity or more and neither same-gene Phase1 validated viral-marker evidence nor a qualifying viral hit in the top 10 or within `phase2.viral_hit_depth` (candidate default 50), × 0.20; or, above 80% high-identity eukaryotic genes and below 10% viral genes, that fraction × 0.12. The larger term applies. Both terms exclude qualifying top-10 or deeper viral hits and same-gene Phase1 validated viral markers. This corrects the broad penalty at depth 10 too; positive evidence is unchanged. Raw top1-host diagnostics are unchanged | up to −0.12 |
 | Size penalty | One, two or three genes, without full capsid credit (capsid fraction 1) | −0.15, −0.08 or −0.04 |
 
 A family vote from taxonomy needs a dominant-family fraction of 0.25 or more, and a
@@ -208,16 +208,28 @@ core count above.
 Capsid evidence in this table is the [`has_capsid_evidence` flag](../METHODS.md#capsid-evidence).
 It is separate from the capsid role in the catalogue.
 
-## Joint rescue of rejected seeds
+## Joint assessment of adjacent seeds
 
-One nonrecursive pass after gating can join two adjacent, disjoint, rejected LOW
-candidates of the same `NCLDV` or `MIRUS` class. Their searched envelopes must
-overlap, every gene in the joint interval must have taxonomy, and no host stop,
-host-positive run, third candidate or internal repeat boundary may separate them.
+One nonrecursive pass after gating can join two adjacent, disjoint candidates of
+the same `NCLDV` or `MIRUS` class. Both must be rejected LOW candidates with
+overlapping searched envelopes, or both must be accepted candidates separated
+by at most 5,000 bp. Every gene in the joint interval must have queried taxonomy,
+and an available cellular host model is required. Recorded stops, host-positive
+runs, third candidates and unresolved child-bounding repeat candidates can
+withhold a join. Accepted pairs also require a qualifying core hallmark in at
+least one child and no repeated strict core family between them.
+Eligibility and the repeat guard both require all confirmed-seed mappings, at
+least one hull gene, and queried taxonomy for every hull gene. This proof permits
+the DTR coverage to include the fixed hull's gene-free padding; it does not extend
+the outer search windows or erase incompleteness beyond the hull.
 The joined interval is scored from the start. It replaces its two children only
 when it passes the gate and the supplementary module counts at least one gene
-inside each child's confirmed seeds.
-[Bounded joint assessment](../METHODS.md#bounded-joint-assessment-of-rejected-seeds)
+inside each child's confirmed seeds for rejected pairs. For accepted pairs,
+each child must retain a qualifying hallmark or strict-module counted gene inside
+its original interval, and the union must retain both classes and the higher
+child tier. Failed unions leave the children unchanged. Independent neighbors
+without distinguishing evidence can still merge.
+[Bounded joint assessment](../METHODS.md#bounded-joint-assessment-of-adjacent-seeds)
 gives the full rules.
 
 ## Where each decision is recorded

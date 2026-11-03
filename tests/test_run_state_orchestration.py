@@ -15,7 +15,7 @@ from virosync.ablation import (
     AblationID,
     validate_ablation_events_bytes,
 )
-from virosync.config import MaskingBackend, MaskingConfig, MaskingFailurePolicy
+from virosync.config import MaskingBackend, MaskingConfig, MaskingFailurePolicy, PipelineConfig
 from virosync.orchestration._flows.single_genome import orchestrator
 from virosync.orchestration._flows.single_genome import (
     run_state as run_state_module,
@@ -65,6 +65,8 @@ from virosync.pipeline.phase0.masking import (
 )
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.reference_mask import ReferenceMask
+from virosync.utils import provenance
 
 _PREDICTION_HEADER = (
     "eve_id\tscaffold\tstart\tend\tconfidence_tier\tlength\t"
@@ -1029,6 +1031,125 @@ def test_phase3_outputs_receive_the_hmm_database_and_the_phase1_hits(
     inputs = mocked_pipeline.generate_outputs_kwargs[-1]["gene_function_inputs"]
     assert inputs.hmm_database == hmm_database
     assert inputs.model_hits == mocked_pipeline.output_dir / "phase1" / "hmm" / "hmm_hits_validated.tsv"
+
+
+def _use_genome_id(pipeline: _MockPipeline, tmp_path: Path, genome_id: str) -> None:
+    """Point the mocked run at an output directory named after ``genome_id``."""
+    pipeline.output_dir = tmp_path / "results" / genome_id
+    pipeline.identity["genome_id"] = genome_id
+    pipeline.identity["output_dir"] = str(pipeline.output_dir.resolve())
+    pipeline.fingerprint = compute_run_fingerprint(pipeline.identity)
+
+
+def _spy_on_phases(pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch) -> dict[str, ReferenceMask]:
+    """Record the reference mask each phase subflow receives."""
+    masks_seen: dict[str, ReferenceMask] = {}
+
+    def spy(name: str, phase):
+        def run_phase(**kwargs):
+            masks_seen[name] = kwargs["reference_mask"]
+            return phase(**kwargs)
+
+        return run_phase
+
+    monkeypatch.setattr(orchestrator, "_run_phase1_subflow", spy("phase1", pipeline._phase1))
+    monkeypatch.setattr(orchestrator, "_run_phase2_subflow", spy("phase2", pipeline._phase2))
+    monkeypatch.setattr(orchestrator, "_run_phase3_subflow", spy("phase3", pipeline._phase3))
+    return masks_seen
+
+
+def test_flow_gives_every_phase_the_reference_mask_of_the_genome_assembly(
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    genome_id = "GCA_052324655.1_ASM5232465v1_genomic"
+    _use_genome_id(mocked_pipeline, tmp_path, genome_id)
+    masks_seen = _spy_on_phases(mocked_pipeline, monkeypatch)
+
+    orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id=genome_id,
+        device="cpu",
+        resume=True,
+    )
+
+    expected = {"GCA-052324655-1", "GCA_052324655.1"}
+    assert {name: mask.genome_keys for name, mask in masks_seen.items()} == {
+        "phase1": expected,
+        "phase2": expected,
+        "phase3": expected,
+    }
+    assert len({id(mask) for mask in masks_seen.values()}) == 1
+
+
+def test_flow_adds_the_genomes_of_the_masked_taxa(
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    labels = tmp_path / "labels.tsv"
+    labels.write_text(
+        "EUK__EP00001\tEUK|NA|NA|NA|Collodictyonidae|Collodictyon|Collodictyon triciliatum\n"
+        "EUK-pEVE__EP00001\tEUK-pEVE|NA|NA|NA|Collodictyonidae-pEVE|Collodictyon-pEVE|Collodictyon triciliatum-pEVE\n"
+        "EUK__EP00002\tEUK|NA|NA|NA|Mantamonadidae|Mantamonas|Mantamonas plastica\n",
+        encoding="utf-8",
+    )
+    masks_seen = _spy_on_phases(mocked_pipeline, monkeypatch)
+    config = PipelineConfig().with_overrides(taxonomy_labels_file=labels, reference_mask_taxa=("collodictyon",))
+
+    orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id="demo",
+        config=config,
+    )
+
+    assert masks_seen["phase1"].genome_keys == {"EP00001"}
+    assert masks_seen["phase1"].taxa == ("collodictyon",)
+
+
+def test_flow_masks_nothing_when_the_own_assembly_mask_is_off(
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    genome_id = "GCA_052324655.1_ASM5232465v1_genomic"
+    _use_genome_id(mocked_pipeline, tmp_path, genome_id)
+    masks_seen = _spy_on_phases(mocked_pipeline, monkeypatch)
+
+    orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id=genome_id,
+        config=PipelineConfig().with_overrides(mask_own_assembly=False),
+    )
+
+    assert masks_seen["phase1"] == ReferenceMask()
+
+
+def test_flow_records_the_reference_mask_in_provenance(
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    genome_id = "GCF_000001215.4_Release_6"
+    _use_genome_id(mocked_pipeline, tmp_path, genome_id)
+    configurations: list[dict] = []
+    monkeypatch.setattr(
+        provenance,
+        "write_provenance",
+        lambda output_dir, config, input_genome=None: configurations.append(config),
+    )
+
+    orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id=genome_id,
+        device="cpu",
+        resume=True,
+    )
+
+    assert [config["reference_mask"] for config in configurations] == [
+        {
+            "n_genome_keys": 2,
+            "taxa": [],
+            "own_assembly_keys": ["GCF-000001215-4", "GCF_000001215.4"],
+        }
+    ]
 
 
 @pytest.mark.parametrize("filename", ["gene_functions.tsv", "gene_function_length_exclusions.tsv"])

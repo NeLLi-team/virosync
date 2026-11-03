@@ -6,6 +6,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Added
 
+- Reference masking: every run ignores DIAMOND hits to its own assembly, named by
+  `--self-reference-key` (config `host.self_reference_keys`) or else by a `GCA_` or
+  `GCF_` accession in the genome ID, so a genome's own host or `EUK-pEVE` proteins
+  never count as evidence about it. `--mask-taxon NAME`
+  (repeatable, config `host.reference_mask_taxa`) also masks every reference genome
+  of a taxon, for benchmark hosts, and `--no-mask-own-assembly` (config
+  `host.mask_own_assembly`) turns the own-assembly mask off. All three settings are part
+  of the run fingerprint, and `provenance.json` records the mask. See
+  [Reference masking](docs/METHODS.md#reference-masking).
 - An exact-model hallmark catalogue, `src/virosync/data/hallmark_panels.json`,
   with 332 links in 13 panels. It defines core and support-only families, capsid
   roles and excluded models for graduated scoring and spatial seeds. Its hash is
@@ -52,6 +61,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 
+- A gene is never host-like when a qualifying viral hit appears among its first
+  `phase2.viral_hit_depth` hits (default 50, at least 10) or Phase 1 validated its
+  protein as a viral marker. The Phase 2 gene search keeps that many hits per gene,
+  an independent original-limit search supplies unchanged `top10_*` fields, and seed extension, joint rescue, the
+  Phase 3 EUK penalty and the report gene map apply the rule. The setting is part of the run fingerprint, and
+  `taxonomy_map.tsv` gains separate `viral_hit_within_depth` and
+  `phase1_validated_viral_marker` flags. Deep-only hits veto host status without
+  becoming positive extension support. All qualifying viral evidence excludes an
+  actual broad-host-count contributor, including at depth10; raw host diagnostics
+  remain unchanged. The depth50 default is staged for evaluation. Phase 2 resume checkpoints are
+  recomputed after upgrade.
 - Count the reference class `EUK-pEVE` (viral-like proteins in eukaryotic
   assemblies, resource bundle v1.2.0) as viral and never as cellular or host.
   Both DIAMOND databases follow this rule: an `EUK-pEVE` hit with at least 25%
@@ -123,6 +143,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   map on any axes, for the manuscript figure.
 
 ### Fixed
+
+- The host signature is read top down from a tree of full-lineage hit weights:
+  the domain first, then each rank while one clade holds a majority. Clades
+  keep credit in proportion to their weight, and the first rank without a
+  majority stays in the signature, so a novel host keeps the levels where its
+  relatives split. A pooled organelle label can no longer take the host's species
+  rank and leave the host stop blind. Host signature models gain
+  `lineage_weights`, so runs from before this change need Phase 1 again. See the
+  host-lineage paragraph in [Methods](docs/METHODS.md).
 
 - Preserve every complete confirmed Phase 1 seed through outward extension,
   merging, repeat partitioning, rescue and resume. The host model only stops

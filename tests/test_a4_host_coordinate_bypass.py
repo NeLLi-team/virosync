@@ -78,7 +78,7 @@ def test_phase2_a4_bypasses_three_gene_stop_and_records_counterfactual(
             )
         ],
         validated_markers=[],
-        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}),
+        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}, lineage_weights={"euk|host": 1.0}),
         output_dir=tmp_path,
         genome_id="genome",
         config=config,

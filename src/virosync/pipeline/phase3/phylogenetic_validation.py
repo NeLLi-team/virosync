@@ -368,6 +368,7 @@ class PhylogeneticValidator:
         diamond_db: Path | None = None,
         threads: int = 16,
         min_region_size: int = 20000,
+        masked_genomes: frozenset[str] = frozenset(),
     ):
         """Initialize phylogenetic validator.
 
@@ -378,6 +379,7 @@ class PhylogeneticValidator:
             diamond_db: Path to Diamond database (optional)
             threads: Number of threads for external tools
             min_region_size: Minimum region size for GVClass (default 20kb)
+            masked_genomes: Genome keys whose reference rows the Diamond check drops
         """
         self.genome_path = Path(genome_path)
         self.work_dir = Path(work_dir)
@@ -385,6 +387,7 @@ class PhylogeneticValidator:
         self.diamond_db = Path(diamond_db) if diamond_db else None
         self.threads = threads
         self.min_region_size = min_region_size
+        self.masked_genomes = masked_genomes
 
         # Load genome sequences
         self._genome_seqs = None
@@ -684,6 +687,7 @@ class PhylogeneticValidator:
                 ],
                 extra_flags=["--sensitive"],
                 timeout=600,
+                masked_genomes=self.masked_genomes,
             )
         except (RuntimeError, subprocess.CalledProcessError) as exc:
             raise EvidenceToolError(f"Diamond failed for {eve_id}: {exc}") from exc

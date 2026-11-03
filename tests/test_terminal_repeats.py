@@ -1453,7 +1453,7 @@ def test_phase2_real_tir_uses_walked_authority_and_final_evidence(
             )
         ],
         validated_markers=[marker],
-        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}),
+        host_signature_model=HostSignatureModel(token_weights={"host": 1.0}, lineage_weights={"euk|host": 1.0}),
         output_dir=tmp_path,
         genome_id="genome",
         config=config,

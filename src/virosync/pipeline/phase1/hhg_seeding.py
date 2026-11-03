@@ -212,6 +212,7 @@ def _run_diamond_marker_search(
     target_faa: Path,
     output_file: Path,
     threads: int,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> None:
     tmp_dir = output_file.parent / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -244,6 +245,7 @@ def _run_diamond_marker_search(
         max_target_seqs=10,
         output_columns=["qseqid", "sseqid", "bitscore"],
         timeout=600,
+        masked_genomes=masked_genomes,
     )
 
 
@@ -255,6 +257,7 @@ def validate_hmm_hits_with_markers(
     top_k: int = 10,
     neighbor_genes: int = 5,
     output_dir: Path | None = None,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> list[HMMHit]:
     """Validate HMM hits with marker-specific FAA databases.
 
@@ -262,6 +265,8 @@ def validate_hmm_hits_with_markers(
       1) BLAST (Diamond) query pORFs against corresponding marker FAA.
       2) Accept if NCLDV, MIRUS, VP, or PLV appears in top-k hits.
       3) Keep only hits that also have another validated marker within +/- neighbor_genes.
+
+    ``masked_genomes`` are genome keys whose reference rows the searches drop.
     """
     if not hits:
         return []
@@ -312,6 +317,7 @@ def validate_hmm_hits_with_markers(
                     target_faa=marker_faa,
                     output_file=output_file,
                     threads=threads,
+                    masked_genomes=masked_genomes,
                 )
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 logger.warning("Diamond failed for %s: %s", marker, exc)
@@ -412,6 +418,7 @@ def validate_hmm_hits_with_combined_db(
     evalue: float = 1e-5,
     output_dir: Path | None = None,
     genome_fasta: Path | None = None,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> tuple[list[HMMHit], list[ValidatedMarkerHit]]:
     """Validate HMM hits using HMM-gated Diamond workflow (PIPELINE_HMM_GATED_PLAN.md Steps 2-3).
 
@@ -432,6 +439,7 @@ def validate_hmm_hits_with_combined_db(
         top_k: Number of top hits to analyze (default 10)
         evalue: E-value cutoff for Diamond
         output_dir: Optional directory for output files
+        masked_genomes: Genome keys whose reference rows the search drops
 
     Returns:
         Tuple of:
@@ -477,6 +485,7 @@ def validate_hmm_hits_with_combined_db(
                 threads=threads,
                 evalue=evalue,
                 max_seqs=top_k,
+                masked_genomes=masked_genomes,
             )
         except Exception as e:
             logger.warning(f"Diamond search failed: {e}")
@@ -1197,6 +1206,7 @@ def hhg_seeding_pipeline(
     assembly_mode: str | None = None,
     return_hits: bool = False,
     output_dir: Path | None = None,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> list[HHGSeed] | tuple[list[HHGSeed], list[HMMHit]]:
     """Full HHG seeding pipeline.
 
@@ -1236,6 +1246,7 @@ def hhg_seeding_pipeline(
         assembly_mode: Assembly mode name ("default", "fragmented", "relaxed", "strict").
                       If provided, overrides min_marker_types and related settings.
                       Use "fragmented" for MAGs and highly fragmented assemblies.
+        masked_genomes: Genome keys whose reference rows the marker validation drops.
 
     Returns:
         If return_hits=False: List of HHGSeed objects
@@ -1323,6 +1334,7 @@ def hhg_seeding_pipeline(
             top_k=marker_top_k,
             output_dir=output_dir,
             genome_fasta=genome_fasta,
+            masked_genomes=masked_genomes,
         )
         if not hits:
             logger.warning("No HMM hits after HMM-gated validation")
@@ -1339,6 +1351,7 @@ def hhg_seeding_pipeline(
             top_k=marker_top_k,
             neighbor_genes=marker_neighbor_genes,
             output_dir=output_dir,
+            masked_genomes=masked_genomes,
         )
         if not hits:
             logger.warning("No HMM hits after marker validation")

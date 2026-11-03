@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, TypeAlias
 
 from virosync.ablation import AblationID
-from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share
+from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
 from virosync.pipeline.phase1.marker_roles import DEFAULT_A2_SINGLE_MARKER_MIN_SCORE, decide_marker_hit_role
 from virosync.pipeline.phase1.seed_merger import (
     ConfirmedSeed,
@@ -16,7 +16,12 @@ from virosync.pipeline.phase1.seed_merger import (
     classify_marker_hits,
     validate_confirmed_seed_containment,
 )
-from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, has_identity_qualified_viral_hit, pORF
+from virosync.pipeline.phase2.boundary_diamond import (
+    GeneTaxonomy,
+    has_identity_qualified_viral_hit,
+    has_viral_hit_veto,
+    pORF,
+)
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
 if TYPE_CHECKING:
@@ -48,18 +53,26 @@ def extend_confirmed_seed(
     host_threshold: float,
     *,
     ml_support: frozenset[str] = frozenset(),
+    viral_marker_genes: frozenset[str] = frozenset(),
     disable_host_stop: bool = False,
 ) -> RefinedBoundary:
-    """Retain the core and commit only connected support inside the searched span."""
+    """Retain the core and commit only connected support inside the searched span.
+
+    A gene with a qualifying viral hit in its top 10 or within the search depth, or
+    with a validated Phase 1 viral marker (``viral_marker_genes``), never counts
+    toward a host stop. Deep-only hits are not positive extension support.
+    """
     seed = confirmed_seed_core(seed)
-    available = host_model is not None and bool(host_model.token_weights)
+    available = host_stop_available(host_model)
     coverage_complete = True
     evidence: list[GeneEvidence] = []
     for gene in genes:
         if gene.start >= envelope[1] or gene.end <= envelope[0]:
             continue
         tax = taxonomy.get(gene.id)
-        viral = tax is not None and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents)
+        marker = gene.id in viral_marker_genes or (tax is not None and tax.phase1_validated_viral_marker)
+        viral_veto = marker or (tax is not None and has_viral_hit_veto(tax))
+        viral = marker or (tax is not None and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents))
         host = bool(
             available
             and host_model is not None
@@ -67,7 +80,7 @@ def extend_confirmed_seed(
             and host_lineage_share(tax, host_model) >= host_threshold
         )
         coverage_complete &= tax is not None
-        evidence.append((gene, viral or gene.id in ml_support, host and not viral, tax is not None))
+        evidence.append((gene, viral or gene.id in ml_support, host and not viral_veto, tax is not None))
     left, left_reason, left_stop = _walk(seed.start, envelope[0], evidence, -1, disable_host_stop)
     right, right_reason, right_stop = _walk(seed.end, envelope[1], evidence, 1, disable_host_stop)
     return RefinedBoundary(

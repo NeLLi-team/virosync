@@ -51,20 +51,18 @@ PLACEHOLDER_TOKENS = {
 }
 
 
+def is_assigned_level(level: str, min_token_length: int) -> bool:
+    """Whether a lineage level names a clade rather than a placeholder."""
+    token = level.strip()
+    folded = token.lower()
+    return len(token) >= min_token_length and folded not in PLACEHOLDER_TOKENS and not folded.endswith("_x")
+
+
 def iter_taxonomy_tokens(taxonomy_string: str, min_token_length: int) -> list[str]:
     """Split taxonomy lineage and filter placeholder/short tokens."""
     if not taxonomy_string:
         return []
-    tokens = []
-    for level in taxonomy_string.split("|"):
-        token = level.strip()
-        if len(token) < min_token_length:
-            continue
-        token_lower = token.lower()
-        if token_lower in PLACEHOLDER_TOKENS or token_lower.endswith("_x"):
-            continue
-        tokens.append(token)
-    return tokens
+    return [level.strip() for level in taxonomy_string.split("|") if is_assigned_level(level, min_token_length)]
 
 
 def _fallback_prefix_tokens(org_id: str, min_token_length: int) -> list[str]:

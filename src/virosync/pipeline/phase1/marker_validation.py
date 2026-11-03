@@ -291,6 +291,7 @@ def run_diamond_on_hmm_hits(
     max_seqs: int = 10,
     search_backend: str = "diamond",
     sensitive: bool = False,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> Path:
     """Run sequence search on HMM-hit pORFs only (NOT all pORFs).
 
@@ -307,6 +308,7 @@ def run_diamond_on_hmm_hits(
         search_backend: "diamond" (the only supported backend)
         sensitive: Use Diamond --sensitive mode for better detection of
             divergent homologs (slower but more sensitive)
+        masked_genomes: Genome keys whose reference rows are dropped from the hits
 
     Returns:
         Path to output TSV file
@@ -333,6 +335,7 @@ def run_diamond_on_hmm_hits(
         evalue=evalue,
         max_target_seqs=max_seqs,
         extra_flags=extra_flags,
+        masked_genomes=masked_genomes,
     )
 
     logger.info(f"Diamond search complete: {output_tsv}")

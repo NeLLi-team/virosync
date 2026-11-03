@@ -7,7 +7,7 @@ import pytest
 from virosync.ablation import AblationID
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
-from virosync.pipeline.phase2.boundary_diamond import GenomeDiamondQuery, SeedGeneMapping, pORF
+from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, GenomeDiamondQuery, SeedGeneMapping, pORF
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 from virosync.pipeline.phase3.joint_seed_rescue import eligible_joint_pairs
@@ -40,22 +40,47 @@ def rejected(boundary: RefinedBoundary) -> VerificationResult:
     )
 
 
+def repeat_context(length: int) -> dict:
+    """Provide explicit searched coverage for planted sequence controls."""
+    gene = pORF("coverage", "s", 200, 210)
+    return {
+        "query": GenomeDiamondQuery(
+            all_porf_ids=[gene.id],
+            seed_gene_mappings={
+                name: SeedGeneMapping(name, "s", 0, length, flank_start_bp=0, flank_end_bp=length)
+                for name in ("a", "b")
+            },
+        ),
+        "proteome_index": {"s": [gene]},
+        "taxonomy": {gene.id: GeneTaxonomy(gene.id, "s", gene.start, gene.end)},
+    }
+
+
 @pytest.fixture
-def pair_inputs() -> dict:
+def pair_inputs(monkeypatch) -> dict:
+    from virosync.pipeline import host_signatures
+
+    monkeypatch.setattr(
+        host_signatures, "_TAXONOMY_LOOKUP", host_signatures.TaxonomyLabelLookup({"EUK__host": "EUK|host"})
+    )
     boundaries = [child("left", 100, 1000), child("right", 1500, 2500)]
     query = GenomeDiamondQuery(
+        all_porf_ids=["left_gene", "right_gene"],
         seed_gene_mappings={
             "left": SeedGeneMapping("left", "s", 100, 1000, flank_start_bp=0, flank_end_bp=1800),
             "right": SeedGeneMapping("right", "s", 1500, 2500, flank_start_bp=800, flank_end_bp=3000),
-        }
+        },
     )
     return dict(
         boundaries=boundaries,
         results=[rejected(b) for b in boundaries],
         query=query,
-        proteome_index={},
-        taxonomy={},
-        host_model=HostSignatureModel(token_weights={"host": 1.0}),
+        proteome_index={"s": [pORF("left_gene", "s", 200, 400), pORF("right_gene", "s", 1600, 1800)]},
+        taxonomy={
+            "left_gene": GeneTaxonomy("left_gene", "s", 200, 400),
+            "right_gene": GeneTaxonomy("right_gene", "s", 1600, 1800),
+        },
+        host_model=HostSignatureModel(token_weights={"host": 1.0}, lineage_weights={"euk|host": 1.0}),
         host_threshold=0.35,
         accepted_ids=frozenset(),
     )
@@ -136,10 +161,80 @@ def test_gap_uses_three_host_rule(pair_inputs: dict, monkeypatch, count: int, vi
         taxonomy[genes[-1].id].top10_pidents = [30]
     monkeypatch.setattr(joint_seed_rescue, "host_lineage_share", lambda gene, model: 0.5)
     pair_inputs.update(
-        proteome_index={"s": genes}, taxonomy=taxonomy, host_model=SimpleNamespace(token_weights={"host": 1})
+        proteome_index={"s": genes},
+        taxonomy=taxonomy,
+        host_model=SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
     )
     pair_inputs["query"].all_porf_ids = list(taxonomy)
     assert bool(eligible_joint_pairs(**pair_inputs)) is not blocked
+
+
+def test_a_signature_without_a_lineage_abstains(pair_inputs: dict) -> None:
+    pair_inputs["host_model"] = HostSignatureModel(
+        token_weights={"plastid": 1.0},
+        lineage_weights={"plastid|plastid|plastid": 1.0},
+    )
+
+    assert eligible_joint_pairs(**pair_inputs) == []
+
+
+@pytest.mark.parametrize("weight_mode", ["rank", "bitscore"])
+@pytest.mark.parametrize(
+    "target,count,viral_last,blocked",
+    [
+        ("EUK__HOST", 2, False, False),
+        ("EUK__HOST", 3, False, True),
+        ("EUK__HOST", 3, True, False),
+        ("EUK__OTHER", 3, False, False),
+        ("PLASTID__HOST", 3, False, False),
+    ],
+)
+def test_gap_barrier_uses_the_real_lineage_share(
+    pair_inputs: dict, weight_mode: str, target: str, count: int, viral_last: bool, blocked: bool
+) -> None:
+    from virosync.pipeline import host_signatures
+    from virosync.pipeline.host_signatures import TaxonomyLabelLookup, build_host_signature_model
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
+
+    labels = {
+        "EUK__HOST": "EUK|Alpha|Sharedclass|Sharedorder|NA|NA|Host one",
+        "EUK__OTHER": "EUK|Beta|Sharedclass|Sharedorder|NA|NA|Other one",
+        "PLASTID__HOST": "PLASTID|PLASTID|PLASTID|PLASTID|PLASTID|PLASTID|PLASTID",
+    }
+    marker = {
+        "hmm_target": "COG0085",
+        "top10_prefixes": "EUK__",
+        "top10_targets": "EUK__HOST|p1",
+        "top10_bitscores": "100",
+        "top10_pidents": "90",
+        "top10_evalues": "1e-40",
+    }
+    host_signatures.set_taxonomy_lookup(TaxonomyLabelLookup(labels))
+    model = build_host_signature_model([marker], host_prefixes={"EUK__"}, weight_mode=weight_mode)
+    genes = [pORF(f"g{i}", "s", 1050 + i * 100, 1100 + i * 100) for i in range(count)]
+    taxonomy = {
+        gene.id: GeneTaxonomy(
+            gene.id,
+            "s",
+            gene.start,
+            gene.end,
+            top10_prefixes=[target.split("__")[0] + "__"],
+            top10_targets=[f"{target}|p"],
+            top10_pidents=[90.0],
+            top10_bits=[100.0],
+        )
+        for gene in genes
+    }
+    if viral_last:
+        taxonomy[genes[-1].id].top10_prefixes = ["NCLDV__"]
+        taxonomy[genes[-1].id].top10_pidents = [30.0]
+    pair_inputs.update(proteome_index={"s": genes}, taxonomy=taxonomy, host_model=model)
+    pair_inputs["query"].all_porf_ids = list(taxonomy)
+
+    pairs = eligible_joint_pairs(**pair_inputs)
+
+    host_signatures.set_taxonomy_lookup(None)
+    assert bool(pairs) is not blocked
 
 
 def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path) -> None:
@@ -252,13 +347,19 @@ def test_native_internal_repeat_veto_and_outer_pair_allowed() -> None:
     sequence, _ = _adjacent_repeat_sequence()
     children = (child("a", 150, 400), child("b", 570, 820))
     markers = [_Marker("s", 220, 270, "a"), _Marker("s", 640, 690, "b")]
-    assert not has_clear_internal_boundary_scan(children, sequence, markers, 5000)
+    assert not has_clear_internal_boundary_scan(children, sequence, markers, 5000, **repeat_context(len(sequence)))
     outer_sequence, _ = _planted_repeat()
     close_children = (child("a", 170, 240), child("b", 260, 350))
     close_markers = [_Marker("s", 190, 210, "a"), _Marker("s", 280, 310, "b")]
-    assert has_clear_internal_boundary_scan(close_children, outer_sequence, close_markers, 5000)
-    assert not has_clear_internal_boundary_scan(close_children, None, close_markers, 5000)
-    assert not has_clear_internal_boundary_scan(close_children, outer_sequence, [], 5000)
+    assert has_clear_internal_boundary_scan(
+        close_children, outer_sequence, close_markers, 100, **repeat_context(len(outer_sequence))
+    )
+    assert not has_clear_internal_boundary_scan(
+        close_children, None, close_markers, 5000, **repeat_context(len(outer_sequence))
+    )
+    assert not has_clear_internal_boundary_scan(
+        close_children, outer_sequence, [], 5000, **repeat_context(len(outer_sequence))
+    )
 
 
 def test_pairing_cap_is_unknown_and_blocks_rescue(monkeypatch) -> None:
@@ -278,11 +379,13 @@ def test_pairing_cap_is_unknown_and_blocks_rescue(monkeypatch) -> None:
         sequence,
         [_Marker("s", 190, 210, "a"), _Marker("s", 280, 310, "b")],
         5000,
+        **repeat_context(len(sequence)),
     )
 
 
 def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path, monkeypatch) -> None:
     import os
+    import random
     import sys
     from pathlib import Path
 
@@ -292,7 +395,9 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
 
     monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     genome = tmp_path / "genome.fna"
-    genome.write_text(">s\n" + "A" * 8000 + "\n")
+    genome.write_text(">s\n" + "".join(random.Random(21).choices("ACGT", k=8000)) + "\n")
+    config = PipelineConfig()
+    config.phase1.extension_kb = 1
     children = (child("a", 0, 2000), child("b", 3000, 7000))
     children[0].gc_deviation = 999
     children[0].candidate_id = "stale_child_identity"
@@ -322,10 +427,11 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
         ),
     ]
     query = GenomeDiamondQuery(
+        all_porf_ids=["a", "b"],
         seed_gene_mappings={
             "a": SeedGeneMapping("a", "s", 0, 2000, flank_start_bp=0, flank_end_bp=5000),
             "b": SeedGeneMapping("b", "s", 3000, 7000, flank_start_bp=1000, flank_end_bp=8000),
-        }
+        },
     )
     prepared = _prepare_joint_boundaries(
         [children],
@@ -333,9 +439,9 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
         masked_path=genome,
         validated_markers=markers,
         boundary_diamond_query=query,
-        boundary_taxonomy_map={},
-        proteome_index={},
-        config=PipelineConfig(),
+        boundary_taxonomy_map={"a": GeneTaxonomy("a", "s", 500, 800), "b": GeneTaxonomy("b", "s", 4000, 4300)},
+        proteome_index={"s": [pORF("a", "s", 500, 800), pORF("b", "s", 4000, 4300)]},
+        config=config,
     )
     assert len(prepared) == 1
     boundary, retained_children = prepared[0]
@@ -351,7 +457,6 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
     import logging
 
     from virosync.orchestration._flows.single_genome.phase3 import _verify_native_boundaries
-    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
 
     proteome = tmp_path / "proteome.faa"
     proteome.write_text(
@@ -417,8 +522,8 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
             masked_path=genome,
             validated_markers=markers,
             boundary_diamond_query=query,
-            boundary_taxonomy_map={},
-            proteome_index={},
+            boundary_taxonomy_map=taxonomy,
+            proteome_index={"s": genes},
             config=config,
         )
         == []
@@ -438,12 +543,14 @@ def test_internal_repeat_endpoint_in_seed_padding_still_separates() -> None:
         sequence,
         [_Marker("s", 220, 270, "a"), _Marker("s", 640, 690, "b")],
         5000,
+        **repeat_context(len(sequence)),
     )
     assert children[1].confirmed_seeds == (ConfirmedSeed("b", "s", 400, 900),)
 
 
 @pytest.mark.parametrize("both_pass", [False, True])
-def test_competition_counts_only_fully_supported_native_results(both_pass: bool) -> None:
+@pytest.mark.parametrize("accepted", [False, True])
+def test_competition_counts_only_fully_supported_native_results(both_pass: bool, accepted: bool) -> None:
     from test_eve_confidence_scoring import _supplementary_gene
 
     from virosync.orchestration._flows.single_genome.phase3 import _replace_accepted_joints
@@ -490,7 +597,13 @@ def test_competition_counts_only_fully_supported_native_results(both_pass: bool)
     calculate_eve_confidence(first, 0)
     calculate_eve_confidence(second, 0)
     originals = [rejected(c) for c in children]
-    selected = _replace_accepted_joints(originals, [first, second], joints, ablation_id=AblationID.A0)
+    selected = _replace_accepted_joints(
+        originals,
+        [first, second],
+        joints,
+        ablation_id=AblationID.A0,
+        accepted_ids=frozenset(result.eve_id for result in originals) if accepted else frozenset(),
+    )
     assert selected == originals if both_pass else selected == [originals[2], first]
 
 
@@ -508,6 +621,7 @@ def test_failed_required_repeat_scan_abstains(monkeypatch) -> None:
         "A" * 4000,
         [_Marker("s", 400, 500, "a"), _Marker("s", 2400, 2500, "b")],
         5000,
+        **repeat_context(4000),
     )
 
 
@@ -556,6 +670,7 @@ def test_ambiguous_intercore_dna_abstains(gap_base: str) -> None:
         sequence,
         [_Marker("s", 400, 500, "a"), _Marker("s", 2400, 2500, "b")],
         5000,
+        **repeat_context(len(sequence)),
     )
 
 
@@ -609,6 +724,8 @@ def test_active_selection_rejection_preserves_children_despite_raw_gate_pass() -
 
 
 def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) -> None:
+    import random
+
     from test_terminal_repeats import _planted_repeat
 
     from virosync.config import PipelineConfig
@@ -616,14 +733,17 @@ def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) ->
     from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 
     sequence, _ = _planted_repeat()
+    rng = random.Random(381)
+    sequence = "".join(rng.choices("ACGT", k=6000)) + sequence + "".join(rng.choices("ACGT", k=6000))
     genome = tmp_path / "joint.fna"
     genome.write_text(f">s\n{sequence}\n", encoding="utf-8")
-    children = (child("a", 150, 200), child("b", 300, 350))
+    children = (child("a", 6150, 6200), child("b", 6300, 6350))
     query = GenomeDiamondQuery(
+        all_porf_ids=["a", "b"],
         seed_gene_mappings={
             name: SeedGeneMapping(name, "s", start, end, flank_start_bp=0, flank_end_bp=len(sequence))
-            for name, start, end in (("a", 150, 200), ("b", 300, 350))
-        }
+            for name, start, end in (("a", 6150, 6200), ("b", 6300, 6350))
+        },
     )
     markers = [
         ValidatedMarkerHit(
@@ -646,7 +766,7 @@ def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) ->
             0,
             1,
         )
-        for name, start, end in (("a", 160, 180), ("b", 310, 330))
+        for name, start, end in (("a", 6160, 6180), ("b", 6310, 6330))
     ]
     prepared = _prepare_joint_boundaries(
         [children],
@@ -654,11 +774,89 @@ def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) ->
         masked_path=genome,
         validated_markers=markers,
         boundary_diamond_query=query,
-        boundary_taxonomy_map={},
-        proteome_index={"s": []},
+        boundary_taxonomy_map={"a": GeneTaxonomy("a", "s", 6160, 6180), "b": GeneTaxonomy("b", "s", 6310, 6330)},
+        proteome_index={"s": [pORF("a", "s", 6160, 6180), pORF("b", "s", 6310, 6330)]},
         config=PipelineConfig(),
     )
     assert len(prepared) == 1
     joint = prepared[0][0]
-    assert (joint.start, joint.end, joint.tir_status, joint.tir_boundary_override) == (150, 350, "ambiguous", False)
+    assert (joint.start, joint.end, joint.tir_status, joint.tir_boundary_override) == (6150, 6350, "ambiguous", False)
     assert joint.confirmed_seeds == children[0].confirmed_seeds + children[1].confirmed_seeds
+
+
+@pytest.mark.parametrize(
+    ("deep_viral", "viral_marker", "blocked"),
+    [(False, False, True), (True, False, False), (False, True, False)],
+    ids=["no_veto", "viral_hit_within_depth", "validated_viral_marker"],
+)
+def test_gap_barrier_yields_to_a_deep_viral_hit_or_a_validated_viral_marker(
+    pair_inputs: dict, monkeypatch, deep_viral: bool, viral_marker: bool, blocked: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
+    from virosync.pipeline.phase3 import joint_seed_rescue
+
+    genes = [pORF(f"g{i}", "s", 1050 + i * 100, 1100 + i * 100) for i in range(3)]
+    taxonomy = {g.id: GeneTaxonomy(g.id, "s", g.start, g.end) for g in genes}
+    taxonomy["g2"].viral_hit_within_depth = deep_viral
+    monkeypatch.setattr(joint_seed_rescue, "host_lineage_share", lambda gene, model: 0.5)
+    pair_inputs.update(
+        proteome_index={"s": genes},
+        taxonomy=taxonomy,
+        host_model=SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
+        viral_marker_genes=frozenset({"g2"}) if viral_marker else frozenset(),
+    )
+    pair_inputs["query"].all_porf_ids = list(taxonomy)
+
+    assert bool(eligible_joint_pairs(**pair_inputs)) is not blocked
+
+
+def test_phase3_flow_gives_the_validated_viral_markers_to_the_joint_rescue_barrier(tmp_path, monkeypatch) -> None:
+    import logging
+    from types import SimpleNamespace
+
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase3
+
+    class StopAfterEligibility(Exception):
+        pass
+
+    seen: dict[str, object] = {}
+
+    def capture(*_args, **kwargs):
+        seen.update(kwargs)
+        raise StopAfterEligibility
+
+    def marker(porf: str, status: str, target: str) -> SimpleNamespace:
+        return SimpleNamespace(query_porf=porf, validation_status=status, hmm_target=target)
+
+    monkeypatch.setattr(phase3, "eligible_joint_pairs", capture)
+    monkeypatch.setattr(phase3, "_run_interproscan", lambda **_kwargs: {})
+    monkeypatch.setattr(phase3, "_precompute_tmvec", lambda **_kwargs: (None, None))
+    monkeypatch.setattr(phase3, "_load_or_classify_jelly_roll", lambda **_kwargs: {})
+    monkeypatch.setattr(phase3, "_verify_native_boundaries", lambda *_args, **_kwargs: [])
+    markers = [marker("g1|aa1", "validated", "GVOGm0003"), marker("g2", "unvalidated", "GVOGm0003")]
+
+    with pytest.raises(StopAfterEligibility):
+        phase3._run_phase3_subflow(
+            masked_path=tmp_path / "masked.fna",
+            proteome_path=tmp_path / "proteome.faa",
+            validated_markers=markers,
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
+            host_signatures=set(),
+            host_signature_model_payload=None,
+            refined_boundaries=[],
+            boundary_taxonomy_map={},
+            boundary_diamond_query=None,
+            proteome_index={},
+            merged_seeds=[],
+            output_dir=tmp_path,
+            config=PipelineConfig(),
+            validated_hits_tsv=tmp_path / "validated_hits.tsv",
+            logger=logging.getLogger(__name__),
+            raw_genome_path=tmp_path / "genome.fna",
+        )
+
+    assert seen["viral_marker_genes"] == frozenset({"g1"})

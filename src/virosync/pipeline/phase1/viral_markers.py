@@ -17,8 +17,14 @@ References:
 
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from virosync.pipeline.host_signatures import is_host_marker
+
+if TYPE_CHECKING:
+    from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 
 CRESS_MARKER_MODELS = frozenset(f"VS{model_number:06d}" for model_number in range(792, 809))
 CRESS_MIN_PIDENT = 25.0
@@ -375,6 +381,27 @@ def is_seed_blocked_model(model_name: str) -> bool:
     """
     model_id = re.split(r"[_.]", model_name, maxsplit=1)[0]
     return model_id.upper() in SEED_BLOCKED_MARKER_MODELS
+
+
+def _is_cellular_marker_model(model_name: str) -> bool:
+    """Return whether a model is a host kinase or a cellular housekeeping marker."""
+    return is_seed_blocked_model(model_name) or is_host_marker(model_name)
+
+
+def viral_marker_gene_ids(markers: "Iterable[ValidatedMarkerHit]") -> frozenset[str]:
+    """Return the IDs of genes whose Phase 1 marker hit is a validated viral marker.
+
+    Marker validation found a viral reference at the identity floor for these hits
+    (status ``validated``). Hits of cellular models are left out, as are
+    ``validated_novel``, ``supported`` and ``unvalidated`` hits.
+    """
+    return frozenset(
+        base_marker_gene_id(marker.query_porf)
+        for marker in markers
+        if marker.validation_status == "validated"
+        and not _is_cellular_marker_model(marker.hmm_target)
+        and base_marker_gene_id(marker.query_porf)
+    )
 
 
 # Marker prefix patterns for classification (based on >95% purity seed allowlist)

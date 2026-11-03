@@ -113,6 +113,26 @@ The core [direct-repeat assessment](../METHODS.md#direct-repeat-assessment) runs
 by default and has no separate enable flag. It reads unmasked host sequence;
 `--skip-masking` controls preprocessing and does not disable this assessment.
 
+### Reference masking
+
+Reference masking drops search hits to chosen reference genomes. It is not the
+repeat masking of `--skip-masking`. By default a run does not use the proteins
+of its own assembly as evidence. [Reference masking](../METHODS.md#reference-masking)
+describes the mask. Changing any mask option or its config value
+(`host.reference_mask_taxa`, `host.mask_own_assembly`, `host.self_reference_keys`)
+starts the genome again.
+
+| Option | Behavior |
+| --- | --- |
+| `--mask-taxon NAME` | Ignore every reference genome whose lineage names NAME at any rank, ignoring case. Repeat the option for several taxa. Needs the taxonomy labels file. Default: none. |
+| `--mask-own-assembly`, `--no-mask-own-assembly` | Ignore or keep reference hits to the assembly named by explicit self keys, or by a `GCA_` or `GCF_` accession in the input file name when no keys are supplied. Default: on. |
+| `--self-reference-key KEY` | Name a reference key of the genome's own proteomes, such as `GCA-000002455-1` or a JGI, IMG or GWH key. Repeat the option for several keys. The keys replace the accession read from the input file name. Config: `host.self_reference_keys`. |
+
+Explicit self keys require exactly one input genome and own-assembly masking on.
+Exact NCBI keys include both their hyphen and underscore accession forms; other
+keys remain exact. Empty keys, protein IDs, placeholder taxa and reference-class
+tags are rejected.
+
 <!-- cli-reference:virosync-orchestrate -->
 ## Orchestration commands
 

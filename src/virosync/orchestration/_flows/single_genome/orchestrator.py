@@ -45,11 +45,13 @@ from virosync.output_contract import (
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
     OUTPUT_SCHEMA_VERSION,
 )
+from virosync.pipeline.host_signatures import TaxonomyLabelLookup
 from virosync.pipeline.phase0.masking import (
     MaskingResult,
     load_masking_result,
 )
 from virosync.pipeline.phase3.gene_functions import GeneFunctionInputs
+from virosync.pipeline.reference_mask import ReferenceMask, build_reference_mask
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, validate_path_component
 from virosync.utils.prodigal_runtime import resolve_prodigal_executable
@@ -664,6 +666,7 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase2/refined_state.json",
             "phase2/resume_state.json",
             "phase2/superset_diamond/full_proteome.tsv",
+            "phase2/superset_viral_veto/full_proteome.tsv",
         ),
         3: ("phase3/ablation_events.json",),
     }[phase]
@@ -996,6 +999,7 @@ def _publish_a1_seed_surface(
     masked_path: Path,
     proteome_path: Path,
     taxonomy_labels_file: Path | None,
+    host_credit_threshold: float,
     seed_marker_allowlist: list[str] | None,
     extended_output: bool,
     export_all_eve_sequences: bool,
@@ -1066,6 +1070,7 @@ def _publish_a1_seed_surface(
             genome_id=genome_id,
             taxonomy_labels_file=taxonomy_labels_file,
             logger=logger,
+            host_credit_threshold=host_credit_threshold,
         )
     )
     persisted_summary = _summarize_prediction_outputs(
@@ -1187,6 +1192,20 @@ def _revalidate_completed_run(
         raise
     completed_artifacts["tsv_invariant_report"] = invariant_report_path
     return report
+
+
+def _build_reference_mask(genome_id: str, config: PipelineConfig) -> ReferenceMask:
+    """Build the run's reference mask from the genome ID and the configured taxa."""
+    host = config.host
+    labels_file = config.databases.taxonomy_labels_file
+    labels = TaxonomyLabelLookup.load(labels_file) if host.reference_mask_taxa and labels_file else None
+    return build_reference_mask(
+        genome_id,
+        mask_own_assembly=host.mask_own_assembly,
+        taxa=host.reference_mask_taxa,
+        labels=labels,
+        self_keys=host.self_reference_keys,
+    )
 
 
 def _pin_cuda_device(device: str, logger) -> None:
@@ -1615,6 +1634,14 @@ def _single_genome_flow_impl(
         )
     report_progress(20, "phase 0 complete")
 
+    reference_mask = _build_reference_mask(genome_id, config)
+    logger.info(
+        "Reference mask: %d genome keys (own assembly %s, taxa %s)",
+        len(reference_mask.genome_keys),
+        list(reference_mask.own_assembly_keys) or "none",
+        list(reference_mask.taxa) or "none",
+    )
+
     # === PHASE 1: Seeding ===
     phase1_result = _run_phase1_subflow(
         masked_path=masked_path,
@@ -1628,6 +1655,7 @@ def _single_genome_flow_impl(
         logger=logger,
         config_fingerprint=config_fingerprint,
         resume_authorized=1 in reusable_phases,
+        reference_mask=reference_mask,
     )
     report_progress(45, "phase 1 complete")
 
@@ -1684,6 +1712,7 @@ def _single_genome_flow_impl(
             masked_path=masked_path,
             proteome_path=proteome_path,
             taxonomy_labels_file=databases.taxonomy_labels_file,
+            host_credit_threshold=config.phase2.host_trim_score_threshold,
             seed_marker_allowlist=databases.seed_marker_allowlist,
             extended_output=phase3.extended_output,
             export_all_eve_sequences=phase3.export_all_eve_sequences,
@@ -1731,6 +1760,7 @@ def _single_genome_flow_impl(
             logger=logger,
             config_fingerprint=config_fingerprint,
             resume_authorized=2 in reusable_phases,
+            reference_mask=reference_mask,
         )
     report_progress(75, "phase 2 complete")
 
@@ -1812,6 +1842,7 @@ def _single_genome_flow_impl(
         validated_hits_tsv=validated_hits_tsv,
         logger=logger,
         resume_authorized=False,
+        reference_mask=reference_mask,
     )
     report_progress(90, "phase 3 complete")
 
@@ -2029,6 +2060,7 @@ def _single_genome_flow_impl(
             genome_id=genome_id,
             taxonomy_labels_file=databases.taxonomy_labels_file,
             logger=logger,
+            host_credit_threshold=config.phase2.host_trim_score_threshold,
         )
     )
 
@@ -2154,6 +2186,7 @@ def _single_genome_flow_impl(
                 "masking": masking,
                 "masking_status_path": str(masking_result.status_path),
                 "masking_status_sha256": masking_result.status_sha256,
+                "reference_mask": reference_mask.to_record(),
             },
             input_genome=genome_path,
         )

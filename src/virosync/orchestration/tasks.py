@@ -207,6 +207,7 @@ def hhg_seeding_task(
     assembly_mode: str | None = None,
     hmm_chunk_size: int | None = None,
     output_dir: Path | None = None,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> tuple[list, list]:
     """Run HHG seeding strategy.
 
@@ -223,6 +224,7 @@ def hhg_seeding_task(
         threads: Number of threads for HMM search
         assembly_mode: Assembly mode (default, fragmented, relaxed, strict)
         hmm_chunk_size: Chunk size for HMM processing
+        masked_genomes: Genome keys whose reference rows the marker validation drops
 
     Returns:
         Tuple of (hhg_seeds, hhg_hits)
@@ -266,6 +268,7 @@ def hhg_seeding_task(
             assembly_mode=assembly_mode,
             return_hits=True,
             output_dir=output_dir,
+            masked_genomes=masked_genomes,
         )
 
     # Handle both return formats
@@ -330,6 +333,7 @@ def marker_validation_task(
     taxonomy_labels_file: Path | None = None,
     taxonomy_weight_mode: str = "rank",
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> list:
     """Run HMM-gated Diamond validation workflow (Steps 2-3).
 
@@ -347,6 +351,7 @@ def marker_validation_task(
         max_seqs: Top-K hits to retrieve (default 10)
         novel_criteria: Optional HMM-only novel-marker acceptance criteria
         taxonomy_labels_file: Optional path to taxonomy labels TSV for host fingerprinting
+        masked_genomes: Genome keys whose reference rows the Diamond search drops
 
     Returns:
         List of ValidatedMarkerHit objects
@@ -415,6 +420,7 @@ def marker_validation_task(
             max_seqs=max_seqs,
             search_backend=search_backend,
             sensitive=True,
+            masked_genomes=masked_genomes,
         )
 
         # Step 3: Filter validated markers based on top-10 taxonomy
@@ -519,10 +525,12 @@ def gene_taxonomy_batch_task(
     marker_validation_dir: Path | None = None,
     hmm_hits_file: Path | None = None,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[list, dict]]:
     """Run Diamond gene taxonomy for all candidates in one batch using genome-wide prodigal genes.
 
     Uses the Tier 2 database (combined_proteome.dmnd) for all-gene taxonomy.
+    ``masked_genomes`` are genome keys whose reference rows the search drops.
     """
     from virosync.orchestration.utils import run_with_monitor
     from virosync.pipeline.phase3.gene_taxonomy import run_gene_taxonomy_diamond_batch
@@ -538,6 +546,7 @@ def gene_taxonomy_batch_task(
         threads=threads,
         high_pident_euk_threshold=high_pident_host_threshold,
         search_backend=search_backend,
+        masked_genomes=masked_genomes,
     )
 
 
@@ -613,6 +622,7 @@ def verify_eve_task(
     precomputed_tmvec: dict | None = None,
     taxonomy_labels_file: Path | None = None,
     ablation_id: AblationID = AblationID.A0,
+    masked_genomes: frozenset[str] = frozenset(),
 ):
     """Verify a single EVE candidate using evidence synthesis.
 
@@ -646,6 +656,7 @@ def verify_eve_task(
         diamond_db: Path to Diamond database
         max_porfs: Maximum genes to return (default 10000, effectively no limit for TMVec)
         hmm_database: Optional HMM database path (used to locate marker annotations)
+        masked_genomes: Genome keys whose reference rows the phylogenetic Diamond check drops
 
     Returns:
         VerificationResult with final status
@@ -721,6 +732,7 @@ def verify_eve_task(
         host_signature_score_threshold=host_signature_score_threshold,
         host_prefixes=host_prefixes,
         host_label=host_label,
+        masked_genomes=masked_genomes,
     )
 
     output_dir = work_dir.parent
@@ -942,6 +954,7 @@ def verify_eve_candidates_batched_task(
     taxonomy_labels_file: Path | None = None,
     max_workers: int = 32,
     ablation_id: AblationID = AblationID.A0,
+    masked_genomes: frozenset[str] = frozenset(),
 ):
     """Verify ALL EVE candidates in parallel using ThreadPoolExecutor.
 
@@ -1031,6 +1044,7 @@ def verify_eve_candidates_batched_task(
         host_signature_score_threshold=host_signature_score_threshold,
         host_prefixes=host_prefixes,
         host_label=host_label,
+        masked_genomes=masked_genomes,
     )
 
     # Ensure taxonomy lookup is set for host signature fallback scoring

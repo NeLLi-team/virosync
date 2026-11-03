@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 # Single source of truth: jupytext percent-format notebook source.
 _SOURCE = Path(__file__).parent / "eve_analysis.py"
 _KERNEL = "python3"
+# The kernel starts in the output directory, where a relative PYTHONPATH finds nothing.
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ def generate_eve_report(
     output_dir: Path,
     genome_id: str,
     tax_labels_path: Path | None = None,
+    host_credit_threshold: float = 0.35,
 ) -> EveReportPaths:
     """Render the per-genome EVE analysis notebook.
 
@@ -53,6 +56,8 @@ def generate_eve_report(
     parameters = {
         "RESULTS_DIR": str(output_dir),
         "GENOME_ID": genome_id,
+        "HOST_CREDIT_THRESHOLD": host_credit_threshold,
+        "VIROSYNC_SRC": str(_PACKAGE_ROOT),
     }
     if tax_labels_path:
         parameters["TAX_LABELS_PATH"] = str(Path(tax_labels_path).resolve())

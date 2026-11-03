@@ -91,6 +91,11 @@ host:
   prefixes:
     - ARC__
   high_pident_threshold: 70.0
+  # Reference masking (docs/METHODS.md, "Reference masking"): searches ignore hits
+  # to the genome's own assembly and to the genomes of the listed taxa.
+  mask_own_assembly: true
+  reference_mask_taxa: []
+  self_reference_keys: []
 
 phase1:
   rebuild_db: false
@@ -140,6 +145,9 @@ phase2:
   diamond_top_k: 10
   diamond_chunk_size: 10000
   diamond_random_seed: 42
+  # Independent veto-search depth when >10; original top10 search stays unchanged.
+  # A qualifying hit (>=25% identity) vetoes host status. At least 10.
+  viral_hit_depth: 50
 
 phase3:
   host_signature_evidence_threshold: 0.3

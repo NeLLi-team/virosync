@@ -152,7 +152,7 @@ artifact versions:
 | Public output schema | 12 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
 | Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
-| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v7` |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v8` |
 | Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v7` |
 | Accepted and detailed prediction artifacts | `canonical-predictions-v8` and `detailed-predictions-v9` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
@@ -240,7 +240,9 @@ viral hits are all `EUK-pEVE`, or when no viral hit qualifies and its best hit i
 (viral-like, eukaryotic genome)". A qualifying lineage hit gives the gene the
 color of that lineage instead. The category distribution shows `EUK-pEVE` genes
 as a segment of their own. The report never takes an `EUK-pEVE` hit, or a
-lineage rank that ends in `-pEVE`, as host.
+lineage rank that ends in `-pEVE`, as host. It never labels a gene as host lineage
+when the gene has a qualifying viral hit within the Phase 2 search depth
+(`phase2.viral_hit_depth`) or a same-gene Phase1 validated viral marker, whatever its best hit.
 
 ## MCP fold classification
 
@@ -436,7 +438,8 @@ candidates.
 
 Marker validation and host-signature estimation read the top 10 DIAMOND hits of
 each marker-domain query against the marker database. They use DIAMOND's rows
-as they are. The host-signature model does not create seeds.
+as they are, after [reference masking](#reference-masking). The host-signature
+model does not create seeds.
 
 Boundary refinement, gene-level taxonomy and the Phase 3 DIAMOND check search the
 combined proteome. That database holds the same subject ID several times, several
@@ -456,9 +459,76 @@ order:
    count as different genomes.
 3. The first N hits, where N is the requested number of targets.
 
+The original Phase 2 gene search retains its existing hit limit and ranking.
+When `phase2.viral_hit_depth` is greater than 10 (candidate default 50), a separate
+search retrieves veto evidence at that depth. Each gene's `top10_*` fields and
+host-lineage share use only the original search, including its original native
+fetch limit, masking and per-genome filtering. Depth 10 needs no second search. The gene also records `viral_hit_within_depth`
+(a column of `taxonomy_map.tsv`): whether a viral hit with at least 25% identity
+appears among the original hits or the first `phase2.viral_hit_depth` hits of the
+separate veto search. This matters when an element integrated in
+an ancestor of a host genus: related species can carry host-labelled copies
+that fill the top 10 and push viral references down.
+
 The filter rewrites the DIAMOND table in place with the same columns. The
 all-against-all search among EVE core proteins in the Syntviz figure is not a
 top-hit search and uses no filter.
+
+### Reference masking
+
+A genome's own proteins are never evidence about that genome. The reference
+databases hold the proteomes of genomes that ViroSync later screens, and of
+benchmark hosts, and label their endogenous viral elements as host or `EUK-pEVE`.
+A hit to the genome under test would hide or inflate an element. Each genome run
+therefore builds one mask and applies it to every DIAMOND search that feeds
+taxonomy or validation: marker validation, HMM-hit seeding, boundary refinement
+(including the superset search), gene-level taxonomy and the Phase 3 DIAMOND
+check. The Syntviz search among EVE core proteins searches no reference database
+and uses no mask. The databases themselves stay complete. This is not the repeat
+masking of Phase 0.
+
+The mask is a set of genome keys, the part of a subject ID between `LABEL__` and
+`|`. A hit is masked when its genome key is in the set, whatever its label, so the
+`EUK`, `EUK-pEVE`, `MITO`, `PLASTID` and viral rows of one genome all go.
+Canonical keys match exactly: `foo` and `foo_bar` name different references.
+Legacy EukProt marker IDs of the form `EP` plus five digits and an underscore
+name suffix also match their bare EukProt key, for example
+`EP00151_Rhizophagus_irregularis` matches `EP00151`. Other keys do not lose
+underscore suffixes. Two sources add keys:
+
+- **Own assembly** (`mask_own_assembly`, on by default). The reference keys in
+  `self_reference_keys` name the genome's own proteomes, for example
+  `GCA-000002455-1` or a JGI, IMG or GWH key; a `LABEL__` head is removed.
+  Exact NCBI keys also include their hyphen/underscore accession twin
+  (`GCA-000002455-1` and `GCA_000002455.1`). Explicit self keys
+  require own-assembly masking and a single input genome. Multi-genome runs
+  cannot share them. Without them, a GenBank or RefSeq accession in the genome
+  ID names the assembly: `GCA_`
+  or `GCF_`, nine digits, then a dot or an underscore and the version. The genome
+  ID is the input file name without its extension. The mask then holds the
+  accession in label form (`GCA_052324655.1` becomes `GCA-052324655-1`, the key of
+  nuclear proteomes) and with a dot, which keys organelle rows such as
+  `MITO__GCF_000001215.4`. A genome ID without an accession and no listed keys
+  masks nothing here.
+- **Taxa** (`reference_mask_taxa`, empty by default). Every genome in the taxonomy
+  labels whose lineage holds a listed name at any rank is masked. Names compare
+  without case and surrounding blanks, and must match a whole rank name. A genus
+  mask therefore also masks the species of the genus, and a species mask a single
+  species. A name that matches no genome gives a warning. Organelle rows carry no
+  lineage, so a taxon mask reaches them only when they share the genome key.
+
+The mask removes rows before the search keeps its hits. With a mask, DIAMOND
+fetches ten times the requested number of targets. The searches that keep one hit
+per genome apply the mask first and then their rules above. The marker-database
+searches keep the first N unmasked rows in DIAMOND's order. When masked rows fill
+the whole fetch, a query keeps fewer than N hits. With an empty mask, every search
+runs and returns as it does without masking.
+
+The mask is part of the run identity: changing `mask_own_assembly`,
+`reference_mask_taxa`, `self_reference_keys` or the genome ID starts the genome
+again. `provenance.json`
+records the number of masked genome keys, the taxa and the own-assembly keys under
+`configuration.reference_mask`.
 
 ### Seed markers
 
@@ -530,8 +600,13 @@ one to four unsupported genes, the reported limit is the search envelope.
 Three consecutive exterior genes matching the host-signature model at the
 configured host-lineage-share threshold (default 0.35), with no qualifying viral
 support in those genes, stop
-extension before the first gene in the run. A single eukaryotic best hit does
-not establish this stop. A missing model or missing taxonomy is reported as
+extension before the first gene in the run. A gene has qualifying viral support
+when a viral hit with at least 25% identity sits in its top 10 or anywhere within
+the first `phase2.viral_hit_depth` hits, or when Phase 1 validated its protein as a
+viral marker (status `validated`, from a model that is not a host kinase, COG or
+BUSCO model). Such a gene is never host-like for this stop. A single eukaryotic best hit does
+not establish this stop. A missing model, a model without a host lineage or
+missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
 A new exterior endpoint must retain the complete supported gene. A gene that
@@ -549,6 +624,22 @@ candidate interval or reduction fields. Integration-gene scans use the retained
 interval plus the configured Phase 1 extension flank.
 Host-lineage share measures the hit weight within the host's lineage; it does
 not compare a gene's hit composition with the pooled model by weighted Jaccard.
+The host signature is read top down from the host-signature model, which keeps
+the hit weight of each full lineage. The domain (EUK, BAC or ARC) with the most
+hit weight is the host domain, each hit counted once, so MITO, PLASTID, viral
+and other-domain lineages never enter. Each rank below it keeps every clade
+with credit in proportion to its weight, relative to the largest clade, and the
+walk continues under that largest clade only while it holds more than half of
+the named weight. The first rank without such a majority stays in the
+signature, and the walk stops below it, so a lineage reaches species only where
+the signature supports one. An unassigned level neither votes nor contradicts,
+and a rank is skipped where the unassigned weight that names a lower rank
+exceeds the largest named clade. A hit earns, at each rank, the credit of its
+clade weighted by the share of the largest clade at that rank, and the sum is
+divided by the total of those shares; credit ends below the first clade that is
+not the largest of its rank. Without any named cellular rank, for example with
+organelle-only hits, a signature has no host lineage, and the host stop and
+joint rescue are unavailable.
 Standalone checkpoint audits must load the configured taxonomy labels before
 scoring; normal fresh and resumed Phase 1 runs initialize this lookup.
 The configured taxonomy weighting applies to these hit shares, including the
@@ -1068,28 +1159,38 @@ Cached full-pORF hits and the native region search carry the same coverage.
 Physical scaffold, start and end come from the parsed proteome header and region
 mapping; query coverage comes only from measured `GeneDiamondHit.qcov` values.
 
-### Bounded joint assessment of rejected seeds
+### Bounded joint assessment of adjacent seeds
 
 After ordinary Phase 3 scoring, one nonrecursive pass may assess disjoint,
-adjacent rejected LOW candidates of the same effective NCLDV or MIRUS class.
-Their stored `flank_start_bp`/`flank_end_bp` taxonomy-search envelopes must
-overlap, every overlapping ORF
+adjacent candidates of the same effective NCLDV or MIRUS class. A pair must
+contain either two rejected LOW candidates or two accepted candidates of any
+tier. Mixed pairs are excluded. Rejected pairs require overlapping stored
+`flank_start_bp`/`flank_end_bp` taxonomy-search envelopes. Accepted pairs may
+cross an exterior gap of at most 5,000 bp without envelope overlap. Every overlapping ORF
 in the joint hull must have been queried, and all original confirmed seed
-objects remain intact. A missing or empty host model or ambiguous/missing DNA
-in the inter-core gap prevents rescue. Recorded host stops and three consecutive
-host-positive genes between the candidates, without qualifying viral support, block
-a pair. A third
+objects remain intact. A missing host model, a host model without a host lineage,
+or ambiguous/missing DNA in the inter-core gap prevents rescue. Recorded host stops and three consecutive
+host-positive genes between the candidates, without qualifying viral support (as defined
+for the host stop), block a pair. A third
 seed or accepted-call conflict blocks rescue. After full native reassessment,
 all passing proposals that share a child with another passing proposal are
 discarded. Unsupported neighbors do not block an otherwise eligible proposal.
 
-The supplementary module must select three independent physical
+For rejected pairs, the supplementary module must select three independent physical
 genes, with at least one selected gene wholly inside each child's original
 confirmed cores. Only then may this assessment cross a support gap. Two
 separately supported multi-marker groups remain separate: both children must
 retain a native `capsid_partner_5kb` or `three_core_15kb` witness matching their
 effective panel to trigger this veto. Native distinct-marker and distinct-locus
 requirements apply; a duplicated single hallmark or lone capsid does not suffice.
+
+An accepted pair needs a qualifying selected-panel core hallmark in at least one
+child. Repeated PolB, A32, RNAPL, TFIIB, TopoII or VLTF3 between the children
+blocks the pair. Catalogue model roles distinguish the large and small subunits
+within the MIRUS RNAP family; MCP repetition alone does not block a pair.
+After rescoring, each accepted child must contribute a qualifying selected-panel
+hallmark or a strict-module counted gene wholly inside its original interval.
+The union must retain both child classes and at least the higher child tier.
 
 The native terminal inverted-repeat detector scans raw sequence across the hull
 and its configured Phase 1 context (5 kb by default), clipped to the contig.
@@ -1099,16 +1200,61 @@ endpoint may fall in padded core sequence; the veto never trims a core. A pair
 enclosing the whole hull does not. A missing, failed or pairing-capped scan blocks
 rescue.
 
+Fresh direct-repeat assessment uses the report detector's 50 bp and 90% identity
+limits. The repeat guard independently requires mappings for every confirmed seed,
+at least one predicted gene overlapping the hull, and queried taxonomy for every
+overlapping gene. Only then does its coverage combine the real flank envelopes
+with the fixed hull, including gene-free seed padding. Child endpoints and outer
+search windows remain unchanged; clipping beyond the hull stays recorded.
+A candidate enclosing a child's validated marker span, with its gap-side
+arm separating the sibling's markers, withholds the join as unresolved repeat
+evidence. Internal repeats that do not enclose the marker span do not suffice.
+An incomplete gap-side window or capped search withholds a join; clipping or
+ambiguity confined to the far-side window and the TIR display-alignment cap do not.
+These candidate vetoes do not establish separate viral insertions.
+
 Joint coordinates receive native classification, composition, repeat evidence,
-annotation, and verification again. Rejected children are replaced only when the
+annotation, and verification again. Children are replaced only when the
 joint result passes the per-candidate active native acceptance selection, including
-rescue-marker containment, and the joint supplementary check. Third-candidate
+rescue-marker containment, and the joint child-contribution check. Third-candidate
 overlap exclusion and noncompeting fixed hulls prevent arbitration conflicts.
-A rejected joint leaves its ordinary children intact.
+A rejected joint leaves its ordinary children intact. Proposals use only the
+original boundaries, and successful unions are not paired again. Two independent
+neighbors with complementary evidence and no detected separating feature can
+still merge; this rule does not establish biological continuity in that case.
 The complete confirmed seeds and JSON `joint_seed_provenance` retain child
-coordinates, stop reasons, original score, tier and effective class in final
+coordinates, stop reasons, original score, tier, effective class and qualified
+families in final
 profiles and the detailed table. Boundary serialization retains proposal
 provenance and all cores; Phase 3 derives proposals again from ordinary
 boundaries on an authorized resume.
 Other candidates retain ordinary scoring. Changed source requires a fresh native
 run; old completion fingerprints do not authorize reuse.
+
+### Candidate viral-depth host veto
+
+The staged depth50 candidate keeps host weighting and positive Phase3 viral
+fractions based on the existing top10 evidence. A deeper-only qualifying hit
+vetoes host stopping and the EUK penalty but is not new positive extension
+support. Top10 viral evidence, existing ML support and same-gene Phase1
+validated viral markers can support extension. The host signature remains
+trained from marker housekeeping evidence.
+
+`phase1_validated_viral_marker` is a separate boolean in searched-gene taxonomy
+records, full Phase2 checkpoints and taxonomy TSV exports. It requires exact
+Phase1 `validated` status and excludes COG, BUSCO and blocked kinase models;
+hallmark eligibility is not a substitute. No taxonomy row is created for an
+unsearched marker gene. Both viral flags veto the host gene-map category, while
+the report retains the observed top-hit origin and leaves unsearched genes
+explicitly unsearched. This candidate is prepared for evaluation, not an
+authenticated production-default approval.
+
+The broad EUK penalty excludes an interior host-count contributor with any
+qualifying top10 viral hit, deeper qualifying viral hit, or Phase1 validated
+viral marker. This intentionally corrects the broad penalty even at depth10;
+search ranking and positive evidence remain unchanged. Exported raw top1-host
+counts remain unchanged; only the count used for that penalty is reduced.
+Phase3 summary records carry `broad_host_counted` to identify actual raw-count
+contributors under the configured host label. Legacy per-region records use
+their existing `is_high_pident_euk` membership. Missing membership does not
+authorize subtraction; unsearched and flanking records are not contributors.

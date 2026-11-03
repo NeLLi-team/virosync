@@ -1679,6 +1679,8 @@ class EvidenceSynthesizerConfig:
     use_phylogenetic_validation: bool = False
     gvclass_db: Path | None = None
     diamond_db: Path | None = None
+    # Genome keys whose reference rows the phylogenetic Diamond check drops.
+    masked_genomes: frozenset[str] = frozenset()
 
     # InterProScan settings
     use_interproscan: bool = False
@@ -1990,27 +1992,58 @@ def _euk_penalty(
         euk_penalty = 0.0
 
     if result.gene_count > 0:
-        broad_euk_fraction = result.genes_with_high_pident_euk / result.gene_count
+        broad_euk_fraction = _broad_euk_penalty_gene_count(result) / result.gene_count
         if broad_euk_fraction > 0.80 and viral_fraction < 0.10:
             broad_euk_penalty = min(broad_euk_fraction * 0.12, 0.12)
             euk_penalty = max(euk_penalty, broad_euk_penalty)
     return euk_penalty
 
 
+def _broad_euk_penalty_gene_count(result: VerificationResult) -> int:
+    """Exclude qualifying viral evidence from counted hosts, preserving raw diagnostics."""
+    exempt = 0
+    for value in result.gene_taxonomy_records:
+        record = getattr(value, "__dict__", value)
+        if record.get("is_flanking", False) or not record.get("has_hit", True):
+            continue
+        # Each classifier declares which records contributed to its raw count.
+        if not record.get("broad_host_counted", record.get("is_high_pident_euk", False)):
+            continue
+        if (
+            record.get("has_viral", False)
+            or record.get("viral_hit_within_depth", False)
+            or record.get("phase1_validated_viral_marker", False)
+        ):
+            exempt += 1
+    return max(0, result.genes_with_high_pident_euk - exempt)
+
+
 def _high_confidence_euk_gene_count(records: list[GeneTaxonomyRecord]) -> int:
-    """Count interior genes with three high-identity EUK hits and no viral hit."""
+    """Count interior genes with three high-identity EUK hits and no viral hit.
+
+    A qualifying viral hit within the search depth also keeps a gene out: copies of
+    an EVE in related eukaryotes can fill the top hits above the viral references.
+    """
     count = 0
     for record in records:
         if isinstance(record, dict):
             is_flanking = record.get("is_flanking", False)
             has_hit = record.get("has_hit", False)
-            has_viral = record.get("has_viral", False)
+            has_viral = (
+                record.get("has_viral", False)
+                or record.get("viral_hit_within_depth", False)
+                or record.get("phase1_validated_viral_marker", False)
+            )
             prefixes = record.get("top10_prefixes", [])
             identities = record.get("top10_pidents", [])
         else:
             is_flanking = getattr(record, "is_flanking", False)
             has_hit = getattr(record, "has_hit", False)
-            has_viral = getattr(record, "has_viral", False)
+            has_viral = (
+                getattr(record, "has_viral", False)
+                or getattr(record, "viral_hit_within_depth", False)
+                or getattr(record, "phase1_validated_viral_marker", False)
+            )
             prefixes = getattr(record, "top10_prefixes", [])
             identities = getattr(record, "top10_pidents", [])
         if is_flanking or not has_hit or has_viral:
@@ -2384,6 +2417,7 @@ class EvidenceSynthesizer:
                 gvclass_db=self.config.gvclass_db,
                 diamond_db=self.config.diamond_db,
                 threads=self.config.threads,
+                masked_genomes=self.config.masked_genomes,
             )
 
         return self._phylogenetic_validator

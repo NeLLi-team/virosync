@@ -121,6 +121,7 @@ def _taxonomy(porf_id: str, pident: float) -> GeneTaxonomy:
         has_ncldv_mirus=True,
         has_vp_plv=False,
         has_viral=True,
+        viral_hit_within_depth=True,
         has_hit=True,
     )
 
@@ -280,6 +281,34 @@ def test_phase2_resume_state_round_trip_preserves_optional_none_values() -> None
     loaded = phase2_resume_state_from_document(phase2_resume_state_to_document(state))
 
     assert loaded == state
+
+
+def test_phase2_resume_state_round_trips_both_values_of_the_depth_flag() -> None:
+    state = _state()
+    state.boundary_taxonomy_map["porf-under"].viral_hit_within_depth = False
+
+    loaded = phase2_resume_state_from_document(phase2_resume_state_to_document(state))
+
+    assert {key: gene.viral_hit_within_depth for key, gene in loaded.boundary_taxonomy_map.items()} == {
+        "porf-under": False,
+        "porf-over": True,
+    }
+
+
+def test_phase2_resume_state_without_the_depth_flag_fails_loudly() -> None:
+    document = phase2_resume_state_to_document(_state())
+    del document["boundary_taxonomy_map"][0]["value"]["viral_hit_within_depth"]
+
+    with pytest.raises(Phase2ResumeStateError, match="missing=.*viral_hit_within_depth"):
+        phase2_resume_state_from_document(document)
+
+
+def test_phase2_resume_state_rejects_the_schema_that_predates_the_depth_flag() -> None:
+    document = phase2_resume_state_to_document(_state())
+    document["schema_version"] = 7
+
+    with pytest.raises(Phase2ResumeStateError, match="unsupported.*schema_version"):
+        phase2_resume_state_from_document(document)
 
 
 def test_phase2_resume_state_rejects_pre_repeat_schema() -> None:
@@ -498,3 +527,15 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
     _assert_phase3_inputs_equal(original, resumed)
     assert result.proteome_index is proteome_index
     assert result.goto_phase3 is True
+
+
+def test_phase1_validated_marker_is_strictly_preserved_on_resume():
+    state = _state()
+    state.boundary_taxonomy_map["porf-under"].phase1_validated_viral_marker = True
+    doc = phase2_resume_state_to_document(state)
+    loaded = phase2_resume_state_from_document(doc)
+    assert loaded.boundary_taxonomy_map["porf-under"].phase1_validated_viral_marker is True
+    assert loaded.boundary_taxonomy_map["porf-over"].phase1_validated_viral_marker is False
+    del doc["boundary_taxonomy_map"][0]["value"]["phase1_validated_viral_marker"]
+    with pytest.raises(Phase2ResumeStateError, match="phase1_validated_viral_marker"):
+        phase2_resume_state_from_document(doc)

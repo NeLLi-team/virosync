@@ -5,7 +5,6 @@ import io
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -86,7 +85,7 @@ def test_run_batch_python_writes_summary_and_preserves_input_order(
     results = python_runner.run_batch_python(
         genome_paths=inputs,
         output_base_dir=tmp_path / "out",
-        config=SimpleNamespace(),
+        config=python_runner.PipelineConfig(),
         max_concurrent_genomes=2,
         retry_delay_seconds=0,
         effective_config={"schema_version": 1, "effective_config_sha256": "abc"},
@@ -156,7 +155,7 @@ def test_output_parent_segment_fails_before_executor_or_output_creation(
         python_runner.run_batch_python(
             genome_paths=[input_path],
             output_base_dir=Path("results") / ".." / "out",
-            config=SimpleNamespace(),
+            config=python_runner.PipelineConfig(),
             max_concurrent_genomes=1,
             effective_config={"schema_version": 1},
         )
@@ -190,7 +189,7 @@ def test_unsafe_stem_fails_before_executor_or_output_creation(
         python_runner.run_batch_python(
             genome_paths=[input_path],
             output_base_dir=output_root,
-            config=SimpleNamespace(),
+            config=python_runner.PipelineConfig(),
             max_concurrent_genomes=1,
         )
 
@@ -223,7 +222,7 @@ def test_duplicate_genome_ids_list_every_source_and_create_no_output(
         python_runner.run_batch_python(
             genome_paths=paths,
             output_base_dir=output_root,
-            config=SimpleNamespace(),
+            config=python_runner.PipelineConfig(),
             max_concurrent_genomes=2,
         )
 
@@ -250,7 +249,7 @@ def test_preexisting_output_symlink_is_rejected_before_worker(
         python_runner.run_batch_python(
             genome_paths=[input_path],
             output_base_dir=output_root,
-            config=SimpleNamespace(),
+            config=python_runner.PipelineConfig(),
             max_concurrent_genomes=1,
         )
 
@@ -289,7 +288,7 @@ def test_deterministic_invariant_error_is_not_retried(
 
     result = python_runner._run_one_genome(
         spec=spec,
-        config=SimpleNamespace(),
+        config=python_runner.PipelineConfig(),
         retries=3,
         retry_delay_seconds=60,
     )
@@ -357,7 +356,7 @@ def test_non_mapping_worker_result_still_writes_one_failed_row(
     results = python_runner.run_batch_python(
         genome_paths=[input_path],
         output_base_dir=tmp_path / "out",
-        config=SimpleNamespace(),
+        config=python_runner.PipelineConfig(),
         max_concurrent_genomes=1,
     )
 

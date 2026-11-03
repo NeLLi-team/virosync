@@ -30,6 +30,7 @@ from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
 from virosync.pipeline.phase1.viral_markers import get_assembly_mode
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
+from virosync.pipeline.reference_mask import ReferenceMask
 from virosync.utils.atomic_write import atomic_write_context
 
 from .manifest import (
@@ -169,6 +170,7 @@ def _run_phase1_subflow(
     config_fingerprint: str | None = None,
     resume_authorized: bool = False,
     threads: int | None = None,
+    reference_mask: ReferenceMask = ReferenceMask(),
 ) -> Phase1Result | Phase1Terminal:
     """Phase 1: Seeding (HMM scan -> marker validation -> region assembly).
 
@@ -186,6 +188,7 @@ def _run_phase1_subflow(
         genome_id: Genome identifier for logging
         config: Resolved pipeline configuration.
         logger: Logger instance
+        reference_mask: Genomes whose reference rows the marker searches drop.
 
     Returns:
         Inputs for Phase 2, or a terminal public flow result.
@@ -445,6 +448,7 @@ def _run_phase1_subflow(
         assembly_mode=assembly_mode if assembly_mode != "default" else None,
         hmm_chunk_size=hmm_chunk_size,
         output_dir=output_dir / "phase1" / "hmm",
+        masked_genomes=reference_mask.genome_keys,
     )
     logger.info(f"HMM hits: {len(hhg_hits)}")
 
@@ -490,6 +494,7 @@ def _run_phase1_subflow(
                 genome_id=genome_id,
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
+                host_credit_threshold=config.phase2.host_trim_score_threshold,
             ),
         }
         _write_empty_run_log(
@@ -562,6 +567,7 @@ def _run_phase1_subflow(
             require_cluster=novel_marker_require_cluster,
             initial_window_bp=initial_window_bp,
         ),
+        masked_genomes=reference_mask.genome_keys,
     )
     if frameshift_hits:
         from Bio import SeqIO
@@ -609,6 +615,7 @@ def _run_phase1_subflow(
                 require_cluster=novel_marker_require_cluster,
                 initial_window_bp=initial_window_bp,
             ),
+            masked_genomes=reference_mask.genome_keys,
         )
         confirmed_frameshift_markers = select_confirmed_frameshift_markers(
             rescue_validation,
@@ -835,6 +842,7 @@ def _run_phase1_subflow(
                 genome_id=genome_id,
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
+                host_credit_threshold=config.phase2.host_trim_score_threshold,
             ),
         }
         _write_empty_run_log(

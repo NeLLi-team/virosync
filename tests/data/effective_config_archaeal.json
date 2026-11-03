@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "456e4029a5dcc778738346629904036ef7f4dccea256cc4dc0b2a17fbfef32d9",
+  "effective_config_sha256": "938a68c74e9cedbc8ee36c697ac70de0e39c361ef384c78af76a09c9d1c2f2f9",
   "execution": {
     "masking": {
       "backend": "off",
@@ -85,9 +85,12 @@
   "host": {
     "high_pident_threshold": 70.0,
     "label": "ARC",
+    "mask_own_assembly": true,
     "prefixes": [
       "ARC__"
-    ]
+    ],
+    "reference_mask_taxa": [],
+    "self_reference_keys": []
   },
   "optional_features": {
     "boltz": {
@@ -172,7 +175,8 @@
     "taxonomy_ml_neighbor_window": 3,
     "taxonomy_ml_threshold": 0.5,
     "taxonomy_weight_mode": "rank",
-    "terminal_repeat_enabled": true
+    "terminal_repeat_enabled": true,
+    "viral_hit_depth": 50
   },
   "phase3": {
     "boltz_max_seq_len": 1000,

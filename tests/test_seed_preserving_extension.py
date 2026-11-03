@@ -9,7 +9,7 @@ from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed
 
 
-def gene(name, start, end, *, viral=False, host=False):
+def gene(name, start, end, *, viral=False, host=False, deep_viral=False):
     return SimpleNamespace(
         id=name,
         porf_id=name,
@@ -17,18 +17,22 @@ def gene(name, start, end, *, viral=False, host=False):
         end=end,
         top10_prefixes=["NCLDV__"] if viral else ["EUK__"],
         top10_pidents=[30.0],
+        viral_hit_within_depth=viral or deep_viral,
+        phase1_validated_viral_marker=False,
         host=host,
     )
 
 
-def grow(genes, *, start=1000, end=2000):
+def grow(genes, *, start=1000, end=2000, viral_marker_genes=frozenset()):
     seed = MergedSeed(
         "s", start, end, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", start, end),)
     )
     taxonomy = {g.id: g for g in genes}
-    model = SimpleNamespace(token_weights={"host": 1})
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
     with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda g, m: float(g.host)):
-        return extend_confirmed_seed(seed, genes, taxonomy, (0, 10000), model, 0.35)
+        return extend_confirmed_seed(
+            seed, genes, taxonomy, (0, 10000), model, 0.35, viral_marker_genes=viral_marker_genes
+        )
 
 
 def test_gene_free_padding_and_original_identity_survive():
@@ -51,6 +55,67 @@ def test_three_host_genes_stop_remote_viral_support():
     assert boundary.end == 2200
     assert boundary.right_stop_reason == "host_stop"
     assert boundary.right_stop == 2300
+
+
+def test_three_host_like_genes_with_a_deep_viral_hit_do_not_stop_extension():
+    boundary = grow(
+        [
+            gene("v", 2100, 2200, viral=True),
+            gene("h1", 2300, 2400, host=True, deep_viral=True),
+            gene("h2", 2500, 2600, host=True, deep_viral=True),
+            gene("h3", 2700, 2800, host=True, deep_viral=True),
+            gene("remote", 2900, 3100, viral=True),
+        ]
+    )
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
+
+
+def test_one_deep_viral_gene_breaks_the_host_run():
+    boundary = grow(
+        [
+            gene("v", 2100, 2200, viral=True),
+            gene("h1", 2300, 2400, host=True),
+            gene("h2", 2500, 2600, host=True, deep_viral=True),
+            gene("h3", 2700, 2800, host=True),
+            gene("remote", 2900, 3100, viral=True),
+        ]
+    )
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
+
+
+def test_three_host_like_genes_that_are_validated_viral_markers_do_not_stop_extension():
+    boundary = grow(
+        [
+            gene("v", 2100, 2200, viral=True),
+            gene("h1", 2300, 2400, host=True),
+            gene("h2", 2500, 2600, host=True),
+            gene("h3", 2700, 2800, host=True),
+            gene("remote", 2900, 3100, viral=True),
+        ],
+        viral_marker_genes=frozenset({"h1", "h2", "h3"}),
+    )
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
+
+
+def test_a_validated_viral_marker_gene_counts_as_connected_support():
+    boundary = grow([gene("m", 2100, 2200, host=True)], viral_marker_genes=frozenset({"m"}))
+    assert boundary.end == 2200
+
+
+def test_a_viral_marker_in_the_middle_of_a_host_run_breaks_it():
+    boundary = grow(
+        [
+            gene("h1", 2300, 2400, host=True),
+            gene("m", 2500, 2600, host=True),
+            gene("h3", 2700, 2800, host=True),
+            gene("remote", 2900, 3100, viral=True),
+        ],
+        viral_marker_genes=frozenset({"m"}),
+    )
+    assert boundary.end == 3100
 
 
 def test_isolated_host_and_euk_best_hit_can_be_connected():
@@ -158,7 +223,7 @@ def test_ablation_disables_host_stop_without_losing_core():
         gene("h3", 2500, 2600, host=True),
         gene("v", 2700, 2800, viral=True),
     ]
-    model = SimpleNamespace(token_weights={"host": 1})
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
     with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda g, m: float(g.host)):
         boundary = extend_confirmed_seed(
             seed, genes, {g.id: g for g in genes}, (0, 10000), model, 0.35, disable_host_stop=True
@@ -275,7 +340,7 @@ def test_ml_positive_host_genes_without_viral_identity_still_form_host_stop():
             genes,
             {g.id: g for g in genes},
             (0, 10000),
-            SimpleNamespace(token_weights={"h": 1}),
+            SimpleNamespace(token_weights={"h": 1}, lineage_weights={"euk|h": 1.0}),
             0.35,
             ml_support=frozenset({"ml", "h1", "h2", "h3"}),
         )
@@ -408,10 +473,20 @@ def test_independent_seed_outputs_can_overlap_without_loss_or_stop_crossing():
         side_effect=lambda record, model: float(record.host),
     ):
         left = extend_confirmed_seed(
-            left_seed, genes, taxonomy, (0, 6000), SimpleNamespace(token_weights={"host": 1}), 0.35
+            left_seed,
+            genes,
+            taxonomy,
+            (0, 6000),
+            SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
+            0.35,
         )
         right = extend_confirmed_seed(
-            right_seed, genes, taxonomy, (0, 6000), SimpleNamespace(token_weights={"host": 1}), 0.35
+            right_seed,
+            genes,
+            taxonomy,
+            (0, 6000),
+            SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
+            0.35,
         )
     outputs = merge_reachable_boundaries([left, right])
     assert [(item.start, item.end) for item in outputs] == [(1000, 3200), (2100, 5000)]
@@ -453,7 +528,12 @@ def test_three_seed_merge_keeps_stop_inside_independent_core_and_exact_ownership
     with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda g, m: float(g.host)):
         boundaries = [
             extend_confirmed_seed(
-                seed, genes, {g.id: g for g in genes}, envelope, SimpleNamespace(token_weights={"host": 1}), 0.35
+                seed,
+                genes,
+                {g.id: g for g in genes},
+                envelope,
+                SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
+                0.35,
             )
             for seed, envelope in zip((left, middle, right), ((0, 4000), (2100, 6700), (4800, 7000)), strict=True)
         ]
@@ -464,3 +544,9 @@ def test_three_seed_merge_keeps_stop_inside_independent_core_and_exact_ownership
     assert outputs[0].confirmed_seeds == left.confirmed_seeds
     assert outputs[1].confirmed_seeds == middle.confirmed_seeds + right.confirmed_seeds
     validate_source_membership([left, middle, right], outputs)
+
+
+def test_deep_only_hit_is_a_veto_not_positive_extension_support():
+    boundary = grow([gene("deep", 2100, 2200, host=True, deep_viral=True)])
+    assert boundary.end == 2000
+    assert boundary.right_stop is None

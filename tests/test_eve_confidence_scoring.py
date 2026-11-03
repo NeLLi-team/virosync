@@ -562,3 +562,134 @@ def test_supplementary_labelled_organelle_keeps_viral_evidence():
     assert evidence.counted_gene_ids == ("a",)
     assert evidence.measured_gene_ids == ()
     assert evidence.organelle_evidence[0].relation == "organelle_higher"
+
+
+@pytest.mark.parametrize("veto", ["viral_hit_within_depth", "phase1_validated_viral_marker"])
+def test_actual_confidence_collection_excludes_vetoed_genes_from_broad_euk_penalty(veto):
+    from virosync.pipeline.phase3.evidence_synthesizer import _collect_confidence_evidence
+
+    result = _bare()
+    calculate_eve_confidence(result, crf_confidence=0.0)
+    result.gene_count = result.genes_with_high_pident_euk = 10
+    result.gene_taxonomy_records = [
+        dict(
+            porf_id=f"g{i}",
+            top1_prefix="EUK",
+            has_hit=True,
+            is_flanking=False,
+            broad_host_counted=True,
+            has_viral=False,
+            top10_prefixes=["EUK"] * 3,
+            top10_pidents=[80.0] * 3,
+            **{veto: True},
+        )
+        for i in range(10)
+    ]
+    evidence = _collect_confidence_evidence(result, crf_confidence=0.0, tmvec_score=None, use_crf_score=False)
+    assert evidence.euk_penalty == 0.0
+    assert result.genes_with_high_pident_euk == 10
+    assert result.gene_taxonomy_viral_top10 == 0
+
+
+def test_broad_penalty_excludes_qualified_top10_and_ignores_uncounted_records():
+    from virosync.pipeline.phase3.evidence_synthesizer import _collect_confidence_evidence
+
+    result = _bare()
+    calculate_eve_confidence(result, crf_confidence=0.0)
+    result.gene_count = result.genes_with_high_pident_euk = 20
+    result.gene_taxonomy_viral_top10 = 1
+    # Owner rule: known viral support excludes this actual broad-host contributor.
+    result.gene_taxonomy_records = [
+        dict(top1_prefix="EUK", has_hit=True, broad_host_counted=True, has_viral=True, viral_hit_within_depth=True)
+    ]
+    # None of these rows contributed to the existing raw broad count.
+    result.gene_taxonomy_records += [
+        dict(top1_prefix="EUK", has_hit=False, broad_host_counted=True, phase1_validated_viral_marker=True),
+        dict(
+            top1_prefix="EUK",
+            has_hit=True,
+            broad_host_counted=True,
+            is_flanking=True,
+            phase1_validated_viral_marker=True,
+        ),
+        dict(top1_prefix="EUK", has_hit=True, is_high_pident_euk=False, phase1_validated_viral_marker=True),
+        dict(top1_prefix="UNKNOWN", phase1_validated_viral_marker=True),
+        dict(top1_prefix="EUK", has_hit=True, phase1_validated_viral_marker=True),
+    ]
+    evidence = _collect_confidence_evidence(result, crf_confidence=0.0, tmvec_score=None, use_crf_score=False)
+    assert evidence.euk_penalty == pytest.approx(19 / 20 * 0.12)
+    assert result.genes_with_high_pident_euk == 20
+
+
+@pytest.mark.parametrize("host", ["EUK", "ARC"])
+@pytest.mark.parametrize("veto", ["has_viral", "viral_hit_within_depth", "phase1_validated_viral_marker"])
+def test_summary_marks_only_actual_broad_count_contributors(host, veto):
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
+    from virosync.pipeline.phase3.evidence_synthesizer import _collect_confidence_evidence
+
+    genes = [pORF(f"g{i}", "scaf", i * 100, i * 100 + 90) for i in range(22)]
+    other = "ARC" if host == "EUK" else "EUK"
+    records = [
+        GeneTaxonomy(
+            g.id,
+            "scaf",
+            g.start,
+            g.end,
+            top1_prefix=(host if i < 20 else other) + "__",
+            top10_prefixes=[(host if i < 20 else other) + "__"],
+            top10_pidents=[20.0],
+            has_hit=True,
+        )
+        for i, g in enumerate(genes)
+    ]
+    setattr(records[0], veto, True)
+    if veto == "has_viral":
+        records[0].top10_prefixes.append("NCLDV__")
+        records[0].top10_pidents.append(30.0)
+    records[20].viral_hit_within_depth = True  # An observed but uncounted other-domain hit.
+    records[21].has_hit = False
+    records[21].top1_prefix = ""
+    records[21].top10_prefixes = []
+    records[21].top10_pidents = []
+    records[21].viral_hit_within_depth = True  # Deep hit alone does not invent a top1 host.
+    config = PipelineConfig()
+    config.host.label = host
+    taxonomy = {row.porf_id: row for row in records}
+    boundary = RefinedBoundary("scaf", 0, 2200, confirmed_seeds=(ConfirmedSeed("seed", "scaf", 0, 2200),))
+    serialized, summary = _summarize_boundary_taxonomy(
+        boundary=boundary,
+        filtered_taxonomy=records,
+        boundary_taxonomy_map=taxonomy,
+        proteome_index={"scaf": genes},
+        boundary_diamond_query=None,
+        config=config,
+        logger=logging.getLogger(__name__),
+    )
+    assert summary["high_pident_euk"] == 20
+    assert sum(r["broad_host_counted"] for r in serialized if not r["is_flanking"]) == 20
+    result = _bare()
+    calculate_eve_confidence(result, crf_confidence=0.0)
+    result.gene_count = summary["total"]
+    result.gene_taxonomy_viral_top10 = summary["viral_top10"]
+    assert summary["viral_top10"] == int(veto == "has_viral")
+    result.genes_with_high_pident_euk = summary["high_pident_euk"]
+    result.gene_taxonomy_records = serialized
+    evidence = _collect_confidence_evidence(result, crf_confidence=0.0, tmvec_score=None, use_crf_score=False)
+    assert evidence.euk_penalty == pytest.approx(19 / 22 * 0.12)
+    assert result.genes_with_high_pident_euk == 20
+
+
+@pytest.mark.parametrize("counted,raw_count,expected", [(True, 10, 0.108), (False, 10, 0.12), (True, 0, 0.0)])
+def test_broad_penalty_respects_legacy_membership_and_clamps(counted, raw_count, expected):
+    from virosync.pipeline.phase3.evidence_synthesizer import _collect_confidence_evidence
+
+    result = _bare()
+    calculate_eve_confidence(result, crf_confidence=0.0)
+    result.gene_count = 10
+    result.genes_with_high_pident_euk = raw_count
+    result.gene_taxonomy_records = [
+        dict(top1_prefix="EUK", has_hit=True, is_high_pident_euk=counted, phase1_validated_viral_marker=True)
+    ]
+    evidence = _collect_confidence_evidence(result, crf_confidence=0.0, tmvec_score=None, use_crf_score=False)
+    assert evidence.euk_penalty == pytest.approx(expected)
+    assert result.genes_with_high_pident_euk == raw_count

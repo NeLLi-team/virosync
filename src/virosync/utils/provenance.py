@@ -273,6 +273,7 @@ def write_provenance(
             "use_interproscan": config.get("use_interproscan", False),
             "masking": _json_safe(config.get("masking")),
             "marker_validation_top_k": config.get("marker_validation_top_k", 10),
+            "reference_mask": _json_safe(config.get("reference_mask")),
         },
         "masking_status": masking_status,
     }

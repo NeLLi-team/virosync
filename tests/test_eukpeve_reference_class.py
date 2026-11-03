@@ -30,6 +30,7 @@ from virosync.pipeline.host_signatures import (
     dominant_lineage_tokens,
     host_lineage_share,
     host_signature_density_evalue_weighted,
+    lineage_key,
     set_taxonomy_lookup,
 )
 from virosync.pipeline.phase1.frameshift_screening import diamond_query_coverages
@@ -242,6 +243,8 @@ def _tax(**overrides):
         "has_ncldv_mirus": False,
         "has_vp_plv": False,
         "has_viral": True,
+        "viral_hit_within_depth": False,
+        "phase1_validated_viral_marker": False,
         "top1_prefix": "EUK-pEVE__",
         "top10_prefixes": ["EUK-pEVE__"],
         "top10_pidents": [80.0],
@@ -391,6 +394,7 @@ def _host_model() -> HostSignatureModel:
             "aurantiochytrium": 60.0,
             "aurantiochytrium limacinum": 50.0,
         },
+        lineage_weights={lineage_key(HOST, 3): 100.0},
         host_prefixes=["EUK__"],
     )
 
@@ -427,24 +431,31 @@ def test_peve_hit_dilutes_the_host_share_of_a_mixed_gene(lookup) -> None:
     assert share == pytest.approx(10 / 19)
 
 
-def test_peve_lineage_never_enters_the_dominant_host_lineage(lookup) -> None:
-    model = _host_model()
-    lineages = [PEVE_SUFFIXED, PEVE_UNSUFFIXED, HOST]
+def test_peve_lineage_never_enters_the_dominant_host_lineage() -> None:
+    model = HostSignatureModel(
+        token_weights={"bigyra": 90.0},
+        lineage_weights={
+            lineage_key(PEVE_UNSUFFIXED, 3): 500.0,
+            lineage_key(HOST, 3): 100.0,
+        },
+    )
 
-    tokens = dominant_lineage_tokens(model, lineages)
+    tokens = dominant_lineage_tokens(model)
 
-    assert not any(token.endswith("-peve") for token in tokens)
-    # The unsuffixed pEVE lineage lists the host species first; it must not win.
     assert "fakeclade" not in tokens
-    assert "aurantiochytrium" in tokens
+    assert "bigyra" in tokens
 
 
 def test_dominant_lineage_drops_tokens_that_end_in_peve() -> None:
-    model = HostSignatureModel(token_weights={"aurantiochytrium limacinum-peve": 50.0, "bigyra-peve": 90.0})
     host_rooted = "EUK|NA|Bigyra-pEVE|Thraustochytrida-pEVE|NA|NA|Aurantiochytrium limacinum-pEVE"
 
-    assert dominant_lineage_tokens(model, [host_rooted]) == frozenset()
-    assert dominant_lineage_tokens(model, [PEVE_SUFFIXED]) == frozenset()
+    for lineage in (host_rooted, PEVE_SUFFIXED):
+        model = HostSignatureModel(
+            token_weights={"bigyra-peve": 90.0},
+            lineage_weights={lineage_key(lineage, 3): 90.0},
+        )
+
+        assert dominant_lineage_tokens(model) == frozenset()
 
 
 def test_euk_peve_is_a_domain_token() -> None:
@@ -495,6 +506,22 @@ def test_three_high_identity_peve_hits_are_never_a_host_gene(has_viral: bool) ->
 
     assert _high_confidence_euk_gene_count([record]) == 0
     assert _high_confidence_euk_gene_count([host_record]) == 1
+
+
+@pytest.mark.parametrize("viral_within_depth,expected", [(False, 1), (True, 0)])
+def test_a_viral_hit_deeper_than_the_top_ten_keeps_a_gene_out_of_the_euk_penalty(
+    viral_within_depth: bool, expected: int
+) -> None:
+    record = {
+        "is_flanking": False,
+        "has_hit": True,
+        "has_viral": False,
+        "viral_hit_within_depth": viral_within_depth,
+        "top10_prefixes": ["EUK", "EUK", "EUK"],
+        "top10_pidents": [90.0, 85.0, 80.0],
+    }
+
+    assert _high_confidence_euk_gene_count([record]) == expected
 
 
 def test_marker_with_only_peve_hits_votes_viral_unknown() -> None:

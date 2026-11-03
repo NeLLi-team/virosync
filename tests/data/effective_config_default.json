@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "d39ba659022d8b72b1f8a09752a8b26e15f405812fe946da693812599f5a8bad",
+  "effective_config_sha256": "6868e926fbef5185dd2e4957bd19f9de179c7a0cac54cb80222dca4bf53a63c3",
   "execution": {
     "masking": {
       "backend": "off",
@@ -38,11 +38,14 @@
   "host": {
     "high_pident_threshold": 70.0,
     "label": "EUK",
+    "mask_own_assembly": true,
     "prefixes": [
       "EUK__",
       "MITO__",
       "PLASTID__"
-    ]
+    ],
+    "reference_mask_taxa": [],
+    "self_reference_keys": []
   },
   "optional_features": {
     "boltz": {
@@ -127,7 +130,8 @@
     "taxonomy_ml_neighbor_window": 3,
     "taxonomy_ml_threshold": 0.5,
     "taxonomy_weight_mode": "rank",
-    "terminal_repeat_enabled": true
+    "terminal_repeat_enabled": true,
+    "viral_hit_depth": 50
   },
   "phase3": {
     "boltz_max_seq_len": 1000,

@@ -33,6 +33,7 @@ from virosync.pipeline.phase1.frameshift_screening import (
 from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
+from virosync.pipeline.reference_mask import ReferenceMask
 
 
 def _complete_marker() -> ValidatedMarkerHit:
@@ -124,6 +125,7 @@ def _complete_host_model() -> HostSignatureModel:
         token_weights={"amoebozoa": 7.123456789012345},
         token_counts={"amoebozoa": 8},
         token_bits={"amoebozoa": [99.12345678901234, 88.98765432109876]},
+        lineage_weights={"euk|amoebozoa||||||": 7.123456789012345},
         max_weight=7.123456789012345,
         min_token_length=4,
         host_prefixes=["EUK__", "HOST__"],
@@ -656,6 +658,9 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
     marker_db.write_text("DB\n")
     kwargs["config"].databases.hmm_database = hmm_database
     kwargs["config"].databases.marker_db = marker_db
+    masked_genomes = frozenset({"GCA-000001-1"})
+    kwargs["reference_mask"] = ReferenceMask(genome_keys=masked_genomes)
+    masks_seen: dict[str, list[frozenset[str]]] = {"hhg_seeding": [], "marker_validation": []}
     hit = FrameshiftHit(
         annotation_class=ANNOTATION_CLASS,
         hit_id="1",
@@ -711,8 +716,10 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
             )
             return [hit]
         if task is phase1_module.hhg_seeding_task:
+            masks_seen["hhg_seeding"].append(task_kwargs["masked_genomes"])
             return [], []
         if task.__name__ == "marker_validation_task":
+            masks_seen["marker_validation"].append(task_kwargs["masked_genomes"])
             if task_kwargs["output_dir"].name == "marker_validation":
                 return []
             task_kwargs["output_dir"].mkdir(parents=True)
@@ -739,6 +746,7 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
 
     result = _run_phase1_subflow(**kwargs)
 
+    assert masks_seen == {"hhg_seeding": [masked_genomes], "marker_validation": [masked_genomes, masked_genomes]}
     assert result.validated_markers == [marker]
     assert len(result.merged_seeds) == 1
     assert result.merged_seeds[0].anchors[0].porf_id == marker.query_porf

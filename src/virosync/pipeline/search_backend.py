@@ -10,6 +10,11 @@ genome, and lists some proteins under both a cellular and a viral label, so its
 gene-taxonomy callers use run_genome_filtered_search(), which fetches
 TARGET_FETCH_MULTIPLIER times the requested hits and reduces them per query with
 select_target_hits(). The marker database keeps the plain search.
+
+Both searches take the run's reference mask, a set of genome keys (see
+virosync.pipeline.reference_mask). They fetch TARGET_FETCH_MULTIPLIER times the
+requested hits, drop every row of a masked genome, and then apply their own
+rules. With an empty mask they run and return exactly as without one.
 """
 
 import logging
@@ -18,11 +23,12 @@ import signal
 import subprocess
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import groupby
 from pathlib import Path
 
 from virosync.pipeline.phase3.gene_taxonomy import CELLULAR_NAMESPACES, VIRAL_PREFIXES
+from virosync.pipeline.reference_mask import is_masked
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,7 @@ def run_sequence_search(
     output_columns: list[str] | None = None,
     extra_flags: list[str] | None = None,
     timeout: int = DEFAULT_SEARCH_TIMEOUT,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> Path:
     """Run a protein sequence search using the specified backend.
 
@@ -75,6 +82,10 @@ def run_sequence_search(
                         Default: qseqid sseqid evalue bitscore pident qcovhsp.
         extra_flags: Additional CLI flags passed verbatim to the tool.
         timeout: Timeout in seconds.
+        masked_genomes: Genome keys whose rows are dropped. With a mask, DIAMOND
+            fetches TARGET_FETCH_MULTIPLIER times ``max_target_seqs`` rows per
+            query and the output keeps the first ``max_target_seqs`` unmasked
+            rows in DIAMOND's order, duplicates included.
 
     Returns:
         Path to the output TSV file.
@@ -86,17 +97,21 @@ def run_sequence_search(
 
     if backend != "diamond":
         raise ValueError(f"Unsupported search backend: {backend!r} (only 'diamond' is supported)")
-    return _run_diamond(
+    fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if masked_genomes else max_target_seqs
+    _run_diamond(
         query_fasta=query_fasta,
         db_path=db_path,
         output_tsv=output_tsv,
         threads=threads,
         evalue=evalue,
-        max_target_seqs=max_target_seqs,
+        max_target_seqs=fetch_limit,
         output_columns=output_columns,
         extra_flags=extra_flags,
         timeout=timeout,
     )
+    if masked_genomes:
+        mask_hits_file(output_tsv, output_columns, max_target_seqs, masked_genomes)
+    return output_tsv
 
 
 def run_genome_filtered_search(
@@ -110,14 +125,15 @@ def run_genome_filtered_search(
     output_columns: list[str] | None = None,
     extra_flags: list[str] | None = None,
     timeout: int = DEFAULT_SEARCH_TIMEOUT,
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> Path:
     """Run a protein search that keeps one hit per target genome.
 
     Takes the arguments of run_sequence_search(). DIAMOND fetches
     TARGET_FETCH_MULTIPLIER times ``max_target_seqs`` hits per query; the output
-    keeps the first ``max_target_seqs`` after the twin and per-genome rules of
-    select_target_hits(). A ``max_target_seqs`` of 0 means unlimited and skips
-    the filter.
+    keeps the first ``max_target_seqs`` after the mask, the twin rule and the
+    per-genome rule of select_target_hits(). A ``max_target_seqs`` of 0 means
+    unlimited and skips the twin and per-genome rules; masked rows are still dropped.
     """
     columns = list(DEFAULT_COLUMNS) if output_columns is None else output_columns
     fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if max_target_seqs > 0 else 0
@@ -134,15 +150,23 @@ def run_genome_filtered_search(
         timeout=timeout,
     )
     if max_target_seqs > 0:
-        filter_hits_file(output_tsv, columns, max_target_seqs)
+        filter_hits_file(output_tsv, columns, max_target_seqs, masked_genomes)
+    elif masked_genomes:
+        mask_hits_file(output_tsv, columns, 0, masked_genomes)
     return output_tsv
 
 
-def select_target_hits(subject_ids: Sequence[str], max_targets: int) -> list[int]:
+def select_target_hits(
+    subject_ids: Sequence[str],
+    max_targets: int,
+    masked_genomes: frozenset[str] = frozenset(),
+) -> list[int]:
     """Choose the rows to keep from one query's hits, given in DIAMOND order.
 
     Subject IDs look like ``<LABEL>__<genome>|<protein>``. Rules, in order:
 
+    0. Mask: rows whose genome key (the part between ``LABEL__`` and ``|``) is in
+       ``masked_genomes`` are dropped, whatever their label.
     1. Twin: a protein (``<genome>|<protein>``) listed under a cellular and a
        viral label keeps the viral row, placed where the protein first occurs.
        The cellular rows of that protein are dropped.
@@ -153,6 +177,19 @@ def select_target_hits(subject_ids: Sequence[str], max_targets: int) -> list[int
     Returns:
         Indices into ``subject_ids`` of the kept rows, in output order.
     """
+    unmasked = _unmasked_rows(subject_ids, masked_genomes)
+    kept = _apply_target_rules([subject_ids[idx] for idx in unmasked], max_targets)
+    return [unmasked[idx] for idx in kept]
+
+
+def _unmasked_rows(subject_ids: Sequence[str], masked_genomes: frozenset[str]) -> list[int]:
+    if not masked_genomes:
+        return list(range(len(subject_ids)))
+    return [idx for idx, subject_id in enumerate(subject_ids) if not is_masked(subject_id, masked_genomes)]
+
+
+def _apply_target_rules(subject_ids: Sequence[str], max_targets: int) -> list[int]:
+    """Apply the twin, genome and truncation rules of select_target_hits()."""
     labels_and_keys = [_split_subject_id(subject_id) for subject_id in subject_ids]
     first_row: dict[str, int] = {}
     viral_row: dict[str, int] = {}
@@ -189,7 +226,12 @@ def select_target_hits(subject_ids: Sequence[str], max_targets: int) -> list[int
     return kept
 
 
-def filter_hits_file(hits_tsv: Path, output_columns: Sequence[str], max_targets: int) -> None:
+def filter_hits_file(
+    hits_tsv: Path,
+    output_columns: Sequence[str],
+    max_targets: int,
+    masked_genomes: frozenset[str] = frozenset(),
+) -> None:
     """Rewrite a DIAMOND table in place, keeping select_target_hits() rows per query.
 
     The columns stay as DIAMOND wrote them. Rows of one query must be adjacent,
@@ -198,6 +240,41 @@ def filter_hits_file(hits_tsv: Path, output_columns: Sequence[str], max_targets:
     Raises:
         ValueError: If ``output_columns`` lacks ``qseqid`` or ``sseqid``.
     """
+    _rewrite_hits_per_query(
+        hits_tsv,
+        output_columns,
+        lambda subject_ids: select_target_hits(subject_ids, max_targets, masked_genomes),
+    )
+
+
+def mask_hits_file(
+    hits_tsv: Path,
+    output_columns: Sequence[str],
+    max_targets: int,
+    masked_genomes: frozenset[str],
+) -> None:
+    """Rewrite a DIAMOND table in place, dropping masked rows and keeping the first ``max_targets``.
+
+    Only masked rows go; the rows that remain keep DIAMOND's order and every
+    duplicate. A ``max_targets`` of 0 keeps all unmasked rows.
+
+    Raises:
+        ValueError: If ``output_columns`` lacks ``qseqid`` or ``sseqid``.
+    """
+
+    def first_unmasked(subject_ids: Sequence[str]) -> list[int]:
+        unmasked = _unmasked_rows(subject_ids, masked_genomes)
+        return unmasked[:max_targets] if max_targets > 0 else unmasked
+
+    _rewrite_hits_per_query(hits_tsv, output_columns, first_unmasked)
+
+
+def _rewrite_hits_per_query(
+    hits_tsv: Path,
+    output_columns: Sequence[str],
+    choose_rows: Callable[[list[str]], list[int]],
+) -> None:
+    """Replace each query's rows in place by the rows ``choose_rows`` picks from its subject IDs."""
     for required in ("qseqid", "sseqid"):
         if required not in output_columns:
             raise ValueError(f"cannot filter hits without {required} in {list(output_columns)}")
@@ -210,7 +287,7 @@ def filter_hits_file(hits_tsv: Path, output_columns: Sequence[str], max_targets:
         for _, query_lines in groupby(lines, key=lambda line: line.split("\t", query_idx + 1)[query_idx]):
             hits = list(query_lines)
             subjects = [line.split("\t")[subject_idx] for line in hits]
-            dst.writelines(hits[idx] for idx in select_target_hits(subjects, max_targets))
+            dst.writelines(hits[idx] for idx in choose_rows(subjects))
     os.replace(filtered_path, hits_tsv)
 
 

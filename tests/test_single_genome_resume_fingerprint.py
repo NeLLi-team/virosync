@@ -312,6 +312,8 @@ def test_noncanonical_coordinate_convention_is_rejected() -> None:
         ("extension_kb", 8),
         ("extended_output", False),  # output-artifact schema -> fingerprinted
         ("masking", MaskingConfig(backend=MaskingBackend.TRF)),
+        ("reference_mask_taxa", ("Phytophthora ramorum",)),
+        ("mask_own_assembly", False),
     ],
 )
 def test_output_determining_knob_changes_fingerprint(field, new) -> None:

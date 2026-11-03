@@ -233,6 +233,14 @@ class HostConfig:
     prefixes: list[str] = field(default_factory=lambda: ["EUK__", "MITO__", "PLASTID__"])
     label: str = "EUK"
     high_pident_threshold: float = 70.0
+    # Reference masking: searches ignore hits to the genomes named here. A genome's
+    # own proteins are never evidence about that genome; benchmark runs also mask
+    # their host taxon. See virosync.pipeline.reference_mask.
+    reference_mask_taxa: tuple[str, ...] = ()
+    mask_own_assembly: bool = True
+    # Reference keys of the genome's own proteomes; when empty, an assembly
+    # accession in the genome ID names them.
+    self_reference_keys: tuple[str, ...] = ()
 
 
 @dataclass
@@ -326,6 +334,9 @@ class Phase2Config:
     diamond_chunk_size: int = 10000
     diamond_random_seed: int = 42
     diamond_superset_prototype_enabled: bool = False
+    # Independent veto-search depth above ten; the original positive-evidence
+    # query and its top10 fields retain their original search limit.
+    viral_hit_depth: int = 50
 
 
 @dataclass
@@ -531,6 +542,9 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("host_prefixes", "host", "prefixes"),
     _spec("host_label", "host", "label"),
     _spec("high_pident_host_threshold", "host", "high_pident_threshold"),
+    _spec("reference_mask_taxa", "host", "reference_mask_taxa"),
+    _spec("mask_own_assembly", "host", "mask_own_assembly"),
+    _spec("self_reference_keys", "host", "self_reference_keys"),
     # --- phase1 (flat names == field names) ---
     _spec("rebuild_db", "phase1", "rebuild_db"),
     _spec("assembly_mode", "phase1", "assembly_mode", enum=AssemblyMode),
@@ -574,6 +588,7 @@ FIELD_SPECS: list[FieldSpec] = [
     _spec("pfam_arbitration_enabled", "phase1", "pfam_arbitration_enabled"),
     _spec("boundary_host_trim_score_threshold", "phase2", "host_trim_score_threshold"),
     _spec("boundary_host_signature_min_token_len", "phase2", "host_signature_min_token_len"),
+    _spec("boundary_viral_hit_depth", "phase2", "viral_hit_depth"),
     # phase2b Diamond + ANI: emitted but NOT overridable; parsed from the nested boundary_diamond block.
     _spec("boundary_diamond_flank_genes", "phase2", "diamond_flank_genes", overridable=False),
     _spec("boundary_diamond_control_sample_size", "phase2", "diamond_control_sample_size", overridable=False),
@@ -798,11 +813,46 @@ class PipelineConfig:
                 errors.append("Phylogenetic validation requires gvclass_db or diamond_db")
         if self.phase3.interproscan_enabled and not self.phase3.interproscan_dir:
             errors.append("InterProScan enabled but interproscan_dir not set")
+        if self.host.reference_mask_taxa and self.databases.taxonomy_labels_file is None:
+            errors.append("host.reference_mask_taxa requires databases.taxonomy_labels_file")
         return errors
 
     def validate_semantics(self) -> list[str]:
         """Validate types-independent ranges and cross-field invariants."""
         errors = list(self.execution.masking.validate())
+        for key in self.host.self_reference_keys:
+            bare_key = key.split("__", 1)[-1]
+            if not bare_key or "|" in key or any(char.isspace() for char in key):
+                errors.append(
+                    "host.self_reference_keys must contain nonempty assembly keys without whitespace or pipes"
+                )
+        if self.host.self_reference_keys and not self.host.mask_own_assembly:
+            errors.append("host.self_reference_keys requires host.mask_own_assembly")
+        invalid_taxa = {
+            "",
+            "na",
+            "n/a",
+            "none",
+            "unknown",
+            "unclassified",
+            "unassigned",
+            "euk",
+            "bac",
+            "arc",
+            "mito",
+            "plastid",
+            "vir",
+            "ncldv",
+            "mirus",
+            "phage",
+            "ppv",
+            "plv",
+            "vp",
+            "cress",
+            "euk-peve",
+        }
+        if any(taxon.strip().casefold() in invalid_taxa for taxon in self.host.reference_mask_taxa):
+            errors.append("host.reference_mask_taxa must name taxa, not empty names, placeholders or reference classes")
         if not isinstance(self.ablation.id, AblationID):
             errors.append("ablation.id must be one of A0-A6")
         if self.ablation.contract_sha256 != ABLATION_CONTRACT_SHA256:
@@ -814,9 +864,12 @@ class PipelineConfig:
         if self.phase2.diamond_superset_prototype_enabled and self.phase2.diamond_top_k != 10:
             errors.append(
                 "phase2.diamond_superset_prototype_enabled requires "
-                "phase2.diamond_top_k=10 so both cached consumers use the same "
-                "DIAMOND hit limit"
+                "phase2.diamond_top_k=10 to preserve the original superset positive-evidence search; "
+                "the optional deeper search supplies veto evidence only"
             )
+
+        if self.phase2.viral_hit_depth < 10:
+            errors.append("phase2.viral_hit_depth must be >= 10")
 
         positive_ints = {
             "compute.threads": self.compute.threads,

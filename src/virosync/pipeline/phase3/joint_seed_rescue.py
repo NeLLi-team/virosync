@@ -1,24 +1,29 @@
-"""Bounded eligibility and ownership checks for rejected adjacent seed pairs."""
+"""Bounded native assessment of adjacent accepted or rejected seed pairs."""
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 
 from virosync.output_contract import resolve_effective_eve_class
-from virosync.pipeline.hallmark_evidence import assess_hallmarks
-from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
+from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     GenomeDiamondQuery,
-    has_identity_qualified_viral_hit,
+    has_viral_hit_veto,
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
+from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
 from virosync.pipeline.phase2.seed_extension import _merge_pair
 from virosync.pipeline.phase2.terminal_repeats import find_terminal_inverted_repeats
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
+
+_STRICT_CORE_FAMILIES = frozenset({"PolB", "A32", "RNAPL", "TFIIB", "TopoII", "VLTF3"})
+_LOGGER = logging.getLogger(__name__)
 
 
 def eligible_joint_pairs(
@@ -31,14 +36,14 @@ def eligible_joint_pairs(
     host_threshold: float,
     *,
     accepted_ids: frozenset[str],
+    viral_marker_genes: frozenset[str] = frozenset(),
 ) -> list[tuple[RefinedBoundary, RefinedBoundary]]:
-    """Select adjacent rejected pairs in overlapping searched contexts."""
-    if query is None or host_model is None or not host_model.token_weights:
+    """Select pairs from original boundaries without consuming earlier unions."""
+    if query is None or not host_stop_available(host_model):
         return []
     by_id = {result.eve_id: result for result in results}
     ordered = sorted(boundaries, key=lambda b: (b.scaffold, b.start, b.end, b.seed_id))
     pairs = []
-    searched = set(query.all_porf_ids)
     for left, right in zip(ordered, ordered[1:]):
         children = (left, right)
         if left.scaffold != right.scaffold or left.end > right.start:
@@ -47,9 +52,16 @@ def eligible_joint_pairs(
         classes = [effective_class(result) for result in scored]
         if classes[0] not in {"NCLDV", "MIRUS"} or classes[0] != classes[1]:
             continue
-        if any(result.eve_id in accepted_ids for result in scored):
+        accepted = [result.eve_id in accepted_ids for result in scored]
+        if any(accepted) != all(accepted):
             continue
-        if any(result.confidence_tier != "LOW" for result in scored):
+        if all(accepted):
+            families = [qualified_core_families(result) for result in scored]
+            if right.start - left.end > 5000 or not any(families):
+                continue
+            if families[0] & families[1] & _STRICT_CORE_FAMILIES:
+                continue
+        elif any(result.confidence_tier != "LOW" for result in scored):
             continue
         if any(not child.confirmed_seeds or child.joint_seed_provenance for child in children):
             continue
@@ -61,24 +73,39 @@ def eligible_joint_pairs(
             continue
         if all(_has_multi_marker_witness(result, classes[0]) for result in scored):
             continue
+        if not _hull_fully_searched(children, query, proteome_index, taxonomy):
+            continue
         mappings = [
             [query.seed_gene_mappings.get(core.seed_id) for core in child.confirmed_seeds] for child in children
         ]
-        if any(mapping is None for group in mappings for mapping in group):
-            continue
         envelopes = [
             (min(m.flank_start_bp for m in group if m is not None), max(m.flank_end_bp for m in group if m is not None))
             for group in mappings
         ]
-        if max(span[0] for span in envelopes) >= min(span[1] for span in envelopes):
+        if not all(accepted) and max(span[0] for span in envelopes) >= min(span[1] for span in envelopes):
             continue
         genes = [g for g in proteome_index.get(left.scaffold, []) if g.start < right.end and g.end > left.start]
-        if any(g.id not in searched or g.id not in taxonomy for g in genes):
-            continue
-        if _gap_has_host_barrier(children, genes, taxonomy, host_model, host_threshold):
+        if _gap_has_host_barrier(children, genes, taxonomy, host_model, host_threshold, viral_marker_genes):
             continue
         pairs.append(children)
     return pairs
+
+
+def _hull_fully_searched(
+    children: tuple[RefinedBoundary, RefinedBoundary],
+    query: GenomeDiamondQuery | None,
+    proteome_index: dict[str, list[pORF]],
+    taxonomy: dict[str, GeneTaxonomy],
+) -> bool:
+    """Prove gene-level coverage before treating hull padding as searched DNA."""
+    left, right = children
+    if query is None or left.scaffold != right.scaffold or any(not child.confirmed_seeds for child in children):
+        return False
+    if any(query.seed_gene_mappings.get(core.seed_id) is None for child in children for core in child.confirmed_seeds):
+        return False
+    genes = [gene for gene in proteome_index.get(left.scaffold, []) if gene.start < right.end and gene.end > left.start]
+    searched = set(query.all_porf_ids)
+    return bool(genes) and all(gene.id in searched and gene.id in taxonomy for gene in genes)
 
 
 def effective_class(result: VerificationResult) -> str:
@@ -91,10 +118,12 @@ def effective_class(result: VerificationResult) -> str:
     )
 
 
-def joint_boundary(children: tuple[RefinedBoundary, RefinedBoundary]) -> RefinedBoundary:
-    """Preserve exact cores and record the rejected geometry before recomputation."""
+def joint_boundary(
+    children: tuple[RefinedBoundary, RefinedBoundary], *, rule: str = "rejected_adjacent_r2_v1"
+) -> RefinedBoundary:
+    """Preserve exact cores and record the child geometry before recomputation."""
     provenance = {
-        "rule": "rejected_adjacent_r2_v1",
+        "rule": rule,
         "children": [
             {
                 "candidate_id": boundary_candidate_id(child),
@@ -130,14 +159,76 @@ def joint_result_supported(result: VerificationResult, children: tuple[RefinedBo
     )
 
 
+def qualified_core_families(result: VerificationResult) -> frozenset[str]:
+    """Resolve qualifying core identities from selected-panel catalogue roles.
+
+    MIRUS RNAP roles pool two subunits. A model's NCLDV catalogue link preserves
+    their identity without interpreting every MIRUS RNAP hit as the large subunit.
+    """
+    families = set()
+    for item, roles in _qualified_core_items(result):
+        for role in roles:
+            family = role["marker"]
+            if role["panel"] == "Mirusviricota" and family == "RNAP":
+                subunits = {
+                    link["marker"]
+                    for link in item.model_roles
+                    if link["panel"] == "Nucleocytoviricota"
+                    and link["marker"] in {"RNAPL", "RNAPS"}
+                    and not link["excluded_from_scoring"]
+                }
+                families.update(subunits or {family})
+            else:
+                families.add(family)
+    return frozenset(families)
+
+
+def qualified_panel_families(result: VerificationResult) -> frozenset[str]:
+    """Retain original selected-panel names alongside resolved core identities."""
+    return frozenset(role["marker"] for _, roles in _qualified_core_items(result) for role in roles)
+
+
+def accepted_joint_supported(result: VerificationResult, children: tuple[RefinedBoundary, RefinedBoundary]) -> bool:
+    """Require native qualifying evidence wholly inside each original interval."""
+    intervals = [(item.start, item.end) for item, _ in _qualified_core_items(result)]
+    support = result.supplementary_viral_evidence
+    if support is not None and support.eligible and support.group == effective_class(result):
+        counted = set(support.counted_gene_ids)
+        intervals.extend(
+            (record["start"], record["end"]) for record in result.gene_taxonomy_records if record["porf_id"] in counted
+        )
+    return all(any(child.start <= start < end <= child.end for start, end in intervals) for child in children)
+
+
+def _qualified_core_items(result: VerificationResult) -> list[tuple[HallmarkEvidence, list[dict]]]:
+    summary = assess_hallmarks(result).summary
+    qualified = set(summary.qualifying_evidence_ids)
+    retained = []
+    for item in result.hallmark_evidence:
+        if item.evidence_id not in qualified:
+            continue
+        roles = [
+            role
+            for role in item.model_roles
+            if role["panel"] == summary.panel and role["role"] == "core_marker" and not role["excluded_from_scoring"]
+        ]
+        if roles:
+            retained.append((item, roles))
+    return retained
+
+
 def has_clear_internal_boundary_scan(
     children: tuple[RefinedBoundary, RefinedBoundary],
     sequence: str | None,
     markers: list[ValidatedMarkerHit],
     extension_bp: int,
+    *,
+    query: GenomeDiamondQuery | None,
+    proteome_index: dict[str, list[pORF]],
+    taxonomy: dict[str, GeneTaxonomy],
 ) -> bool:
     """Require complete native scans without a child-bounding internal repeat pair."""
-    if sequence is None:
+    if sequence is None or query is None or not _hull_fully_searched(children, query, proteome_index, taxonomy):
         return False
     left, right = children
     gap_start = max(core.end for core in left.confirmed_seeds)
@@ -167,14 +258,61 @@ def has_clear_internal_boundary_scan(
                 marker_end=end,
             )
             if scan.pairing_capped:
+                _LOGGER.info(
+                    "withheld_unresolved_repeat type=TIR reason=pairing_capped children=%s",
+                    [boundary_candidate_id(c) for c in children],
+                )
                 return False
             other_start, other_end = spans[1 - index]
-            if any(
-                (repeat.right_end <= other_start and left.start < repeat.right_end < right.end)
-                or (repeat.left_start >= other_end and left.start < repeat.left_start < right.end)
-                for repeat in scan.candidates
-            ):
+            for repeat in scan.candidates:
+                if (repeat.right_end <= other_start and left.start < repeat.right_end < right.end) or (
+                    repeat.left_start >= other_end and left.start < repeat.left_start < right.end
+                ):
+                    _LOGGER.info(
+                        "withheld_unresolved_repeat type=TIR children=%s arms=%s",
+                        [boundary_candidate_id(c) for c in children],
+                        repeat,
+                    )
+                    return False
+        coverage = tuple(
+            (mapping.flank_start_bp, mapping.flank_end_bp)
+            for mapping in query.seed_gene_mappings.values()
+            if mapping.scaffold == left.scaffold
+        ) + ((left.start, right.end),)
+        for index, child in enumerate(children):
+            direct = assess_repeat_evidence(
+                sequence,
+                scaffold=child.scaffold,
+                input_id=boundary_candidate_id(child),
+                start=child.start,
+                end=child.end,
+                parent_start=child.start,
+                parent_end=child.end,
+                coverage_intervals=coverage,
+                extension_bp=extension_bp,
+            )
+            gap_side = direct.right if index == 0 else direct.left
+            if gap_side.status != "completed":
+                _LOGGER.info(
+                    "withheld_unresolved_repeat type=DTR children=%s gap_side=%s",
+                    [boundary_candidate_id(c) for c in children],
+                    gap_side,
+                )
                 return False
+            start, end = spans[index]
+            other_start, other_end = spans[1 - index]
+            for repeat in direct.candidates:
+                encloses = repeat.left_end <= start and end <= repeat.right_start
+                separates = (index == 0 and repeat.right_end <= other_start) or (
+                    index == 1 and repeat.left_start >= other_end
+                )
+                if encloses and separates:
+                    _LOGGER.info(
+                        "withheld_unresolved_repeat type=DTR children=%s arms=%s",
+                        [boundary_candidate_id(c) for c in children],
+                        repeat,
+                    )
+                    return False
     except (OSError, RuntimeError, ValueError):
         return False
     return True
@@ -212,6 +350,7 @@ def _gap_has_host_barrier(
     taxonomy: dict[str, GeneTaxonomy],
     model: HostSignatureModel,
     threshold: float,
+    viral_marker_genes: frozenset[str],
 ) -> bool:
     left, right = children
     run = 0
@@ -220,7 +359,7 @@ def _gap_has_host_barrier(
             continue
         record = taxonomy[gene.id]
         host = host_lineage_share(record, model) >= threshold
-        viral = has_identity_qualified_viral_hit(record.top10_prefixes, record.top10_pidents)
+        viral = has_viral_hit_veto(record) or gene.id in viral_marker_genes
         run = run + 1 if host and not viral else 0
         if run == 3:
             return True

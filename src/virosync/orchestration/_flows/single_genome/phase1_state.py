@@ -161,6 +161,7 @@ _SEED_FIELD_SET = set(_SEED_FIELDS)
 _HOST_MODEL_FIELDS = {
     "token_weights",
     "token_counts",
+    "lineage_weights",
     "token_bits",
     "max_weight",
     "min_token_length",
@@ -488,6 +489,11 @@ def _host_model_to_document(model: object) -> dict[str, object]:
             f"{context}.token_weights",
             integer_values=False,
         ),
+        "lineage_weights": _require_string_number_map(
+            model.lineage_weights,
+            f"{context}.lineage_weights",
+            integer_values=False,
+        ),
         "token_counts": _require_string_number_map(
             model.token_counts,
             f"{context}.token_counts",
@@ -543,6 +549,13 @@ def _host_model_from_document(value: object) -> HostSignatureModel:
             )
         ),
         token_bits=token_bits,
+        lineage_weights=dict(
+            _require_string_number_map(
+                document["lineage_weights"],
+                f"{context}.lineage_weights",
+                integer_values=False,
+            )
+        ),
         max_weight=_require_finite_float(
             document["max_weight"],
             f"{context}.max_weight",

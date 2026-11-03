@@ -409,6 +409,9 @@ def _build_pipeline_config(
     low_tier_threshold: float | None = None,
     use_taxonomy_ml: bool | None = None,
     taxonomy_ml_model: str | None = None,
+    mask_taxa: tuple[str, ...] | None = None,
+    mask_own_assembly: bool | None = None,
+    self_reference_keys: tuple[str, ...] | None = None,
 ) -> PipelineConfig:
     """Apply explicit CLI overrides exactly once to a decoded pipeline."""
     application = _coerce_application_config(yaml_config)
@@ -444,6 +447,9 @@ def _build_pipeline_config(
         "low_tier_threshold": low_tier_threshold,
         "boundary_taxonomy_ml_enabled": use_taxonomy_ml,
         "boundary_taxonomy_ml_model": taxonomy_ml_model,
+        "reference_mask_taxa": mask_taxa,
+        "mask_own_assembly": mask_own_assembly,
+        "self_reference_keys": self_reference_keys,
     }
     if rebuild_db is not None:
         overrides["rebuild_db"] = rebuild_db
@@ -1385,6 +1391,23 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     help="Taxonomy boundary ML model choice (logreg|gbdt|xgboost)",
 )
 @click.option(
+    "--mask-taxon",
+    "mask_taxa",
+    multiple=True,
+    help="Ignore reference hits to every genome of this taxon, at any rank; repeat for several taxa",
+)
+@click.option(
+    "--mask-own-assembly/--no-mask-own-assembly",
+    default=None,
+    help="Ignore reference hits to the genome's own assembly, named by --self-reference-key or an accession in its file name (default: on)",
+)
+@click.option(
+    "--self-reference-key",
+    "self_reference_keys",
+    multiple=True,
+    help="Reference key of the genome's own proteomes, such as GCA-000002455-1; repeat for several. Replaces the accession read from the file name",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -1430,6 +1453,9 @@ def run(
     interproscan: bool | None,
     use_taxonomy_ml: bool | None,
     taxonomy_ml_model: str | None,
+    mask_taxa: tuple[str, ...],
+    mask_own_assembly: bool | None,
+    self_reference_keys: tuple[str, ...],
     verbose: bool,
 ) -> None:
     """Run ViroSync on one or more genomes with local worker threads.
@@ -1493,6 +1519,9 @@ def run(
         low_tier_threshold=explicit("low_tier_threshold", low_tier_threshold),
         use_taxonomy_ml=explicit("use_taxonomy_ml", use_taxonomy_ml),
         taxonomy_ml_model=explicit("taxonomy_ml_model", taxonomy_ml_model),
+        mask_taxa=explicit("mask_taxa", mask_taxa),
+        mask_own_assembly=explicit("mask_own_assembly", mask_own_assembly),
+        self_reference_keys=explicit("self_reference_keys", self_reference_keys),
     )
 
     effective_threads, cap_warning = _cap_threads_per_worker(
@@ -1520,6 +1549,8 @@ def run(
 
     # R1 safety preflight is complete before resource resolution or output writes.
     genome_paths = _collect_genome_paths(input_path)
+    if pipeline_config.host.self_reference_keys and len(genome_paths) != 1:
+        raise click.UsageError("host.self_reference_keys requires exactly one input genome")
     if not genome_paths:
         raise click.ClickException("No genome files found in input")
     try:

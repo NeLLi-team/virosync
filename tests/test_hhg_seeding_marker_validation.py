@@ -35,7 +35,7 @@ def _fake_extract(hits, proteome_fasta, output_fasta):
     return 1
 
 
-def _fake_run_diamond(hmm_hit_fasta, diamond_db, output_tsv, threads, evalue, max_seqs):
+def _fake_run_diamond(hmm_hit_fasta, diamond_db, output_tsv, threads, evalue, max_seqs, masked_genomes):
     """Stub for run_diamond_on_hmm_hits: create an empty output TSV."""
     Path(output_tsv).write_text("")
 
@@ -142,6 +142,42 @@ def test_validate_hmm_hits_forwards_optional_genome_fasta(tmp_path: Path) -> Non
         )
 
     assert seen_kwargs.get("genome_fasta") == genome
+
+
+def test_validate_hmm_hits_gives_the_reference_mask_to_the_marker_search(tmp_path: Path) -> None:
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">contig_1_1\nMGKPSALVR\n")
+    marker_db = tmp_path / "marker.dmnd"
+    marker_db.write_bytes(b"")
+    hits = [HMMHit("contig_1_1", "mcp", 120.0, 1e-40, 120.0, 1, 9)]
+    masks_seen: list[frozenset[str]] = []
+
+    def _capture_search(**kwargs):
+        masks_seen.append(kwargs["masked_genomes"])
+        Path(kwargs["output_tsv"]).write_text("")
+
+    with (
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.extract_hmm_hit_sequences",
+            side_effect=_fake_extract,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.run_diamond_on_hmm_hits",
+            side_effect=_capture_search,
+        ),
+        patch(
+            "virosync.pipeline.phase1.hhg_seeding.filter_validated_markers",
+            return_value=[],
+        ),
+    ):
+        validate_hmm_hits_with_combined_db(
+            hits=hits,
+            proteome_fasta=proteome,
+            marker_db=marker_db,
+            masked_genomes=frozenset({"GCA-000001-1"}),
+        )
+
+    assert masks_seen == [frozenset({"GCA-000001-1"})]
 
 
 def test_filter_uses_prodigal_coordinates_without_reading_genome(tmp_path: Path) -> None:

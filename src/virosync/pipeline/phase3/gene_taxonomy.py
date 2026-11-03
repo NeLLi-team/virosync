@@ -348,11 +348,13 @@ def run_diamond_blastp(
     fast: bool = False,
     min_threads_per_chunk: int = 4,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> Path:
     """Run Diamond blastp with top-10 hits.
 
     For large query sets (>chunk_size), queries are chunked and processed in parallel.
     Parallelism is determined by: max_parallel = threads // min_threads_per_chunk
+    ``masked_genomes`` are genome keys whose reference rows the search drops.
     """
     output_file.parent.mkdir(parents=True, exist_ok=True)
     db_prefix = _resolve_diamond_db_prefix(target_db)
@@ -372,6 +374,7 @@ def run_diamond_blastp(
             max_seqs=max_seqs,
             fast=fast,
             search_backend=search_backend,
+            masked_genomes=masked_genomes,
         )
         return output_file
 
@@ -420,6 +423,7 @@ def run_diamond_blastp(
                 max_seqs=max_seqs,
                 fast=fast,
                 search_backend=search_backend,
+                masked_genomes=masked_genomes,
             )
             return chunk_num, chunk_output
 
@@ -451,6 +455,7 @@ def _run_single_diamond_blastp(
     max_seqs: int,
     fast: bool,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> None:
     from virosync.pipeline.search_backend import run_genome_filtered_search
 
@@ -465,6 +470,7 @@ def _run_single_diamond_blastp(
         evalue=evalue,
         max_target_seqs=max_seqs,
         extra_flags=extra_flags,
+        masked_genomes=masked_genomes,
     )
 
 
@@ -723,6 +729,7 @@ def run_gene_taxonomy_diamond_batch(
     threads: int = 4,
     high_pident_euk_threshold: float = 70.0,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[list[GeneTaxonomy], dict]]:
     """Run Diamond gene taxonomy for all candidate regions in one batch.
 
@@ -735,6 +742,7 @@ def run_gene_taxonomy_diamond_batch(
         output_dir: Output directory for batch outputs
         threads: Threads for Diamond
         high_pident_euk_threshold: % identity threshold for EUK
+        masked_genomes: Genome keys whose reference rows the Diamond search drops
 
     Returns:
         Dict mapping eve_id -> (gene_taxonomies, summary)
@@ -820,6 +828,7 @@ def run_gene_taxonomy_diamond_batch(
                 threads=threads,
                 fast=False,
                 search_backend=search_backend,
+                masked_genomes=masked_genomes,
             )
         except subprocess.CalledProcessError as e:
             # Fail loud rather than fabricating zero-viral summaries for every region:

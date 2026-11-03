@@ -18,7 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import TextIO, TypedDict, cast
 
-from virosync.config import PipelineConfig
+from virosync.config import ConfigError, PipelineConfig
 from virosync.orchestration._flows.single_genome import single_genome_flow
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
@@ -546,6 +546,8 @@ def run_batch_python(
 ) -> list[GenomeRunResult]:
     """Run genomes concurrently with standard-library Python primitives."""
     genome_paths = [Path(path) for path in genome_paths]
+    if config.host.self_reference_keys and len(genome_paths) != 1:
+        raise ConfigError("host.self_reference_keys requires exactly one input genome")
     output_base_dir = Path(output_base_dir)
     run_specs = _preflight_genome_runs(genome_paths, output_base_dir)
     output_base_dir.mkdir(parents=True, exist_ok=True)

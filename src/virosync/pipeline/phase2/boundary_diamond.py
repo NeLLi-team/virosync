@@ -34,7 +34,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from Bio import SeqIO
 
@@ -62,6 +62,9 @@ CELLULAR_PREFIXES = {"EUK__", "BAC__", "ARC__"}
 
 # Minimum identity for a viral top-10 hit to count as viral evidence.
 MIN_VIRAL_HIT_PIDENT = 25.0
+
+# Leading hits that every top10_* field of a GeneTaxonomy holds.
+TOP_HIT_COUNT = 10
 
 
 def _listify_top10_field(value) -> list:
@@ -99,6 +102,20 @@ def has_identity_qualified_viral_hit(
     return False
 
 
+def has_viral_hit_veto(taxonomy: GeneTaxonomy) -> bool:
+    """Return whether a qualifying viral hit keeps a gene from counting as host.
+
+    The hit can sit in the top 10 or anywhere within the first ``viral_hit_depth``
+    hits of the gene search. A separate same-gene Phase1 validated viral marker
+    also vetoes host status without changing top10 taxonomy.
+    """
+    return (
+        taxonomy.phase1_validated_viral_marker
+        or taxonomy.viral_hit_within_depth
+        or has_identity_qualified_viral_hit(taxonomy.top10_prefixes, taxonomy.top10_pidents)
+    )
+
+
 @dataclass
 class BoundaryDiamondConfig:
     """Configuration for batched boundary Diamond analysis.
@@ -109,11 +126,14 @@ class BoundaryDiamondConfig:
         control_sample_size: Total control genes to sample (genome-wide, not per-EVE)
         control_min_distance: Minimum genes away from any EVE boundary for controls
         control_region_genes: Number of consecutive genes per control sample
-        top_k: Top-N hits to retrieve from Diamond
+        top_k: Leading hits kept in every ``top10_*`` field, at most TOP_HIT_COUNT
+        viral_hit_depth: Hit limit for the separate veto search above ten; it
+            never supplies the original top10 taxonomy fields
         chunk_size: Maximum proteins per Diamond chunk for memory management
         threads: Number of threads for Diamond execution
         random_seed: Seed for deterministic control sampling
         host_prefix: Expected host taxonomy prefix (EUK__ or ARC__ for archaeal hosts)
+        masked_genomes: Genome keys whose reference rows the Diamond search drops
     """
 
     flank_genes: int = 10
@@ -121,12 +141,19 @@ class BoundaryDiamondConfig:
     control_min_distance: int = 30
     control_region_genes: int = 11
     top_k: int = 10
+    viral_hit_depth: int = TOP_HIT_COUNT
     chunk_size: int = 10000
     threads: int = 8
     random_seed: int = 42
     host_prefix: str = "EUK__"
     taxonomy_weight_mode: str = "rank"
     search_backend: str = "diamond"
+    masked_genomes: frozenset[str] = frozenset()
+
+    @property
+    def top_hit_count(self) -> int:
+        """Return how many leading hits the ``top10_*`` fields hold."""
+        return min(self.top_k, TOP_HIT_COUNT)
 
 
 @dataclass
@@ -208,7 +235,11 @@ class GeneTaxonomy:
         has_ncldv_mirus: Whether NCLDV or MIRUS appears in top-10
         has_vp_plv: Whether VP or PLV appears in top-10
         has_viral: Whether any viral prefix appears in top-10
-        has_hit: Whether Diamond found any hit (False = no-hit entry)
+        has_hit: Whether the original-limit search found a hit (False = no-hit entry)
+        viral_hit_within_depth: Whether a qualifying viral hit appears among the
+            first ``viral_hit_depth`` hits, beyond the top 10 as well
+        phase1_validated_viral_marker: Exact same-gene Phase1 validated viral
+            marker evidence, excluding host COG/BUSCO and blocked kinase models
     """
 
     porf_id: str
@@ -230,6 +261,8 @@ class GeneTaxonomy:
     has_vp_plv: bool = False
     has_viral: bool = False
     has_hit: bool = False
+    viral_hit_within_depth: bool = False
+    phase1_validated_viral_marker: bool = False
 
 
 class TaxonomyFingerprintRecord(TypedDict):
@@ -265,6 +298,9 @@ class GeneTaxonomyRecord(TypedDict):
     has_vp_plv: bool
     has_viral: bool
     has_hit: bool
+    viral_hit_within_depth: bool
+    phase1_validated_viral_marker: bool
+    broad_host_counted: NotRequired[bool]
     is_flanking: bool
     flank_position: str | None
 
@@ -344,6 +380,8 @@ def build_gene_taxonomy_record(
         "has_vp_plv": tax.has_vp_plv,
         "has_viral": tax.has_viral,
         "has_hit": tax.has_hit,
+        "viral_hit_within_depth": tax.viral_hit_within_depth,
+        "phase1_validated_viral_marker": tax.phase1_validated_viral_marker,
         "is_flanking": is_flanking,
         "flank_position": flank_position,
     }
@@ -872,6 +910,7 @@ def run_diamond_blastp(
     threads: int = 8,
     evalue: float = 1e-5,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> None:
     """Run protein sequence search.
 
@@ -883,6 +922,7 @@ def run_diamond_blastp(
         threads: Number of threads
         evalue: E-value cutoff
         search_backend: "diamond" (the only supported backend)
+        masked_genomes: Genome keys whose reference rows are dropped from the hits
     """
     from virosync.pipeline.search_backend import run_genome_filtered_search
 
@@ -894,6 +934,7 @@ def run_diamond_blastp(
         backend=search_backend,
         evalue=evalue,
         max_target_seqs=max_target_seqs,
+        masked_genomes=masked_genomes,
     )
 
 
@@ -947,12 +988,13 @@ def run_full_proteome_diamond(
     max_target_seqs: int,
     threads: int,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> dict[str, list[DiamondHit]]:
     """Search the full proteome in one unchunked DIAMOND invocation.
 
     This is the opt-in Phase 2 superset prototype seam. Query IDs remain the
     raw pORF IDs so one result can be sliced for both host trimming and boundary
-    refinement.
+    refinement. ``masked_genomes`` are genome keys whose reference rows are dropped.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / "full_proteome.tsv"
@@ -963,6 +1005,7 @@ def run_full_proteome_diamond(
         max_target_seqs=max_target_seqs,
         threads=threads,
         search_backend=search_backend,
+        masked_genomes=masked_genomes,
     )
     return parse_diamond_output(output_file)
 
@@ -973,17 +1016,40 @@ def classify_cached_diamond_query(
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None = None,
+    *,
+    viral_veto_hits: dict[str, list[DiamondHit]] | None = None,
 ) -> dict[str, GeneTaxonomy]:
-    """Classify an exact boundary query by slicing full-proteome raw hits."""
+    """Slice original-limit hits independently from optional deep-veto hits."""
     selected_hits = {porf_id: diamond_hits.get(porf_id, [])[: config.top_k] for porf_id in query.all_porf_ids}
-    return classify_all_porfs(
+    return _classify_query_hits(query, selected_hits, proteome_index, config, taxonomy_lookup, viral_veto_hits)
+
+
+def _classify_query_hits(
+    query: GenomeDiamondQuery,
+    diamond_hits: dict[str, list[DiamondHit]],
+    proteome_index: dict[str, list[pORF]],
+    config: BoundaryDiamondConfig,
+    taxonomy_lookup: dict | None,
+    viral_veto_hits: dict[str, list[DiamondHit]] | None,
+) -> dict[str, GeneTaxonomy]:
+    taxonomy = classify_all_porfs(
         all_porf_ids=query.all_porf_ids,
-        diamond_hits=selected_hits,
+        diamond_hits=diamond_hits,
         proteome_index=proteome_index,
         host_prefix=config.host_prefix,
         taxonomy_lookup=taxonomy_lookup,
         taxonomy_weight_mode=config.taxonomy_weight_mode,
+        top_hit_count=config.top_hit_count,
     )
+    if config.viral_hit_depth > TOP_HIT_COUNT:
+        if viral_veto_hits is None:
+            raise ValueError("independent deep-veto search results are required above depth10")
+        for porf_id, record in taxonomy.items():
+            hits = viral_veto_hits.get(porf_id, [])[: config.viral_hit_depth]
+            record.viral_hit_within_depth |= has_identity_qualified_viral_hit(
+                [extract_prefix(hit.target) for hit in hits], [hit.pident for hit in hits]
+            )
+    return taxonomy
 
 
 def split_fasta(
@@ -1038,6 +1104,7 @@ def run_diamond_chunked(
     max_target_seqs: int,
     threads: int,
     search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
 ) -> dict[str, list[DiamondHit]]:
     """Run Diamond in chunks for large query sets.
 
@@ -1051,6 +1118,7 @@ def run_diamond_chunked(
         chunk_size: Maximum sequences per chunk
         max_target_seqs: Maximum hits per query
         threads: Number of threads
+        masked_genomes: Genome keys whose reference rows are dropped from the hits
 
     Returns:
         Dict mapping query ID to list of DiamondHit
@@ -1073,6 +1141,7 @@ def run_diamond_chunked(
             max_target_seqs=max_target_seqs,
             threads=threads,
             search_backend=search_backend,
+            masked_genomes=masked_genomes,
         )
 
         chunk_hits = parse_diamond_output(chunk_output)
@@ -1088,6 +1157,8 @@ def classify_all_porfs(
     host_prefix: str,
     taxonomy_lookup: dict | None = None,
     taxonomy_weight_mode: str = "rank",
+    *,
+    top_hit_count: int = TOP_HIT_COUNT,
 ) -> dict[str, GeneTaxonomy]:
     """Classify all pORFs, including those with no Diamond hits.
 
@@ -1100,6 +1171,7 @@ def classify_all_porfs(
         proteome_index: Scaffold -> sorted list of pORF objects
         host_prefix: Host taxonomy prefix (e.g., "EUK__")
         taxonomy_lookup: Optional taxonomy label lookup for fingerprinting
+        top_hit_count: Leading hits that every ``top10_*`` field keeps
 
     Returns:
         Dict mapping pORF ID to GeneTaxonomy
@@ -1155,7 +1227,7 @@ def classify_all_porfs(
             )
         else:
             # Classify based on hits (take top-10)
-            top10 = hits[:10]
+            top10 = hits[:top_hit_count]
             prefixes = [extract_prefix(h.target) for h in top10]
             top10_targets = [h.target for h in top10]
             top10_bits = [h.bits for h in top10]
@@ -1198,6 +1270,7 @@ def classify_all_porfs(
                 has_vp_plv=has_vp_plv,
                 has_viral=has_viral,
                 has_hit=True,
+                viral_hit_within_depth=has_viral,
             )
 
     return taxonomy_map
@@ -1269,7 +1342,7 @@ def run_batched_diamond(
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None = None,
 ) -> dict[str, GeneTaxonomy]:
-    """Run Diamond ONCE for all proteins in the genome query.
+    """Run the original query plus an independent deep-veto query when requested.
 
     Returns taxonomy keyed by pORF ID for fast lookup.
 
@@ -1328,48 +1401,45 @@ def run_batched_diamond(
     safe_chunk_size = max(1, config.chunk_size)
     estimated_chunks = max(1, (n_sequences + safe_chunk_size - 1) // safe_chunk_size)
     active_logger.info(
-        "Phase 2b: Diamond settings: threads=%d top_k=%d chunk_size=%d queries=%d estimated_chunks=%d",
+        "Phase 2b: Diamond settings: threads=%d top_k=%d viral_hit_depth=%d chunk_size=%d queries=%d estimated_chunks=%d",
         config.threads,
         config.top_k,
+        config.viral_hit_depth,
         config.chunk_size,
         n_sequences,
         estimated_chunks,
     )
 
-    # Chunk if needed
-    if n_sequences <= config.chunk_size:
-        # Single run
-        diamond_output = output_dir / "boundary_diamond.tsv"
-        run_diamond_blastp(
-            query=query_fasta,
-            db=diamond_db,
-            output=diamond_output,
-            max_target_seqs=config.top_k,
-            threads=config.threads,
-            search_backend=config.search_backend,
-        )
-        hits = parse_diamond_output(diamond_output)
-    else:
-        # Chunked execution
-        hits = run_diamond_chunked(
+    def search(directory: Path, limit: int) -> dict[str, list[DiamondHit]]:
+        directory.mkdir(parents=True, exist_ok=True)
+        if n_sequences <= config.chunk_size:
+            diamond_output = directory / "boundary_diamond.tsv"
+            run_diamond_blastp(
+                query=query_fasta,
+                db=diamond_db,
+                output=diamond_output,
+                max_target_seqs=limit,
+                threads=config.threads,
+                search_backend=config.search_backend,
+                masked_genomes=config.masked_genomes,
+            )
+            return parse_diamond_output(diamond_output)
+        return run_diamond_chunked(
             query_fasta=query_fasta,
             diamond_db=diamond_db,
-            output_dir=output_dir,
+            output_dir=directory,
             chunk_size=config.chunk_size,
-            max_target_seqs=config.top_k,
+            max_target_seqs=limit,
             threads=config.threads,
             search_backend=config.search_backend,
+            masked_genomes=config.masked_genomes,
         )
 
-    # Parse and classify all pORFs
-    taxonomy_map = classify_all_porfs(
-        all_porf_ids=query.all_porf_ids,
-        diamond_hits=hits,
-        proteome_index=proteome_index,
-        host_prefix=config.host_prefix,
-        taxonomy_lookup=taxonomy_lookup,
-        taxonomy_weight_mode=config.taxonomy_weight_mode,
+    hits = search(output_dir, config.top_k)
+    viral_veto_hits = (
+        search(output_dir / "viral_veto", config.viral_hit_depth) if config.viral_hit_depth > TOP_HIT_COUNT else None
     )
+    taxonomy_map = _classify_query_hits(query, hits, proteome_index, config, taxonomy_lookup, viral_veto_hits)
 
     # Log summary statistics
     n_with_hits = sum(1 for t in taxonomy_map.values() if t.has_hit)
@@ -1672,7 +1742,7 @@ def write_taxonomy_map(
             "porf_id\tscaffold\tstart\tend\ttop1_target\ttop1_prefix\t"
             "top1_pident\ttop1_evalue\ttop10_prefixes\ttop10_targets\t"
             "top10_bits\ttop10_pidents\ttop10_evalues\t"
-            "has_ncldv_mirus\thas_vp_plv\thas_viral\thas_hit\n"
+            "has_ncldv_mirus\thas_vp_plv\thas_viral\thas_hit\tviral_hit_within_depth\tphase1_validated_viral_marker\n"
         )
         # Data
         for porf_id, tax in sorted(taxonomy_map.items()):
@@ -1687,7 +1757,8 @@ def write_taxonomy_map(
                 f"{tax.top1_evalue:.2e}\t{prefixes_str}\t{targets_str}\t"
                 f"{bits_str}\t{pidents_str}\t{evalues_str}\t"
                 f"{int(tax.has_ncldv_mirus)}\t{int(tax.has_vp_plv)}\t"
-                f"{int(tax.has_viral)}\t{int(tax.has_hit)}\n"
+                f"{int(tax.has_viral)}\t{int(tax.has_hit)}\t{int(tax.viral_hit_within_depth)}\t"
+                f"{int(tax.phase1_validated_viral_marker)}\n"
             )
 
     logger.info("Wrote taxonomy map: %s", output_path)

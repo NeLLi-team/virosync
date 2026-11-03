@@ -53,7 +53,12 @@ def test_support_gap_requires_five_pending_genes(direction, pending):
     seed = MergedSeed("s", 1000, 2000, seed_id="a", confirmed_seeds=(ConfirmedSeed("a", "s", 1000, 2000),))
     starts = [2000 + 100 * i if direction == 1 else 900 - 100 * i for i in range(pending)]
     genes = [SimpleNamespace(id=str(i), start=start, end=start + 50) for i, start in enumerate(starts)]
-    tax = {gene.id: SimpleNamespace(top10_prefixes=[], top10_pidents=[]) for gene in genes}
+    tax = {
+        gene.id: SimpleNamespace(
+            top10_prefixes=[], top10_pidents=[], viral_hit_within_depth=False, phase1_validated_viral_marker=False
+        )
+        for gene in genes
+    }
     result = extend_confirmed_seed(seed, genes, tax, (0, 3000), None, 0.35)
     reason = result.right_stop_reason if direction == 1 else result.left_stop_reason
     assert reason == ("support_gap" if pending == 5 else "search_envelope")
@@ -66,7 +71,12 @@ def test_support_on_fifth_gene_connects_but_sixth_does_not(direction, positive_p
     starts = [2000 + 100 * i if direction == 1 else 900 - 100 * i for i in range(positive_position)]
     genes = [SimpleNamespace(id=str(i), start=start, end=start + 50) for i, start in enumerate(starts)]
     tax = {
-        gene.id: SimpleNamespace(top10_prefixes=["NCLDV__"] if i == positive_position - 1 else [], top10_pidents=[30.0])
+        gene.id: SimpleNamespace(
+            top10_prefixes=["NCLDV__"] if i == positive_position - 1 else [],
+            top10_pidents=[30.0],
+            viral_hit_within_depth=False,
+            phase1_validated_viral_marker=False,
+        )
         for i, gene in enumerate(genes)
     }
     result = extend_confirmed_seed(seed, genes, tax, (0, 3000), None, 0.35)
@@ -227,6 +237,8 @@ def test_successful_ml_support_uses_shared_controller_and_host_stop(tmp_path, mo
         gene.id: SimpleNamespace(
             top10_prefixes=[],
             top10_pidents=[],
+            viral_hit_within_depth=False,
+            phase1_validated_viral_marker=False,
             top10_targets=["EUK__HOST"] if gene.id.startswith("h") else [],
         )
         for gene in genes
@@ -251,7 +263,9 @@ def test_successful_ml_support_uses_shared_controller_and_host_stop(tmp_path, mo
         proteome_path=tmp_path / "proteome",
         merged_seeds=[seed],
         validated_markers=[],
-        host_signature_model=HostSignatureModel(token_weights={"host_lineage": 1.0}),
+        host_signature_model=HostSignatureModel(
+            token_weights={"host_lineage": 1.0}, lineage_weights={"euk|host_lineage": 1.0}
+        ),
         output_dir=tmp_path,
         genome_id="g",
         config=PipelineConfig().with_overrides(resume=False, boundary_taxonomy_ml_enabled=True, threads=1),

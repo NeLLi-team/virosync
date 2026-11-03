@@ -192,6 +192,7 @@ _FINGERPRINT_SCALAR_FIELDS = (
     "pfam_arbitration_enabled",
     "boundary_host_trim_score_threshold",
     "boundary_host_signature_min_token_len",
+    "boundary_viral_hit_depth",
     "boundary_diamond_flank_genes",
     "boundary_diamond_control_sample_size",
     "boundary_diamond_control_min_distance",
@@ -226,6 +227,9 @@ _FINGERPRINT_SCALAR_FIELDS = (
     "host_prefixes",
     "host_label",
     "high_pident_host_threshold",
+    "reference_mask_taxa",
+    "mask_own_assembly",
+    "self_reference_keys",
     # execution
     "masking",
 )

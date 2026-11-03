@@ -24,7 +24,7 @@ from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
-from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode
+from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode, viral_marker_gene_ids
 from virosync.pipeline.phase2.boundary_diamond import (
     MIN_VIRAL_HIT_PIDENT,
     build_gene_taxonomy_record,
@@ -49,12 +49,16 @@ from virosync.pipeline.phase3.eve_ani_clustering import (
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult, validate_results_seed_containment
 from virosync.pipeline.phase3.gene_functions import find_gene_function_resources, label_core_genes
 from virosync.pipeline.phase3.joint_seed_rescue import (
+    accepted_joint_supported,
     effective_class,
     eligible_joint_pairs,
     has_clear_internal_boundary_scan,
     joint_boundary,
     joint_result_supported,
+    qualified_core_families,
+    qualified_panel_families,
 )
+from virosync.pipeline.reference_mask import ReferenceMask
 from virosync.utils.path_safety import safe_filename_components
 
 from .loaders import (
@@ -425,7 +429,12 @@ def _summarize_boundary_taxonomy(
     n_vp_plv_interior = 0
     n_host = 0
     for taxonomy in filtered_taxonomy:
-        gene_tax_records.append(build_gene_taxonomy_record(taxonomy, is_flanking=False))
+        gene_tax_records.append(
+            {
+                **build_gene_taxonomy_record(taxonomy, is_flanking=False),
+                "broad_host_counted": bool(taxonomy.has_hit and taxonomy.top1_prefix == host_prefix),
+            }
+        )
         n_viral_interior += int(taxonomy.has_viral)
         n_ncldv_mirus_interior += int(taxonomy.has_ncldv_mirus)
         n_vp_plv_interior += int(taxonomy.has_vp_plv)
@@ -711,6 +720,7 @@ def _run_verification(
     precomputed_tmvec: object | None,
     tmvec_device: str,
     config: PipelineConfig,
+    reference_mask: ReferenceMask = ReferenceMask(),
 ) -> list:
     """Run the shared batched verification path for candidate boundaries."""
     from virosync.orchestration.tasks import verify_eve_candidates_batched_task
@@ -773,6 +783,7 @@ def _run_verification(
         precomputed_tmvec=precomputed_tmvec,
         max_workers=config.compute.effective_threads(),
         ablation_id=config.ablation.id,
+        masked_genomes=reference_mask.genome_keys,
     )
 
 
@@ -798,6 +809,7 @@ def _verify_native_boundaries(
     precomputed_tmvec: dict | None,
     tmvec_device: str,
     interproscan_path: Path | None = None,
+    reference_mask: ReferenceMask = ReferenceMask(),
 ) -> list[VerificationResult]:
     """Rebuild coordinate evidence, annotations and scores for one native batch."""
     # ==================================================
@@ -808,6 +820,7 @@ def _verify_native_boundaries(
     interproscan_map_batched = {}
     boundary_taxonomy_index = _build_scaffold_start_index(boundary_taxonomy_map.values())
     validated_marker_index = _build_scaffold_start_index(validated_markers)
+    validated_viral_genes = viral_marker_gene_ids(validated_markers)
 
     logger.info(
         "Phase 3: Preparing data for batched verification of %d boundaries",
@@ -829,6 +842,10 @@ def _verify_native_boundaries(
         )
         hallmark_hits_map[evidence.boundary_id] = evidence.hallmarks
         if evidence.gene_taxonomy:
+            for record in evidence.gene_taxonomy[0]:
+                record["phase1_validated_viral_marker"] = (
+                    record.get("phase1_validated_viral_marker", False) or record["porf_id"] in validated_viral_genes
+                )
             gene_taxonomy_map_batched[evidence.boundary_id] = evidence.gene_taxonomy
         if evidence.interproscan:
             interproscan_map_batched[evidence.boundary_id] = evidence.interproscan
@@ -865,6 +882,7 @@ def _verify_native_boundaries(
         precomputed_tmvec=precomputed_tmvec,
         tmvec_device=tmvec_device,
         config=config,
+        reference_mask=reference_mask,
     )
 
 
@@ -887,6 +905,7 @@ def _run_phase3_subflow(
     logger: object,
     resume_authorized: bool = False,
     raw_genome_path: Path | None = None,
+    reference_mask: ReferenceMask = ReferenceMask(),
 ) -> Phase3Result:
     """Phase 3: Evidence synthesis and verification.
 
@@ -904,6 +923,7 @@ def _run_phase3_subflow(
         validated_markers: List of validated marker hits from Phase 1
         config: Resolved nested pipeline configuration.
         logger: Logger instance
+        reference_mask: Genomes whose reference rows the phylogenetic Diamond check drops.
 
     Returns:
         Explicit Phase 3 outputs needed by final publication.
@@ -1017,9 +1037,13 @@ def _run_phase3_subflow(
         host_signature_model_payload=host_signature_model_payload,
         precomputed_tmvec=precomputed_tmvec,
         tmvec_device=tmvec_device,
+        reference_mask=reference_mask,
     )
     verification_results = _verify_native_boundaries(refined_boundaries, **verification_context)
     if raw_genome_path is not None:
+        accepted_ids = frozenset(
+            r.eve_id for r in select_phase3_acceptance(verification_results, ablation_id).canonical_results
+        )
         pairs = eligible_joint_pairs(
             refined_boundaries,
             verification_results,
@@ -1030,9 +1054,8 @@ def _run_phase3_subflow(
             if host_signature_model_payload and config.phase2.host_trim_enabled and ablation_id is not AblationID.A4
             else None,
             config.phase2.host_trim_score_threshold,
-            accepted_ids=frozenset(
-                r.eve_id for r in select_phase3_acceptance(verification_results, ablation_id).canonical_results
-            ),
+            accepted_ids=accepted_ids,
+            viral_marker_genes=viral_marker_gene_ids(validated_markers),
         )
         joints = _prepare_joint_boundaries(
             pairs,
@@ -1043,6 +1066,7 @@ def _run_phase3_subflow(
             boundary_taxonomy_map=boundary_taxonomy_map,
             proteome_index=proteome_index,
             config=config,
+            accepted_ids=accepted_ids,
         )
         if joints:
             joint_output = output_dir / "phase3" / "joint_seed_rescue"
@@ -1076,7 +1100,7 @@ def _run_phase3_subflow(
                 },
             )
             verification_results = _replace_accepted_joints(
-                verification_results, joint_results, joints, ablation_id=ablation_id
+                verification_results, joint_results, joints, ablation_id=ablation_id, accepted_ids=accepted_ids
             )
 
     validate_results_seed_containment(verification_results)
@@ -1364,6 +1388,7 @@ def _prepare_joint_boundaries(
     boundary_taxonomy_map: dict,
     proteome_index: dict,
     config: PipelineConfig,
+    accepted_ids: frozenset[str] = frozenset(),
 ) -> list[tuple[RefinedBoundary, tuple[RefinedBoundary, RefinedBoundary]]]:
     """Finalize fixed joint hulls through the existing coordinate evidence path."""
     if not pairs or not raw_genome_path.is_file() or not config.phase2.terminal_repeat_enabled:
@@ -1379,9 +1404,17 @@ def _prepare_joint_boundaries(
             sequences.get(children[0].scaffold),
             validated_markers,
             config.phase1.extension_kb * 1000,
+            query=boundary_diamond_query,
+            proteome_index=proteome_index,
+            taxonomy=boundary_taxonomy_map,
         ):
             continue
-        joint = joint_boundary(children)
+        joint = joint_boundary(
+            children,
+            rule="accepted_adjacent_v1"
+            if all(boundary_candidate_id(c) in accepted_ids for c in children)
+            else "rejected_adjacent_r2_v1",
+        )
         try:
             finalized = refine_boundaries_with_terminal_repeats(
                 [joint],
@@ -1426,8 +1459,9 @@ def _replace_accepted_joints(
     joints: list[tuple[RefinedBoundary, tuple[RefinedBoundary, RefinedBoundary]]],
     *,
     ablation_id: AblationID,
+    accepted_ids: frozenset[str] = frozenset(),
 ) -> list[VerificationResult]:
-    """Replace rejected children only after native support and final gate pass."""
+    """Replace disjoint pairs only after native support, class and tier checks."""
     children_by_id = {boundary_candidate_id(boundary): children for boundary, children in joints}
     original_by_id = {result.eve_id: result for result in originals}
     qualified = []
@@ -1436,8 +1470,24 @@ def _replace_accepted_joints(
         expected = tuple(core for child in children for core in child.confirmed_seeds)
         if result.confirmed_seeds != expected:
             raise ValueError("joint rescue changed confirmed seed ownership")
-        family = effective_class(original_by_id[boundary_candidate_id(children[0])])
-        if effective_class(result) != family or not joint_result_supported(result, children):
+        child_results = [original_by_id[boundary_candidate_id(child)] for child in children]
+        accepted = [child.eve_id in accepted_ids for child in child_results]
+        if any(accepted) != all(accepted):
+            continue
+        if any(effective_class(result) != effective_class(child) for child in child_results):
+            continue
+        supported = (
+            accepted_joint_supported(result, children) if all(accepted) else joint_result_supported(result, children)
+        )
+        if not supported:
+            continue
+        tiers = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+        if all(accepted) and tiers[result.confidence_tier] < max(
+            tiers[child.confidence_tier] for child in child_results
+        ):
+            logging.getLogger(__name__).info(
+                "Joint %s withheld: rescored tier below accepted child tier", result.eve_id
+            )
             continue
         if not select_phase3_acceptance([result], ablation_id).canonical_results:
             continue
@@ -1451,12 +1501,16 @@ def _replace_accepted_joints(
     boundaries_by_id = {boundary_candidate_id(boundary): boundary for boundary, _ in joints}
     for result in accepted:
         provenance = json.loads(boundaries_by_id[result.eve_id].joint_seed_provenance)
+        if all(boundary_candidate_id(child) in accepted_ids for child in children_by_id[result.eve_id]):
+            provenance["rule"] = "accepted_adjacent_v1"
         for child in provenance["children"]:
             original = original_by_id[child["candidate_id"]]
             child.update(
                 final_confidence=original.final_confidence,
                 confidence_tier=original.confidence_tier,
                 effective_class=effective_class(original),
+                qualified_families=sorted(qualified_panel_families(original)),
+                core_family_identities=sorted(qualified_core_families(original)),
             )
         result.joint_seed_provenance = json.dumps(provenance, sort_keys=True)
     removed = {boundary_candidate_id(child) for result in accepted for child in children_by_id[result.eve_id]}

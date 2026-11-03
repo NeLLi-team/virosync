@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 from matplotlib.lines import Line2D
 
+from virosync.pipeline.host_signatures import lineage_key
 from virosync.pipeline.phase3.eve_ani_clustering import (
     MIN_CLUSTER_ALIGNED_FRACTION,
     MIN_CLUSTER_ANI,
@@ -62,10 +63,12 @@ def test_generate_eve_report_writes_jupyter_notebook(
     report_paths = generate_eve_report(
         output_dir=tmp_path,
         genome_id="demo",
+        host_credit_threshold=0.8,
     )
 
     assert report_paths.jupyter == tmp_path / "notebooks" / "jupyter" / "eve_analysis.ipynb"
     assert report_paths.jupyter.exists()
+    assert captured["parameters"]["HOST_CREDIT_THRESHOLD"] == 0.8
     assert captured["parameters"]["GENOME_ID"] == "demo"
     assert captured["parameters"]["RESULTS_DIR"] == str(tmp_path)
     assert captured["kernel_name"] == "python3"
@@ -73,6 +76,39 @@ def test_generate_eve_report_writes_jupyter_notebook(
     # marimo output must no longer be produced
     assert not (tmp_path / "notebooks" / "marimo").exists()
     assert not hasattr(report_paths, "marimo")
+
+
+def test_report_kernel_imports_the_running_detector_from_the_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _execute_notebook(_source: str, output: str, parameters: dict[str, object], **_kwargs: object) -> None:
+        captured.update(parameters)
+        Path(output).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setitem(sys.modules, "papermill", SimpleNamespace(execute_notebook=_execute_notebook))
+    generate_eve_report(output_dir=tmp_path, genome_id="demo")
+
+    kernel = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            f"sys.path.insert(0, {str(captured['VIROSYNC_SRC'])!r})\n"
+            "from pathlib import Path\n"
+            "from virosync.pipeline import host_signatures\n"
+            "print(Path(host_signatures.__file__).resolve())",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": "src"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    expected = Path(report_generate.__file__).resolve().parents[1] / "pipeline" / "host_signatures.py"
+    assert Path(kernel.stdout.strip()) == expected
 
 
 def test_generate_eve_report_requires_papermill_success(
@@ -670,11 +706,36 @@ def test_notebook_separates_mcp_support_fold_and_gene_taxonomy(
     namespace.update(
         {
             "BOUNDARY_TAXONOMY": {
-                "contig_1": {"top1_prefix": "BAC", "top1_target": "bacterium"},
-                "contig_2": {"top1_prefix": "ARC", "top1_target": "archaeon"},
-                "contig_3": {"top1_prefix": "BAC", "top1_target": "bacterium"},
-                "contig_4": {"top1_prefix": "EUK", "top1_target": "other-eukaryote"},
-                "contig_5": {"top1_prefix": "ARC", "top1_target": "archaeon"},
+                "contig_1": {
+                    "top1_prefix": "BAC",
+                    "top1_target": "bacterium",
+                    "viral_hit_within_depth": 0,
+                    "phase1_validated_viral_marker": 0,
+                },
+                "contig_2": {
+                    "top1_prefix": "ARC",
+                    "top1_target": "archaeon",
+                    "viral_hit_within_depth": 0,
+                    "phase1_validated_viral_marker": 0,
+                },
+                "contig_3": {
+                    "top1_prefix": "BAC",
+                    "top1_target": "bacterium",
+                    "viral_hit_within_depth": 0,
+                    "phase1_validated_viral_marker": 0,
+                },
+                "contig_4": {
+                    "top1_prefix": "EUK",
+                    "top1_target": "other-eukaryote",
+                    "viral_hit_within_depth": 0,
+                    "phase1_validated_viral_marker": 0,
+                },
+                "contig_5": {
+                    "top1_prefix": "ARC",
+                    "top1_target": "archaeon",
+                    "viral_hit_within_depth": 0,
+                    "phase1_validated_viral_marker": 0,
+                },
             },
             "_report_viral_category": lambda _record: None,
             "_canonical_viral_category": lambda _origin, _target: None,
@@ -1727,6 +1788,10 @@ PEVE_TOKENS = {
     "cavenderia-peve",
     "cavenderia fasciculata-peve",
 }
+SPLIT_GENERA = {
+    lineage_key(f"EUK|Amorphea|Amoebozoa|Evosea|Eumycetozoa|{genus}|{genus} one", 3): weight
+    for genus, weight in (("Dictyostelium", 40.0), ("Cavenderia", 35.0), ("Heterostelium", 25.0))
+}
 FIVE_GENES_30_BP_APART = "".join(
     f">contig_{index} # {start} # {start + 29} # 1 # ID=contig_{index};partial=00\nM\n"
     for index, start in enumerate(range(1, 151, 30), start=1)
@@ -1734,12 +1799,30 @@ FIVE_GENES_30_BP_APART = "".join(
 
 
 @pytest.fixture
-def euk_peve_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def euk_peve_report(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Run the notebook through the gene records of one EVE with host, EUK-pEVE and capsid genes.
 
     contig_1 is the left flank and contig_5 the right flank; contig_2 to contig_4 form the core.
     The host model weighs every -pEVE rank above the host's own ranks.
     """
+    yield from _euk_peve_report(request, tmp_path, monkeypatch, deep_viral_genes=frozenset())
+
+
+@pytest.fixture
+def deep_viral_report(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Run the same notebook with a viral hit within the search depth for the host-like gene contig_1."""
+    yield from _euk_peve_report(request, tmp_path, monkeypatch, deep_viral_genes=frozenset({"contig_1"}))
+
+
+def _euk_peve_report(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    deep_viral_genes: frozenset[str],
+    marker_genes: frozenset[str] = frozenset(),
+):
+    deep = {f"contig_{index}": int(f"contig_{index}" in deep_viral_genes) for index in range(1, 6)}
     labels = tmp_path / "labels.tsv"
     labels.write_text(
         f"EUK__EP00001\t{HOST_LINEAGE}\n"
@@ -1750,16 +1833,31 @@ def euk_peve_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     marker_dir = tmp_path / "phase1" / "marker_validation"
     marker_dir.mkdir(parents=True)
     token_weights = dict.fromkeys(HOST_TOKENS, 50.0) | dict.fromkeys(PEVE_TOKENS, 90.0) | {"sar": 10.0}
-    (marker_dir / "host_signature_model.json").write_text(json.dumps({"token_weights": token_weights}))
+    (marker_dir / "host_signature_model.json").write_text(
+        json.dumps(
+            {
+                "token_weights": token_weights,
+                "lineage_weights": getattr(request, "param", {lineage_key(HOST_LINEAGE, 3): 100.0}),
+            }
+        )
+    )
     boundary_dir = tmp_path / "phase2" / "boundary_diamond"
     boundary_dir.mkdir(parents=True)
     (boundary_dir / "taxonomy_map.tsv").write_text(
-        "porf_id\ttop1_target\ttop1_prefix\ttop10_prefixes\ttop10_targets\ttop10_pidents\n"
-        "contig_1\tEUK__EP00001|XP_10\tEUK__\tEUK__\tEUK__EP00001|XP_10\t80.00\n"
-        f"contig_2\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t60.00\n"
-        f"contig_3\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__,NCLDV__\t{PEVE_TARGET},{NCLDV_TARGET}\t90.00,30.00\n"
-        f"contig_4\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t20.00\n"
-        "contig_5\tEUK__EP00099|XP_5\tEUK__\tEUK__\tEUK__EP00099|XP_5\t70.00\n"
+        "porf_id\ttop1_target\ttop1_prefix\ttop10_prefixes\ttop10_targets\ttop10_pidents\tviral_hit_within_depth\n"
+        f"contig_1\tEUK__EP00001|XP_10\tEUK__\tEUK__\tEUK__EP00001|XP_10\t80.00\t{deep['contig_1']}\n"
+        f"contig_2\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t60.00\t{deep['contig_2']}\n"
+        f"contig_3\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__,NCLDV__\t{PEVE_TARGET},{NCLDV_TARGET}\t90.00,30.00\t"
+        f"{deep['contig_3']}\n"
+        f"contig_4\t{PEVE_TARGET}\tEUK-pEVE__\tEUK-pEVE__\t{PEVE_TARGET}\t20.00\t{deep['contig_4']}\n"
+        f"contig_5\tEUK__EP00099|XP_5\tEUK__\tEUK__\tEUK__EP00099|XP_5\t70.00\t{deep['contig_5']}\n"
+    )
+    taxonomy_path = boundary_dir / "taxonomy_map.tsv"
+    header, *rows = taxonomy_path.read_text().splitlines()
+    taxonomy_path.write_text(
+        header
+        + "\tphase1_validated_viral_marker\n"
+        + "".join(row + f"\t{int(row.split(chr(9))[0] in marker_genes)}\n" for row in rows)
     )
     synthesis = tmp_path / "phase3_synthesis"
     synthesis.mkdir()
@@ -1826,6 +1924,32 @@ def test_notebook_counts_euk_peve_genes_as_viral_and_never_as_host(euk_peve_repo
         "contig_4": False,
         "contig_5": False,
     }
+
+
+def test_notebook_never_labels_a_gene_with_a_deep_viral_hit_as_host(deep_viral_report: dict[str, object]) -> None:
+    genes = _report_genes(deep_viral_report)
+
+    assert genes["contig_1"]["category"] == "EUK"
+    assert genes["contig_1"]["host_lineage_match"] is False
+    assert genes["contig_1"]["best_hit_origin"] == "EUK"
+
+
+SHARED_NAME_GENERA = {
+    lineage_key(f"EUK|Amorphea|Amoebozoa|Evosea|Dictyostelium|{genus}|{genus} one", 3): weight
+    for genus, weight in (("Dictyostelium", 40.0), ("Cavenderia", 35.0), ("Heterostelium", 25.0))
+}
+
+
+@pytest.mark.parametrize("euk_peve_report", [SHARED_NAME_GENERA], indirect=True)
+def test_notebook_names_no_host_genus_without_a_genus_majority(euk_peve_report: dict[str, object]) -> None:
+    assert "dictyostelium" in euk_peve_report["HOST_TAXA"]
+    assert euk_peve_report["HOST_GENUS"] == ""
+
+
+@pytest.mark.parametrize("euk_peve_report", [SPLIT_GENERA], indirect=True)
+def test_notebook_host_lineage_stops_where_the_detector_stops(euk_peve_report: dict[str, object]) -> None:
+    assert euk_peve_report["HOST_TAXA"] == {"amorphea", "amoebozoa", "evosea", "eumycetozoa"}
+    assert euk_peve_report["HOST_GENUS"] == ""
 
 
 def test_notebook_host_lineage_drops_euk_peve_ranks(euk_peve_report: dict[str, object]) -> None:
@@ -1913,3 +2037,40 @@ def test_notebook_category_distribution_counts_euk_peve_and_sums_to_one(
     assert heights["EUK-pEVE"] == pytest.approx([0.0, 2 / 3, 0.0])
     assert [sum(region) for region in zip(*heights.values(), strict=True)] == pytest.approx([1.0, 1.0, 1.0])
     assert mcolors.to_hex(containers["EUK-pEVE"][1].get_facecolor()) == euk_peve_report["COLORS"]["EUK-pEVE"]
+
+
+def test_notebook_uses_configured_host_credit_threshold(euk_peve_report: dict[str, object]) -> None:
+    euk_peve_report["tax_labels"]["EUK__RELATIVE"] = "EUK|Amorphea|Amoebozoa|Evosea|Eumycetozoa|Other|Other one"
+    euk_peve_report["HOST_CREDIT_THRESHOLD"] = 0.9
+    assert not euk_peve_report["is_host_gene"]("EUK__RELATIVE|p1")
+
+
+def test_required_report_forwards_host_credit_threshold(monkeypatch, tmp_path: Path) -> None:
+    from virosync.orchestration._flows.single_genome.reports import _generate_required_reports
+
+    captured = {}
+
+    def generate(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(jupyter=tmp_path / "eve_analysis.ipynb")
+
+    monkeypatch.setattr(report_generate, "generate_eve_report", generate)
+    _generate_required_reports(tmp_path, "demo", None, report_generate.logger, 0.8)
+    assert captured["host_credit_threshold"] == 0.8
+
+
+@pytest.fixture
+def phase1_marker_report(request, tmp_path, monkeypatch):
+    yield from _euk_peve_report(
+        request, tmp_path, monkeypatch, deep_viral_genes=frozenset(), marker_genes=frozenset({"contig_1"})
+    )
+
+
+def test_actual_gene_map_uses_same_gene_phase1_marker_veto(phase1_marker_report):
+    genes = _report_genes(phase1_marker_report)
+    assert genes["contig_1"]["phase1_validated_viral_marker"] is True
+    assert genes["contig_5"]["phase1_validated_viral_marker"] is False
+    assert genes["contig_1"]["category"] == "EUK"
+    assert genes["contig_1"]["host_lineage_match"] is False
+    assert genes["contig_1"]["best_hit_origin"] == "EUK"
+    assert genes["contig_5"]["category"] == "EUK"

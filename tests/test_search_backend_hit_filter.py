@@ -244,3 +244,166 @@ def test_run_sequence_search_keeps_the_plain_diamond_top_k(tmp_path: Path, fake_
     cmd = fake_diamond.commands[0]
     assert cmd[cmd.index("--max-target-seqs") + 1] == "10"
     assert len(output.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def _masked(subject_ids: list[str], masked_genomes: set[str], max_targets: int = 10) -> list[str]:
+    kept = select_target_hits(subject_ids, max_targets, frozenset(masked_genomes))
+    return [subject_ids[idx] for idx in kept]
+
+
+def test_select_target_hits_drops_masked_rows_before_truncating() -> None:
+    subjects = ["EUK__G1|p1", "EUK__G2|p1", "BAC__G3|p1", "NCLDV__V1|p1"]
+
+    assert select_target_hits(subjects, 2) == [0, 1]
+    assert select_target_hits(subjects, 2, frozenset({"G1"})) == [1, 2]
+
+
+def test_select_target_hits_masks_a_genome_under_every_label() -> None:
+    subjects = ["EUK__G1|p1", "EUK-pEVE__G1|p2", "MITO__G1|p3", "PLASTID__G1|p4", "PPV__G1|p5", "BAC__G2|p1"]
+
+    assert _masked(subjects, {"G1"}) == ["BAC__G2|p1"]
+
+
+def test_select_target_hits_masks_whole_genome_keys_only() -> None:
+    subjects = ["EUK__G10|p1", "EUK__G1|p1", "EUK__XG1|p1"]
+
+    assert _masked(subjects, {"G1"}) == ["EUK__G10|p1", "EUK__XG1|p1"]
+
+
+def test_select_target_hits_masks_ids_without_a_label() -> None:
+    subjects = ["G1|p1", "G2|p1"]
+
+    assert _masked(subjects, {"G1"}) == ["G2|p1"]
+
+
+def test_select_target_hits_keeps_the_twin_and_genome_rules_with_a_mask() -> None:
+    subjects = ["EUK__G1|p1", "EUK__G2|p1", "EUK__G2|p2", "EUK__G3|p1", "PPV__G3|p1"]
+
+    kept = select_target_hits(subjects, 10, frozenset({"G1"}))
+
+    assert kept == [1, 4]
+
+
+@pytest.mark.parametrize("max_targets", [1, 2, 10])
+def test_select_target_hits_with_an_empty_mask_is_unchanged(max_targets: int) -> None:
+    subjects = ["EUK__G1|p1", "EUK__G1|p2", "EUK__G2|p5", "BAC__G3|p6", "NCLDV__G1|p1"]
+
+    assert select_target_hits(subjects, max_targets, frozenset()) == select_target_hits(subjects, max_targets)
+
+
+def _without_tmpdir(cmd: list[str]) -> list[str]:
+    """Drop the per-call temporary directory, the only part that differs between runs."""
+    idx = cmd.index("--tmpdir")
+    return cmd[:idx] + cmd[idx + 2 :]
+
+
+def _plain_search(tmp_path: Path, **kwargs: object) -> Path:
+    return run_sequence_search(
+        query_fasta=tmp_path / "q.faa",
+        db_path=tmp_path / "db.dmnd",
+        output_tsv=tmp_path / "out.tsv",
+        threads=1,
+        **kwargs,
+    )
+
+
+def _rows(path: Path) -> list[list[str]]:
+    return [line.split("\t")[:2] for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_plain_search_with_a_mask_fetches_extra_rows(tmp_path: Path, fake_diamond: type[_FakeDiamond]) -> None:
+    _plain_search(tmp_path, max_target_seqs=10, masked_genomes=frozenset({"G1"}))
+
+    cmd = fake_diamond.commands[0]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == str(10 * TARGET_FETCH_MULTIPLIER)
+
+
+def test_plain_search_with_a_mask_keeps_the_first_unmasked_rows_in_order(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [
+        ("q1", "EUK__G1|p1"),
+        ("q1", "EUK__G2|p1"),
+        ("q1", "EUK__G2|p1"),
+        ("q1", "EUK-pEVE__G1|p2"),
+        ("q1", "NCLDV__V1|p1"),
+        ("q1", "BAC__G3|p1"),
+        ("q2", "NCLDV__V1|p1"),
+    ]
+
+    output = _plain_search(tmp_path, max_target_seqs=3, masked_genomes=frozenset({"G1"}))
+
+    assert _rows(output) == [
+        ["q1", "EUK__G2|p1"],
+        ["q1", "EUK__G2|p1"],
+        ["q1", "NCLDV__V1|p1"],
+        ["q2", "NCLDV__V1|p1"],
+    ]
+
+
+def test_plain_search_with_a_mask_and_no_limit_drops_only_the_masked_rows(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [("q1", "EUK__G1|p1"), ("q1", "EUK__G2|p1"), ("q1", "EUK__G2|p1")]
+
+    output = _plain_search(tmp_path, max_target_seqs=0, masked_genomes=frozenset({"G1"}))
+
+    cmd = fake_diamond.commands[0]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == "0"
+    assert _rows(output) == [["q1", "EUK__G2|p1"], ["q1", "EUK__G2|p1"]]
+
+
+def test_plain_search_with_an_empty_mask_runs_the_same_command_and_keeps_every_row(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [("q1", "EUK__G1|p1")] * 3
+    unmasked_rows = _plain_search(tmp_path, max_target_seqs=10).read_text(encoding="utf-8")
+
+    masked = _plain_search(tmp_path, max_target_seqs=10, masked_genomes=frozenset())
+
+    cmd = fake_diamond.commands[1]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == "10"
+    assert _without_tmpdir(fake_diamond.commands[0]) == _without_tmpdir(cmd)
+    assert masked.read_text(encoding="utf-8") == unmasked_rows
+
+
+def test_genome_filtered_search_with_a_mask_drops_masked_genomes_before_truncating(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [
+        ("q1", "EUK__G1|p1"),
+        ("q1", "EUK-pEVE__G1|p2"),
+        ("q1", "EUK__G2|p1"),
+        ("q1", "EUK__G2|p2"),
+        ("q1", "NCLDV__V1|p1"),
+    ]
+
+    output = _filtered_search(tmp_path, max_target_seqs=2, masked_genomes=frozenset({"G1"}))
+
+    cmd = fake_diamond.commands[0]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == str(2 * TARGET_FETCH_MULTIPLIER)
+    assert _rows(output) == [["q1", "EUK__G2|p1"], ["q1", "NCLDV__V1|p1"]]
+
+
+def test_genome_filtered_search_with_a_mask_and_no_limit_drops_only_the_masked_rows(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [("q1", "EUK__G1|p1"), ("q1", "EUK__G2|p1"), ("q1", "EUK__G2|p1")]
+
+    output = _filtered_search(tmp_path, max_target_seqs=0, masked_genomes=frozenset({"G1"}))
+
+    assert _rows(output) == [["q1", "EUK__G2|p1"], ["q1", "EUK__G2|p1"]]
+
+
+def test_genome_filtered_search_with_an_empty_mask_is_unchanged(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond]
+) -> None:
+    fake_diamond.rows = [("q1", "EUK__G1|p1"), ("q1", "EUK__G1|p2"), ("q1", "NCLDV__V1|p1")]
+    unmasked_rows = _filtered_search(tmp_path, max_target_seqs=10).read_text(encoding="utf-8")
+
+    masked = _filtered_search(tmp_path, max_target_seqs=10, masked_genomes=frozenset())
+
+    cmd = fake_diamond.commands[1]
+    assert cmd[cmd.index("--max-target-seqs") + 1] == str(10 * TARGET_FETCH_MULTIPLIER)
+    assert _without_tmpdir(fake_diamond.commands[0]) == _without_tmpdir(cmd)
+    assert masked.read_text(encoding="utf-8") == unmasked_rows
