@@ -306,8 +306,8 @@ def run_diamond_on_hmm_hits(
         evalue: E-value cutoff
         max_seqs: Maximum hits per query (default 10 for top-10 analysis)
         search_backend: "diamond" (the only supported backend)
-        sensitive: Use Diamond --sensitive mode for better detection of
-            divergent homologs (slower but more sensitive)
+        sensitive: Use Diamond --sensitive with 400-target ranking chunks
+            to improve retrieval of divergent homologs at small hit limits.
         masked_genomes: Genome keys whose reference rows are dropped from the hits
 
     Returns:
@@ -325,7 +325,7 @@ def run_diamond_on_hmm_hits(
     logger.info("  Query: %s", hmm_hit_fasta.name)
     logger.info("  Database: %s", diamond_db.name)
 
-    extra_flags = ["--sensitive"] if sensitive else None
+    extra_flags = ["--sensitive", "--ext-chunk-size", "400"] if sensitive else None
     run_sequence_search(
         query_fasta=hmm_hit_fasta,
         db_path=diamond_db,

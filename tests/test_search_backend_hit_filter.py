@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from virosync.pipeline import search_backend
+from virosync.pipeline.phase1.marker_validation import run_diamond_on_hmm_hits
 from virosync.pipeline.phase2.boundary_diamond import parse_diamond_output
 from virosync.pipeline.phase3.gene_taxonomy import parse_diamond_top10
 from virosync.pipeline.search_backend import (
@@ -244,6 +245,33 @@ def test_run_sequence_search_keeps_the_plain_diamond_top_k(tmp_path: Path, fake_
     cmd = fake_diamond.commands[0]
     assert cmd[cmd.index("--max-target-seqs") + 1] == "10"
     assert len(output.read_text(encoding="utf-8").splitlines()) == 3
+
+
+@pytest.mark.parametrize(
+    ("sensitive", "expected_flags"),
+    [(False, []), (True, ["--sensitive", "--ext-chunk-size", "400"])],
+)
+def test_marker_search_breadth_preserves_mask_and_retained_limit(
+    tmp_path: Path, fake_diamond: type[_FakeDiamond], sensitive: bool, expected_flags: list[str]
+) -> None:
+    fake_diamond.rows = [("q1", "EUK__SELF|p1")] + [("q1", f"NCLDV__V{n}|p1") for n in range(12)]
+
+    output = run_diamond_on_hmm_hits(
+        tmp_path / "q.faa",
+        tmp_path / "marker.dmnd",
+        tmp_path / "out.tsv",
+        threads=1,
+        max_seqs=10,
+        sensitive=sensitive,
+        masked_genomes=frozenset({"SELF"}),
+    )
+
+    cmd = fake_diamond.commands[0]
+    flags_start = cmd.index("--outfmt") + 2 + len(search_backend.DEFAULT_COLUMNS)
+    assert cmd[flags_start : cmd.index("--threads")] == expected_flags
+    assert cmd[cmd.index("--max-target-seqs") + 1] == "100"
+    targets = [line.split("\t")[1] for line in output.read_text(encoding="utf-8").splitlines()]
+    assert targets == [f"NCLDV__V{n}|p1" for n in range(10)]
 
 
 def _masked(subject_ids: list[str], masked_genomes: set[str], max_targets: int = 10) -> list[str]:

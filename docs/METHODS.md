@@ -437,9 +437,16 @@ candidates.
 ### Reference hit selection
 
 Marker validation and host-signature estimation read the top 10 DIAMOND hits of
-each marker-domain query against the marker database. They use DIAMOND's rows
+each full-length HMM-hit protein against the marker database. They use DIAMOND's rows
 as they are, after [reference masking](#reference-masking). The host-signature
 model does not create seeds.
+
+The sensitive marker-validation search sets `--ext-chunk-size 400` to examine
+larger batches of candidate targets during DIAMOND's ranking heuristic. This
+helps recover divergent matches that the automatic setting can miss at a small
+target limit. It preserves the requested hit limit, reference mask and validation
+thresholds. This setting applies to the sensitive HMM-hit search; other searches
+retain their existing settings. See DIAMOND's [ranking options](https://github.com/bbuchfink/diamond/wiki/Advanced-options).
 
 Boundary refinement, gene-level taxonomy and the Phase 3 DIAMOND check search the
 combined proteome. That database holds the same subject ID several times, several
