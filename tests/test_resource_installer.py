@@ -21,6 +21,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -982,6 +983,67 @@ def test_valid_receipt_reuse_preserves_install_metadata_bytes_and_stats(
     assert metadata_path.read_bytes() == before_bytes
     assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
     assert after_stat.st_ctime_ns == before_stat.st_ctime_ns
+
+
+def test_receipt_reuse_across_nfs_client_device_numbers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "resources" / "virosync"
+    archive, manifest_bytes = _build_archive(tmp_path / "valid.tar.gz")
+    assert manifest_bytes is not None
+    _setup(target, archive, manifest_bytes)
+    candidate = target.resolve(strict=True)
+    metadata_path = candidate / "DB_METADATA.json"
+    before = metadata_path.read_bytes()
+    original_lstat = Path.lstat
+    payload_paths = {candidate / name for name in json.loads(before)["verified_files"]}
+    before_stat = metadata_path.lstat()
+
+    def other_client_lstat(path: Path, *args: Any, **kwargs: Any) -> Any:
+        observed = original_lstat(path, *args, **kwargs)
+        if path in payload_paths:
+            fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+            fields["st_dev"] += 2
+            return SimpleNamespace(**fields)
+        return observed
+
+    monkeypatch.setattr(Path, "lstat", other_client_lstat)
+    events: list[str] = []
+    _record_reuse_checks(monkeypatch, events)
+    _setup(target, archive, manifest_bytes, force=False, full=True)
+
+    assert events == ["receipt"]
+    assert metadata_path.read_bytes() == before
+    after_stat = metadata_path.lstat()
+    assert (after_stat.st_ino, after_stat.st_ctime_ns) == (before_stat.st_ino, before_stat.st_ctime_ns)
+
+
+def test_device_bearing_receipt_requires_full_verification_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "resources" / "virosync"
+    archive, manifest_bytes = _build_archive(tmp_path / "valid.tar.gz")
+    assert manifest_bytes is not None
+    _setup(target, archive, manifest_bytes)
+    candidate = target.resolve(strict=True)
+    metadata_path = candidate / "DB_METADATA.json"
+    metadata = json.loads(metadata_path.read_text())
+    for name, signature in metadata["verified_files"].items():
+        signature["device"] = (candidate / name).lstat().st_dev
+    metadata_path.chmod(0o600)
+    metadata_path.write_text(json.dumps(metadata))
+    metadata_path.chmod(0o444)
+    events: list[str] = []
+    _record_reuse_checks(monkeypatch, events)
+
+    _setup(target, archive, manifest_bytes, force=False, full=True)
+    assert events == ["receipt", "verify"]
+    assert all("device" not in row for row in json.loads(metadata_path.read_text())["verified_files"].values())
+    events.clear()
+    _setup(target, archive, manifest_bytes, force=False, full=True)
+    assert events == ["receipt"]
 
 
 def test_missing_receipt_is_verified_before_metadata_is_rebuilt(

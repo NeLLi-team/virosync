@@ -867,7 +867,6 @@ def _write_install_metadata(
     for relative in required_files:
         metadata = (root / relative).lstat()
         verified_files[relative] = {
-            "device": metadata.st_dev,
             "inode": metadata.st_ino,
             "size": metadata.st_size,
             "mtime_ns": metadata.st_mtime_ns,
@@ -896,7 +895,11 @@ def verified_install_receipt(
     *,
     expected_archive_sha256: str | None = None,
 ) -> bool:
-    """Return whether an install receipt authenticates the current payload stats."""
+    """Check immutable payload stats using a receipt portable across NFS clients.
+
+    Persist inode, size and nanosecond modification/change times. Device numbers
+    are client-local, so use them only for same-process open/path race checks.
+    """
     descriptor = -1
     try:
         resource_root = Path(root).resolve(strict=True)
@@ -971,7 +974,7 @@ def verified_install_receipt(
     if actual_files != allowed_files or actual_directories != allowed_directories:
         return False
 
-    expected_fields = {"device", "inode", "size", "mtime_ns", "ctime_ns"}
+    expected_fields = {"inode", "size", "mtime_ns", "ctime_ns"}
     for item in manifest.files:
         try:
             candidate = resource_root / item.path
@@ -989,7 +992,6 @@ def verified_install_receipt(
         if not isinstance(receipt, dict) or set(receipt) != expected_fields:
             return False
         observed = {
-            "device": metadata.st_dev,
             "inode": metadata.st_ino,
             "size": metadata.st_size,
             "mtime_ns": metadata.st_mtime_ns,
