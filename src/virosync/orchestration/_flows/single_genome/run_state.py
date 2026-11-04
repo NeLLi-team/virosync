@@ -169,7 +169,7 @@ _KNOWN_ARTIFACT_SCHEMAS = {
     "phase1/frameshift_screening/confirmed_frameshift_markers.tsv": ("frameshift-rescued-markers-v1"),
     "phase1/pfam_arbitration.tsv": "pfam-arbitration-v1",
     "phase2/refined_state.json": "virosync.phase2.refined_boundaries/v7",
-    "phase2/resume_state.json": "virosync.phase2.resume_state/v8",
+    "phase2/resume_state.json": "virosync.phase2.resume_state/v9",
     "virosync_predictions.tsv": "canonical-predictions-v8",
     "phase3_synthesis/virosync_predictions.tsv": "canonical-predictions-v8",
     "virosync_predictions_detailed.tsv": "detailed-predictions-v9",

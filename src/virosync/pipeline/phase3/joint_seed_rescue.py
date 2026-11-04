@@ -13,12 +13,11 @@ from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     GenomeDiamondQuery,
-    has_viral_hit_veto,
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
 from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
-from virosync.pipeline.phase2.seed_extension import _merge_pair
+from virosync.pipeline.phase2.seed_extension import _merge_pair, is_extension_host_gene
 from virosync.pipeline.phase2.terminal_repeats import find_terminal_inverted_repeats
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 
@@ -43,6 +42,11 @@ def eligible_joint_pairs(
         return []
     by_id = {result.eve_id: result for result in results}
     ordered = sorted(boundaries, key=lambda b: (b.scaffold, b.start, b.end, b.seed_id))
+    protected_cores: dict[str, set[tuple[int, int]]] = {}
+    for boundary in boundaries:
+        protected_cores.setdefault(boundary.scaffold, set()).update(
+            (core.start, core.end) for core in boundary.confirmed_seeds
+        )
     pairs = []
     for left, right in zip(ordered, ordered[1:]):
         children = (left, right)
@@ -85,7 +89,15 @@ def eligible_joint_pairs(
         if not all(accepted) and max(span[0] for span in envelopes) >= min(span[1] for span in envelopes):
             continue
         genes = [g for g in proteome_index.get(left.scaffold, []) if g.start < right.end and g.end > left.start]
-        if _gap_has_host_barrier(children, genes, taxonomy, host_model, host_threshold, viral_marker_genes):
+        if _gap_has_host_barrier(
+            children,
+            genes,
+            taxonomy,
+            host_model,
+            host_threshold,
+            viral_marker_genes,
+            protected_seed_intervals=tuple(sorted(protected_cores[left.scaffold])),
+        ):
             continue
         pairs.append(children)
     return pairs
@@ -351,6 +363,8 @@ def _gap_has_host_barrier(
     model: HostSignatureModel,
     threshold: float,
     viral_marker_genes: frozenset[str],
+    *,
+    protected_seed_intervals: tuple[tuple[int, int], ...] = (),
 ) -> bool:
     left, right = children
     run = 0
@@ -358,9 +372,13 @@ def _gap_has_host_barrier(
         if gene.end <= left.end or gene.start >= right.start:
             continue
         record = taxonomy[gene.id]
-        host = host_lineage_share(record, model) >= threshold
-        viral = has_viral_hit_veto(record) or gene.id in viral_marker_genes
-        run = run + 1 if host and not viral else 0
+        host = is_extension_host_gene(
+            record,
+            host_share_ok=host_lineage_share(record, model) >= threshold,
+            marker=gene.id in viral_marker_genes,
+            protected=any(gene.start < end and gene.end > start for start, end in protected_seed_intervals),
+        )
+        run = run + 1 if host else 0
         if run == 3:
             return True
     return False

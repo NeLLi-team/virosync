@@ -63,6 +63,13 @@ logger = logging.getLogger(__name__)
 # concrete family always wins label resolution, but it is NOT disqualified.
 _V2_EVE_CLASSES = CONCRETE_EVE_CLASSES
 
+_HOST_COMPETITION_COLUMNS = (
+    "host_competition_assessed",
+    "host_competition_viral_bits",
+    "host_competition_cellular_bits",
+    "host_competition_viral_target",
+    "host_competition_cellular_target",
+)
 _GENE_TAXONOMY_COLUMNS = (
     "porf_id",
     "scaffold",
@@ -76,6 +83,7 @@ _GENE_TAXONOMY_COLUMNS = (
     "has_ncldv_top10",
     "has_mirus_top10",
     "has_vp_plv_top10",
+    *_HOST_COMPETITION_COLUMNS,
 )
 _COMBINED_GENE_TAXONOMY_COLUMNS = (
     "eve_id",
@@ -94,6 +102,7 @@ _COMBINED_GENE_TAXONOMY_COLUMNS = (
     "is_high_pident_euk",
     "is_flanking",
     "flank_position",
+    *_HOST_COMPETITION_COLUMNS,
 )
 
 
@@ -144,12 +153,13 @@ class _GeneTaxonomyOutputRecord:
     is_high_pident_euk: bool
     is_flanking: bool
     flank_position: str
+    host_competition_fields: tuple[str, ...]
     legacy_per_eve_fields: tuple[str, ...] | None = None
 
     def per_eve_row(self) -> list[str]:
         """Return fields in the per-EVE taxonomy schema."""
         if self.legacy_per_eve_fields is not None:
-            return list(self.legacy_per_eve_fields)
+            return [*self.legacy_per_eve_fields, *self.host_competition_fields]
         return [
             self.porf_id,
             self.per_eve_scaffold,
@@ -163,6 +173,7 @@ class _GeneTaxonomyOutputRecord:
             _tsv_flag(self.has_ncldv_top10),
             _tsv_flag(self.has_mirus_top10),
             _tsv_flag(self.per_eve_has_vp_plv_top10),
+            *self.host_competition_fields,
         ]
 
     def combined_row(self, eve_id: str) -> list[str]:
@@ -184,6 +195,7 @@ class _GeneTaxonomyOutputRecord:
             _tsv_flag(self.is_high_pident_euk),
             _tsv_flag(self.is_flanking),
             self.flank_position,
+            *self.host_competition_fields,
         ]
 
 
@@ -278,10 +290,16 @@ def _per_eve_coordinate(record: Mapping[str, object], alias: str, canonical: str
 
 def _normalize_gene_taxonomy_record(record: Mapping[str, object]) -> _GeneTaxonomyOutputRecord:
     """Interpret a Phase 2 or legacy Phase 3 taxonomy record once."""
+    host_competition_fields = (
+        _tsv_flag(record.get("host_competition_assessed", False)),
+        *(str(record[name]) if record.get(name) is not None else "." for name in _HOST_COMPETITION_COLUMNS[1:3]),
+        *(str(record.get(name) or ".") for name in _HOST_COMPETITION_COLUMNS[3:]),
+    )
     if "top1_prefix" not in record:
         scaffold = cast(str, record.get("scaffold", "."))
         best_hit_evalue = str(record.get("best_hit_evalue", ""))
         return _GeneTaxonomyOutputRecord(
+            host_competition_fields=host_competition_fields,
             porf_id=cast(str, record.get("porf_id", ".")),
             per_eve_scaffold=scaffold,
             combined_scaffold=scaffold,
@@ -329,6 +347,7 @@ def _normalize_gene_taxonomy_record(record: Mapping[str, object]) -> _GeneTaxono
             _tsv_flag(record.get("has_vp_plv_top10")),
         )
     return _GeneTaxonomyOutputRecord(
+        host_competition_fields=host_competition_fields,
         porf_id=porf_id,
         per_eve_scaffold=cast(
             str,

@@ -58,5 +58,23 @@ def test_native_fetch_window_mask_duplicates_and_late_twin_do_not_change_top10(t
     deep = run(50)
     assert calls == [100] * (2 if path == "chunked" else 1) + [500] * (2 if path == "chunked" else 1)
     assert all(row.viral_hit_within_depth and not row.has_viral for row in deep.values())
-    assert {key: replace(row, viral_hit_within_depth=False) for key, row in deep.items()} == original
+    # Scores in the independent native deep search differ by design. Only the
+    # new competition diagnostics and deep veto may change, never original10.
+    assert {
+        key: replace(
+            row,
+            viral_hit_within_depth=original[key].viral_hit_within_depth,
+            host_competition_assessed=original[key].host_competition_assessed,
+            host_competition_viral_bits=original[key].host_competition_viral_bits,
+            host_competition_cellular_bits=original[key].host_competition_cellular_bits,
+            host_competition_viral_target=original[key].host_competition_viral_target,
+            host_competition_cellular_target=original[key].host_competition_cellular_target,
+        )
+        for key, row in deep.items()
+    } == original
+    assert all(row.host_competition_assessed for row in deep.values())
+    assert all(row.host_competition_viral_bits is not None for row in deep.values())
+    assert all(
+        row.host_competition_cellular_bits > original[key].host_competition_cellular_bits for key, row in deep.items()
+    )
     assert all(len(row.top10_targets) == 6 for row in deep.values())

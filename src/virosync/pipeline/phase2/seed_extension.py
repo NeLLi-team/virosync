@@ -55,12 +55,14 @@ def extend_confirmed_seed(
     ml_support: frozenset[str] = frozenset(),
     viral_marker_genes: frozenset[str] = frozenset(),
     disable_host_stop: bool = False,
+    protected_seed_intervals: tuple[tuple[int, int], ...] = (),
 ) -> RefinedBoundary:
     """Retain the core and commit only connected support inside the searched span.
 
-    A gene with a qualifying viral hit in its top 10 or within the search depth, or
-    with a validated Phase 1 viral marker (``viral_marker_genes``), never counts
-    toward a host stop. Deep-only hits are not positive extension support.
+    A measured cellular-dominant gene can count toward a three-host stop despite
+    weaker viral hits. Validated Phase 1 markers keep their veto. The added score
+    comparison cannot introduce a stop inside another confirmed seed interval.
+    Positive extension support is unchanged; deep-only hits never supply it.
     """
     seed = confirmed_seed_core(seed)
     available = host_stop_available(host_model)
@@ -71,7 +73,6 @@ def extend_confirmed_seed(
             continue
         tax = taxonomy.get(gene.id)
         marker = gene.id in viral_marker_genes or (tax is not None and tax.phase1_validated_viral_marker)
-        viral_veto = marker or (tax is not None and has_viral_hit_veto(tax))
         viral = marker or (tax is not None and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents))
         host = bool(
             available
@@ -79,8 +80,14 @@ def extend_confirmed_seed(
             and tax is not None
             and host_lineage_share(tax, host_model) >= host_threshold
         )
+        host = tax is not None and is_extension_host_gene(
+            tax,
+            host_share_ok=host,
+            marker=marker,
+            protected=any(gene.start < end and gene.end > start for start, end in protected_seed_intervals),
+        )
         coverage_complete &= tax is not None
-        evidence.append((gene, viral or gene.id in ml_support, host and not viral_veto, tax is not None))
+        evidence.append((gene, viral or gene.id in ml_support, host, tax is not None))
     left, left_reason, left_stop = _walk(seed.start, envelope[0], evidence, -1, disable_host_stop)
     right, right_reason, right_stop = _walk(seed.end, envelope[1], evidence, 1, disable_host_stop)
     return RefinedBoundary(
@@ -107,6 +114,19 @@ def extend_confirmed_seed(
         region_classification_vp_plv_markers=seed.region_classification_vp_plv_markers,
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
     )
+
+
+def is_extension_host_gene(taxonomy: GeneTaxonomy, *, host_share_ok: bool, marker: bool, protected: bool) -> bool:
+    """Add measured dominance to existing host stops without changing support."""
+    if not host_share_ok or marker or taxonomy.phase1_validated_viral_marker:
+        return False
+    if not has_viral_hit_veto(taxonomy):
+        return True
+    if protected or not taxonomy.host_competition_assessed:
+        return False
+    viral = taxonomy.host_competition_viral_bits
+    cellular = taxonomy.host_competition_cellular_bits
+    return cellular is not None and viral is not None and cellular > viral
 
 
 def _walk(

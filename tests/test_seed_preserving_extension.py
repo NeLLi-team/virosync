@@ -19,6 +19,11 @@ def gene(name, start, end, *, viral=False, host=False, deep_viral=False):
         top10_pidents=[30.0],
         viral_hit_within_depth=viral or deep_viral,
         phase1_validated_viral_marker=False,
+        host_competition_assessed=False,
+        host_competition_cellular_bits=None,
+        host_competition_viral_bits=None,
+        host_competition_cellular_target="",
+        host_competition_viral_target="",
         host=host,
     )
 
@@ -57,7 +62,7 @@ def test_three_host_genes_stop_remote_viral_support():
     assert boundary.right_stop == 2300
 
 
-def test_three_host_like_genes_with_a_deep_viral_hit_do_not_stop_extension():
+def test_unassessed_host_like_genes_with_a_deep_viral_hit_keep_old_veto():
     boundary = grow(
         [
             gene("v", 2100, 2200, viral=True),

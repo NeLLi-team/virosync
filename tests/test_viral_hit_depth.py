@@ -66,7 +66,18 @@ def test_top10_fields_hold_the_first_ten_hits_of_a_deeper_list() -> None:
     today = _classify(hits[:10], viral_hit_depth=10)
 
     assert len(deep.top10_targets) == 10
-    assert replace(deep, viral_hit_within_depth=False) == today
+    assert (
+        replace(
+            deep,
+            viral_hit_within_depth=today.viral_hit_within_depth,
+            host_competition_viral_bits=today.host_competition_viral_bits,
+            host_competition_viral_target=today.host_competition_viral_target,
+        )
+        == today
+    )
+    assert deep.host_competition_assessed and today.host_competition_assessed
+    assert deep.host_competition_viral_bits == 985.0
+    assert today.host_competition_viral_bits is None
 
 
 def test_has_viral_keeps_the_top10_rule() -> None:
@@ -217,7 +228,7 @@ def test_cached_and_batched_classification_agree_at_every_depth(tmp_path: Path, 
     assert (batched["g1"].viral_hit_within_depth, batched["g2"].viral_hit_within_depth) == (True, False)
 
 
-def test_taxonomy_map_adds_one_column_and_keeps_every_other_value(tmp_path: Path) -> None:
+def test_taxonomy_map_preserves_original_fields_and_exports_measured_competition(tmp_path: Path) -> None:
     deep = _classify(_host_hits_with_viral_at(15), viral_hit_depth=50)
     today = _classify(_host_hits_with_viral_at(15)[:10], viral_hit_depth=10)
 
@@ -226,11 +237,17 @@ def test_taxonomy_map_adds_one_column_and_keeps_every_other_value(tmp_path: Path
     deep_header, deep_row = (tmp_path / "deep.tsv").read_text().splitlines()
     today_header, today_row = (tmp_path / "today.tsv").read_text().splitlines()
 
-    assert deep_header.endswith("\thas_hit\tviral_hit_within_depth\tphase1_validated_viral_marker")
-    assert deep_row.rsplit("\t", 2) == [today_row.rsplit("\t", 2)[0], "1", "0"]
-    assert today_row.endswith("\t0")
-    assert deep_header.rsplit("\t", 1)[0] == today_header.rsplit("\t", 1)[0]
-    assert deep_row.rsplit("\t", 2)[0] == today_row.rsplit("\t", 2)[0]
+    deep_fields = dict(zip(deep_header.split("\t"), deep_row.split("\t"), strict=True))
+    today_fields = dict(zip(today_header.split("\t"), today_row.split("\t"), strict=True))
+    assert deep_header == today_header
+    expected_changes = {"viral_hit_within_depth", "host_competition_viral_bits", "host_competition_viral_target"}
+    assert {key for key in deep_fields if deep_fields[key] != today_fields[key]} == expected_changes
+    assert deep_fields["viral_hit_within_depth"] == "1"
+    assert today_fields["viral_hit_within_depth"] == "0"
+    assert deep_fields["host_competition_assessed"] == "1"
+    assert today_fields["host_competition_viral_bits"] == "."
+    assert float(deep_fields["host_competition_viral_bits"]) == 985.0
+    assert deep_fields["host_competition_viral_target"] == VIRAL_TARGET
 
 
 def _extend(taxonomy: dict[str, GeneTaxonomy], genes: list[pORF], monkeypatch) -> object:
@@ -241,9 +258,9 @@ def _extend(taxonomy: dict[str, GeneTaxonomy], genes: list[pORF], monkeypatch) -
 
 
 @pytest.mark.parametrize(
-    ("depth", "end", "reason"), [(10, 2200, "host_stop"), (50, 3100, "search_envelope")], ids=["depth_10", "depth_50"]
+    ("depth", "end", "reason"), [(10, 2200, "host_stop"), (50, 2200, "host_stop")], ids=["depth_10", "depth_50"]
 )
-def test_extension_crosses_three_host_like_genes_only_when_their_viral_hits_are_within_the_depth(
+def test_three_cellular_dominant_hosts_stop_even_with_weak_deep_viral_hits(
     monkeypatch, depth: int, end: int, reason: str
 ) -> None:
     genes = [
@@ -268,6 +285,11 @@ def test_extension_crosses_three_host_like_genes_only_when_their_viral_hits_are_
         viral_veto_hits=hits if depth > 10 else None,
     )
 
+    for name in ("h1", "h2", "h3"):
+        assert taxonomy[name].has_viral is False
+        assert taxonomy[name].viral_hit_within_depth is (depth == 50)
+        if depth == 50:
+            assert taxonomy[name].host_competition_cellular_bits > taxonomy[name].host_competition_viral_bits
     boundary = _extend(taxonomy, genes, monkeypatch)
 
     assert (boundary.end, boundary.right_stop_reason) == (end, reason)

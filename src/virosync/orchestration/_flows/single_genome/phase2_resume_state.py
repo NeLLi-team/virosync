@@ -28,7 +28,7 @@ from virosync.utils.atomic_write import atomic_write
 from .phase_state import phase2_state_from_document, phase2_state_to_document
 
 PHASE2_RESUME_STATE_FILENAME = "resume_state.json"
-PHASE2_RESUME_STATE_SCHEMA_VERSION = 8
+PHASE2_RESUME_STATE_SCHEMA_VERSION = 9
 PHASE2_RESUME_STATE_ARTIFACT_TYPE = "virosync.phase2.resume_state"
 PHASE2_RESUME_STATE_SCHEMA = f"{PHASE2_RESUME_STATE_ARTIFACT_TYPE}/v{PHASE2_RESUME_STATE_SCHEMA_VERSION}"
 
@@ -47,9 +47,12 @@ _GENE_STRING_FIELDS = (
     "scaffold",
     "top1_target",
     "top1_prefix",
+    "host_competition_viral_target",
+    "host_competition_cellular_target",
 )
 _GENE_INTEGER_FIELDS = ("start", "end")
 _GENE_FLOAT_FIELDS = ("top1_pident", "top1_evalue")
+_GENE_OPTIONAL_FLOAT_FIELDS = ("host_competition_viral_bits", "host_competition_cellular_bits")
 _GENE_STRING_LIST_FIELDS = ("top10_prefixes", "top10_targets")
 _GENE_FLOAT_LIST_FIELDS = ("top10_bits", "top10_pidents", "top10_evalues", "top10_qcovhsp")
 _GENE_BOOLEAN_FIELDS = (
@@ -59,12 +62,14 @@ _GENE_BOOLEAN_FIELDS = (
     "has_hit",
     "viral_hit_within_depth",
     "phase1_validated_viral_marker",
+    "host_competition_assessed",
 )
 _GENE_SPECIAL_FIELDS = ("taxonomy_fingerprint",)
 _GENE_FIELDS = (
     *_GENE_STRING_FIELDS,
     *_GENE_INTEGER_FIELDS,
     *_GENE_FLOAT_FIELDS,
+    *_GENE_OPTIONAL_FLOAT_FIELDS,
     *_GENE_STRING_LIST_FIELDS,
     *_GENE_FLOAT_LIST_FIELDS,
     *_GENE_BOOLEAN_FIELDS,
@@ -314,6 +319,9 @@ def _gene_to_document(value: object, context: str) -> dict[str, object]:
         document[name] = _require_integer(getattr(value, name), f"{context}.{name}")
     for name in _GENE_FLOAT_FIELDS:
         document[name] = _require_finite_float(getattr(value, name), f"{context}.{name}")
+    for name in _GENE_OPTIONAL_FLOAT_FIELDS:
+        number = getattr(value, name)
+        document[name] = None if number is None else _require_finite_float(number, f"{context}.{name}")
     for name in _GENE_STRING_LIST_FIELDS:
         document[name] = _require_string_list(getattr(value, name), f"{context}.{name}")
     for name in _GENE_FLOAT_LIST_FIELDS:
@@ -324,6 +332,7 @@ def _gene_to_document(value: object, context: str) -> dict[str, object]:
         value.taxonomy_fingerprint,
         f"{context}.taxonomy_fingerprint",
     )
+    _validate_host_competition(value, context)
     return document
 
 
@@ -336,6 +345,9 @@ def _gene_from_document(value: object, context: str) -> GeneTaxonomy:
         kwargs[name] = _require_integer(document[name], f"{context}.{name}")
     for name in _GENE_FLOAT_FIELDS:
         kwargs[name] = _require_finite_float(document[name], f"{context}.{name}")
+    for name in _GENE_OPTIONAL_FLOAT_FIELDS:
+        number = document[name]
+        kwargs[name] = None if number is None else _require_finite_float(number, f"{context}.{name}")
     for name in _GENE_STRING_LIST_FIELDS:
         kwargs[name] = _require_string_list(document[name], f"{context}.{name}")
     for name in _GENE_FLOAT_LIST_FIELDS:
@@ -346,7 +358,24 @@ def _gene_from_document(value: object, context: str) -> GeneTaxonomy:
         document["taxonomy_fingerprint"],
         f"{context}.taxonomy_fingerprint",
     )
-    return GeneTaxonomy(**kwargs)
+    taxonomy = GeneTaxonomy(**kwargs)
+    _validate_host_competition(taxonomy, context)
+    return taxonomy
+
+
+def _validate_host_competition(taxonomy: GeneTaxonomy, context: str) -> None:
+    """Reject incomplete or inconsistent measured competition in checkpoints."""
+    for kind in ("viral", "cellular"):
+        bits = getattr(taxonomy, f"host_competition_{kind}_bits")
+        target = getattr(taxonomy, f"host_competition_{kind}_target")
+        if (bits is None) != (target == "") or (bits is not None and bits < 0):
+            raise Phase2ResumeStateError(f"{context}: inconsistent {kind} host-competition hit")
+        if not taxonomy.host_competition_assessed and bits is not None:
+            raise Phase2ResumeStateError(f"{context}: unassessed host competition contains scores")
+    if taxonomy.host_competition_assessed and (
+        (taxonomy.host_competition_viral_bits is not None) != taxonomy.viral_hit_within_depth
+    ):
+        raise Phase2ResumeStateError(f"{context}: host-competition viral evidence differs from veto")
 
 
 def _control_to_document(

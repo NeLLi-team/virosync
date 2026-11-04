@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 14. The repeat-evidence groups below comprise 18
+Both tables use output schema 15. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -150,10 +150,10 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 14 |
+| Public output schema | 15 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
 | Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
-| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v8` |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v9` |
 | Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v7` |
 | Accepted and detailed prediction artifacts | `canonical-predictions-v8` and `detailed-predictions-v9` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
@@ -500,6 +500,27 @@ separate veto search. This matters when an element integrated in
 an ancestor of a host genus: related species can carry host-labelled copies
 that fill the top 10 and push viral references down.
 
+The private host-stop experiment also records the best qualifying viral and
+cellular bitscores and their target IDs across the original and separate deep
+searches. Viral hits need 25% identity; cellular competitors are EUK, BAC and
+ARC. An assessed search with no such hit has a null maximum. Unavailable evidence
+is marked separately. Original top-ten arrays, host-share estimates and positive
+extension support remain unchanged.
+
+The Phase 2 taxonomy map and final per-EVE and combined gene taxonomy tables
+retain the assessment flag, both maxima and their target IDs. Missing scores
+use `.` in TSV; measured zero stays zero. Evidence profiles retain the region's
+stop coordinates and reasons without duplicating the gene tables.
+
+The experiment changes only the three-gene host barrier. A host-signature gene
+can join that barrier when its best cellular score strictly exceeds its best
+viral score, despite weaker viral hits within the configured depth. Ties retain
+viral protection. Existing stops remain in force when competition is unavailable.
+Validated Phase 1 marker genes retain their veto, and the added dominance rule
+does not apply to genes overlapping any independently confirmed seed interval.
+One or two isolated dominated genes do not acquire a new stopping rule. Joint
+assessment uses the same predicate, and recorded stops still constrain repeats.
+
 The filter rewrites the DIAMOND table in place with the same columns. The
 all-against-all search among EVE core proteins in the Syntviz figure is not a
 top-hit search and uses no filter.
@@ -636,8 +657,11 @@ extension before the first gene in the run. A gene has qualifying viral support
 when a viral hit with at least 25% identity sits in its top 10 or anywhere within
 the first `phase2.viral_hit_depth` hits, or when Phase 1 validated its protein as a
 viral marker (status `validated`, from a model that is not a host kinase, COG or
-BUSCO model). Such a gene is never host-like for this stop. A single eukaryotic best hit does
-not establish this stop. A missing model, a model without a host lineage or
+BUSCO model). The private dominance experiment described under reference hit
+selection additionally permits a stop when measured cellular hits strictly
+outscore qualifying viral hits, outside all confirmed cores. It keeps the
+Phase 1 marker veto and all existing stops when competition is unavailable.
+A single eukaryotic best hit does not establish this stop. A missing model, a model without a host lineage or
 missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
@@ -1267,8 +1291,10 @@ run; old completion fingerprints do not authorize reuse.
 
 The staged depth50 candidate keeps host weighting and positive Phase3 viral
 fractions based on the existing top10 evidence. A deeper-only qualifying hit
-vetoes host stopping and the EUK penalty but is not new positive extension
-support. Top10 viral evidence, existing ML support and same-gene Phase1
+vetoes the EUK penalty and normally vetoes host stopping, but is not new positive
+extension support. The private three-gene dominance experiment can override the
+DIAMOND host-stop veto using measured scores; it does not change the EUK penalty
+or gene-map category. Top10 viral evidence, existing ML support and same-gene Phase1
 validated viral markers can support extension. The host signature remains
 trained from marker housekeeping evidence.
 

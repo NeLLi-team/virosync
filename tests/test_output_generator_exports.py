@@ -1580,3 +1580,48 @@ def test_generate_all_rejects_duplicate_confirmed_seed_membership(tmp_path: Path
 
     with pytest.raises(ValueError, match="confirmed seed"):
         OutputGenerator(output_dir=tmp_path).generate_all([first, second])
+
+
+@pytest.mark.parametrize(
+    ("assessed", "viral_bits", "cellular_bits", "viral_target", "cellular_target"),
+    [
+        (True, 80.5, 100.25, "NCLDV__virus|p", "EUK__host|p"),
+        (True, 0.0, 0.0, "NCLDV__zero|p", "EUK__zero|p"),
+        (True, None, None, "", ""),
+        (False, None, None, "", ""),
+    ],
+    ids=["measured", "measured-zero", "assessed-no-hit", "unassessed"],
+)
+def test_native_host_competition_reaches_both_final_gene_tables(
+    tmp_path, assessed, viral_bits, cellular_bits, viral_target, cellular_target
+):
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, build_gene_taxonomy_record
+
+    tax = GeneTaxonomy(
+        "g",
+        "ctg",
+        100,
+        200,
+        host_competition_assessed=assessed,
+        host_competition_viral_bits=viral_bits,
+        host_competition_cellular_bits=cellular_bits,
+        host_competition_viral_target=viral_target,
+        host_competition_cellular_target=cellular_target,
+    )
+    record = build_gene_taxonomy_record(tax)
+    result = VerificationResult("eve", "ctg", 0, 1000, gene_taxonomy_records=[record])
+    original = dict(record)
+    outputs = OutputGenerator(tmp_path).write_gene_taxonomy([result])
+    expected = {
+        "host_competition_assessed": str(int(assessed)),
+        "host_competition_viral_bits": "." if viral_bits is None else str(viral_bits),
+        "host_competition_cellular_bits": "." if cellular_bits is None else str(cellular_bits),
+        "host_competition_viral_target": viral_target or ".",
+        "host_competition_cellular_target": cellular_target or ".",
+    }
+    for key in ("gene_taxonomy_eve", "gene_taxonomy_all"):
+        with outputs[key].open(newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        assert len(rows) == 1
+        assert {name: rows[0][name] for name in expected} == expected
+    assert record == original

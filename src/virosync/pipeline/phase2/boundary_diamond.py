@@ -28,6 +28,7 @@ Key design principles:
 from __future__ import annotations
 
 import logging
+import math
 import random
 import subprocess
 from collections import Counter
@@ -107,7 +108,9 @@ def has_viral_hit_veto(taxonomy: GeneTaxonomy) -> bool:
 
     The hit can sit in the top 10 or anywhere within the first ``viral_hit_depth``
     hits of the gene search. A separate same-gene Phase1 validated viral marker
-    also vetoes host status without changing top10 taxonomy.
+    also vetoes host status without changing top10 taxonomy. The experimental
+    extension barrier can override weak DIAMOND support using measured scores;
+    it preserves the independent Phase 1 marker veto.
     """
     return (
         taxonomy.phase1_validated_viral_marker
@@ -263,6 +266,11 @@ class GeneTaxonomy:
     has_hit: bool = False
     viral_hit_within_depth: bool = False
     phase1_validated_viral_marker: bool = False
+    host_competition_assessed: bool = False
+    host_competition_viral_bits: float | None = None
+    host_competition_cellular_bits: float | None = None
+    host_competition_viral_target: str = ""
+    host_competition_cellular_target: str = ""
 
 
 class TaxonomyFingerprintRecord(TypedDict):
@@ -300,6 +308,11 @@ class GeneTaxonomyRecord(TypedDict):
     has_hit: bool
     viral_hit_within_depth: bool
     phase1_validated_viral_marker: bool
+    host_competition_assessed: bool
+    host_competition_viral_bits: float | None
+    host_competition_cellular_bits: float | None
+    host_competition_viral_target: str
+    host_competition_cellular_target: str
     broad_host_counted: NotRequired[bool]
     is_flanking: bool
     flank_position: str | None
@@ -382,6 +395,11 @@ def build_gene_taxonomy_record(
         "has_hit": tax.has_hit,
         "viral_hit_within_depth": tax.viral_hit_within_depth,
         "phase1_validated_viral_marker": tax.phase1_validated_viral_marker,
+        "host_competition_assessed": tax.host_competition_assessed,
+        "host_competition_viral_bits": tax.host_competition_viral_bits,
+        "host_competition_cellular_bits": tax.host_competition_cellular_bits,
+        "host_competition_viral_target": tax.host_competition_viral_target,
+        "host_competition_cellular_target": tax.host_competition_cellular_target,
         "is_flanking": is_flanking,
         "flank_position": flank_position,
     }
@@ -1041,15 +1059,41 @@ def _classify_query_hits(
         taxonomy_weight_mode=config.taxonomy_weight_mode,
         top_hit_count=config.top_hit_count,
     )
-    if config.viral_hit_depth > TOP_HIT_COUNT:
-        if viral_veto_hits is None:
-            raise ValueError("independent deep-veto search results are required above depth10")
-        for porf_id, record in taxonomy.items():
+    if config.viral_hit_depth > TOP_HIT_COUNT and viral_veto_hits is None:
+        raise ValueError("independent deep-veto search results are required above depth10")
+    for porf_id, record in taxonomy.items():
+        hits = []
+        if config.viral_hit_depth > TOP_HIT_COUNT:
             hits = viral_veto_hits.get(porf_id, [])[: config.viral_hit_depth]
             record.viral_hit_within_depth |= has_identity_qualified_viral_hit(
                 [extract_prefix(hit.target) for hit in hits], [hit.pident for hit in hits]
             )
+        if record.start < record.end:
+            original = diamond_hits.get(porf_id, [])[: len(record.top10_targets)]
+            _assign_host_competition(record, [*original, *hits])
     return taxonomy
+
+
+def _assign_host_competition(taxonomy: GeneTaxonomy, hits: list[DiamondHit]) -> None:
+    """Retain exact maxima from the original and independent deep search rows."""
+    viral, cellular = [], []
+    for hit in hits:
+        if not math.isfinite(hit.bits) or hit.bits < 0 or not math.isfinite(hit.pident) or not 0 <= hit.pident <= 100:
+            raise ValueError(f"invalid host-competition hit scores for {taxonomy.porf_id}")
+        prefix = extract_prefix(hit.target)
+        if prefix in VIRAL_PREFIXES and hit.pident >= MIN_VIRAL_HIT_PIDENT:
+            viral.append(hit)
+        elif prefix in CELLULAR_PREFIXES:
+            cellular.append(hit)
+    best_viral = max(viral, key=lambda hit: hit.bits, default=None)
+    best_cellular = max(cellular, key=lambda hit: hit.bits, default=None)
+    if (best_viral is not None) != taxonomy.viral_hit_within_depth:
+        raise ValueError(f"host-competition rows disagree with viral veto for {taxonomy.porf_id}")
+    taxonomy.host_competition_assessed = True
+    taxonomy.host_competition_viral_bits = best_viral.bits if best_viral is not None else None
+    taxonomy.host_competition_cellular_bits = best_cellular.bits if best_cellular is not None else None
+    taxonomy.host_competition_viral_target = best_viral.target if best_viral is not None else ""
+    taxonomy.host_competition_cellular_target = best_cellular.target if best_cellular is not None else ""
 
 
 def split_fasta(
@@ -1742,7 +1786,9 @@ def write_taxonomy_map(
             "porf_id\tscaffold\tstart\tend\ttop1_target\ttop1_prefix\t"
             "top1_pident\ttop1_evalue\ttop10_prefixes\ttop10_targets\t"
             "top10_bits\ttop10_pidents\ttop10_evalues\t"
-            "has_ncldv_mirus\thas_vp_plv\thas_viral\thas_hit\tviral_hit_within_depth\tphase1_validated_viral_marker\n"
+            "has_ncldv_mirus\thas_vp_plv\thas_viral\thas_hit\tviral_hit_within_depth\tphase1_validated_viral_marker\t"
+            "host_competition_assessed\thost_competition_viral_bits\thost_competition_cellular_bits\t"
+            "host_competition_viral_target\thost_competition_cellular_target\n"
         )
         # Data
         for porf_id, tax in sorted(taxonomy_map.items()):
@@ -1758,7 +1804,10 @@ def write_taxonomy_map(
                 f"{bits_str}\t{pidents_str}\t{evalues_str}\t"
                 f"{int(tax.has_ncldv_mirus)}\t{int(tax.has_vp_plv)}\t"
                 f"{int(tax.has_viral)}\t{int(tax.has_hit)}\t{int(tax.viral_hit_within_depth)}\t"
-                f"{int(tax.phase1_validated_viral_marker)}\n"
+                f"{int(tax.phase1_validated_viral_marker)}\t{int(tax.host_competition_assessed)}\t"
+                f"{tax.host_competition_viral_bits if tax.host_competition_viral_bits is not None else '.'}\t"
+                f"{tax.host_competition_cellular_bits if tax.host_competition_cellular_bits is not None else '.'}\t"
+                f"{tax.host_competition_viral_target or '.'}\t{tax.host_competition_cellular_target or '.'}\n"
             )
 
     logger.info("Wrote taxonomy map: %s", output_path)

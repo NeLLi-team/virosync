@@ -695,6 +695,9 @@ def _run_phase2_subflow(
 
     refined_boundaries = []
     walked_intervals: dict[str, tuple[int, int]] = {}
+    protected_cores: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    for seed in merged_seeds:
+        protected_cores[seed.scaffold].update((core.start, core.end) for core in seed.confirmed_seeds)
     for seed in merged_seeds:
         mapping = boundary_diamond_query.seed_gene_mappings.get(seed.seed_id) if boundary_diamond_query else None
         envelope = (seed.start, seed.end)
@@ -714,6 +717,7 @@ def _run_phase2_subflow(
             host_threshold=boundary_host_trim_score_threshold,
             ml_support=ml_support.get(seed.seed_id, frozenset()),
             viral_marker_genes=viral_marker_genes,
+            protected_seed_intervals=tuple(sorted(protected_cores[seed.scaffold])),
         )
         boundary = extend_confirmed_seed(**kwargs, disable_host_stop=ablation_id is AblationID.A4)
         if ablation_id is AblationID.A4:

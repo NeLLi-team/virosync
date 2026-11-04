@@ -122,6 +122,11 @@ def _taxonomy(porf_id: str, pident: float) -> GeneTaxonomy:
         has_vp_plv=False,
         has_viral=True,
         viral_hit_within_depth=True,
+        host_competition_assessed=True,
+        host_competition_viral_bits=222.9876543210987,
+        host_competition_cellular_bits=333.1234567890123,
+        host_competition_viral_target="NCLDV__target|mcp",
+        host_competition_cellular_target=f"EUK__target|{porf_id}",
         has_hit=True,
     )
 
@@ -285,7 +290,13 @@ def test_phase2_resume_state_round_trip_preserves_optional_none_values() -> None
 
 def test_phase2_resume_state_round_trips_both_values_of_the_depth_flag() -> None:
     state = _state()
-    state.boundary_taxonomy_map["porf-under"].viral_hit_within_depth = False
+    under = state.boundary_taxonomy_map["porf-under"]
+    under.viral_hit_within_depth = False
+    under.host_competition_viral_bits = None
+    under.host_competition_viral_target = ""
+    under.has_viral = under.has_ncldv_mirus = False
+    for field in ("top10_targets", "top10_prefixes", "top10_bits", "top10_pidents", "top10_evalues"):
+        setattr(under, field, getattr(under, field)[:1])
 
     loaded = phase2_resume_state_from_document(phase2_resume_state_to_document(state))
 
@@ -539,3 +550,25 @@ def test_phase1_validated_marker_is_strictly_preserved_on_resume():
     del doc["boundary_taxonomy_map"][0]["value"]["phase1_validated_viral_marker"]
     with pytest.raises(Phase2ResumeStateError, match="phase1_validated_viral_marker"):
         phase2_resume_state_from_document(doc)
+
+
+def test_phase2_resume_preserves_assessed_competition_and_nullable_missing_scores() -> None:
+    state = _state()
+    state.boundary_taxonomy_map["porf-under"] = replace(
+        state.boundary_taxonomy_map["porf-under"],
+        host_competition_assessed=False,
+        host_competition_viral_bits=None,
+        host_competition_cellular_bits=None,
+        host_competition_viral_target="",
+        host_competition_cellular_target="",
+    )
+    document = phase2_resume_state_to_document(state)
+    restored = phase2_resume_state_from_document(document)
+    assert restored.boundary_taxonomy_map == state.boundary_taxonomy_map
+    observed = restored.boundary_taxonomy_map["porf-over"]
+    assert observed.host_competition_assessed is True
+    assert observed.host_competition_viral_bits == 222.9876543210987
+    assert restored.boundary_taxonomy_map["porf-under"].host_competition_viral_bits is None
+    document["schema_version"] = 8
+    with pytest.raises(Phase2ResumeStateError, match="unsupported.*schema_version"):
+        phase2_resume_state_from_document(document)
