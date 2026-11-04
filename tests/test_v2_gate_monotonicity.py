@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
@@ -21,14 +19,13 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
 )
 from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate, evaluate_v2_quality_gate
 
-# Label triples per class, shaped so both the LOW resolver (likely_family /
-# classification) and the HIGH/MEDIUM resolver (region_classification) land on
-# the same effective class.
+# Native labels shaped so both the LOW and HIGH/MEDIUM resolvers land on the
+# same effective class.
 _CLASS_LABELS = {
-    "PPV": dict(region_classification="PPV", classification="PPV", likely_family="PPV"),
-    "MIXED": dict(region_classification="MIXED", classification="MIXED", likely_family="UNKNOWN"),
-    "NCLDV": dict(region_classification="NCLDV", classification="NCLDV", likely_family="NCLDV"),
-    "MIRUS": dict(region_classification="MIRUS", classification="MIRUS", likely_family="MIRUS"),
+    "PPV": dict(region_classification="PPV", likely_family="PPV"),
+    "MIXED": dict(region_classification="MIXED", likely_family="UNKNOWN"),
+    "NCLDV": dict(region_classification="NCLDV", likely_family="NCLDV"),
+    "MIRUS": dict(region_classification="MIRUS", likely_family="MIRUS"),
 }
 
 # (end, hallmark_count, hallmark_genes, has_capsid_evidence)
@@ -73,7 +70,9 @@ def test_class_gate_is_monotone_in_confidence_tier() -> None:
         for end, hallmark_count, hallmark_genes, has_capsid_evidence in _EVIDENCE_VECTORS:
             decisions = {
                 tier: _evaluate_class_quality_gate(
-                    SimpleNamespace(
+                    VerificationResult(
+                        eve_id="candidate",
+                        scaffold="s",
                         confidence_tier=tier,
                         start=0,
                         end=end,

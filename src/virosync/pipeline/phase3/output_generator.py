@@ -531,6 +531,7 @@ def _evaluate_class_quality_gate(result: VerificationResult) -> QualityGateDecis
         classification=getattr(result, "classification", ""),
         likely_family=getattr(result, "likely_family", ""),
     )
+    module_support = supplementary is not None and supplementary.eligible and supplementary.group == eve_class
 
     if has_spatial_rescue(result):
         return QualityGateDecision(True, eve_class, "hallmark_spatial_rescue_pass")
@@ -560,15 +561,23 @@ def _evaluate_class_quality_gate(result: VerificationResult) -> QualityGateDecis
             reason = "small_dna_high_medium_pass" if kept else "small_dna_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
         if eve_class in ("NCLDV", "MIRUS"):
-            kept = length > 5000 or has_capsid_evidence
+            kept = (
+                length > 5000
+                or has_capsid_evidence
+                or (
+                    (hallmark >= 2 or module_support)
+                    and len(assess_competitive_viral_support(result).supporting_gene_ids) >= 2
+                )
+            )
             reason = "ncldv_mirus_high_medium_pass" if kept else "ncldv_mirus_high_medium_gate"
             return QualityGateDecision(kept, eve_class, reason)
 
     if tier == "LOW":
         family = eve_class
         if family in ("NCLDV", "MIRUS"):
-            module_support = supplementary is not None and supplementary.eligible and supplementary.group == family
-            kept = length > 5000 and (hallmark >= 2 or module_support)
+            kept = (hallmark >= 2 or module_support) and (
+                length > 5000 or len(assess_competitive_viral_support(result).supporting_gene_ids) >= 2
+            )
             reason = "ncldv_mirus_low_promoted" if kept else "ncldv_mirus_low_gate"
             if kept and hallmark < 2 and module_support:
                 reason = "ncldv_mirus_low_supplementary_module"

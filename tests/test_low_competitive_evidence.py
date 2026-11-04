@@ -55,6 +55,67 @@ def test_short_coreless_low_with_two_stronger_viral_genes_is_retained(end):
     assert (result.start, result.end, result.confidence_tier) == (0, end, "LOW")
 
 
+@pytest.mark.parametrize("family", ["NCLDV", "MIRUS"])
+@pytest.mark.parametrize("tier", ["LOW", "MEDIUM", "HIGH"])
+@pytest.mark.parametrize("end", [700, 4037, 5000])
+def test_two_competitive_genes_satisfy_short_large_dna_length_requirement(family, tier, end):
+    result = candidate(
+        gene("a"),
+        gene("b", start=500, end=700),
+        end=end,
+        region_classification=family,
+        likely_family=family,
+        confidence_tier=tier,
+    )
+    decision = evaluate_v2_quality_gate(result)
+    assert decision.kept
+    assert (result.start, result.end, result.confidence_tier) == (0, end, tier)
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        gene("b", start=500, end=700, bits=[100.0, 100.0]),
+        gene("b", start=500, end=700, bits=[99.0, 100.0]),
+        gene("b", start=500, end=700, top10_pidents=[24.9, 30.0]),
+        gene("b", start=500, end=700, prefixes=["PHAGE"], bits=[120.0]),
+        gene("alias"),
+        gene("b", start=4000, end=4100),
+        gene("b", start=500, end=700, bits=[120.0]),
+    ],
+)
+def test_short_length_exception_needs_two_valid_independent_supports(second):
+    assert not evaluate_v2_quality_gate(candidate(gene("a"), second, end=4037)).kept
+
+
+@pytest.mark.parametrize("tier", ["LOW", "MEDIUM", "HIGH"])
+def test_short_length_exception_requires_marker_context_at_every_tier(tier):
+    result = candidate(gene("a"), gene("b", start=500, end=700), end=4037, hallmark_count=1, confidence_tier=tier)
+    assert not evaluate_v2_quality_gate(result).kept
+
+
+@pytest.mark.parametrize("family", ["PPV", "MIXED"])
+def test_short_large_dna_exception_does_not_change_other_classes(family):
+    result = candidate(
+        gene("a"),
+        gene("b", start=500, end=700),
+        end=1500,
+        region_classification=family,
+        likely_family=family,
+    )
+    assert not evaluate_v2_quality_gate(result).kept
+
+
+def test_two_proven_supports_do_not_require_every_other_gene_to_be_assessed():
+    result = candidate(
+        gene("a"),
+        gene("b", start=500, end=700),
+        gene("unavailable", start=800, end=1000, bits=[120.0]),
+        end=4037,
+    )
+    assert evaluate_v2_quality_gate(result).kept
+
+
 def test_exact_15000_bp_with_two_supporting_genes_keeps_original_gate_reason():
     decision = evaluate_v2_quality_gate(candidate(gene("a"), gene("b", start=500, end=700)))
     assert decision.kept and decision.promoted_low
@@ -206,6 +267,9 @@ def test_only_scored_qualifying_core_exempts_low():
         )
     ]
     assert evaluate_v2_quality_gate(result).kept
+    result.end = 4037
+    assert not evaluate_v2_quality_gate(result).kept
+    result.end = 6000
     result.hallmark_evidence[0].model_roles[0]["excluded_from_scoring"] = True
     assert evaluate_v2_quality_gate(result).reason == "low_gene_evidence_unavailable"
 

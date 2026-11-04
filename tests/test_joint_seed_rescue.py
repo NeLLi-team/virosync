@@ -644,7 +644,7 @@ def test_failed_required_repeat_scan_abstains(monkeypatch) -> None:
     )
 
 
-def test_supplementary_support_does_not_bypass_final_length_gate() -> None:
+def test_competitive_supplementary_support_can_retain_short_joint() -> None:
     from test_eve_confidence_scoring import _supplementary_candidate, _supplementary_gene
 
     from virosync.orchestration._flows.single_genome.phase3 import _replace_accepted_joints
@@ -666,7 +666,10 @@ def test_supplementary_support_does_not_bypass_final_length_gate() -> None:
     calculate_eve_confidence(result, 0)
     assert result.supplementary_viral_evidence.eligible
     originals = [rejected(c) for c in children]
-    assert _replace_accepted_joints(originals, [result], [(joint, children)], ablation_id=AblationID.A0) == originals
+    retained = _replace_accepted_joints(originals, [result], [(joint, children)], ablation_id=AblationID.A0)
+    assert retained == [result]
+    assert result.confirmed_seeds == joint.confirmed_seeds
+    assert (result.start, result.end) == (0, 5000)
 
 
 @pytest.mark.parametrize("model", [None, {}])

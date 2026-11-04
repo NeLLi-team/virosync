@@ -277,8 +277,8 @@ def test_supplementary_zero_core_still_obeys_high_cap():
     assert calculate_eve_confidence(result, 1.0, use_crf_score=True) == pytest.approx(0.699)
 
 
-@pytest.mark.parametrize("end,kept", [(15000, True), (12764, True), (6000, True), (5000, False), (4999, False)])
-def test_supplementary_module_low_gate_uses_same_record_and_keeps_length_rule(end, kept):
+@pytest.mark.parametrize("end", [15000, 12764, 6000, 5000, 4999])
+def test_supplementary_module_low_gate_uses_same_record_and_competitive_support(end):
     from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate, evaluate_v2_quality_gate
 
     result = _supplementary_candidate(end=end, total=100)
@@ -286,13 +286,26 @@ def test_supplementary_module_low_gate_uses_same_record_and_keeps_length_rule(en
     result.confidence_tier = assign_confidence_tier(result)
     assert result.confidence_tier == "LOW"
     assessment = result.supplementary_viral_evidence
-    assert _evaluate_class_quality_gate(result).kept is kept
+    assert _evaluate_class_quality_gate(result).kept
     decision = evaluate_v2_quality_gate(result)
-    assert decision.kept is kept
+    assert decision.kept
     assert result.supplementary_viral_evidence is assessment
     result.end += 1
     with pytest.raises(ValueError, match="supplementary.*interval"):
         evaluate_v2_quality_gate(result)
+
+
+def test_short_module_without_marker_count_retains_computed_medium_tier():
+    from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+
+    result = _supplementary_candidate(end=4037)
+    result.final_confidence = calculate_eve_confidence(result, 0.0)
+    result.confidence_tier = assign_confidence_tier(result)
+    assert result.confidence_tier == "MEDIUM"
+    assert result.hallmark_count == 0
+    assert result.supplementary_viral_evidence.eligible
+    assert evaluate_v2_quality_gate(result).kept
+    assert result.confidence_tier == "MEDIUM"
 
 
 @pytest.mark.parametrize(

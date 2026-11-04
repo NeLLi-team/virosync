@@ -516,7 +516,26 @@ def test_notebook_reads_accepted_phylogenetic_rejection_without_assessment() -> 
         predicted_family="NCLDV",
         confirmed_seeds=(ConfirmedSeed("seed", "s", 0, 6000),),
     )
-    result = RejectedPhylogeny(config=EvidenceSynthesizerConfig()).verify_eve(boundary, [], hallmark_hits=hits)
+    records = [
+        {
+            "porf_id": name,
+            "scaffold": "s",
+            "start": start,
+            "end": start + 60,
+            "top10_prefixes": ["NCLDV", "EUK"],
+            "top10_targets": [f"NCLDV__reference|{name}", f"EUK__reference|{name}"],
+            "top10_pidents": [40.0, 40.0],
+            "top10_bitscores": [120.0, 100.0],
+            "top10_evalues": [1e-30, 1e-20],
+            "top10_qcovhsp": [80.0, 80.0],
+            "has_hit": True,
+            "is_flanking": False,
+        }
+        for name, start in [("p1", 100), ("p2", 300)]
+    ]
+    result = RejectedPhylogeny(config=EvidenceSynthesizerConfig()).verify_eve(
+        boundary, [], hallmark_hits=hits, gene_taxonomy_records=records
+    )
     assert result.confidence_tier == "LOW"
     assert evaluate_v2_quality_gate(result).kept
     assert unsupported_eve_ids([result]) == set()

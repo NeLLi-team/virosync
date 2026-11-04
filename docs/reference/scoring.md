@@ -197,7 +197,7 @@ this table. The additional LOW evidence check below applies to both routes.
 
 | Class | HIGH or MEDIUM | LOW |
 | --- | --- | --- |
-| `NCLDV`, `MIRUS` | Length above 5,000 bp, or capsid evidence | Length above 5,000 bp, and two hallmarks or an eligible module of the same class |
+| `NCLDV`, `MIRUS` | Length above 5,000 bp, capsid evidence, or the short-call exception below | Length above 5,000 bp or two competitive supporting genes; plus two marker-bearing proteins or an eligible module of the same class |
 | `PPV`, `MIXED` | Length above 2,000 bp, and capsid evidence or two hallmarks with one non-ATPase | Same rule |
 | `CRESS` | CRESS marker family and at least one hallmark | Same rule |
 | Other classes | Rejected | Rejected |
@@ -211,8 +211,13 @@ accepted LOW candidate without a qualifying core family in
 `qualifying_hallmark_genes`. It rejects a candidate supported by fewer than two
 distinct genes. A qualifying core exempts the call
 from this extra check; a capsid flag, model count or module flag alone does not.
-MEDIUM and HIGH calls retain their existing acceptance rules. The class-specific
-length rules still apply; this extra filter adds no separate length cutoff.
+The private short-call experiment also lets two competitive supporting genes
+satisfy the NCLDV/MIRUS length requirement at any tier, when the candidate has
+two marker-bearing proteins or an eligible module of the same class. It leaves the other
+class requirements and the computed confidence unchanged. A qualifying core
+alone does not grant this length exception. PPV/MIXED retain their 2,000 bp
+requirement; CRESS retains its marker requirement. Search padding never supplies
+protected sequence merely to meet a length cutoff.
 
 A supporting gene lies fully inside the final interval. In its retained top ten
 proteome hits after reference masking, its best viral bitscore must strictly

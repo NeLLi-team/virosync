@@ -1221,8 +1221,14 @@ eligibility reason. Eligible modules skip only the zero-core ceiling below
 MEDIUM. They do not change weighted components, bonuses, penalties or floors;
 the separate fewer-than-two-core ceiling below HIGH still applies before the
 existing floors. In the NCLDV/MIRUS LOW gate, an eligible module is an
-alternative to two legacy hallmarks, still requiring length >5,000 bp. A
-module with a score below 0.2 therefore remains LOW. The gate fails if its
+alternative to two legacy hallmarks. The private short-call experiment permits
+two fully contained, independent competitive viral/pEVE genes to satisfy the
+NCLDV/MIRUS length requirement instead of length >5,000 bp. The same exception,
+including its two-marker-or-eligible-module requirement, applies at higher
+tiers without changing confidence or any other class
+requirement. It uses the masked top-ten, identity and score-comparison rules
+of the coreless LOW check; it does not restore search padding. A module with
+a score below 0.2 therefore remains LOW. The gate fails if its
 stored interval no longer matches the result. Class-switching and ambiguous
 cases retain baseline policy.
 
