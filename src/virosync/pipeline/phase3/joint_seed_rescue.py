@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
+from typing import Literal
 
 from virosync.output_contract import resolve_effective_eve_class
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
@@ -16,13 +17,23 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
-from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
+from virosync.pipeline.phase2.repeat_evidence import EndAssessment, assess_repeat_evidence
 from virosync.pipeline.phase2.seed_extension import _merge_pair, is_extension_host_gene
-from virosync.pipeline.phase2.terminal_repeats import find_terminal_inverted_repeats
+from virosync.pipeline.phase2.terminal_repeats import _is_low_complexity, find_terminal_inverted_repeats
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 
 _STRICT_CORE_FAMILIES = frozenset({"PolB", "A32", "RNAPL", "TFIIB", "TopoII", "VLTF3"})
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class JointRepeatAssessment:
+    """Record repeat uncertainty without claiming a complete negative scan."""
+
+    status: Literal["completed", "accepted_child_ambiguity"]
+    new_gap: tuple[int, int]
+    inter_core_ambiguous_bp: int
+    gap_sides: tuple[EndAssessment, EndAssessment]
 
 
 def eligible_joint_pairs(
@@ -131,7 +142,10 @@ def effective_class(result: VerificationResult) -> str:
 
 
 def joint_boundary(
-    children: tuple[RefinedBoundary, RefinedBoundary], *, rule: str = "rejected_adjacent_r2_v1"
+    children: tuple[RefinedBoundary, RefinedBoundary],
+    *,
+    rule: str = "rejected_adjacent_r2_v1",
+    repeat_assessment: JointRepeatAssessment | None = None,
 ) -> RefinedBoundary:
     """Preserve exact cores and record the child geometry before recomputation."""
     provenance = {
@@ -150,6 +164,8 @@ def joint_boundary(
             for child in children
         ],
     }
+    if repeat_assessment is not None:
+        provenance["repeat_assessment"] = asdict(repeat_assessment)
     return replace(
         _merge_pair(*children), candidate_id="", joint_seed_provenance=json.dumps(provenance, sort_keys=True)
     )
@@ -229,7 +245,7 @@ def _qualified_core_items(result: VerificationResult) -> list[tuple[HallmarkEvid
     return retained
 
 
-def has_clear_internal_boundary_scan(
+def assess_joint_repeat_scan(
     children: tuple[RefinedBoundary, RefinedBoundary],
     sequence: str | None,
     markers: list[ValidatedMarkerHit],
@@ -238,15 +254,22 @@ def has_clear_internal_boundary_scan(
     query: GenomeDiamondQuery | None,
     proteome_index: dict[str, list[pORF]],
     taxonomy: dict[str, GeneTaxonomy],
-) -> bool:
-    """Require complete native scans without a child-bounding internal repeat pair."""
+    accepted_ids: frozenset[str] = frozenset(),
+) -> JointRepeatAssessment | None:
+    """Withhold separating repeats; record permitted uncertainty in accepted children."""
     if sequence is None or query is None or not _hull_fully_searched(children, query, proteome_index, taxonomy):
-        return False
+        return None
     left, right = children
+    if len(sequence) < right.end:
+        return None
+    accepted_children = all(boundary_candidate_id(child) in accepted_ids for child in children)
     gap_start = max(core.end for core in left.confirmed_seeds)
     gap_end = min(core.start for core in right.confirmed_seeds)
-    if len(sequence) < right.end or not set(sequence[gap_start:gap_end].upper()) <= set("ACGT"):
-        return False
+    inter_core_ambiguous_bp = sum(base not in "ACGT" for base in sequence[gap_start:gap_end].upper())
+    if inter_core_ambiguous_bp and not accepted_children:
+        return None
+    if not set(sequence[left.end : right.start].upper()) <= set("ACGT"):
+        return None
     scan_start, scan_end = max(0, left.start - extension_bp), min(len(sequence), right.end + extension_bp)
     spans = []
     for child in children:
@@ -258,8 +281,9 @@ def has_clear_internal_boundary_scan(
             and child.start <= m.start < m.end <= child.end
         ]
         if not retained:
-            return False
+            return None
         spans.append((min(m.start for m in retained), max(m.end for m in retained)))
+    gap_sides = []
     try:
         for index, (start, end) in enumerate(spans):
             scan = find_terminal_inverted_repeats(
@@ -274,7 +298,7 @@ def has_clear_internal_boundary_scan(
                     "withheld_unresolved_repeat type=TIR reason=pairing_capped children=%s",
                     [boundary_candidate_id(c) for c in children],
                 )
-                return False
+                return None
             other_start, other_end = spans[1 - index]
             for repeat in scan.candidates:
                 if (repeat.right_end <= other_start and left.start < repeat.right_end < right.end) or (
@@ -285,7 +309,7 @@ def has_clear_internal_boundary_scan(
                         [boundary_candidate_id(c) for c in children],
                         repeat,
                     )
-                    return False
+                    return None
         coverage = tuple(
             (mapping.flank_start_bp, mapping.flank_end_bp)
             for mapping in query.seed_gene_mappings.values()
@@ -304,13 +328,16 @@ def has_clear_internal_boundary_scan(
                 extension_bp=extension_bp,
             )
             gap_side = direct.right if index == 0 else direct.left
-            if gap_side.status != "completed":
+            if gap_side.status != "completed" and not (
+                accepted_children and _ambiguity_confined_to_children(gap_side, sequence, children)
+            ):
                 _LOGGER.info(
                     "withheld_unresolved_repeat type=DTR children=%s gap_side=%s",
                     [boundary_candidate_id(c) for c in children],
                     gap_side,
                 )
-                return False
+                return None
+            gap_sides.append(gap_side)
             start, end = spans[index]
             other_start, other_end = spans[1 - index]
             for repeat in direct.candidates:
@@ -324,10 +351,40 @@ def has_clear_internal_boundary_scan(
                         [boundary_candidate_id(c) for c in children],
                         repeat,
                     )
-                    return False
+                    return None
     except (OSError, RuntimeError, ValueError):
+        return None
+    uncertain = inter_core_ambiguous_bp > 0 or any(side.status != "completed" for side in gap_sides)
+    return JointRepeatAssessment(
+        "accepted_child_ambiguity" if uncertain else "completed",
+        (left.end, right.start),
+        inter_core_ambiguous_bp,
+        (gap_sides[0], gap_sides[1]),
+    )
+
+
+def _ambiguity_confined_to_children(
+    side: EndAssessment,
+    sequence: str,
+    children: tuple[RefinedBoundary, RefinedBoundary],
+) -> bool:
+    """Allow only ambiguous child sequence, never another incomplete-scan reason."""
+    if (
+        side.status != "incomplete"
+        or set(side.reasons) - {"midpoint_partition"} != {"ambiguous_bases"}
+        or side.window_start is None
+        or side.window_end is None
+    ):
         return False
-    return True
+    window = sequence[side.window_start : side.window_end].upper()
+    # Native end assessment skips complexity when Ns are present. The exception
+    # must not turn a low-complexity window into apparently usable evidence.
+    if _is_low_complexity("".join(base for base in window if base in "ACGT")):
+        return False
+    return all(
+        base in "ACGT" or any(child.start <= position < child.end for child in children)
+        for position, base in enumerate(window, side.window_start)
+    )
 
 
 def _crosses_stop(child: RefinedBoundary, start: int, end: int) -> bool:

@@ -50,9 +50,9 @@ from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult, va
 from virosync.pipeline.phase3.gene_functions import find_gene_function_resources, label_core_genes
 from virosync.pipeline.phase3.joint_seed_rescue import (
     accepted_joint_supported,
+    assess_joint_repeat_scan,
     effective_class,
     eligible_joint_pairs,
-    has_clear_internal_boundary_scan,
     joint_boundary,
     joint_result_supported,
     qualified_core_families,
@@ -1399,7 +1399,7 @@ def _prepare_joint_boundaries(
     }
     prepared = []
     for children in pairs:
-        if not has_clear_internal_boundary_scan(
+        repeat_assessment = assess_joint_repeat_scan(
             children,
             sequences.get(children[0].scaffold),
             validated_markers,
@@ -1407,10 +1407,13 @@ def _prepare_joint_boundaries(
             query=boundary_diamond_query,
             proteome_index=proteome_index,
             taxonomy=boundary_taxonomy_map,
-        ):
+            accepted_ids=accepted_ids,
+        )
+        if repeat_assessment is None:
             continue
         joint = joint_boundary(
             children,
+            repeat_assessment=repeat_assessment,
             rule="accepted_adjacent_v1"
             if all(boundary_candidate_id(c) in accepted_ids for c in children)
             else "rejected_adjacent_r2_v1",

@@ -188,7 +188,7 @@ def test_fresh_direct_repeat_requires_complete_marker_span(
     arm = sequence[arm_start : arm_start + 60]
     repeat_inputs["sequence"] = sequence[:gap_start] + arm + sequence[gap_start + 60 :]
 
-    assert joint.has_clear_internal_boundary_scan(**repeat_inputs) is allowed
+    assert (joint.assess_joint_repeat_scan(**repeat_inputs) is not None) is allowed
 
 
 @pytest.mark.parametrize("position,allowed", [(700, True), (1800, False)])
@@ -196,7 +196,7 @@ def test_only_gap_side_ambiguous_window_withholds(repeat_inputs: dict, position:
     sequence = repeat_inputs["sequence"]
     repeat_inputs["sequence"] = sequence[:position] + "N" * 70 + sequence[position + 70 :]
 
-    assert joint.has_clear_internal_boundary_scan(**repeat_inputs) is allowed
+    assert (joint.assess_joint_repeat_scan(**repeat_inputs) is not None) is allowed
 
 
 @pytest.mark.parametrize("limit", ["MAX_CANDIDATES", "MAX_SEED_PAIRINGS"])
@@ -209,19 +209,132 @@ def test_direct_repeat_candidate_limit_withholds(
     repeat_inputs["sequence"] = sequence[:2200] + sequence[960:1020] + sequence[2260:]
     monkeypatch.setattr(repeat_evidence, limit, 0)
 
-    assert not joint.has_clear_internal_boundary_scan(**repeat_inputs)
+    assert not joint.assess_joint_repeat_scan(**repeat_inputs)
 
 
 def test_far_side_contig_clipping_does_not_withhold(repeat_inputs: dict) -> None:
     repeat_inputs["children"] = (child("a", 100, 2000), child("b", 2600, 3500))
 
-    assert joint.has_clear_internal_boundary_scan(**repeat_inputs)
+    assert joint.assess_joint_repeat_scan(**repeat_inputs)
 
 
 def test_missing_repeat_query_coverage_withholds(repeat_inputs: dict) -> None:
     repeat_inputs["query"] = None
 
-    assert not joint.has_clear_internal_boundary_scan(**repeat_inputs)
+    assert not joint.assess_joint_repeat_scan(**repeat_inputs)
+
+
+@pytest.mark.parametrize("accepted,position,expected", [(True, 1800, True), (False, 1800, False), (True, 2200, False)])
+def test_prepared_joint_records_only_accepted_child_ambiguity(
+    repeat_inputs: dict,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    accepted: bool,
+    position: int,
+    expected: bool,
+) -> None:
+    """The real repeat scans permit child uncertainty but never an unresolved bridge."""
+    import json
+    from dataclasses import replace
+
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase3
+
+    sequence = repeat_inputs["sequence"]
+    sequence = sequence[:position] + "N" * 70 + sequence[position + 70 :]
+    raw = tmp_path / "raw.fa"
+    raw.write_text(f">s\n{sequence}\n", encoding="utf-8")
+    children = repeat_inputs["children"]
+    children[0].confirmed_seeds = (replace(children[0].confirmed_seeds[0], start=1300, end=1500),)
+    children[1].confirmed_seeds = (replace(children[1].confirmed_seeds[0], start=2800, end=3000),)
+    accepted_ids = frozenset(boundary_candidate_id(c) for c in children) if accepted else frozenset()
+    config = PipelineConfig()
+    config.phase1.extension_kb = 1
+    monkeypatch.setattr(phase3, "refine_boundaries_with_terminal_repeats", lambda boundaries, **kwargs: boundaries)
+    monkeypatch.setattr(phase3, "refresh_boundary_classification", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase3, "_recalculate_boundary_composition", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase3, "_annotate_boundary_repeats", lambda *args, **kwargs: None)
+
+    prepared = phase3._prepare_joint_boundaries(
+        [children],
+        raw_genome_path=raw,
+        masked_path=raw,
+        validated_markers=repeat_inputs["markers"],
+        boundary_diamond_query=repeat_inputs["query"],
+        boundary_taxonomy_map=repeat_inputs["taxonomy"],
+        proteome_index=repeat_inputs["proteome_index"],
+        config=config,
+        accepted_ids=accepted_ids,
+    )
+
+    assert bool(prepared) is expected
+    if expected:
+        boundary, original_children = prepared[0]
+        assert original_children == children
+        assert boundary.confirmed_seeds == children[0].confirmed_seeds + children[1].confirmed_seeds
+        assessment = json.loads(boundary.joint_seed_provenance)["repeat_assessment"]
+        assert assessment["status"] == "accepted_child_ambiguity"
+        assert assessment["new_gap"] == [2000, 2600]
+        assert assessment["inter_core_ambiguous_bp"] == 70
+        assert assessment["gap_sides"][0]["reasons"] == ["ambiguous_bases", "midpoint_partition"]
+        assert assessment["gap_sides"][0]["ambiguous_bp"] == 70
+        assert assessment["gap_sides"][1]["status"] == "incomplete"
+        assert assessment["gap_sides"][1]["ambiguous_bp"] == 70
+
+
+@pytest.mark.parametrize("arm_start,copy_start", [(960, 2200), (2300, 3700)])
+def test_accepted_child_ambiguity_keeps_both_separating_repeat_vetoes(
+    repeat_inputs: dict, arm_start: int, copy_start: int
+) -> None:
+    """A positive pair on either child vetoes even when the left scan is incomplete."""
+    sequence = repeat_inputs["sequence"]
+    sequence = sequence[:copy_start] + sequence[arm_start : arm_start + 60] + sequence[copy_start + 60 :]
+    repeat_inputs["sequence"] = sequence[:1800] + "N" * 70 + sequence[1870:]
+    accepted_ids = frozenset(boundary_candidate_id(c) for c in repeat_inputs["children"])
+
+    assert joint.assess_joint_repeat_scan(**repeat_inputs, accepted_ids=accepted_ids) is None
+
+
+@pytest.mark.parametrize("reason", ["candidate_limit", "seed_pairing_limit", "taxonomy_clipped", "window_limit"])
+def test_accepted_ambiguity_keeps_other_incomplete_reasons(
+    repeat_inputs: dict, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    """An ambiguity exception must not erase a concurrent native limit or coverage failure."""
+    from dataclasses import replace
+
+    from virosync.pipeline.phase2.repeat_evidence import RepeatEvidence
+
+    sequence = repeat_inputs["sequence"]
+    repeat_inputs["sequence"] = sequence[:1800] + "N" * 70 + sequence[1870:]
+    accepted_ids = frozenset(boundary_candidate_id(c) for c in repeat_inputs["children"])
+    native_assess = joint.assess_repeat_evidence
+
+    def limited_assessment(*args: object, **kwargs: object) -> RepeatEvidence:
+        evidence = native_assess(*args, **kwargs)
+        return replace(evidence, right=replace(evidence.right, reasons=(*evidence.right.reasons, reason)))
+
+    monkeypatch.setattr(joint, "assess_repeat_evidence", limited_assessment)
+
+    assert joint.assess_joint_repeat_scan(**repeat_inputs, accepted_ids=accepted_ids) is None
+
+
+def test_accepted_ambiguity_outside_children_still_withholds(repeat_inputs: dict) -> None:
+    """An endpoint window may extend past the sibling; that exterior DNA is not exempt."""
+    sequence = repeat_inputs["sequence"]
+    repeat_inputs["sequence"] = sequence[:3550] + "N" * 70 + sequence[3620:]
+    repeat_inputs["extension_bp"] = 1600
+    accepted_ids = frozenset(boundary_candidate_id(c) for c in repeat_inputs["children"])
+
+    assert joint.assess_joint_repeat_scan(**repeat_inputs, accepted_ids=accepted_ids) is None
+
+
+def test_accepted_ambiguity_cannot_hide_low_complexity(repeat_inputs: dict) -> None:
+    """An N-containing window still needs informative resolved bases."""
+    sequence = repeat_inputs["sequence"]
+    repeat_inputs["sequence"] = sequence[:1500] + "A" * 300 + "N" * 70 + "A" * 630 + sequence[2500:]
+    accepted_ids = frozenset(boundary_candidate_id(c) for c in repeat_inputs["children"])
+
+    assert joint.assess_joint_repeat_scan(**repeat_inputs, accepted_ids=accepted_ids) is None
 
 
 def test_unavailable_cellular_lineage_withholds(accepted_inputs: dict) -> None:
@@ -260,7 +373,7 @@ def test_gene_free_padding_uses_proven_hull_without_expanding_search(
         return scan
 
     monkeypatch.setattr(joint, "assess_repeat_evidence", record)
-    assert joint.has_clear_internal_boundary_scan(**padded_repeat_inputs)
+    assert joint.assess_joint_repeat_scan(**padded_repeat_inputs)
     arguments, scan = scans[0]
     assert (1000, 3500) in arguments["coverage_intervals"]
     assert (arguments["start"], arguments["end"]) == (1000, 2000)
@@ -274,7 +387,7 @@ def test_child_bounding_direct_repeat_in_padding_still_withholds(padded_repeat_i
     sequence = padded_repeat_inputs["sequence"]
     padded_repeat_inputs["sequence"] = sequence[:2200] + sequence[1020:1080] + sequence[2260:]
 
-    assert not joint.has_clear_internal_boundary_scan(**padded_repeat_inputs)
+    assert not joint.assess_joint_repeat_scan(**padded_repeat_inputs)
 
 
 @pytest.mark.parametrize("missing", ["query", "taxonomy", "mapping", "all_genes"])
@@ -288,7 +401,7 @@ def test_repeat_guard_rechecks_hull_completeness(padded_repeat_inputs: dict, mis
     else:
         padded_repeat_inputs["proteome_index"] = {}
 
-    assert not joint.has_clear_internal_boundary_scan(**padded_repeat_inputs)
+    assert not joint.assess_joint_repeat_scan(**padded_repeat_inputs)
 
 
 def test_hull_proof_does_not_fill_gap_side_coverage_beyond_hull(
@@ -305,7 +418,7 @@ def test_hull_proof_does_not_fill_gap_side_coverage_beyond_hull(
         return scan
 
     monkeypatch.setattr(joint, "assess_repeat_evidence", record)
-    assert not joint.has_clear_internal_boundary_scan(**padded_repeat_inputs)
+    assert not joint.assess_joint_repeat_scan(**padded_repeat_inputs)
     assert "taxonomy_clipped" in scans[0].right.reasons
     assert scans[0].right.window_end == 3500
 

@@ -1258,8 +1258,11 @@ tier. Mixed pairs are excluded. Rejected pairs require overlapping stored
 `flank_start_bp`/`flank_end_bp` taxonomy-search envelopes. Accepted pairs may
 cross an exterior gap of at most 5,000 bp without envelope overlap. Every overlapping ORF
 in the joint hull must have been queried, and all original confirmed seed
-objects remain intact. A missing host model, a host model without a host lineage,
-or ambiguous/missing DNA in the inter-core gap prevents rescue. Recorded host stops and three consecutive
+objects remain intact. A missing host model or a host model without a host lineage
+prevents rescue. Rejected pairs also require resolved ACGT sequence throughout the
+inter-core gap. For two already accepted children, only the newly added exterior
+gap must be fully resolved; ambiguous bases inside their original intervals are
+retained and recorded as uncertainty. Recorded host stops and three consecutive
 host-positive genes between the candidates, without qualifying viral support (as defined
 for the host stop), block a pair. A third
 seed or accepted-call conflict blocks rescue. After full native reassessment,
@@ -1299,8 +1302,16 @@ search windows remain unchanged; clipping beyond the hull stays recorded.
 A candidate enclosing a child's validated marker span, with its gap-side
 arm separating the sibling's markers, withholds the join as unresolved repeat
 evidence. Internal repeats that do not enclose the marker span do not suffice.
-An incomplete gap-side window or capped search withholds a join; clipping or
-ambiguity confined to the far-side window and the TIR display-alignment cap do not.
+An incomplete gap-side window normally withholds a join. For two already accepted
+children, ambiguity alone may remain unresolved when every ambiguous base in that
+window lies within an original child. The existing midpoint partition may coexist
+with this reason. Resolved bases in that window must also pass the existing
+low-complexity filter; ambiguity cannot hide a low-complexity window.
+Both children still receive fresh repeat scans, and any detected
+separating pair still blocks the join. Missing coverage, clipping, search caps,
+failed scans and other incompleteness retain their veto. Clipping or ambiguity
+confined to the far-side window and the TIR display-alignment cap do not withhold
+the join.
 These candidate vetoes do not establish separate viral insertions.
 
 Joint coordinates receive native classification, composition, repeat evidence,
@@ -1314,7 +1325,11 @@ neighbors with complementary evidence and no detected separating feature can
 still merge; this rule does not establish biological continuity in that case.
 The complete confirmed seeds and JSON `joint_seed_provenance` retain child
 coordinates, stop reasons, original score, tier, effective class and qualified
-families in final
+families. The provenance also records the actual new gap, inter-core ambiguous-base
+count, both gap-facing direct-repeat assessments, and whether the proposal used
+the accepted-child ambiguity exception. This exception permits reassessment; it
+does not establish absence of separating repeats or biological continuity. The
+record remains in final
 profiles and the detailed table. Boundary serialization retains proposal
 provenance and all cores; Phase 3 derives proposals again from ordinary
 boundaries on an authorized resume.

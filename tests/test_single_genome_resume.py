@@ -58,6 +58,7 @@ from virosync.output_contract import (
 )
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
+from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 
@@ -193,6 +194,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
                 end=4,
                 seed_id="seed-0-demo-0",
                 confirmed_seeds=(ConfirmedSeed("seed-0-demo-0", "demo", 0, 4),),
+                seed_gene_ids=("p1",),
+                anchors=[Anchor("p1", "demo", 0, 4, "+", "GVOGm0003", 100.0, 1e-10)],
                 sources=["test"],
             )
         ],

@@ -361,31 +361,29 @@ def test_two_native_multi_marker_groups_stay_separate(
 def test_native_internal_repeat_veto_and_outer_pair_allowed() -> None:
     from test_terminal_repeats import _adjacent_repeat_sequence, _Marker, _planted_repeat
 
-    from virosync.pipeline.phase3.joint_seed_rescue import has_clear_internal_boundary_scan
+    from virosync.pipeline.phase3.joint_seed_rescue import assess_joint_repeat_scan
 
     sequence, _ = _adjacent_repeat_sequence()
     children = (child("a", 150, 400), child("b", 570, 820))
     markers = [_Marker("s", 220, 270, "a"), _Marker("s", 640, 690, "b")]
-    assert not has_clear_internal_boundary_scan(children, sequence, markers, 5000, **repeat_context(len(sequence)))
+    assert not assess_joint_repeat_scan(children, sequence, markers, 5000, **repeat_context(len(sequence)))
     outer_sequence, _ = _planted_repeat()
     close_children = (child("a", 170, 240), child("b", 260, 350))
     close_markers = [_Marker("s", 190, 210, "a"), _Marker("s", 280, 310, "b")]
-    assert has_clear_internal_boundary_scan(
+    assert assess_joint_repeat_scan(
         close_children, outer_sequence, close_markers, 100, **repeat_context(len(outer_sequence))
     )
-    assert not has_clear_internal_boundary_scan(
+    assert not assess_joint_repeat_scan(
         close_children, None, close_markers, 5000, **repeat_context(len(outer_sequence))
     )
-    assert not has_clear_internal_boundary_scan(
-        close_children, outer_sequence, [], 5000, **repeat_context(len(outer_sequence))
-    )
+    assert not assess_joint_repeat_scan(close_children, outer_sequence, [], 5000, **repeat_context(len(outer_sequence)))
 
 
 def test_pairing_cap_is_unknown_and_blocks_rescue(monkeypatch) -> None:
     from test_terminal_repeats import _Marker, _planted_repeat
 
     from virosync.pipeline.phase2 import terminal_repeats
-    from virosync.pipeline.phase3.joint_seed_rescue import has_clear_internal_boundary_scan
+    from virosync.pipeline.phase3.joint_seed_rescue import assess_joint_repeat_scan
 
     sequence, _ = _planted_repeat()
     monkeypatch.setattr(terminal_repeats, "_MAX_SEED_PAIRINGS", 0)
@@ -393,7 +391,7 @@ def test_pairing_cap_is_unknown_and_blocks_rescue(monkeypatch) -> None:
         sequence, scan_start=0, scan_end=len(sequence), marker_start=190, marker_end=210
     )
     assert scan.pairing_capped
-    assert not has_clear_internal_boundary_scan(
+    assert not assess_joint_repeat_scan(
         (child("a", 170, 240), child("b", 260, 350)),
         sequence,
         [_Marker("s", 190, 210, "a"), _Marker("s", 280, 310, "b")],
@@ -552,12 +550,12 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
 def test_internal_repeat_endpoint_in_seed_padding_still_separates() -> None:
     from test_terminal_repeats import _adjacent_repeat_sequence, _Marker
 
-    from virosync.pipeline.phase3.joint_seed_rescue import has_clear_internal_boundary_scan
+    from virosync.pipeline.phase3.joint_seed_rescue import assess_joint_repeat_scan
 
     sequence, _ = _adjacent_repeat_sequence()
     # First repeat ends at 420, inside the right seed's padded prefix.
     children = (child("a", 100, 350), child("b", 400, 900))
-    assert not has_clear_internal_boundary_scan(
+    assert not assess_joint_repeat_scan(
         children,
         sequence,
         [_Marker("s", 220, 270, "a"), _Marker("s", 640, 690, "b")],
@@ -635,7 +633,7 @@ def test_failed_required_repeat_scan_abstains(monkeypatch) -> None:
         raise RuntimeError("required scan failed")
 
     monkeypatch.setattr(joint_seed_rescue, "find_terminal_inverted_repeats", fail_scan)
-    assert not joint_seed_rescue.has_clear_internal_boundary_scan(
+    assert not joint_seed_rescue.assess_joint_repeat_scan(
         (child("a", 100, 1000), child("b", 2000, 3000)),
         "A" * 4000,
         [_Marker("s", 400, 500, "a"), _Marker("s", 2400, 2500, "b")],
@@ -684,10 +682,10 @@ def test_unavailable_host_model_abstains(pair_inputs: dict, model: dict | None) 
 def test_ambiguous_intercore_dna_abstains(gap_base: str) -> None:
     from test_terminal_repeats import _Marker
 
-    from virosync.pipeline.phase3.joint_seed_rescue import has_clear_internal_boundary_scan
+    from virosync.pipeline.phase3.joint_seed_rescue import assess_joint_repeat_scan
 
     sequence = "A" * 1400 + gap_base + "A" * 1599
-    assert not has_clear_internal_boundary_scan(
+    assert not assess_joint_repeat_scan(
         (child("a", 100, 1000), child("b", 2000, 2900)),
         sequence,
         [_Marker("s", 400, 500, "a"), _Marker("s", 2400, 2500, "b")],
