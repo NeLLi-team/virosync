@@ -41,7 +41,11 @@ from virosync.pipeline.hallmark_evidence import EXCLUDED_FAMILIES, has_spatial_r
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
-from .evidence_synthesizer import VerificationResult, validate_results_seed_containment
+from .evidence_synthesizer import (
+    VerificationResult,
+    _has_only_peve_viral_evidence,
+    validate_results_seed_containment,
+)
 from .gene_functions import (
     GeneFunctionInputs,
     find_gene_function_resources,
@@ -537,7 +541,6 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             reason = "ncldv_mirus_low_promoted" if kept else "ncldv_mirus_low_gate"
             if kept and hallmark < 2 and module_support:
                 reason = "ncldv_mirus_low_supplementary_module"
-            return QualityGateDecision(kept, family, reason, promoted_low=kept)
         # LOW must never be LOOSER than the region's own HIGH/MEDIUM rule, or
         # raising a region's confidence would remove it from the output. These
         # two branches used to omit the `hallmark >= 2` conjunct, so a region
@@ -546,7 +549,7 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
         # kept here: an MCP is the primary diagnostic for Preplasmiviricota, and
         # dropping it would reject 58% of published LOW PPV calls, which is a
         # sensitivity change rather than a correctness fix.
-        if family == "CRESS":
+        elif family == "CRESS":
             identity_marker_support = "CRESS" in (getattr(result, "marker_family_hits", []) or [])
             kept = identity_marker_support and length > 0 and hallmark >= 1
             reason = "cress_identity_low_promoted" if kept else "cress_identity_required"
@@ -556,15 +559,36 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
                 reason,
                 promoted_low=kept,
             )
-        if family == "PPV":
+        elif family == "PPV":
             kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "small_dna_low_promoted" if kept else "small_dna_low_gate"
-            return QualityGateDecision(kept, family, reason, promoted_low=kept)
-        if family == "MIXED":
+        elif family == "MIXED":
             kept = length > 2000 and (has_capsid_evidence or (hallmark >= 2 and non_atpase_hallmark >= 1))
             reason = "mixed_low_promoted" if kept else "mixed_low_gate"
-            return QualityGateDecision(kept, family, reason, promoted_low=kept)
-        return QualityGateDecision(False, family, "low_unsupported_family")
+        else:
+            return QualityGateDecision(False, family, "low_unsupported_family")
+
+        assessment = getattr(result, "hallmark_assessment", None)
+        if (
+            kept
+            and assessment is not None
+            and assessment.summary.core_count == 0
+            and getattr(result, "has_capsid_evidence", None) is False
+            and not (supplementary is not None and supplementary.eligible)
+            and len(hallmark_genes) == hallmark >= 2
+            and all(isinstance(name, str) and name.strip() for name in hallmark_genes)
+            and len({OutputGenerator._normalize_model_name(name) for name in hallmark_genes}) == 1
+            and _has_only_peve_viral_evidence(result)
+        ):
+            logger.info(
+                "Quality gate rejected %s (%s:%d-%d): low_repeated_peve_only_gate",
+                result.eve_id,
+                result.scaffold,
+                result.start,
+                result.end,
+            )
+            return QualityGateDecision(False, family, "low_repeated_peve_only_gate")
+        return QualityGateDecision(kept, family, reason, promoted_low=kept)
 
     return QualityGateDecision(False, eve_class, "unsupported_tier")
 

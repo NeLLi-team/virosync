@@ -205,6 +205,18 @@ the reason `hallmark_spatial_rescue_pass`. Other candidates follow this table:
 marker-bearing proteins, one per scoring locus. It is separate from the panel
 core count above.
 
+An otherwise accepted LOW candidate is rejected when its complete marker list
+contains only one normalized model name, it has no qualifying core, capsid
+evidence or eligible supplementary module, and its qualifying viral hits are
+all EUK-pEVE with taxonomy `VIRAL_UNKNOWN`. The check uses retained marker hits
+and non-flanking proteome-gene hits from the original top ten. It preserves the
+CRESS identity-marker route. Missing assessment or incomplete marker names do
+not establish this rejection. Model-name normalization folds case for `GVOGm`
+and `OG` prefixes; other names retain their case. The check changes acceptance,
+not the score, tier or coordinates.
+The run log records this rejection as `low_repeated_peve_only_gate`, with the
+candidate identifier and coordinates.
+
 Capsid evidence in this table is the [`has_capsid_evidence` flag](../METHODS.md#capsid-evidence).
 It is separate from the capsid role in the catalogue.
 

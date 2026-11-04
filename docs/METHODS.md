@@ -293,6 +293,13 @@ before the region class. The region passes the gate through the same rule as a
 evidence or two hallmarks with one non-ATPase hallmark. A region with any lineage
 viral hit keeps its family logic.
 
+For LOW candidates with no qualifying core, capsid evidence or eligible
+supplementary module, repeated copies of one model do not suffice when all
+qualified viral hits are EUK-pEVE and the taxonomy is `VIRAL_UNKNOWN`. This
+additional gate requires a complete marker-name list and uses only original
+top-ten marker and interior-gene hits. It leaves scores, coordinates, higher
+tiers and the CRESS identity-marker route unchanged.
+
 `has_mcp` and `mcp_gene_ids` name major capsid proteins only. The class-vote
 override, ANI class transfer, jelly-roll classification and Boltz input
 selection still need an MCP. `evidence_profiles.json` reports both flags.
