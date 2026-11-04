@@ -1201,7 +1201,7 @@ else:
 # show DJR, SJR, or HK97 fold classifications. Fold labels can use heuristic
 # or domain evidence and do not establish MCP support on their own. Legacy
 # PHAGE targets with a resolved Preplasmiviricota lineage appear as PPV. The
-# white interval marks the final ViroSync boundary.
+# pale-yellow interval marks the final accepted ViroSync boundary.
 
 # %%
 if not profiles:
@@ -1354,12 +1354,13 @@ else:
 
     # ---- Layout constants for gene map ----
     BAR_HEIGHT = 0.5
-    LABEL_FONT = 8
+    LABEL_FONT = 10
     CONF_FONT = 8
     LEGEND_FONT = 9
     TITLE_FONT = 13
     XLABEL_FONT = 10
     FLANK_COLOR = "#F0F0F0"
+    EVE_INTERVAL_COLOR = "#FFF2B3"
     FLANK_EDGE = "#AAAAAA"
     CORE_EDGE = "#333333"
     LABEL_X_FRAC = 0.22
@@ -1397,7 +1398,7 @@ if not eve_genes_extended:
     print("No EVEs to map.")
 else:
     # ---- Gene Map: all canonical EVEs with colored flanking genes ----
-    # Shows every canonical EVE in a single figure with tier-colored labels
+    # Shows every canonical EVE in a single figure with explicit tier labels
 
     ALL_SHOW_TIERS = SHOW_TIERS
 
@@ -1414,7 +1415,7 @@ else:
     print(f"Showing {len(all_sorted_eves)} EVEs (tiers: {', '.join(ALL_SHOW_TIERS)})")
 
     n_all = len(all_sorted_eves)
-    fig_h = max(22, n_all * EVE_SPACING)
+    fig_h = n_all * EVE_SPACING + 4
     fig, ax = plt.subplots(figsize=(18, fig_h))
 
     max_len = max(e[1]["length"] for e in all_sorted_eves)
@@ -1426,14 +1427,14 @@ else:
         eve_end_rel = eve_info["eve_end"] - eve_info["ext_start"]
         confidence = eve_info["confidence"]
         tier = eve_info["confidence_tier"]
-        # Background: gray flanks, white EVE core
+        # Background: gray flanks, pale-yellow accepted EVE interval
         ax.barh(y, eve_start_rel, left=0, height=BAR_HEIGHT, color=FLANK_COLOR, edgecolor=FLANK_EDGE, linewidth=0.5)
         ax.barh(
             y,
             eve_end_rel - eve_start_rel,
             left=eve_start_rel,
             height=BAR_HEIGHT,
-            color="white",
+            color=EVE_INTERVAL_COLOR,
             edgecolor=CORE_EDGE,
             linewidth=1.0,
         )
@@ -1526,7 +1527,7 @@ else:
         for mx in rt_pos:
             ax.plot(mx, y, **MARKER_RT)
 
-        # EVE label (left side) -- color by tier
+        # State the tier directly so every row remains readable without color.
         parts = eve_id.replace("EVE_", "").rsplit("_", 1)
         if len(parts) == 2:
             scaffold_short = parts[0].split("|")[1] if "|" in parts[0] else parts[0]
@@ -1534,15 +1535,14 @@ else:
         else:
             label = eve_id.replace("EVE_", "")[:30]
 
-        tier_color = TIER_COLORS.get(tier, "#666666")
         ax.text(
             -max_len * 0.01,
             y,
-            label,
+            f"{tier} | {label}",
             ha="right",
             va="center",
             fontsize=LABEL_FONT,
-            color=tier_color,
+            color="#222222",
             fontweight="bold" if tier == "HIGH" else "normal",
         )
 
@@ -1557,31 +1557,6 @@ else:
             color="#555555",
         )
 
-    # ---- Tier separator lines + margin labels ----
-    tier_spans_all = {}
-    running = 0
-    for t in ["HIGH", "MEDIUM", "LOW"]:
-        count = sum(1 for _, e in all_sorted_eves if e["confidence_tier"] == t)
-        if count > 0:
-            tier_spans_all[t] = (running, running + count)
-            running += count
-
-    for tier_name, (idx_start, idx_end) in tier_spans_all.items():
-        if idx_end > idx_start:
-            mid_y = n_all - 1 - (idx_start + idx_end) / 2 + 0.5
-            n_tier = idx_end - idx_start
-            ax.text(
-                -max_len * LABEL_X_FRAC * 0.92,
-                mid_y,
-                f"{tier_name}\n(n={n_tier})",
-                ha="center",
-                va="center",
-                fontsize=9,
-                fontweight="bold",
-                color=TIER_COLORS.get(tier_name, "#666666"),
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#CCCCCC", alpha=0.9),
-            )
-
     # ---- Axes formatting ----
     tier_str_all = " / ".join(
         f"{sum(1 for _, e in all_sorted_eves if e['confidence_tier'] == t)} {t}"
@@ -1593,11 +1568,11 @@ else:
     ax.set_ylim(-1.5, n_all - 0.2)
     ax.set_xlabel(
         f"Position (bp) | Gray: {FLANK_SIZE / 1000:g} kb minimum + "
-        f"{NEAREST_FLANK_GENES} nearest genes per flank | White: EVE core",
+        f"{NEAREST_FLANK_GENES} nearest genes per flank | Yellow: accepted EVE interval",
         fontsize=XLABEL_FONT,
     )
     ax.set_title(
-        f"{GENOME_ID} EVE Gene Map: All Confident EVEs  ({tier_str_all})",
+        f"{GENOME_ID} EVE Gene Map: Reported EVEs  ({tier_str_all})",
         fontsize=TITLE_FONT,
         fontweight="bold",
     )
@@ -1607,9 +1582,11 @@ else:
     ax.spines["top"].set_visible(False)
 
     # Scale bar
-    sb_x = max_len * 0.82
-    ax.plot([sb_x, sb_x + SCALE_BAR_BP], [-1.1, -1.1], "k-", linewidth=2)
-    ax.text(sb_x + SCALE_BAR_BP / 2, -1.3, "5 kb", ha="center", fontsize=9)
+    scale_bar_bp = min(SCALE_BAR_BP, max_len)
+    sb_x = max_len * 1.04 - scale_bar_bp
+    ax.plot([sb_x, sb_x + scale_bar_bp], [-1.1, -1.1], "k-", linewidth=2)
+    scale_label = f"{scale_bar_bp / 1000:g} kb" if scale_bar_bp >= 1000 else f"{scale_bar_bp:g} bp"
+    ax.text(sb_x + scale_bar_bp / 2, -1.2, scale_label, ha="center", va="top", fontsize=9)
 
     # Legend
     legend_elements = [
@@ -1672,49 +1649,47 @@ else:
     legend_elements.extend(
         [
             mpatches.Patch(facecolor=FLANK_COLOR, edgecolor=FLANK_EDGE, label="Flanking region"),
-            mpatches.Patch(facecolor="white", edgecolor=CORE_EDGE, label="EVE core"),
+            mpatches.Patch(facecolor=EVE_INTERVAL_COLOR, edgecolor=CORE_EDGE, label="Accepted EVE interval"),
         ]
     )
 
     # Tier indicator in legend
-    legend_elements.extend(
-        [
-            Line2D([0], [0], color="none", label=""),  # spacer
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="none",
-                markerfacecolor=TIER_COLORS["HIGH"],
-                markersize=8,
-                label="HIGH confidence",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="none",
-                markerfacecolor=TIER_COLORS["MEDIUM"],
-                markersize=8,
-                label="MEDIUM confidence",
-            ),
-        ]
-    )
+    for tier_name in TIER_ORDER:
+        if any(info["confidence_tier"] == tier_name for _, info in all_sorted_eves):
+            legend_elements.append(
+                Line2D(
+                    [0],
+                    [0],
+                    marker="s",
+                    color="none",
+                    markerfacecolor=TIER_COLORS[tier_name],
+                    markeredgecolor="#222222",
+                    markersize=8,
+                    label=f"{tier_name} confidence",
+                )
+            )
 
-    ax.legend(handles=legend_elements, loc="upper right", framealpha=0.95, fontsize=LEGEND_FONT, ncol=2)
+    ax.legend(
+        handles=legend_elements,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        framealpha=0.95,
+        fontsize=LEGEND_FONT,
+        ncol=4,
+    )
 
     plt.tight_layout()
 
     # ---- Function labels under the core genes ----
-    FUNCTION_LABEL_FONT = 5.5
+    FUNCTION_LABEL_FONT = 7.5
     FUNCTION_LABEL_TOP = 0.28  # below the gene row, in rows
     FUNCTION_LABEL_ROOM = 0.47  # free space between a gene row and the next, in rows
     FUNCTION_LABEL_MAX_LINES = 3
 
-    def _draw_function_labels(y, labels):
-        """Print `(x, label)` pairs under the gene row at `y` and return how many had no free line."""
+    def _layout_function_labels(y, labels):
+        """Measure up to three label lines and the height needed to keep them below their gene row."""
         if not labels:
-            return 0
+            return [], 0, 1.0
         renderer = fig.canvas.get_renderer()
         to_data = ax.transData.inverted()
         texts = [
@@ -1733,24 +1708,30 @@ else:
         boxes = [
             to_data.transform([(b.x0, b.y0), (b.x1, b.y1)]) for b in (t.get_window_extent(renderer) for t in texts)
         ]
-        line_height = 1.15 * (boxes[0][1][1] - boxes[0][0][1])
-        n_lines = min(FUNCTION_LABEL_MAX_LINES, int(FUNCTION_LABEL_ROOM / line_height))
+        line_height = 1.15 * max(box[1][1] - box[0][1] for box in boxes)
         order = sorted(range(len(texts)), key=lambda k: boxes[k][0][0])
         spans = [(boxes[k][0][0], boxes[k][1][0]) for k in order]
         gap = (spans[0][1] - spans[0][0]) / max(len(labels[order[0]][1]), 1)
         dropped = 0
-        for k, line in zip(order, _function_label_rows(spans, gap, n_lines), strict=True):
+        placements = []
+        for k, line in zip(order, _function_label_rows(spans, gap, FUNCTION_LABEL_MAX_LINES), strict=True):
             if line is None:
                 texts[k].remove()
                 dropped += 1
             else:
-                texts[k].set_y(y - FUNCTION_LABEL_TOP - line * line_height)
-        return dropped
+                placements.append((texts[k], y - FUNCTION_LABEL_TOP, line, line_height))
+        lines_used = max((line + 1 for _, _, line, _ in placements), default=0)
+        # One point of clearance also covers renderer rounding at export DPI.
+        point_height = fig.dpi / 72 * (ax.get_ylim()[1] - ax.get_ylim()[0]) / ax.bbox.height
+        height_scale = max(1.0, (lines_used * line_height + point_height) / FUNCTION_LABEL_ROOM)
+        return placements, dropped, height_scale
 
     labels_dropped = 0
+    function_label_placements = []
+    label_height_scale = 1.0
     for i, (_, eve_info) in enumerate(all_sorted_eves):
         window = eve_info["length"]
-        labels_dropped += _draw_function_labels(
+        placements, dropped, height_scale = _layout_function_labels(
             n_all - 1 - i,
             [
                 (
@@ -1762,6 +1743,14 @@ else:
                 if gene.get("function_label")
             ],
         )
+        function_label_placements.extend(placements)
+        labels_dropped += dropped
+        label_height_scale = max(label_height_scale, height_scale)
+    if label_height_scale > 1:
+        # Keep the laid-out axes fractions fixed: only the vertical pixel scale changes.
+        fig.set_size_inches(fig.get_figwidth(), fig.get_figheight() * label_height_scale)
+    for text, top, line, line_height in function_label_placements:
+        text.set_y(top - line * line_height / label_height_scale)
     if labels_dropped:
         print(f"Gene map: {labels_dropped} function labels omitted for lack of room; see gene_functions.tsv")
 

@@ -441,6 +441,13 @@ prints each label under its core gene and drops a label that has no free line,
 and the Syntviz figure uses the label as the feature name and records it, with
 its evidence, as a `function` annotation.
 
+The overview map scales its height to the number of reported EVEs and the space
+needed for up to three lines of rendered function labels. Dark row
+labels state the confidence tier, and the legend includes every tier shown.
+Pale yellow marks the final accepted EVE interval; it does not mark the smaller
+protected seed-gene hull. Grey backgrounds mark the selected flanks. Gene
+colors, outlines and function labels retain their existing evidence meanings.
+
 ## Workflow summary
 
 ViroSync predicts genes, finds viral marker proteins, and validates marker
