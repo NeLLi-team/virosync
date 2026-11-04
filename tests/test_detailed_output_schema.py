@@ -3,13 +3,19 @@ from __future__ import annotations
 """Schema regression tests for ViroSync detailed TSV exports."""
 
 import csv
+import logging
 from pathlib import Path
 
 import pytest
 
+from virosync.ablation import AblationID
 from virosync.output_contract import DETAILED_PREDICTION_COLUMNS
+from virosync.pipeline.hallmark_evidence import HallmarkAssessment, HallmarkSummary
+from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+from virosync.pipeline.phase3.acceptance_selection import select_phase3_acceptance
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 from virosync.pipeline.phase3.output_generator import OutputGenerator
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
 from virosync.validation.tsv_invariants import run_tsv_invariant_checks
 
 
@@ -170,6 +176,58 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
     assert ";VP:" not in row["taxonomy_best_hits"]
     assert ";PLV:" not in row["taxonomy_best_hits"]
     assert row["host_signature_fraction"] == "0.2000"
+    assert row["normal_quality_gate_reason"] == "."
+
+
+@pytest.fixture
+def repeated_peve_candidate() -> VerificationResult:
+    return VerificationResult(
+        eve_id="weak",
+        confirmed_seeds=(ConfirmedSeed("weak", "sc", 0, 6000),),
+        scaffold="sc",
+        start=0,
+        end=6000,
+        confidence_tier="LOW",
+        region_classification="MIXED",
+        likely_family="MIXED",
+        taxonomy_class="VIRAL_UNKNOWN",
+        hallmark_count=2,
+        hallmark_genes=["VS000254", "VS000254"],
+        hallmark_assessment=HallmarkAssessment("sc", 0, 6000, HallmarkSummary(), ()),
+        hallmark_taxonomy_records=[{"top10_prefixes": [EUK_PEVE_LABEL], "top10_pidents": [60.0]}],
+    )
+
+
+@pytest.mark.parametrize("ablation_id", [AblationID.A0, AblationID.A6])
+def test_detailed_output_preserves_gate_reason_without_verbose_logs(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    ablation_id: AblationID,
+    repeated_peve_candidate: VerificationResult,
+) -> None:
+    candidate = repeated_peve_candidate
+    with caplog.at_level(logging.ERROR, logger="virosync"):
+        selection = select_phase3_acceptance([candidate], ablation_id)
+        output = OutputGenerator(tmp_path).write_predictions_detailed_tsv(list(selection.detailed_results))
+    with output.open() as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["normal_quality_gate_reason"] == "low_repeated_peve_only_gate"
+    assert row["canonical_selection_outcome"] == ("kept" if ablation_id is AblationID.A6 else "normal_gate_rejected")
+    assert candidate.to_dict()["normal_quality_gate_reason"] == row["normal_quality_gate_reason"]
+    assert bool(selection.canonical_results) is (ablation_id is AblationID.A6)
+
+
+def test_generate_all_stores_gate_reason_before_rejection(
+    tmp_path: Path, repeated_peve_candidate: VerificationResult
+) -> None:
+    outputs = OutputGenerator(tmp_path).generate_all([repeated_peve_candidate])
+    with outputs["predictions_detailed_tsv"].open() as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["normal_quality_gate_reason"] == "low_repeated_peve_only_gate"
+    assert row["canonical_selection_outcome"] == "."
+    assert repeated_peve_candidate.to_dict()["normal_quality_gate_reason"] == row["normal_quality_gate_reason"]
+    with outputs["predictions_tsv"].open() as handle:
+        assert list(csv.DictReader(handle, delimiter="\t")) == []
 
 
 def test_detailed_tsv_invariants_allow_counted_names_to_exceed_unique_protein_count(

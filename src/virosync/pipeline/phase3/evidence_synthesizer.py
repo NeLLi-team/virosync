@@ -1364,6 +1364,7 @@ class VerificationResult:
     seed_novelty_score: float = 0.0
     seed_compositional_score: float = 0.0
     canonical_selection_outcome: str = ""
+    normal_quality_gate_reason: str = ""
 
     # Composition evidence features
     kfd: float = 0.0
@@ -1568,6 +1569,7 @@ class VerificationResult:
             "seed_novelty_score": self.seed_novelty_score,
             "seed_compositional_score": self.seed_compositional_score,
             "canonical_selection_outcome": self.canonical_selection_outcome,
+            "normal_quality_gate_reason": self.normal_quality_gate_reason,
             # Composition features
             "kfd": self.kfd,
             "gc_deviation": self.gc_deviation,

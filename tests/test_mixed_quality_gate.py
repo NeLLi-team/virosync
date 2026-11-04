@@ -15,7 +15,6 @@ MIXED region is kept, not disqualified; only genuinely weak ones are gated out.
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 
 import pytest
@@ -339,10 +338,3 @@ def test_supplementary_module_preserves_its_low_promotion_reason() -> None:
     decision = evaluate_v2_quality_gate(result)
     assert decision.kept and decision.promoted_low
     assert decision.reason == "ncldv_mirus_low_supplementary_module"
-
-
-def test_repeated_peve_low_rejection_has_a_candidate_trace(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        decision = evaluate_v2_quality_gate(_repeated_peve_low())
-    assert not decision.kept
-    assert "eve (sc:0-6000): low_repeated_peve_only_gate" in caplog.text

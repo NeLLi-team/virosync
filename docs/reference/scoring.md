@@ -214,8 +214,8 @@ CRESS identity-marker route. Missing assessment or incomplete marker names do
 not establish this rejection. Model-name normalization folds case for `GVOGm`
 and `OG` prefixes; other names retain their case. The check changes acceptance,
 not the score, tier or coordinates.
-The run log records this rejection as `low_repeated_peve_only_gate`, with the
-candidate identifier and coordinates.
+The detailed table records this rejection as `low_repeated_peve_only_gate` in
+`normal_quality_gate_reason`, beside the candidate identifier and coordinates.
 
 Capsid evidence in this table is the [`has_capsid_evidence` flag](../METHODS.md#capsid-evidence).
 It is separate from the capsid role in the catalogue.
@@ -251,6 +251,7 @@ gives the full rules.
 | Score and tier | `final_confidence`, `confidence_tier` |
 | Published class | `effective_eve_class` |
 | Qualifying core families | `qualifying_hallmark_genes` |
-| Gate and selection outcome | `canonical_selection_outcome` in the detailed table |
+| Normal quality-gate decision | `normal_quality_gate_reason` in the detailed table, including A6 counterfactual decisions |
+| Final selection outcome | `canonical_selection_outcome` in the detailed table |
 | Joint rescue | `joint_seed_provenance` in the detailed table |
 | Components, weights, floor, witnesses and supplementary module | `score_components` and `supplementary_viral_evidence` in `evidence_profiles.json` |

@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 12. The repeat-evidence groups below comprise 18
+Both tables use output schema 13. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -97,6 +97,7 @@ columns in each table; they are separate from the 17-column
 | `taxonomy_best_hits`, `ncldv_top10_proteins`, `mirus_top10_proteins`, `ppv_top10_proteins`, `cress_top10_proteins` | Detailed | Gene-level taxonomy counts. |
 | `kfd`, `gc_deviation` | Both | Sequence-composition differences from the host background used by scoring. |
 | `canonical_selection_outcome` | Detailed | Reason for keeping or excluding a candidate. |
+| `normal_quality_gate_reason` | Detailed | Stored decision from the normal quality gate, before overlap selection or ablation bypass. A dot means no stored decision is available. |
 | `joint_seed_provenance` | Detailed | JSON audit of a successful joint rescue, including original child IDs, coordinates, scores, tiers, classes and stop reasons; `.` otherwise. |
 | `ani_cluster_id`, `ani_cluster_size`, `ani_max_percent` | Detailed | Within-genome ANI cluster assignment. A dot marks no clustered relative where applicable. |
 | `taxonomy_class_before_ani`, `taxonomy_class_propagated_from` | Detailed | Class before ANI-based transfer and the donor EVE, when transfer occurred. |
@@ -191,6 +192,14 @@ of a frameshift-rescued marker, overlap selection or suppression, or lack of
 viral evidence. Both `kept` and `overlap_selected` can identify accepted
 candidates. Use the accepted-prediction table to determine which candidates
 ViroSync accepted.
+
+`normal_quality_gate_reason` records the decision already computed during
+selection, even when routine logs are suppressed. For example,
+`low_repeated_peve_only_gate` identifies the repeated-model pEVE-only LOW
+rejection. This field does not determine final inclusion: overlap selection,
+rescue-marker checks, the no-viral-evidence drop and the A6 gate-bypass arm can
+produce a different `canonical_selection_outcome`. A direct export without a stored gate decision
+writes `.` rather than recomputing or inferring a reason.
 
 ### Class meanings
 

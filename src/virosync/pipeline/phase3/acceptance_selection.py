@@ -1,4 +1,4 @@
-"""Pure selection of detailed and canonical Phase-3 result surfaces."""
+"""Select Phase-3 result surfaces and store their acceptance decisions."""
 
 from __future__ import annotations
 
@@ -211,6 +211,7 @@ def select_phase3_acceptance(
     candidates: list[CandidateAcceptance] = []
     for index, result in enumerate(results):
         result.canonical_selection_outcome = selection_outcomes[index]
+        result.normal_quality_gate_reason = normal_decisions[index].reason
         candidates.append(
             CandidateAcceptance(
                 result=result,

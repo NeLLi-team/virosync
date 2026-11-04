@@ -48,6 +48,9 @@ def test_a0_through_a5_use_normal_gate_selection(ablation_id: AblationID) -> Non
     assert selection.detailed_results == tuple(results)
     assert selection.canonical_results == (results[0],)
     assert [decision.kept for decision in selection.normal_gate_decisions] == [True, False, False]
+    assert [result.normal_quality_gate_reason for result in results] == [
+        decision.reason for decision in selection.normal_gate_decisions
+    ]
     assert selection.candidate_count == 3
     assert selection.intervention_count == 0
     assert selection.changed_count == 0
@@ -69,6 +72,9 @@ def test_a6_keeps_every_scored_candidate_and_retains_counterfactual_decisions() 
         "low_unsupported_family",
     ]
     assert [candidate.intervention_applied for candidate in selection.candidates] == [False, True, True]
+    assert [result.to_dict()["normal_quality_gate_reason"] for result in results] == [
+        decision.reason for decision in selection.normal_gate_decisions
+    ]
     assert selection.candidate_count == 3
     assert selection.intervention_count == 2
     assert selection.changed_count == 2
@@ -192,6 +198,8 @@ def test_overlapping_ordinary_candidate_survives_lower_tier_rescue() -> None:
     assert selection.canonical_results == (ordinary,)
     assert rescue.canonical_selection_outcome == "overlap_suppressed_by:ordinary"
     assert ordinary.canonical_selection_outcome == "overlap_selected"
+    assert rescue.normal_quality_gate_reason == "ncldv_mirus_low_promoted"
+    assert ordinary.normal_quality_gate_reason == "ncldv_mirus_high_medium_pass"
 
 
 def test_higher_tier_rescue_wins_direct_overlaps_deterministically() -> None:

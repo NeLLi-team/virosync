@@ -580,13 +580,6 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
             and len({OutputGenerator._normalize_model_name(name) for name in hallmark_genes}) == 1
             and _has_only_peve_viral_evidence(result)
         ):
-            logger.info(
-                "Quality gate rejected %s (%s:%d-%d): low_repeated_peve_only_gate",
-                result.eve_id,
-                result.scaffold,
-                result.start,
-                result.end,
-            )
             return QualityGateDecision(False, family, "low_repeated_peve_only_gate")
         return QualityGateDecision(kept, family, reason, promoted_low=kept)
 
@@ -1521,6 +1514,8 @@ class OutputGenerator:
                 # calls before the v2 logic could promote them). The v2 gate is
                 # the single, canonical acceptance gate.
                 decisions = [evaluate_v2_quality_gate(r) for r in results]
+                for result, decision in zip(results, decisions):
+                    result.normal_quality_gate_reason = decision.reason
                 results = [r for r, decision in zip(results, decisions) if decision.kept]
                 dropped = sum(1 for decision in decisions if not decision.kept)
                 promoted_low_count = sum(1 for decision in decisions if decision.promoted_low)
@@ -1953,6 +1948,7 @@ class OutputGenerator:
             "likely_group": getattr(result, "likely_group", "") or ".",
             "seed_sources": "|".join(sorted(result.seed_sources)) if result.seed_sources else ".",
             "canonical_selection_outcome": result.canonical_selection_outcome or ".",
+            "normal_quality_gate_reason": result.normal_quality_gate_reason or ".",
             **_integration_evidence_row(result),
             "hallmark_total": str(hallmark_total if hallmark_total else result.hallmark_count),
             "hallmark_unique": str(hallmark_unique if hallmark_unique else result.hallmark_diversity),
