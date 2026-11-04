@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from virosync.orchestration._flows.single_genome.phase1 import _candidate_regions_to_seeds
 from virosync.pipeline.phase0.prodigal import GenePrediction
 from virosync.pipeline.phase1.region_assembly import (
     ValidatedMarkerHit,
@@ -77,6 +78,19 @@ def test_cress_marker_requires_paired_identity_support() -> None:
         )
     )
     assert not is_identity_qualified_cress_marker(_marker(1, 100, 400, model="VS000791"))
+
+
+def test_compact_cress_keeps_its_distinct_member_rule_and_unpadded_core() -> None:
+    marker = _marker(1, 100, 400)
+    assert is_identity_qualified_cress_marker(marker)
+    assert not marker.is_capsid_evidence
+    regions = assemble_compact_cress_regions([marker], {"ctg": [_gene(1, 100, 400)]})
+
+    (seed,) = _candidate_regions_to_seeds(regions, [marker], [], [])
+
+    assert (seed.start, seed.end) == (100, 400)
+    assert seed.seed_gene_ids == ("ctg_1",)
+    assert seed.confirmed_seeds == (ConfirmedSeed("seed_0_ctg_100", "ctg", 100, 400),)
 
 
 def test_single_gene_specificity_uses_the_top_hit_target() -> None:

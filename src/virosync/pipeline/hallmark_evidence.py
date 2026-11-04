@@ -245,7 +245,11 @@ def add_rescue_seeds(seeds: list[MergedSeed], witnesses: Sequence[HallmarkWitnes
     candidates = [
         w
         for w in witnesses
-        if not any(seed.scaffold == w.scaffold and seed.start <= w.start and seed.end >= w.end for seed in seeds)
+        if not any(
+            core.scaffold == w.scaffold and core.start <= w.start and core.end >= w.end
+            for seed in seeds
+            for core in seed.confirmed_seeds
+        )
     ]
     for witness in candidates:
         if any(

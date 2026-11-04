@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from virosync.ablation import AblationID, InterventionCounts
 from virosync.output_contract import (
@@ -123,6 +123,9 @@ def _profile_vote_class(validated_anchors: Sequence[Anchor]) -> str | None:
 
 def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     overlapping_anchors = _overlapping_anchors(seed)
+    seed = replace(seed, anchors=list(overlapping_anchors), hhg_anchors=[])
+    if seed.predicted_family != "CRESS":
+        seed.compute_classification()
     eligible_anchors = _eligible_anchors(overlapping_anchors)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
     validated_anchors = [anchor for anchor in overlapping_anchors if is_validated_marker(anchor)]

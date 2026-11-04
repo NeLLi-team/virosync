@@ -1,4 +1,4 @@
-"""One coordinate authority for growth from complete confirmed Phase 1 seeds."""
+"""One coordinate authority for growth from protected seed-gene hulls."""
 
 from __future__ import annotations
 
@@ -64,6 +64,8 @@ def extend_confirmed_seed(
     comparison cannot introduce a stop inside another confirmed seed interval.
     Positive extension support is unchanged; deep-only hits never supply it.
     """
+    # Repeat assessment keeps the search context without protecting its padding.
+    original_start, original_end = seed.start, seed.end
     seed = confirmed_seed_core(seed)
     available = host_stop_available(host_model)
     coverage_complete = True
@@ -95,8 +97,8 @@ def extend_confirmed_seed(
         start=left,
         end=right,
         seed_id=seed.seed_id,
-        original_start=seed.start,
-        original_end=seed.end,
+        original_start=original_start,
+        original_end=original_end,
         confirmed_seeds=seed.confirmed_seeds,
         left_stop_reason=left_reason,
         right_stop_reason=right_reason,

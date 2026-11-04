@@ -256,7 +256,8 @@ the DTR coverage to include the fixed hull's gene-free padding; it does not exte
 the outer search windows or erase incompleteness beyond the hull.
 The joined interval is scored from the start. It replaces its two children only
 when it passes the gate and the supplementary module counts at least one gene
-inside each child's confirmed seeds for rejected pairs. For accepted pairs,
+inside each child's protected seed-gene hull for rejected pairs. Search padding
+does not count as that core. For accepted pairs,
 each child must retain a qualifying hallmark or strict-module counted gene inside
 its original interval, and the union must retain both classes and the higher
 child tier. Failed unions leave the children unchanged. Independent neighbors

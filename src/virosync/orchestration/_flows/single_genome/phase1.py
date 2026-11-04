@@ -28,7 +28,8 @@ from virosync.pipeline.hallmark_evidence import (
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
-from virosync.pipeline.phase1.viral_markers import get_assembly_mode
+from virosync.pipeline.phase1.region_assembly import can_seed_marker
+from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 from virosync.pipeline.reference_mask import ReferenceMask
 from virosync.utils.atomic_write import atomic_write_context
@@ -91,7 +92,7 @@ def _candidate_regions_to_seeds(
     seedable_deviation_markers: list,
     extension_markers: list,
 ) -> list:
-    """Convert assembled regions into the stable seed surface for Phase 2."""
+    """Keep search containers separate from their eligible full-gene cores."""
     from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
     from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
@@ -101,9 +102,25 @@ def _candidate_regions_to_seeds(
         seedable_deviation_markers,
         extension_markers,
     )
-    for region in candidate_regions:
+    for index, region in enumerate(candidate_regions):
+        cress = getattr(region, "predicted_family", "") == "CRESS"
+        members = [
+            marker
+            for marker in region.markers
+            if cress
+            or can_seed_marker(
+                marker.hmm_target,
+                marker.validation_status,
+                tier1_bypassed=getattr(marker, "tier1_bypassed", False),
+            )
+        ]
+        if not members:
+            raise ValueError(
+                f"assembled region has no eligible seed members: {region.scaffold}:{region.start}-{region.end}"
+            )
+        identity = f"seed_{index}_{region.scaffold}_{region.start}"
         anchors = []
-        region_anchor_markers = region.markers if getattr(region, "predicted_family", "") == "CRESS" else anchor_markers
+        region_anchor_markers = region.markers if cress else anchor_markers
         for marker in region_anchor_markers:
             if marker.scaffold != region.scaffold:
                 continue
@@ -136,6 +153,16 @@ def _candidate_regions_to_seeds(
                 scaffold=region.scaffold,
                 start=region.start,
                 end=region.end,
+                seed_id=identity,
+                seed_gene_ids=tuple(sorted({base_marker_gene_id(marker.query_porf) for marker in members})),
+                confirmed_seeds=(
+                    ConfirmedSeed(
+                        identity,
+                        region.scaffold,
+                        min(marker.start for marker in members),
+                        max(marker.end for marker in members),
+                    ),
+                ),
                 sources=sources,
                 confidence="high" if any(is_mcp_gene(anchor.hallmark_gene) for anchor in anchors) else "medium",
                 hhg_score=len(anchors) * 10.0,
@@ -154,9 +181,6 @@ def _candidate_regions_to_seeds(
             )
         )
 
-    for index, seed in enumerate(merged_seeds):
-        seed.seed_id = f"seed_{index}_{seed.scaffold}_{seed.start}"
-        seed.confirmed_seeds = (ConfirmedSeed(seed.seed_id, seed.scaffold, seed.start, seed.end),)
     return merged_seeds
 
 

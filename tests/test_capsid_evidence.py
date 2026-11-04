@@ -9,6 +9,7 @@ scoring, which requires retained HMM measurements.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -348,6 +349,7 @@ def _region_marker(
 @pytest.mark.parametrize("status", ["validated", "validated_novel", "supported"])
 def test_phase1_seeds_carry_the_marker_validation_status_on_their_anchors(status: str) -> None:
     marker = _region_marker(CAPSID_MODEL, status)
+    marker.tier1_bypassed = status == "supported"
     region = SimpleNamespace(scaffold="ctgA", start=0, end=2000, markers=[marker], predicted_family="UNKNOWN")
 
     (seed,) = _candidate_regions_to_seeds([region], [marker], [], [])
@@ -374,6 +376,35 @@ def test_phase1_seeds_carry_the_marker_top10_taxonomy_on_their_anchors() -> None
             "80.0,45.5",
             "EUK-pEVE__a|p,NCLDV__b|q",
         )
+
+
+def test_protected_seed_is_full_eligible_gene_not_padded_annotation_window() -> None:
+    marker = replace(_region_marker(CAPSID_MODEL, "validated"), query_porf="ctgA_1|aa50-90")
+    annotation = replace(_region_marker("COG0504", "validated"), query_porf="ctgA_2", start=8000, end=9000)
+    region = SimpleNamespace(
+        scaffold="ctgA", start=0, end=10000, markers=[marker, annotation], predicted_family="NCLDV"
+    )
+
+    (seed,) = _candidate_regions_to_seeds([region], [marker, annotation], [], [])
+
+    assert (seed.start, seed.end) == (0, 10000)
+    assert seed.confirmed_seeds == (ConfirmedSeed("seed_0_ctgA_0", "ctgA", 1000, 1300),)
+    assert seed.seed_gene_ids == ("ctgA_1",)
+    assert [anchor.porf_id for anchor in seed.anchors] == ["ctgA_1|aa50-90", "ctgA_2"]
+
+
+def test_protected_seed_keeps_one_identity_and_all_eligible_gene_spans() -> None:
+    first = _region_marker(CAPSID_MODEL, "validated")
+    alias = replace(first, query_porf="ctgA_1|aa50-90")
+    second = replace(first, query_porf="ctgA_2", start=4000, end=4600)
+    region = SimpleNamespace(
+        scaffold="ctgA", start=0, end=10000, markers=[alias, second, first], predicted_family="NCLDV"
+    )
+
+    (seed,) = _candidate_regions_to_seeds([region], [first, alias, second], [], [])
+
+    assert seed.confirmed_seeds == (ConfirmedSeed("seed_0_ctgA_0", "ctgA", 1000, 4600),)
+    assert seed.seed_gene_ids == ("ctgA_1", "ctgA_2")
 
 
 @pytest.mark.parametrize(
@@ -532,7 +563,7 @@ def test_raw_capsid_flag_cannot_remove_the_size_penalty(gene_count: int, expecte
 # --- Acceptance gate ---
 
 
-def _gate_result(**overrides) -> SimpleNamespace:
+def _gate_result(**overrides) -> VerificationResult:
     base = {
         "confidence_tier": "HIGH",
         "start": 0,
@@ -545,10 +576,10 @@ def _gate_result(**overrides) -> SimpleNamespace:
         "likely_family": "MIXED",
     }
     base.update(overrides)
-    return SimpleNamespace(**base)
+    return VerificationResult(eve_id="gate", scaffold="ctg", **base)
 
 
-@pytest.mark.parametrize("tier", ["HIGH", "MEDIUM", "LOW"])
+@pytest.mark.parametrize("tier", ["HIGH", "MEDIUM"])
 @pytest.mark.parametrize("family", ["MIXED", "PPV"])
 def test_gate_accepts_a_short_one_hallmark_region_with_capsid_evidence(tier: str, family: str) -> None:
     kept = evaluate_v2_quality_gate(
@@ -558,6 +589,16 @@ def test_gate_accepts_a_short_one_hallmark_region_with_capsid_evidence(tier: str
 
     assert kept is True
     assert rejected is False
+
+
+@pytest.mark.parametrize("family", ["MIXED", "PPV"])
+def test_unqualified_capsid_flag_does_not_bypass_low_gene_evidence(family: str) -> None:
+    decision = evaluate_v2_quality_gate(
+        _gate_result(confidence_tier="LOW", likely_family=family, has_capsid_evidence=True)
+    )
+
+    assert decision.kept is False
+    assert decision.reason == "low_gene_evidence_unavailable"
 
 
 @pytest.mark.parametrize("family", ["NCLDV", "MIRUS"])

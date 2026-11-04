@@ -143,7 +143,7 @@ def _seeds_to_refined_boundaries(
                 0,
             ),
         )
-        for seed in merged_seeds
+        for seed in map(confirmed_seed_core, merged_seeds)
     ]
 
 
@@ -469,7 +469,6 @@ def _run_phase2_subflow(
 
     phase2_start = time.time()
     host_coordinate_counts = InterventionCounts()
-    merged_seeds = [confirmed_seed_core(seed) for seed in merged_seeds]
 
     # Authenticated state is the only resume source.
     phase2_state_path = output_dir / "phase2" / PHASE2_STATE_FILENAME

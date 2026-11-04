@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 15. The repeat-evidence groups below comprise 18
+Both tables use output schema 16. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -150,11 +150,11 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 15 |
+| Public output schema | 16 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
-| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
-| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v9` |
-| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v7` |
+| Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v5` |
+| Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v10` |
+| Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v8` |
 | Accepted and detailed prediction artifacts | `canonical-predictions-v8` and `detailed-predictions-v9` |
 | Repeat-pair artifact | `virosync.repeat_candidates/v1` |
 
@@ -444,8 +444,8 @@ its evidence, as a `function` annotation.
 ## Workflow summary
 
 ViroSync predicts genes, finds viral marker proteins, and validates marker
-matches against viral references. It builds confirmed seed regions around
-supported markers and preserves each complete seed while extending outward.
+matches against viral references. It builds search windows around supported
+markers and protects the complete confirmed seed genes while extending outward.
 The last phase combines marker, taxonomy, composition, and optional
 domain or structure evidence. Acceptance rules then select the reported
 regions. Within each genome, ANI clustering can transfer a class from
@@ -630,15 +630,32 @@ extension, merge and repeat-partition rules preserve every assigned seed.
 
 ### Seed-preserving extension
 
-The complete assembled Phase 1 interval, including its padding, or the exact
-full-gene hull of a hallmark-rescue witness, is the protected seed. Its original identity and coordinates remain attached to every
-derived candidate. The searched flanking envelope is separate from the EVE:
-finding the first or last predicted gene does not remove gene-free seed ends.
+The protected seed is the full-gene hull of the seed-eligible markers in an
+assembled Phase 1 region, or the exact hull of a hallmark-rescue witness. Its
+original identity and coordinates remain attached to every derived candidate.
+The hull includes the bases between its member genes, including when two
+clusters were joined because their search windows overlapped. This rule does
+not split that cluster or remove internal host-like sequence. Annotation-only
+markers do not enlarge the hull: cellular-blocked models and noncapsid
+`validated_novel` members remain annotations. CRESS seeds keep their separate
+identity-qualified member rule and compact hull. For frameshift rescue, protection covers the complete
+reconstructed coding span; that span need not be a complete ancestral gene.
+
+Phase 1 padding is search context. The default 5 kb on each side and 10 kb
+minimum search window do not impose a minimum final EVE length. Unsupported
+padding can be excluded when setting boundaries. Final class-specific size and
+evidence gates apply separately. Phase 2 queries the original search window
+and its flanking genes, then starts extension from the protected gene hull.
+Extended boundaries retain that search window in their original-coordinate
+metadata for repeat assessment; A3 passthrough and partition children retain
+their own hull or child interval there. Only the confirmed core requires
+containment in the final EVE. A1 and A3 passthrough outputs use the protected
+hull without padding, and their marker classification uses that retained hull.
 For ordinary non-CRESS seeds, extension can use the complete searched flanking
 gene interval together with the protected core. The Phase 1 `extension_kb`
 setting still supplies the terminal-repeat and annotation radius; it does not
-cap this outward walk. CRESS seeds and seeds without a searched mapping keep
-their core as the extension envelope.
+cap this outward walk. CRESS seeds and seeds without a searched mapping use
+their original container as the extension envelope.
 
 One controller starts at the seed and walks flanking genes in genomic order,
 independently on each side. Identity-qualified viral hits provide positive
@@ -721,7 +738,11 @@ Final gene sets, markers, composition and optional evidence are computed for
 the retained coordinates before scoring. Output and resumed-state checks
 require complete seed containment. Incompatible boundary checkpoints must be
 recomputed rather than reconstructed from late, mutable boundary fields.
-Each Phase 1 checkpoint seed must exactly match its one original seed record.
+Each Phase 1 checkpoint retains its search window, original protected gene
+hull and ordinary seed-member IDs separately. The hull must match the full
+anchor coordinates of those members and remain inside the search window.
+These checks verify structure and identity; the producer selects eligible
+members before the checkpoint is written.
 Phase 2 also checks that its complete source membership agrees with Phase 1,
 both when writing new boundaries and when resuming them.
 Marker family votes are deduplicated by protein identity, including when HMM

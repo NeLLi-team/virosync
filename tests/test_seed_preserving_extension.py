@@ -40,11 +40,31 @@ def grow(genes, *, start=1000, end=2000, viral_marker_genes=frozenset()):
         )
 
 
-def test_gene_free_padding_and_original_identity_survive():
+def test_complete_source_core_and_original_identity_survive():
     boundary = grow([gene("inside", 1300, 1700, host=True)])
     assert (boundary.start, boundary.end) == (1000, 2000)
     assert boundary.confirmed_seeds[0].seed_id == "original"
     assert (boundary.confirmed_seeds[0].start, boundary.confirmed_seeds[0].end) == (1000, 2000)
+
+
+def test_host_stop_can_exclude_search_padding_without_cutting_seed_gene():
+    seed = MergedSeed("s", 0, 10000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 4000, 5000),))
+    genes = [
+        gene("core", 4000, 5000, host=True),
+        gene("near", 5100, 5200, viral=True),
+        gene("h1", 5300, 5400, host=True),
+        gene("h2", 5500, 5600, host=True),
+        gene("h3", 5700, 5800, host=True),
+        gene("remote", 5900, 6000, viral=True),
+    ]
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
+    with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda g, m: float(g.host)):
+        boundary = extend_confirmed_seed(seed, genes, {g.id: g for g in genes}, (0, 10000), model, 0.35)
+
+    assert (boundary.start, boundary.end) == (4000, 5200)
+    assert boundary.right_stop == 5300
+    assert boundary.confirmed_seeds == seed.confirmed_seeds
+    assert (boundary.original_start, boundary.original_end) == (0, 10000)
 
 
 def test_three_host_genes_stop_remote_viral_support():
@@ -239,7 +259,7 @@ def test_ablation_disables_host_stop_without_losing_core():
 
 @pytest.mark.parametrize(
     ("family", "mapped", "expected_end"),
-    [("NCLDV", True, 9000), ("CRESS", True, 2000), ("NCLDV", False, 2000)],
+    [("NCLDV", True, 9000), ("CRESS", True, 1700), ("NCLDV", False, 1700)],
 )
 def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
     tmp_path, monkeypatch, family, mapped, expected_end
@@ -261,9 +281,12 @@ def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
     )
     monkeypatch.setattr(phase2, "build_proteome_index", lambda _: {"s": genes})
     monkeypatch.setattr(phase2, "_require_phase2b_gene_taxonomy_db", lambda *args, **kwargs: tmp_path / "db")
-    monkeypatch.setattr(
-        phase2, "_run_boundary_diamond", lambda **kwargs: phase2._BoundaryEvidence({"v": genes[0]}, None, query)
-    )
+
+    def searched_evidence(**kwargs):
+        assert [(seed.start, seed.end) for seed in kwargs["merged_seeds"]] == [(1000, 2000)]
+        return phase2._BoundaryEvidence({"v": genes[0]}, None, query)
+
+    monkeypatch.setattr(phase2, "_run_boundary_diamond", searched_evidence)
     monkeypatch.setattr(phase2, "_recalculate_boundary_composition", lambda *args, **kwargs: None)
     monkeypatch.setattr(phase2, "_annotate_boundary_repeats", lambda *args, **kwargs: None)
     monkeypatch.setattr(phase2, "_write_phase2_checkpoints", lambda **kwargs: tmp_path / "boundaries.bed")
@@ -293,7 +316,7 @@ def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
                 2000,
                 seed_id="original",
                 predicted_family=family,
-                confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),),
+                confirmed_seeds=(ConfirmedSeed("original", "s", 1300, 1700),),
             )
         ],
         config=config,
@@ -307,15 +330,26 @@ def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
                 2000,
                 seed_id="original",
                 predicted_family=family,
-                confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),),
+                confirmed_seeds=(ConfirmedSeed("original", "s", 1300, 1700),),
             )
         ],
         config=config.with_overrides(boundary_taxonomy_ml_enabled=True),
         **arguments,
     )
     assert off.refined_boundaries == failed.refined_boundaries
-    assert (off.refined_boundaries[0].start, off.refined_boundaries[0].end) == (1000, expected_end)
-    assert off.refined_boundaries[0].confirmed_seeds[0].end == 2000
+    assert (off.refined_boundaries[0].start, off.refined_boundaries[0].end) == (1300, expected_end)
+    assert off.refined_boundaries[0].confirmed_seeds[0].end == 1700
+
+
+def test_phase2_passthrough_emits_protected_gene_hull_without_search_padding():
+    from virosync.orchestration._flows.single_genome.phase2 import _seeds_to_refined_boundaries
+
+    seed = MergedSeed("s", 0, 10000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 4000, 5000),))
+
+    (boundary,) = _seeds_to_refined_boundaries([seed])
+
+    assert (boundary.start, boundary.end) == (4000, 5000)
+    assert boundary.confirmed_seeds == seed.confirmed_seeds
 
 
 def test_displaced_mutable_coordinates_cannot_relocate_confirmed_seed():

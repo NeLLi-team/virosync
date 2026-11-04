@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.seed_extension import (
@@ -152,19 +153,41 @@ def test_authenticated_resume_rejects_lost_or_changed_source_set(tmp_path, monke
         )
 
 
+def source_seed():
+    anchor = Anchor("gene", "s", 100, 300, "+", "GVOGm0003", 50.0, 1e-20)
+    return MergedSeed(
+        "s",
+        90,
+        310,
+        seed_id="a",
+        anchors=[anchor],
+        seed_gene_ids=("gene",),
+        confirmed_seeds=(ConfirmedSeed("a", "s", 100, 300),),
+    )
+
+
 @pytest.mark.parametrize(
     "change",
-    [{"seed_id": "renamed"}, {"start": 99}, {"end": 301}, {"confirmed_seeds": (ConfirmedSeed("a", "s", 110, 290),)}],
+    [
+        {"seed_id": "renamed"},
+        {"start": 101},
+        {"end": 299},
+        {"confirmed_seeds": (ConfirmedSeed("a", "s", 110, 290),)},
+        {"seed_gene_ids": ()},
+        {"seed_gene_ids": ("missing",)},
+        {"seed_gene_ids": ("gene", "gene")},
+        {"seed_gene_ids": ("gene|aa1-20",)},
+        {"sources": ["hallmark_rescue"]},
+    ],
 )
 def test_phase1_checkpoint_rejects_source_container_disagreement(change):
     from virosync.orchestration._flows.single_genome.phase1_state import Phase1StateError, _seed_to_document
 
-    seed = MergedSeed("s", 100, 300, seed_id="a", confirmed_seeds=(ConfirmedSeed("a", "s", 100, 300),))
-    with pytest.raises(Phase1StateError, match="source"):
-        _seed_to_document(replace(seed, **change), 0)
+    with pytest.raises(Phase1StateError, match="source|confirmed seed"):
+        _seed_to_document(replace(source_seed(), **change), 0)
 
 
-@pytest.mark.parametrize("field,value", [("seed_id", "renamed"), ("start", 99), ("end", 301)])
+@pytest.mark.parametrize("field,value", [("seed_id", "renamed"), ("start", 101), ("end", 299)])
 def test_phase1_checkpoint_read_rejects_source_container_disagreement(field, value):
     from virosync.orchestration._flows.single_genome.phase1_state import (
         Phase1StateError,
@@ -172,11 +195,32 @@ def test_phase1_checkpoint_read_rejects_source_container_disagreement(field, val
         _seed_to_document,
     )
 
-    seed = MergedSeed("s", 100, 300, seed_id="a", confirmed_seeds=(ConfirmedSeed("a", "s", 100, 300),))
-    document = _seed_to_document(seed, 0)
+    document = _seed_to_document(source_seed(), 0)
     document[field] = value
-    with pytest.raises(Phase1StateError, match="source"):
+    with pytest.raises(Phase1StateError, match="source|confirmed seed"):
         _seed_from_document(document, 0)
+
+
+@pytest.mark.parametrize("change", [{"start": 101}, {"scaffold": "other"}])
+def test_phase1_checkpoint_rejects_disagreeing_member_anchor_coordinates(change):
+    from virosync.orchestration._flows.single_genome.phase1_state import Phase1StateError, _seed_to_document
+
+    seed = source_seed()
+    seed.hhg_anchors = [replace(seed.anchors[0], **change)]
+
+    with pytest.raises(Phase1StateError, match="inconsistent gene coordinates"):
+        _seed_to_document(seed, 0)
+
+
+def test_phase1_checkpoint_preserves_padding_separately_from_member_hull():
+    from virosync.orchestration._flows.single_genome.phase1_state import _seed_from_document, _seed_to_document
+
+    seed = source_seed()
+    restored = _seed_from_document(_seed_to_document(seed, 0), 0)
+
+    assert restored == seed
+    assert (restored.start, restored.end) == (90, 310)
+    assert restored.confirmed_seeds == (ConfirmedSeed("a", "s", 100, 300),)
 
 
 def test_child_uses_full_parent_taxonomy_coverage_after_identity_update():

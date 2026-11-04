@@ -23,7 +23,7 @@ from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed, vali
 from virosync.utils.atomic_write import atomic_write
 
 PHASE1_STATE_FILENAME = "resume_state.json"
-PHASE1_STATE_SCHEMA_VERSION = 4
+PHASE1_STATE_SCHEMA_VERSION = 5
 PHASE1_STATE_ARTIFACT_TYPE = "virosync.phase1.resume_state"
 PHASE1_STATE_SCHEMA = f"{PHASE1_STATE_ARTIFACT_TYPE}/v{PHASE1_STATE_SCHEMA_VERSION}"
 
@@ -155,6 +155,7 @@ _SEED_FIELDS = (
     *_SEED_INTEGER_LIST_FIELDS,
     *_SEED_ANCHOR_LIST_FIELDS,
     "confirmed_seeds",
+    "seed_gene_ids",
 )
 _SEED_FIELD_SET = set(_SEED_FIELDS)
 
@@ -425,6 +426,7 @@ def _seed_to_document(seed: object, index: int) -> dict[str, object]:
         _validate_phase1_source(seed)
     except ValueError as error:
         raise Phase1StateError(f"{context}: {error}") from error
+    document["seed_gene_ids"] = list(seed.seed_gene_ids)
     return document
 
 
@@ -459,6 +461,7 @@ def _seed_from_document(value: object, index: int) -> MergedSeed:
             for anchor_index, anchor in enumerate(raw_anchors)
         ]
     kwargs["confirmed_seeds"] = confirmed_seeds_from_document(document["confirmed_seeds"], f"{context}.confirmed_seeds")
+    kwargs["seed_gene_ids"] = tuple(_require_string_list(document["seed_gene_ids"], f"{context}.seed_gene_ids"))
     seed = MergedSeed(**kwargs)
     try:
         _validate_phase1_source(seed)
@@ -769,11 +772,38 @@ def load_phase1_state(path: str | Path) -> Phase1ResumeState:
 
 
 def _validate_phase1_source(seed: MergedSeed) -> None:
-    """Phase1 creates one original record, with no changed container coordinates."""
+    """Validate member identity and geometry without reclassifying saved evidence."""
+    from virosync.pipeline.phase1.viral_markers import base_marker_gene_id
+
     validate_confirmed_seed_containment(seed.scaffold, seed.start, seed.end, seed.confirmed_seeds)
-    expected = ConfirmedSeed(seed.seed_id, seed.scaffold, seed.start, seed.end)
+    members = seed.seed_gene_ids
+    if not isinstance(members, tuple) or any(not isinstance(gene, str) or not gene for gene in members):
+        raise ValueError("Phase1 source member IDs must be a tuple of nonempty strings")
+    if seed.sources == ["hallmark_rescue"]:
+        if members:
+            raise ValueError("Phase1 hallmark rescue source cannot have ordinary marker members")
+        start, end = seed.start, seed.end
+    else:
+        if not members or tuple(sorted(set(members))) != members:
+            raise ValueError("Phase1 source member IDs must be nonempty, sorted and unique")
+        if any(base_marker_gene_id(gene) != gene for gene in members):
+            raise ValueError("Phase1 source member IDs must name complete base proteins")
+        coordinates = {}
+        for anchor in seed.anchors + seed.hhg_anchors:
+            gene = base_marker_gene_id(anchor.porf_id)
+            if gene not in members:
+                continue
+            span = (anchor.start, anchor.end)
+            if anchor.scaffold != seed.scaffold or (gene in coordinates and coordinates[gene] != span):
+                raise ValueError(f"Phase1 source member has inconsistent gene coordinates: {gene}")
+            coordinates[gene] = span
+        if set(coordinates) != set(members):
+            raise ValueError("Phase1 source member is absent from its marker anchors")
+        start = min(span[0] for span in coordinates.values())
+        end = max(span[1] for span in coordinates.values())
+    expected = ConfirmedSeed(seed.seed_id, seed.scaffold, start, end)
     if seed.confirmed_seeds != (expected,):
-        raise ValueError("Phase1 source container must exactly match its single confirmed seed")
+        raise ValueError("Phase1 source core must exactly match its member hull and original identity")
 
 
 def _hallmark_records(value: object, record_type: type[_HallmarkRecord]) -> list[_HallmarkRecord]:

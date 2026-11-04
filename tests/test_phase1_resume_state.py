@@ -95,7 +95,8 @@ def _complete_seed() -> MergedSeed:
         start=51,
         end=1601,
         seed_id="seed_0_scaffold/alpha_51",
-        confirmed_seeds=(ConfirmedSeed("seed_0_scaffold/alpha_51", "scaffold/alpha", 51, 1601),),
+        confirmed_seeds=(ConfirmedSeed("seed_0_scaffold/alpha_51", "scaffold/alpha", 101, 999),),
+        seed_gene_ids=("scaffold/alpha_17",),
         sources=["hhg", "marker_validation"],
         hhg_score=123.456789012345,
         novelty_score=0.123456789012345,
@@ -751,6 +752,8 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
     assert len(result.merged_seeds) == 1
     assert result.merged_seeds[0].anchors[0].porf_id == marker.query_porf
     assert result.merged_seeds[0].sources == ["frameshift_rescue"]
+    assert result.merged_seeds[0].seed_gene_ids == (protein_id,)
+    assert result.merged_seeds[0].confirmed_seeds == (ConfirmedSeed("seed_0_contig_1_50", "contig_1", 100, 300),)
     confirmed_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     assert protein_id in confirmed_faa.read_text()
 

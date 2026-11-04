@@ -12,8 +12,8 @@ This module:
 Key concepts:
 - Initial clustering: Group markers within initial_window_bp OR initial_window_genes
 - Iterative extension: Extend by extension_kb, check for new markers, repeat until no more markers found
-- Validated marker: HMM hit confirmed by Diamond top-5 taxonomy (NCLDV/MIRUS prefix)
-- Candidate region: A genomic interval containing ≥2 validated markers after extension
+- Validated marker: HMM hit confirmed by the marker-reference validation rules
+- Candidate region: A search interval containing at least one seed-eligible marker
 
 Algorithm:
 The iterative extension captures more EVE content by discovering markers that
@@ -135,23 +135,18 @@ class ValidatedMarkerHit:
         Returns:
             True if marker can seed an EVE region
         """
-        # Blocked models still count inside a region another marker seeded.
-        if is_cellular_marker_model(self.hmm_target):
-            return False
+        return can_seed_marker(self.hmm_target, self.validation_status, tier1_bypassed=self.tier1_bypassed)
 
-        # Validated markers with Diamond top-10 viral taxonomy → auto-seed
-        if self.tier1_bypassed:
-            return True
 
-        if self.validation_status == "validated":
-            return True
+def can_seed_marker(model: str, validation_status: str, *, tier1_bypassed: bool = False) -> bool:
+    """Use the same ordinary seed eligibility for assembly and core membership."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
-        # validated_novel (HMM-only, no Diamond hits) → ONLY MCP or capsid evidence can seed
-        if self.validation_status == "validated_novel":
-            return self.is_capsid_evidence
-
-        # unvalidated or supported → cannot seed
+    if is_cellular_marker_model(model):
         return False
+    if tier1_bypassed or validation_status == "validated":
+        return True
+    return validation_status == "validated_novel" and is_capsid_evidence_gene(model)
 
 
 @dataclass

@@ -26,7 +26,7 @@ from virosync.utils.atomic_write import atomic_write
 from .phase1_state import Phase1StateError, confirmed_seeds_from_document, confirmed_seeds_to_document
 
 PHASE2_STATE_FILENAME = "refined_state.json"
-PHASE2_STATE_SCHEMA_VERSION = 7
+PHASE2_STATE_SCHEMA_VERSION = 8
 PHASE2_STATE_ARTIFACT_TYPE = "virosync.phase2.refined_boundaries"
 PHASE2_STATE_SCHEMA = f"{PHASE2_STATE_ARTIFACT_TYPE}/v{PHASE2_STATE_SCHEMA_VERSION}"
 

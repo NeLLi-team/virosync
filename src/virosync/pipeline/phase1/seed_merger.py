@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ConfirmedSeed:
-    """Complete Phase 1 interval and immutable original identity."""
+    """Protected complete-gene hull and immutable original seed identity."""
 
     seed_id: str
     scaffold: str
@@ -31,12 +31,15 @@ class MergedSeed:
 
     The active workflow populates marker-derived HHG/validation fields. Legacy
     novelty/compositional fields remain for output and compatibility schemas.
+    Bounds retain the Phase 1 search context; confirmed_seeds alone defines
+    protected geometry. seed_gene_ids records the ordinary or CRESS members.
     """
 
     scaffold: str
     start: int
     end: int
     confirmed_seeds: tuple[ConfirmedSeed, ...] = field(default=(), kw_only=True)
+    seed_gene_ids: tuple[str, ...] = field(default=(), kw_only=True)
     seed_id: str = ""  # Stable ID assigned during merge: "seed_{idx}_{scaffold}_{start}"
     sources: list[str] = field(default_factory=list)  # Active workflow: ["hhg", "marker_validation"]
     hhg_score: float = 0.0

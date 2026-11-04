@@ -110,11 +110,11 @@ def test_a1_exports_exact_phase1_coordinates_and_unscored_provenance() -> None:
     assert result.seed_hhg_score == 20.0
     assert result.seed_novelty_score == 0.25
     assert result.seed_compositional_score == 0.5
-    # plv_ seeds surface under the unified Preplasmiviricota class.
-    assert result.region_classification == "PPV"
-    assert result.likely_family == "PPV"
+    # One retained marker from each family gives MIXED despite stale seed counts.
+    assert result.region_classification == "MIXED"
+    assert result.likely_family == "MIXED"
     assert result.region_classification_ncldv_markers == 1
-    assert result.region_classification_vp_plv_markers == 2
+    assert result.region_classification_vp_plv_markers == 1
     assert result.region_classification_mirus_markers == 0
     assert result.kfd == 0.125
     assert result.gc_deviation == 0.2
@@ -156,6 +156,34 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
         ]
     )
     assert result_a.mcp_gene_ids == result_b.mcp_gene_ids == ["gene-b"]
+
+
+def test_a1_classification_excludes_markers_in_removed_search_padding() -> None:
+    inside = _anchor("inside", "GVOGm0003", 80.0, start=4000, end=5000)
+    outside = _anchor("outside", "plv_mcp_1", 90.0, start=8000, end=9000)
+    outside.validation_status = "supported"
+    seed = MergedSeed(
+        "ctg",
+        0,
+        10000,
+        seed_id="seed",
+        seed_gene_ids=("inside",),
+        anchors=[inside, outside],
+        confirmed_seeds=(ConfirmedSeed("seed", "ctg", 4000, 5000),),
+    )
+    seed.compute_classification()
+    assert seed.predicted_family == "MIXED"
+
+    (result,) = build_phase1_seed_surface([seed]).results
+
+    assert (result.start, result.end) == (4000, 5000)
+    assert result.hallmark_genes == ["GVOGm0003"]
+    assert result.region_classification == "NCLDV"
+    assert result.likely_family == result.taxonomy_class == "NCLDV"
+    assert result.region_classification_ncldv_markers == 1
+    assert result.region_classification_vp_plv_markers == 0
+    assert seed.predicted_family == "MIXED"
+    assert seed.anchors == [inside, outside]
 
 
 def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> None:

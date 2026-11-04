@@ -299,6 +299,19 @@ def test_partial_overlap_adds_distinct_seed_and_containment_does_not():
     assert add_rescue_seeds([containing], witnesses) == [containing]
 
 
+def test_spatial_witness_in_search_padding_remains_independently_confirmed():
+    ordinary = MergedSeed(
+        "s", 0, 10000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 100, 1000),)
+    )
+    witnesses = find_spatial_witnesses([hit("other", "GVOGm0003", 8000, 9000)])
+
+    seeds = add_rescue_seeds([ordinary], witnesses)
+
+    assert len(seeds) == 2
+    assert seeds[0] == ordinary
+    assert seeds[1].confirmed_seeds == (ConfirmedSeed(witnesses[0].witness_id, "s", 8000, 9000),)
+
+
 def test_partial_rescue_does_not_merge_across_host_stop_or_split_its_core():
     old = MergedSeed("s", 0, 1500, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 0, 1500),))
     evidence = [hit("a", "GVOGm0003", 1000, 2000)]
