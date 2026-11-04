@@ -285,15 +285,10 @@ def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path, hull
     assert [c["candidate_id"] for c in provenance["children"]] == [boundary_candidate_id(c) for c in children]
     assert provenance["children"][0]["right_stop_reason"] == "support_gap"
     originals = [rejected(c) for c in children]
-    if hull_end == 6000:
-        assert result.confidence_tier == "LOW"
-        assert _qualifying_hallmark_genes(result) == "."
-        assert _evaluate_class_quality_gate(result).kept
-        assert evaluate_v2_quality_gate(result).reason == "low_short_without_core"
-        selected = _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0)
-        assert all(actual is original for actual, original in zip(selected, originals, strict=True))
-        assert tuple(seed for original in selected for seed in original.confirmed_seeds) == boundary.confirmed_seeds
-        return
+    assert result.confidence_tier == "LOW"
+    assert _qualifying_hallmark_genes(result) == "."
+    assert _evaluate_class_quality_gate(result).kept
+    assert evaluate_v2_quality_gate(result).kept
     assert _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0) == [result]
     successful = json.loads(result.joint_seed_provenance)
     assert successful["children"][0]["final_confidence"] == originals[0].final_confidence
@@ -309,6 +304,15 @@ def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path, hull
     with detailed.open() as handle:
         row = next(csv.DictReader(handle, delimiter="\t"))
     assert row["joint_seed_provenance"] == result.joint_seed_provenance
+    original_locus_ids = result.scoring_locus_ids
+    result.scoring_locus_ids = {record["porf_id"]: "one_locus" for record in result.gene_taxonomy_records}
+    assert result.supplementary_viral_evidence.eligible
+    assert _evaluate_class_quality_gate(result).kept
+    assert evaluate_v2_quality_gate(result).reason == "low_insufficient_competitive_viral_genes"
+    selected = _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0)
+    assert all(actual is original for actual, original in zip(selected, originals, strict=True))
+    assert tuple(seed for original in selected for seed in original.confirmed_seeds) == boundary.confirmed_seeds
+    result.scoring_locus_ids = original_locus_ids
     result.supplementary_viral_evidence = replace(result.supplementary_viral_evidence, eligible=False)
     assert _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0) == originals
 

@@ -480,8 +480,6 @@ def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
     decision = _evaluate_class_quality_gate(result)
     if not decision.kept or result.confidence_tier.upper() != "LOW" or _qualifying_hallmark_genes(result) != ".":
         return decision
-    if result.end - result.start < 15000:
-        return QualityGateDecision(False, decision.effective_class, "low_short_without_core")
     support = assess_competitive_viral_support(result)
     if len(support.supporting_gene_ids) < 2:
         reason = "low_gene_evidence_unavailable" if support.unavailable else "low_insufficient_competitive_viral_genes"

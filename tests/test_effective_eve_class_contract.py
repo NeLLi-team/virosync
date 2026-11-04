@@ -145,6 +145,8 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
             confidence_tier="LOW",
             start=0,
             end=6001,
+            gene_taxonomy_records=[],
+            scoring_locus_ids={},
             hallmark_count=2,
             hallmark_genes=["marker_a", "marker_b"],
             has_capsid_evidence=False,
@@ -152,7 +154,7 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
         )
     )
     assert decision.kept is False
-    assert decision.reason == "low_short_without_core"
+    assert decision.reason == "low_gene_evidence_unavailable"
     assert decision.effective_class == "NCLDV"
 
 

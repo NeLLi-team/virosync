@@ -46,12 +46,13 @@ def candidate(*records, **changes):
     return VerificationResult(**values)
 
 
-def test_short_coreless_low_is_removed_even_with_two_stronger_viral_genes():
-    result = candidate(gene("a"), gene("b", start=500, end=700), end=14999)
+@pytest.mark.parametrize("end", [6000, 12764, 14999])
+def test_short_coreless_low_with_two_stronger_viral_genes_is_retained(end):
+    result = candidate(gene("a"), gene("b", start=500, end=700), end=end)
     decision = evaluate_v2_quality_gate(result)
-    assert not decision.kept
-    assert decision.reason == "low_short_without_core"
-    assert (result.start, result.end, result.confidence_tier) == (0, 14999, "LOW")
+    assert decision.kept
+    assert decision.reason == "ncldv_mirus_low_promoted"
+    assert (result.start, result.end, result.confidence_tier) == (0, end, "LOW")
 
 
 def test_exact_15000_bp_with_two_supporting_genes_keeps_original_gate_reason():
@@ -206,7 +207,7 @@ def test_only_scored_qualifying_core_exempts_low():
     ]
     assert evaluate_v2_quality_gate(result).kept
     result.hallmark_evidence[0].model_roles[0]["excluded_from_scoring"] = True
-    assert evaluate_v2_quality_gate(result).reason == "low_short_without_core"
+    assert evaluate_v2_quality_gate(result).reason == "low_gene_evidence_unavailable"
 
 
 @pytest.mark.parametrize("tier", ["MEDIUM", "HIGH"])
@@ -216,9 +217,9 @@ def test_extra_low_rule_does_not_touch_higher_tiers(tier):
 
 def test_spatial_rescue_does_not_bypass_coreless_low_requirement():
     with patch("virosync.pipeline.phase3.output_generator.has_spatial_rescue", return_value=True):
-        assert evaluate_v2_quality_gate(candidate(end=6000)).reason == "low_short_without_core"
+        assert evaluate_v2_quality_gate(candidate(end=6000)).reason == "low_gene_evidence_unavailable"
 
 
 def test_cress_route_does_not_bypass_coreless_low_requirement():
     result = candidate(end=6000, region_classification="CRESS", likely_family="CRESS", marker_family_hits=["CRESS"])
-    assert evaluate_v2_quality_gate(result).reason == "low_short_without_core"
+    assert evaluate_v2_quality_gate(result).reason == "low_gene_evidence_unavailable"

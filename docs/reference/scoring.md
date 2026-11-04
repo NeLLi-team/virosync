@@ -208,10 +208,11 @@ core count above.
 
 The current private detector experiment adds a check to every otherwise
 accepted LOW candidate without a qualifying core family in
-`qualifying_hallmark_genes`. It rejects an interval shorter than 15,000 bp or
-supported by fewer than two distinct genes. A qualifying core exempts the call
+`qualifying_hallmark_genes`. It rejects a candidate supported by fewer than two
+distinct genes. A qualifying core exempts the call
 from this extra check; a capsid flag, model count or module flag alone does not.
-MEDIUM and HIGH calls retain their existing acceptance rules.
+MEDIUM and HIGH calls retain their existing acceptance rules. The class-specific
+length rules still apply; this extra filter adds no separate length cutoff.
 
 A supporting gene lies fully inside the final interval. In its retained top ten
 proteome hits after reference masking, its best viral bitscore must strictly
@@ -230,8 +231,8 @@ separate top-50 host-veto evidence. Synthetic backgrounds determine the mask,
 not their inserted viral donors. Missing or malformed gene evidence is reported
 as unavailable, rather than treated as an observed zero-hit search.
 
-The detailed table records `low_short_without_core`,
-`low_insufficient_competitive_viral_genes` or `low_gene_evidence_unavailable` in
+The detailed table records `low_insufficient_competitive_viral_genes` or
+`low_gene_evidence_unavailable` in
 `normal_quality_gate_reason`. Evidence profiles report the supporting gene IDs
 and assessment completeness. These checks change acceptance, not the score,
 tier or coordinates. They remain a benchmark experiment pending native review.

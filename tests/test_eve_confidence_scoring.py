@@ -277,15 +277,16 @@ def test_supplementary_zero_core_still_obeys_high_cap():
     assert calculate_eve_confidence(result, 1.0, use_crf_score=True) == pytest.approx(0.699)
 
 
-@pytest.mark.parametrize("end,kept", [(15000, True), (6000, False), (5000, False)])
+@pytest.mark.parametrize("end,kept", [(15000, True), (12764, True), (6000, True), (5000, False), (4999, False)])
 def test_supplementary_module_low_gate_uses_same_record_and_keeps_length_rule(end, kept):
-    from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+    from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate, evaluate_v2_quality_gate
 
     result = _supplementary_candidate(end=end, total=100)
     result.final_confidence = calculate_eve_confidence(result, 0.0)
     result.confidence_tier = assign_confidence_tier(result)
     assert result.confidence_tier == "LOW"
     assessment = result.supplementary_viral_evidence
+    assert _evaluate_class_quality_gate(result).kept is kept
     decision = evaluate_v2_quality_gate(result)
     assert decision.kept is kept
     assert result.supplementary_viral_evidence is assessment
@@ -469,9 +470,7 @@ def test_supplementary_native_verify_infers_existing_family_before_assessment(to
     assert result.supplementary_viral_evidence.low_class == "NCLDV"
     assert result.confidence_tier == tier
     selection = select_phase3_acceptance([result], AblationID.A0)
-    assert selection.canonical_results == ((result,) if tier == "MEDIUM" else ())
-    if tier == "LOW":
-        assert selection.normal_gate_decisions[0].reason == "low_short_without_core"
+    assert selection.canonical_results == (result,)
     assert unsupported_eve_ids([result]) == set()
 
 

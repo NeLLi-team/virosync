@@ -195,8 +195,7 @@ ViroSync accepted.
 
 `normal_quality_gate_reason` records the decision already computed during
 selection, even when routine logs are suppressed. For example,
-`low_short_without_core` identifies a short LOW candidate without a qualifying
-core. `low_insufficient_competitive_viral_genes` records fewer than two genes
+`low_insufficient_competitive_viral_genes` records fewer than two genes
 whose retained viral hit beats cellular hits; `low_gene_evidence_unavailable`
 distinguishes incomplete evidence from an observed lack of support. These reasons
 describe the current private LOW-rule experiment. This field does not determine
@@ -307,14 +306,15 @@ evidence or two hallmarks with one non-ATPase hallmark. A region with any lineag
 viral hit keeps its family logic.
 
 In the private LOW-rule experiment, a scored qualifying core exempts a LOW
-candidate from the added filter. Otherwise, the candidate must span at least
-15,000 bp and contain two genes whose best retained viral or pEVE hit has at
-least 25% identity and strictly beats the best cellular hit. The comparison uses
+candidate from the added filter. Otherwise, the candidate must contain two
+genes whose best retained viral or pEVE hit has at least 25% identity and
+strictly beats the best cellular hit. The comparison uses
 the masked original top ten, excludes phage-only support, and pools linked
 fragments by base pORF ID, exact coordinates and scoring locus before counting
 distinct genes. Capsid flags, supplementary modules and the CRESS route do not
 provide an exemption on their own. This filter leaves scores and coordinates
-unchanged and applies after the class-specific gate.
+unchanged and applies after the class-specific gate, whose existing length
+requirements still apply. It adds no separate minimum length.
 
 `has_mcp` and `mcp_gene_ids` name major capsid proteins only. The class-vote
 override, ANI class transfer, jelly-roll classification and Boltz input
