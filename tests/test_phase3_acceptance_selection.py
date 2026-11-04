@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from virosync.ablation import AblationID, InterventionCounts
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.phase3 import acceptance_selection as selection_module
 from virosync.pipeline.phase3.acceptance_selection import select_phase3_acceptance
 from virosync.pipeline.phase3.evidence_synthesizer import (
@@ -10,6 +11,30 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     EvidenceSynthesizerConfig,
     VerificationResult,
 )
+
+
+def _add_scored_core(result: VerificationResult) -> None:
+    """Attach a validated, retained catalogue MCP and its native assessment."""
+    result.hallmark_evidence = [
+        HallmarkEvidence(
+            "core|aa1-20",
+            "core",
+            result.scaffold,
+            result.start + 1,
+            result.start + 61,
+            "GVOGm0003",
+            1e-8,
+            70.0,
+            60.0,
+            1,
+            20,
+            "validated",
+            30.0,
+            "retained_hmm",
+        )
+    ]
+    result.hallmark_assessment = assess_hallmarks(result)
+    assert result.hallmark_assessment.summary.qualifying_evidence_ids
 
 
 def _candidate(
@@ -95,6 +120,7 @@ def test_a6_distinguishes_normal_low_promotion_from_bypass_retention() -> None:
     promoted.hallmark_count = 2
     promoted.hallmark_genes = ["MCP", "POL"]
     promoted.likely_family = "NCLDV"
+    _add_scored_core(promoted)
     bypassed = _candidate(
         "bypassed",
         length=6_001,
@@ -172,6 +198,7 @@ def _rescue_candidate(
         result.frameshift_rescue_marker_ids = [f"{eve_id}_VSR0123456789abcdef"]
         result.hallmark_count = 2
         result.hallmark_genes = ["VS000087", "POLB"]
+        _add_scored_core(result)
     return result
 
 

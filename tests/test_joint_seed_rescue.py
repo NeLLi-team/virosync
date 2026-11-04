@@ -237,7 +237,8 @@ def test_gap_barrier_uses_the_real_lineage_share(
     assert bool(pairs) is not blocked
 
 
-def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path) -> None:
+@pytest.mark.parametrize("hull_end", [6000, 16000])
+def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path, hull_end: int) -> None:
     import json
 
     from test_eve_confidence_scoring import _supplementary_gene
@@ -249,9 +250,14 @@ def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path) -> N
     )
     from virosync.pipeline.phase3.evidence_synthesizer import EvidenceSynthesizer, EvidenceSynthesizerConfig
     from virosync.pipeline.phase3.joint_seed_rescue import joint_boundary, joint_result_supported
-    from virosync.pipeline.phase3.output_generator import OutputGenerator
+    from virosync.pipeline.phase3.output_generator import (
+        OutputGenerator,
+        _evaluate_class_quality_gate,
+        _qualifying_hallmark_genes,
+        evaluate_v2_quality_gate,
+    )
 
-    children = (child("left", 0, 2000), child("right", 3000, 7000))
+    children = (child("left", 0, 2000), child("right", 3000, hull_end))
     children = tuple(
         replace(c, scaffold="scaf", confirmed_seeds=(ConfirmedSeed(c.seed_id, "scaf", c.start, c.end),))
         for c in children
@@ -271,7 +277,7 @@ def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path) -> N
     result = synthesizer.verify_eve(restored, [], gene_taxonomy_records=records, gene_taxonomy_summary={"total": 3})
     assert result.supplementary_viral_evidence.eligible
     assert result.supplementary_viral_evidence.start == 0
-    assert result.supplementary_viral_evidence.end == 7000
+    assert result.supplementary_viral_evidence.end == hull_end
     assert joint_result_supported(result, children)
     assert result.confirmed_seeds == restored.confirmed_seeds
     assert result.joint_seed_provenance == boundary.joint_seed_provenance
@@ -279,6 +285,15 @@ def test_native_joint_rescoring_preserves_cores_and_output_resume(tmp_path) -> N
     assert [c["candidate_id"] for c in provenance["children"]] == [boundary_candidate_id(c) for c in children]
     assert provenance["children"][0]["right_stop_reason"] == "support_gap"
     originals = [rejected(c) for c in children]
+    if hull_end == 6000:
+        assert result.confidence_tier == "LOW"
+        assert _qualifying_hallmark_genes(result) == "."
+        assert _evaluate_class_quality_gate(result).kept
+        assert evaluate_v2_quality_gate(result).reason == "low_short_without_core"
+        selected = _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0)
+        assert all(actual is original for actual, original in zip(selected, originals, strict=True))
+        assert tuple(seed for original in selected for seed in original.confirmed_seeds) == boundary.confirmed_seeds
+        return
     assert _replace_accepted_joints(originals, [result], [(restored, children)], ablation_id=AblationID.A0) == [result]
     successful = json.loads(result.joint_seed_provenance)
     assert successful["children"][0]["final_confidence"] == originals[0].final_confidence
@@ -557,7 +572,7 @@ def test_competition_counts_only_fully_supported_native_results(both_pass: bool,
     from virosync.pipeline.phase3.evidence_synthesizer import calculate_eve_confidence
     from virosync.pipeline.phase3.joint_seed_rescue import joint_boundary
 
-    children = (child("a", 0, 2000), child("b", 3000, 7000), child("c", 8000, 10000))
+    children = (child("a", 0, 2000), child("b", 3000, 16000), child("c", 17000, 19000))
     children = tuple(
         replace(c, scaffold="scaf", confirmed_seeds=(ConfirmedSeed(c.seed_id, "scaf", c.start, c.end),))
         for c in children
@@ -568,7 +583,7 @@ def test_competition_counts_only_fully_supported_native_results(both_pass: bool,
         boundary_candidate_id(joints[0][0]),
         "scaf",
         0,
-        7000,
+        16000,
         confirmed_seeds=joints[0][0].confirmed_seeds,
         likely_family="NCLDV",
         region_classification="NCLDV",
@@ -583,7 +598,7 @@ def test_competition_counts_only_fully_supported_native_results(both_pass: bool,
         boundary_candidate_id(joints[1][0]),
         "scaf",
         3000,
-        10000,
+        19000,
         confirmed_seeds=joints[1][0].confirmed_seeds,
         likely_family="NCLDV",
         region_classification="NCLDV",
@@ -591,7 +606,7 @@ def test_competition_counts_only_fully_supported_native_results(both_pass: bool,
         gene_taxonomy_records=[
             _supplementary_gene("b", 3100, 3200),
             _supplementary_gene("c", 3500, 3600),
-            _supplementary_gene("d", 8500, 8600, qcov=80 if both_pass else 10),
+            _supplementary_gene("d", 17500, 17600, qcov=80 if both_pass else 10),
         ],
     )
     calculate_eve_confidence(first, 0)
@@ -698,7 +713,7 @@ def test_active_selection_rejection_preserves_children_despite_raw_gate_pass() -
     from virosync.pipeline.phase3.joint_seed_rescue import joint_boundary, joint_result_supported
     from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 
-    children = (child("a", 0, 250), child("b", 450, 6000))
+    children = (child("a", 0, 250), child("b", 450, 15000))
     children = tuple(
         replace(
             c,
@@ -709,7 +724,7 @@ def test_active_selection_rejection_preserves_children_despite_raw_gate_pass() -
         for c in children
     )
     boundary = joint_boundary(children)
-    result = _supplementary_candidate()
+    result = _supplementary_candidate(end=15000)
     result.eve_id = boundary_candidate_id(boundary)
     result.confirmed_seeds = boundary.confirmed_seeds
     result.seed_sources = ["frameshift_rescue"]

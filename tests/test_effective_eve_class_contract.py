@@ -41,7 +41,7 @@ def test_effective_class_partition_and_output_schema_are_versioned() -> None:
     )
     assert tuple(EFFECTIVE_EVE_CLASS_COUNT_KEYS) == EFFECTIVE_EVE_CLASSES
     assert "MIXED" not in EFFECTIVE_EVE_CLASSES
-    assert OUTPUT_SCHEMA_VERSION == 13
+    assert OUTPUT_SCHEMA_VERSION == 14
 
 
 def test_persisted_effective_class_normalization_is_exhaustive() -> None:
@@ -151,7 +151,8 @@ def test_tier_aware_resolver_preserves_low_gate_precedence() -> None:
             **labels,
         )
     )
-    assert decision.kept is True
+    assert decision.kept is False
+    assert decision.reason == "low_short_without_core"
     assert decision.effective_class == "NCLDV"
 
 

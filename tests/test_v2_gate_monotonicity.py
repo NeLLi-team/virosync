@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from virosync.pipeline.hallmark_evidence import HallmarkEvidence
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     assign_confidence_tier,
     calculate_eve_confidence,
 )
-from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate, evaluate_v2_quality_gate
 
 # Label triples per class, shaped so both the LOW resolver (likely_family /
 # classification) and the HIGH/MEDIUM resolver (region_classification) land on
@@ -67,12 +67,12 @@ def _region() -> VerificationResult:
     return result
 
 
-def test_v2_gate_is_monotone_in_confidence_tier() -> None:
+def test_class_gate_is_monotone_in_confidence_tier() -> None:
     """Accepted at LOW must imply accepted at MEDIUM and at HIGH."""
     for eve_class, labels in _CLASS_LABELS.items():
         for end, hallmark_count, hallmark_genes, has_capsid_evidence in _EVIDENCE_VECTORS:
             decisions = {
-                tier: evaluate_v2_quality_gate(
+                tier: _evaluate_class_quality_gate(
                     SimpleNamespace(
                         confidence_tier=tier,
                         start=0,
@@ -125,3 +125,70 @@ def test_mcp_substring_does_not_earn_the_catalogue_floor() -> None:
     assert assign_confidence_tier(decoy) == "LOW"
     assert genuine.final_confidence >= 0.2
     assert assign_confidence_tier(genuine) != "LOW"
+
+
+def _add_scored_core(result: VerificationResult) -> None:
+    """Attach a validated, retained catalogue MCP and its native assessment."""
+    result.hallmark_evidence = [
+        HallmarkEvidence(
+            "core|aa1-20",
+            "core",
+            result.scaffold,
+            result.start + 1,
+            result.start + 61,
+            "GVOGm0003",
+            1e-8,
+            70.0,
+            60.0,
+            1,
+            20,
+            "validated",
+            30.0,
+            "retained_hmm",
+        )
+    ]
+    result.hallmark_assessment = assess_hallmarks(result)
+    assert result.hallmark_assessment.summary.qualifying_evidence_ids
+
+
+def test_full_gate_monotonicity_has_supported_low_and_scored_core_cases() -> None:
+    supported = VerificationResult(
+        eve_id="supported",
+        scaffold="scaf",
+        start=0,
+        end=16000,
+        region_classification="NCLDV",
+        likely_family="NCLDV",
+        hallmark_count=2,
+        hallmark_genes=["marker_a", "marker_b"],
+        gene_taxonomy_records=[
+            dict(
+                porf_id=name,
+                scaffold="scaf",
+                start=start,
+                end=start + 100,
+                top10_prefixes=["NCLDV", "EUK"],
+                top10_bitscores=[120.0, 100.0],
+                top10_targets=["NCLDV__ref", "EUK__ref"],
+                top10_pidents=[30.0, 40.0],
+                has_hit=True,
+                is_flanking=False,
+            )
+            for name, start in [("a", 100), ("b", 500)]
+        ],
+    )
+    core = VerificationResult(
+        eve_id="core",
+        scaffold="scaf",
+        start=0,
+        end=6000,
+        region_classification="NCLDV",
+        likely_family="NCLDV",
+        hallmark_count=2,
+        hallmark_genes=["GVOGm0003", "marker_b"],
+    )
+    _add_scored_core(core)
+    for result in (supported, core):
+        for tier in ("LOW", "MEDIUM", "HIGH"):
+            result.confidence_tier = tier
+            assert evaluate_v2_quality_gate(result).kept, (result.eve_id, tier)

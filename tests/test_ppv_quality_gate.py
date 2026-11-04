@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from virosync.pipeline.phase3.evidence_synthesizer import infer_ppv_subtype
 from virosync.pipeline.phase3.gene_taxonomy import extract_prefix
-from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate
 
 
 def _result(**overrides) -> SimpleNamespace:
@@ -31,7 +31,7 @@ def _result(**overrides) -> SimpleNamespace:
 
 
 def test_ppv_mcp_high_medium_passes() -> None:
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_capsid_evidence=True)
     )
     assert decision.kept
@@ -40,18 +40,18 @@ def test_ppv_mcp_high_medium_passes() -> None:
 
 def test_ppv_atpase_only_high_medium_is_gated_out() -> None:
     # ATPase-only PPV region must be held out, exactly like PLV/VP.
-    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2))
+    decision = _evaluate_class_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2))
     assert not decision.kept
     assert decision.reason == "small_dna_high_medium_gate"
 
 
 def test_ppv_non_atpase_hallmark_high_medium_passes() -> None:
-    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2))
+    decision = _evaluate_class_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2))
     assert decision.kept
 
 
 def test_ppv_low_mcp_is_promoted() -> None:
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         _result(
             confidence_tier="LOW",
             hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"],

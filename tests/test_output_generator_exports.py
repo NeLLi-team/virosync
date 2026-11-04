@@ -21,6 +21,7 @@ from virosync.output_contract import (
     OUTPUT_SCHEMA_VERSION,
     REPEAT_CANDIDATE_COLUMNS,
 )
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
@@ -118,6 +119,30 @@ CANONICAL_EXTENDED_FIELDS = (
     "seed_marker_patterns",
     "other_marker_patterns",
 )
+
+
+def _add_scored_core(result: VerificationResult) -> None:
+    """Attach a validated, retained catalogue MCP and its native assessment."""
+    result.hallmark_evidence = [
+        HallmarkEvidence(
+            "core|aa1-20",
+            "core",
+            result.scaffold,
+            result.start + 1,
+            result.start + 61,
+            "GVOGm0003",
+            1e-8,
+            70.0,
+            60.0,
+            1,
+            20,
+            "validated",
+            30.0,
+            "retained_hmm",
+        )
+    ]
+    result.hallmark_assessment = assess_hallmarks(result)
+    assert result.hallmark_assessment.summary.qualifying_evidence_ids
 
 
 def _write_genome_fasta(path: Path) -> None:
@@ -661,6 +686,7 @@ def test_generate_all_counts_promoted_low_as_canonical_prediction(tmp_path: Path
         hallmark_count=2,
     )
 
+    _add_scored_core(result)
     output_files = generator.generate_all([result])
 
     with Path(output_files["predictions_tsv"]).open() as handle:
@@ -795,6 +821,7 @@ def test_a0_preselected_output_matches_generator_gate_fallback(
         hallmark_count=2,
     )
     promoted_low.hallmark_genes = ["VP_MCP"]
+    _add_scored_core(promoted_low)
     normal_drop = _build_result(
         eve_id="EVE_NORMAL_DROP",
         scaffold="contig_1",

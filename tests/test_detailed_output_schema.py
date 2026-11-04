@@ -180,7 +180,7 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
 
 
 @pytest.fixture
-def repeated_peve_candidate() -> VerificationResult:
+def short_coreless_candidate() -> VerificationResult:
     return VerificationResult(
         eve_id="weak",
         confirmed_seeds=(ConfirmedSeed("weak", "sc", 0, 6000),),
@@ -203,29 +203,29 @@ def test_detailed_output_preserves_gate_reason_without_verbose_logs(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     ablation_id: AblationID,
-    repeated_peve_candidate: VerificationResult,
+    short_coreless_candidate: VerificationResult,
 ) -> None:
-    candidate = repeated_peve_candidate
+    candidate = short_coreless_candidate
     with caplog.at_level(logging.ERROR, logger="virosync"):
         selection = select_phase3_acceptance([candidate], ablation_id)
         output = OutputGenerator(tmp_path).write_predictions_detailed_tsv(list(selection.detailed_results))
     with output.open() as handle:
         row = next(csv.DictReader(handle, delimiter="\t"))
-    assert row["normal_quality_gate_reason"] == "low_repeated_peve_only_gate"
+    assert row["normal_quality_gate_reason"] == "low_short_without_core"
     assert row["canonical_selection_outcome"] == ("kept" if ablation_id is AblationID.A6 else "normal_gate_rejected")
     assert candidate.to_dict()["normal_quality_gate_reason"] == row["normal_quality_gate_reason"]
     assert bool(selection.canonical_results) is (ablation_id is AblationID.A6)
 
 
 def test_generate_all_stores_gate_reason_before_rejection(
-    tmp_path: Path, repeated_peve_candidate: VerificationResult
+    tmp_path: Path, short_coreless_candidate: VerificationResult
 ) -> None:
-    outputs = OutputGenerator(tmp_path).generate_all([repeated_peve_candidate])
+    outputs = OutputGenerator(tmp_path).generate_all([short_coreless_candidate])
     with outputs["predictions_detailed_tsv"].open() as handle:
         row = next(csv.DictReader(handle, delimiter="\t"))
-    assert row["normal_quality_gate_reason"] == "low_repeated_peve_only_gate"
+    assert row["normal_quality_gate_reason"] == "low_short_without_core"
     assert row["canonical_selection_outcome"] == "."
-    assert repeated_peve_candidate.to_dict()["normal_quality_gate_reason"] == row["normal_quality_gate_reason"]
+    assert short_coreless_candidate.to_dict()["normal_quality_gate_reason"] == row["normal_quality_gate_reason"]
     with outputs["predictions_tsv"].open() as handle:
         assert list(csv.DictReader(handle, delimiter="\t")) == []
 

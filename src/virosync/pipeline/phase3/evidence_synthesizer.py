@@ -54,6 +54,7 @@ from virosync.pipeline.phase3.gene_taxonomy import (
     peve_profile_class,
     viral_hit_categories,
 )
+from virosync.pipeline.phase3.low_support import assess_competitive_viral_support
 from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
@@ -1570,6 +1571,7 @@ class VerificationResult:
             "seed_compositional_score": self.seed_compositional_score,
             "canonical_selection_outcome": self.canonical_selection_outcome,
             "normal_quality_gate_reason": self.normal_quality_gate_reason,
+            "competitive_viral_support": asdict(assess_competitive_viral_support(self)),
             # Composition features
             "kfd": self.kfd,
             "gc_deviation": self.gc_deviation,

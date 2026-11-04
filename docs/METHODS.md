@@ -82,7 +82,7 @@ and BED row.
 
 ### Key TSV columns
 
-Both tables use output schema 13. The repeat-evidence groups below comprise 18
+Both tables use output schema 14. The repeat-evidence groups below comprise 18
 columns in each table; they are separate from the 17-column
 [repeat-pair sidecar](#repeat-pair-sidecar).
 
@@ -150,7 +150,7 @@ artifact versions:
 
 | Contract | Current version |
 | --- | --- |
-| Public output schema | 12 |
+| Public output schema | 14 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
 | Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v4` |
 | Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v8` |
@@ -195,10 +195,14 @@ ViroSync accepted.
 
 `normal_quality_gate_reason` records the decision already computed during
 selection, even when routine logs are suppressed. For example,
-`low_repeated_peve_only_gate` identifies the repeated-model pEVE-only LOW
-rejection. This field does not determine final inclusion: overlap selection,
-rescue-marker checks, the no-viral-evidence drop and the A6 gate-bypass arm can
-produce a different `canonical_selection_outcome`. A direct export without a stored gate decision
+`low_short_without_core` identifies a short LOW candidate without a qualifying
+core. `low_insufficient_competitive_viral_genes` records fewer than two genes
+whose retained viral hit beats cellular hits; `low_gene_evidence_unavailable`
+distinguishes incomplete evidence from an observed lack of support. These reasons
+describe the current private LOW-rule experiment. This field does not determine
+final inclusion: overlap selection, rescue-marker checks, the no-viral-evidence
+drop and the A6 gate-bypass arm can produce a different
+`canonical_selection_outcome`. A direct export without a stored gate decision
 writes `.` rather than recomputing or inferring a reason.
 
 ### Class meanings
@@ -302,12 +306,15 @@ before the region class. The region passes the gate through the same rule as a
 evidence or two hallmarks with one non-ATPase hallmark. A region with any lineage
 viral hit keeps its family logic.
 
-For LOW candidates with no qualifying core, capsid evidence or eligible
-supplementary module, repeated copies of one model do not suffice when all
-qualified viral hits are EUK-pEVE and the taxonomy is `VIRAL_UNKNOWN`. This
-additional gate requires a complete marker-name list and uses only original
-top-ten marker and interior-gene hits. It leaves scores, coordinates, higher
-tiers and the CRESS identity-marker route unchanged.
+In the private LOW-rule experiment, a scored qualifying core exempts a LOW
+candidate from the added filter. Otherwise, the candidate must span at least
+15,000 bp and contain two genes whose best retained viral or pEVE hit has at
+least 25% identity and strictly beats the best cellular hit. The comparison uses
+the masked original top ten, excludes phage-only support, and pools linked
+fragments by base pORF ID, exact coordinates and scoring locus before counting
+distinct genes. Capsid flags, supplementary modules and the CRESS route do not
+provide an exemption on their own. This filter leaves scores and coordinates
+unchanged and applies after the class-specific gate.
 
 `has_mcp` and `mcp_gene_ids` name major capsid proteins only. The class-vote
 override, ANI class transfer, jelly-roll classification and Boltz input

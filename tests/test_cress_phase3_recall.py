@@ -10,7 +10,7 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     VerificationResult,
     infer_likely_family,
 )
-from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate
 
 
 def _result(region_classification: str = "UNKNOWN") -> VerificationResult:
@@ -108,7 +108,7 @@ def test_single_identity_qualified_cress_gene_passes_without_two_kb_floor(
     tier: str,
     expected_reason: str,
 ) -> None:
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         SimpleNamespace(
             confidence_tier=tier,
             start=100,
@@ -147,7 +147,7 @@ def test_euk_top_hit_single_cress_gene_remains_discovery_only() -> None:
 
     assert result.region_classification == "CRESS"
     assert "CRESS" not in result.marker_family_hits
-    assert not evaluate_v2_quality_gate(result).kept
+    assert not _evaluate_class_quality_gate(result).kept
 
 
 def test_two_qualified_cress_genes_pass_with_euk_top_hits() -> None:
@@ -169,7 +169,7 @@ def test_two_qualified_cress_genes_pass_with_euk_top_hits() -> None:
     result.confidence_tier = "MEDIUM"
 
     assert result.marker_family_hits == ["CRESS"]
-    assert evaluate_v2_quality_gate(result).kept
+    assert _evaluate_class_quality_gate(result).kept
 
 
 def test_generic_boundary_overlapping_cress_hit_is_not_promoted() -> None:
@@ -182,14 +182,14 @@ def test_generic_boundary_overlapping_cress_hit_is_not_promoted() -> None:
 
     assert result.region_classification == "UNKNOWN"
     assert "CRESS" not in result.marker_family_hits
-    decision = evaluate_v2_quality_gate(result)
+    decision = _evaluate_class_quality_gate(result)
     assert not decision.kept
     assert decision.reason == "cress_identity_required"
 
 
 @pytest.mark.parametrize("tier", ["HIGH", "LOW"])
 def test_unqualified_single_cress_label_remains_gated_out(tier: str) -> None:
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         SimpleNamespace(
             confidence_tier=tier,
             start=100,

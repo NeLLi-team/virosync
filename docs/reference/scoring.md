@@ -191,8 +191,9 @@ is eligible when:
 
 ## Acceptance gate
 
-A candidate with a contained spatial witness that supports its tier passes with
-the reason `hallmark_spatial_rescue_pass`. Other candidates follow this table:
+A candidate with a contained spatial witness that supports its tier passes the
+class gate with reason `hallmark_spatial_rescue_pass`. Other candidates follow
+this table. The additional LOW evidence check below applies to both routes.
 
 | Class | HIGH or MEDIUM | LOW |
 | --- | --- | --- |
@@ -205,17 +206,35 @@ the reason `hallmark_spatial_rescue_pass`. Other candidates follow this table:
 marker-bearing proteins, one per scoring locus. It is separate from the panel
 core count above.
 
-An otherwise accepted LOW candidate is rejected when its complete marker list
-contains only one normalized model name, it has no qualifying core, capsid
-evidence or eligible supplementary module, and its qualifying viral hits are
-all EUK-pEVE with taxonomy `VIRAL_UNKNOWN`. The check uses retained marker hits
-and non-flanking proteome-gene hits from the original top ten. It preserves the
-CRESS identity-marker route. Missing assessment or incomplete marker names do
-not establish this rejection. Model-name normalization folds case for `GVOGm`
-and `OG` prefixes; other names retain their case. The check changes acceptance,
-not the score, tier or coordinates.
-The detailed table records this rejection as `low_repeated_peve_only_gate` in
-`normal_quality_gate_reason`, beside the candidate identifier and coordinates.
+The current private detector experiment adds a check to every otherwise
+accepted LOW candidate without a qualifying core family in
+`qualifying_hallmark_genes`. It rejects an interval shorter than 15,000 bp or
+supported by fewer than two distinct genes. A qualifying core exempts the call
+from this extra check; a capsid flag, model count or module flag alone does not.
+MEDIUM and HIGH calls retain their existing acceptance rules.
+
+A supporting gene lies fully inside the final interval. In its retained top ten
+proteome hits after reference masking, its best viral bitscore must strictly
+exceed its best cellular bitscore. Ties fail. A viral hit without a cellular hit
+supports; a gene without a viral hit does not. Viral classes are NCLDV, MIRUS,
+PPV (including VP and PLV), CRESS, GVMAG and EUK-pEVE. Phage-only hits do not
+supply this support. A counted viral hit needs at least 25% identity. Cellular
+competitors are EUK, BAC and ARC; organelle and unknown hits are neither. This
+check never reads deeper hits. Existing positive marker validation is unchanged.
+Repeated models on one gene
+and fragments linked to one scoring locus cannot count as independent genes.
+
+The experiment masks each background genome's whole species in both reference
+searches, including pEVE-labelled references, before retaining top-ten and
+separate top-50 host-veto evidence. Synthetic backgrounds determine the mask,
+not their inserted viral donors. Missing or malformed gene evidence is reported
+as unavailable, rather than treated as an observed zero-hit search.
+
+The detailed table records `low_short_without_core`,
+`low_insufficient_competitive_viral_genes` or `low_gene_evidence_unavailable` in
+`normal_quality_gate_reason`. Evidence profiles report the supporting gene IDs
+and assessment completeness. These checks change acceptance, not the score,
+tier or coordinates. They remain a benchmark experiment pending native review.
 
 Capsid evidence in this table is the [`has_capsid_evidence` flag](../METHODS.md#capsid-evidence).
 It is separate from the capsid role in the catalogue.

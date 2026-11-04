@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
+from virosync.pipeline.phase3.output_generator import _evaluate_class_quality_gate
 
 
 def _result(**overrides) -> SimpleNamespace:
@@ -29,33 +29,35 @@ def _result(**overrides) -> SimpleNamespace:
 
 
 def test_atpase_only_high_medium_plv_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2))
+    decision = _evaluate_class_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_ATPase_1"], hallmark_count=2))
     assert not decision.kept
     assert decision.reason == "small_dna_high_medium_gate"
 
 
 def test_non_atpase_hallmark_high_medium_plv_passes() -> None:
-    decision = evaluate_v2_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2))
+    decision = _evaluate_class_quality_gate(_result(hallmark_genes=["PLV_PC_054", "VP_Penton_1"], hallmark_count=2))
     assert decision.kept
     assert decision.reason == "small_dna_high_medium_pass"
 
 
 def test_mcp_only_high_medium_plv_passes() -> None:
     # An MCP alone is sufficient even without a second hallmark.
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         _result(hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"], hallmark_count=1, has_capsid_evidence=True)
     )
     assert decision.kept
 
 
 def test_atpase_only_low_plv_is_gated_out() -> None:
-    decision = evaluate_v2_quality_gate(_result(confidence_tier="LOW", hallmark_genes=["PLV_PC_054"], hallmark_count=1))
+    decision = _evaluate_class_quality_gate(
+        _result(confidence_tier="LOW", hallmark_genes=["PLV_PC_054"], hallmark_count=1)
+    )
     assert not decision.kept
     assert decision.reason == "small_dna_low_gate"
 
 
 def test_mcp_low_plv_is_promoted() -> None:
-    decision = evaluate_v2_quality_gate(
+    decision = _evaluate_class_quality_gate(
         _result(
             confidence_tier="LOW",
             hallmark_genes=["plv_mcp_caps_PgVV_Aquinto"],
