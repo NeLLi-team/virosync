@@ -41,6 +41,13 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     genome.write_text("".join(f">{name}\n{'ACGT' * 5000}\n" for name in contigs), encoding="utf-8")
     proteome = tmp_path / "proteome.faa"
     genes = [f">ctgE_{n} # {1000 + n * 500} # {1300 + n * 500} # 1 # ID=1_{n};partial=00\nMKK\n" for n in range(1, 10)]
+    # The ctgD marker pair has real gene neighbors; its window spans these genes.
+    genes.extend(
+        [
+            ">ctgD_1 # 1001 # 1300 # 1 # ID=2_1;partial=00\nMKK\n",
+            ">ctgD_2 # 1501 # 1800 # 1 # ID=2_2;partial=00\nMKK\n",
+        ]
+    )
     proteome.write_text("".join(genes), encoding="utf-8")
     return genome, proteome
 
@@ -107,7 +114,7 @@ def test_housekeeping_companion_stays_inside_a_viral_seed(tmp_path: Path, model:
 
     regions = _assemble(tmp_path, markers)
 
-    assert [(r.start, r.end, [m.hmm_target for m in r.markers]) for r in regions] == [(0, 10000, [SEED_MODEL, model])]
+    assert [(r.start, r.end, [m.hmm_target for m in r.markers]) for r in regions] == [(1000, 1800, [SEED_MODEL, model])]
 
 
 def test_nonhousekeeping_low_candidate_seed_is_unchanged(tmp_path: Path) -> None:
@@ -116,7 +123,7 @@ def test_nonhousekeeping_low_candidate_seed_is_unchanged(tmp_path: Path) -> None
         _marker("ctgD_2", "ctgD", 1500, 1800, "VS000229"),
     ]
 
-    assert [(r.start, r.end) for r in _assemble(tmp_path, markers)] == [(0, 10000)]
+    assert [(r.start, r.end) for r in _assemble(tmp_path, markers)] == [(1000, 1800)]
 
 
 def test_other_marker_alone_still_seeds_a_region(tmp_path: Path) -> None:

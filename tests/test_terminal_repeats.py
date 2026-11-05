@@ -1390,7 +1390,16 @@ def test_phase2_real_tir_uses_walked_authority_and_final_evidence(
     genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
     genes = [pORF(f"host-{start}", "contig", start, start + 10) for start in (360, 380, 400)]
     taxonomy = {
-        gene.id: GeneTaxonomy(porf_id=gene.id, scaffold="contig", start=gene.start, end=gene.end) for gene in genes
+        gene.id: GeneTaxonomy(
+            porf_id=gene.id,
+            scaffold="contig",
+            start=gene.start,
+            end=gene.end,
+            has_hit=True,
+            top10_prefixes=["EUK__"],
+            top10_pidents=[80.0],
+        )
+        for gene in genes
     }
     query = _query(len(sequence))
     marker = SimpleNamespace(

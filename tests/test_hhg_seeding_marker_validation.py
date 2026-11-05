@@ -301,7 +301,8 @@ def test_nearby_diamond_validated_protein_supports_novel_marker_in_any_order(
 @pytest.mark.parametrize(
     ("support_query", "support_start", "support_pident"),
     [
-        ("contig_1_2", 10302, 35.0),
+        # A 20,001 bp gap exceeds the default 20 kb cluster-support window.
+        ("contig_1_2", 20302, 35.0),
         ("contig_1_2", 10001, 24.9),
         ("contig_2_1", 10001, 35.0),
     ],

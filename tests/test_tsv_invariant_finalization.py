@@ -34,6 +34,7 @@ from virosync.orchestration._flows.single_genome.run_state import load_run_state
 from virosync.output_contract import REPEAT_CANDIDATE_COLUMNS
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase0.masking import mask_genome_pipeline
+from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.repeat_evidence import assess_repeat_evidence
@@ -327,13 +328,13 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
         )
         proteome = phase0_dir / "proteome.fasta"
         genes = phase0_dir / "genes.gff"
-        proteome.write_text("")
-        genes.write_text("")
+        proteome.write_text(">p1\nM\n")
+        genes.write_text("scaffold\ttest\tCDS\t1\t4\t.\t+\t0\tID=p1\n")
         return {
             "masked_path": genome,
             "repeat_regions": [],
             "proteome_path": proteome,
-            "n_genes": 0,
+            "n_genes": 1,
             "elapsed": 0.0,
             "masking_result": masking_result,
         }
@@ -348,6 +349,8 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
                 start=0,
                 end=4,
                 seed_id="seed-0-scaffold-0",
+                anchors=[Anchor("p1", "scaffold", 0, 4, "+", "GVOGm0003", 50.0, 1e-20)],
+                seed_gene_ids=("p1",),
                 confirmed_seeds=(ConfirmedSeed("seed-0-scaffold-0", "scaffold", 0, 4),),
                 sources=["test"],
             )
