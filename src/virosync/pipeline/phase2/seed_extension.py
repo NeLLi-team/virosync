@@ -18,6 +18,7 @@ from virosync.pipeline.phase1.seed_merger import (
 )
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
+    _listify_top10_field,
     has_identity_qualified_viral_hit,
     has_viral_hit_veto,
     pORF,
@@ -75,21 +76,26 @@ def extend_confirmed_seed(
             continue
         tax = taxonomy.get(gene.id)
         marker = gene.id in viral_marker_genes or (tax is not None and tax.phase1_validated_viral_marker)
-        viral = marker or (tax is not None and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents))
-        host = bool(
-            available
-            and host_model is not None
-            and tax is not None
-            and host_lineage_share(tax, host_model) >= host_threshold
+        share = (
+            host_lineage_share(tax, host_model) if available and host_model is not None and tax is not None else None
         )
-        host = tax is not None and is_extension_host_gene(
-            tax,
-            host_share_ok=host,
-            marker=marker,
-            protected=any(gene.start < end and gene.end > start for start, end in protected_seed_intervals),
+        host_share = share is not None and share >= host_threshold
+        validated = tax is not None and tax.phase1_validated_viral_marker
+        marker_support = validated or (gene.id in viral_marker_genes and not host_share)
+        viral = marker_support or (
+            tax is not None
+            and not host_share
+            and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents)
         )
+        host = host_share and not marker and not tax.phase1_validated_viral_marker
+        foreign = bool(
+            share is not None and share < 0.10 and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
+        )
+        has_hits = tax is not None and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
+        if tax is not None and not has_hits and not marker_support and gene.id not in ml_support:
+            continue
         coverage_complete &= tax is not None
-        evidence.append((gene, viral or gene.id in ml_support, host, tax is not None))
+        evidence.append((gene, viral or foreign or gene.id in ml_support, host, tax is not None))
     left, left_reason, left_stop = _walk(seed.start, envelope[0], evidence, -1, disable_host_stop)
     right, right_reason, right_stop = _walk(seed.end, envelope[1], evidence, 1, disable_host_stop)
     return RefinedBoundary(
@@ -157,7 +163,10 @@ def _walk(
     run: list[int] = []
     if not disable_host_stop:
         for start, end, support, host, covered in ordered:
-            run = [*run, start] if host else []
+            if host:
+                run = [*run, start]
+            elif support:
+                run = []
             if len(run) == 3:
                 barrier = max(edge, run[0])
                 break
@@ -189,7 +198,7 @@ def _walk(
     return direction * accepted, reason, direction * barrier if barrier is not None else None
 
 
-def merge_reachable_boundaries(boundaries: list[RefinedBoundary]) -> list[RefinedBoundary]:
+def merge_reachable_boundaries(boundaries: list[RefinedBoundary], compatible=None) -> list[RefinedBoundary]:
     """Merge all compatible active overlaps, including across a nested separate seed."""
     finished: list[RefinedBoundary] = []
     active: list[RefinedBoundary] = []
@@ -198,10 +207,14 @@ def merge_reachable_boundaries(boundaries: list[RefinedBoundary]) -> list[Refine
         active = [item for item in active if item.scaffold == boundary.scaffold and item.end > boundary.start]
         index = 0
         while index < len(active):
-            if _can_merge(active[index], boundary):
+            if _can_merge(active[index], boundary) and (compatible is None or compatible(active[index], boundary)):
                 boundary = _merge_pair(active.pop(index), boundary)
                 index = 0
             else:
+                if compatible is not None and _can_merge(active[index], boundary):
+                    from virosync.pipeline.eve_type_rules import separate_overlap
+
+                    active[index], boundary = separate_overlap(active[index], boundary)
                 index += 1
         active.append(boundary)
     return sorted(finished + active, key=lambda item: (item.scaffold, item.start, item.end, item.seed_id))

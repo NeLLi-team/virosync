@@ -1130,6 +1130,10 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
 # different regions with no warning. The defaults were aligned to the YAML; this
 # test fails if they drift apart again.
 RESULT_AFFECTING_DEFAULTS = (
+    ("phase1", "initial_window_bp"),
+    ("phase1", "initial_window_genes"),
+    ("phase1", "merge_distance"),
+    ("phase2", "diamond_flank_genes"),
     ("phase1", "frameshift_screening_enabled"),
     ("phase1", "min_markers_initial"),
     ("phase2", "host_trim_enabled"),
@@ -1161,6 +1165,10 @@ def test_result_affecting_defaults_match_the_shipped_config():
 # exported Python API on the old values. Flow argument names differ from the config
 # field names, hence the explicit mapping.
 FLOW_ARG_FOR_FIELD = {
+    ("phase1", "initial_window_bp"): "initial_window_bp",
+    ("phase1", "initial_window_genes"): "initial_window_genes",
+    ("phase1", "merge_distance"): "merge_distance",
+    ("phase2", "diamond_flank_genes"): "boundary_diamond_flank_genes",
     ("phase1", "frameshift_screening_enabled"): "frameshift_screening_enabled",
     ("phase1", "min_markers_initial"): "min_markers_initial",
     ("phase2", "host_trim_enabled"): "boundary_host_trim_enabled",
@@ -1184,3 +1192,26 @@ def test_flow_signature_defaults_match_the_config_defaults():
         "single_genome_flow defaults disagree with the pipeline config defaults, so "
         f"calling the flow directly would produce different results; (flow, config) = {mismatched}"
     )
+
+
+@pytest.mark.parametrize("preset", [None, "config/orchestration.yaml", "config/orchestration_archaeal.yaml"])
+def test_v9g_defaults_reach_native_runner(preset: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the approved defaults through the public native flow boundary."""
+    from virosync.orchestration._flows.single_genome import orchestrator
+
+    def capture_config(*, config: PipelineConfig, **kwargs: object) -> tuple[int, int, int, int]:
+        return (
+            config.phase1.initial_window_bp,
+            config.phase1.initial_window_genes,
+            config.phase1.merge_distance,
+            config.phase2.diamond_flank_genes,
+        )
+
+    config = ApplicationConfig.from_yaml(Path(preset)).pipeline if preset else None
+    monkeypatch.setattr(orchestrator, "_single_genome_flow_impl", capture_config)
+    assert orchestrator.single_genome_flow(
+        genome_path=tmp_path / "genome.fna",
+        output_dir=tmp_path,
+        genome_id="test",
+        config=config,
+    ) == (20000, 10, 0, 40)

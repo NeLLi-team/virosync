@@ -50,13 +50,13 @@ def test_accepted_gap_limit(accepted_inputs: dict, gap: int, allowed: bool) -> N
 @pytest.mark.parametrize(
     "family,models,allowed",
     [
-        ("NCLDV", ("GVOGm0760", "GVOGm0760"), False),
+        ("NCLDV", ("GVOGm0760", "GVOGm0760"), True),
         ("NCLDV", ("GVOGm0003", "GVOGm0003"), True),
-        ("MIRUS", ("GVOGm0023", "VS000307"), False),
+        ("MIRUS", ("GVOGm0023", "VS000307"), True),
         ("MIRUS", ("GVOGm0023", "GVOGm0022"), True),
     ],
 )
-def test_qualified_catalogue_families_distinguish_rnap_subunits(
+def test_partial_qualified_core_sets_can_merge(
     accepted_inputs: dict, family: str, models: tuple[str, str], allowed: bool
 ) -> None:
     for index, result in enumerate(accepted_inputs["results"]):
@@ -90,7 +90,7 @@ def test_third_boundary_blocks_accepted_pair(accepted_inputs: dict, nested: bool
     assert joint.eligible_joint_pairs(**accepted_inputs) == []
 
 
-@pytest.mark.parametrize("failure", [None, "tier", "class", "second_child_class", "missing_child", "gate"])
+@pytest.mark.parametrize("failure", [None, "tier", "class", "second_child_class", "missing_child", "low_core"])
 def test_accepted_union_replaces_only_after_native_checks(failure: str | None, tmp_path: Path) -> None:
     import copy
     import json
@@ -119,7 +119,7 @@ def test_accepted_union_replaces_only_after_native_checks(failure: str | None, t
         originals[1].region_classification = "MIRUS"
     elif failure == "missing_child":
         result.hallmark_evidence = [hit("a", "GVOGm0054", 1000, 1300), hit("gap", "GVOGm0003", 7000, 7300)]
-    elif failure == "gate":
+    elif failure == "low_core":
         result.confidence_tier = "LOW"
         originals[0].confidence_tier = originals[1].confidence_tier = "LOW"
     before = copy.deepcopy(originals)
@@ -133,7 +133,7 @@ def test_accepted_union_replaces_only_after_native_checks(failure: str | None, t
     )
 
     assert originals == before
-    if failure:
+    if failure and failure != "low_core":
         assert selected == originals
     else:
         assert selected == [result]

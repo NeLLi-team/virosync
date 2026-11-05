@@ -56,7 +56,10 @@ def test_support_gap_requires_five_pending_genes(direction, pending):
     genes = [SimpleNamespace(id=str(i), start=start, end=start + 50) for i, start in enumerate(starts)]
     tax = {
         gene.id: SimpleNamespace(
-            top10_prefixes=[], top10_pidents=[], viral_hit_within_depth=False, phase1_validated_viral_marker=False
+            top10_prefixes=["EUK__"],
+            top10_pidents=[30.0],
+            viral_hit_within_depth=False,
+            phase1_validated_viral_marker=False,
         )
         for gene in genes
     }
@@ -73,7 +76,7 @@ def test_support_on_fifth_gene_connects_but_sixth_does_not(direction, positive_p
     genes = [SimpleNamespace(id=str(i), start=start, end=start + 50) for i, start in enumerate(starts)]
     tax = {
         gene.id: SimpleNamespace(
-            top10_prefixes=["NCLDV__"] if i == positive_position - 1 else [],
+            top10_prefixes=["NCLDV__"] if i == positive_position - 1 else ["EUK__"],
             top10_pidents=[30.0],
             viral_hit_within_depth=False,
             phase1_validated_viral_marker=False,
@@ -279,8 +282,8 @@ def test_successful_ml_support_uses_shared_controller_and_host_stop(tmp_path, mo
     ]
     taxonomy = {
         gene.id: SimpleNamespace(
-            top10_prefixes=[],
-            top10_pidents=[],
+            top10_prefixes=["EUK__"] if gene.id.startswith("h") else [],
+            top10_pidents=[30.0] if gene.id.startswith("h") else [],
             viral_hit_within_depth=False,
             phase1_validated_viral_marker=False,
             top10_targets=["EUK__HOST"] if gene.id.startswith("h") else [],

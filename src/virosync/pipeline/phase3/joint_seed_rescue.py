@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 from virosync.output_contract import resolve_effective_eve_class
+from virosync.pipeline.eve_type_rules import composition, may_merge
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
@@ -65,7 +66,12 @@ def eligible_joint_pairs(
             continue
         scored = [by_id[boundary_candidate_id(child)] for child in children]
         classes = [effective_class(result) for result in scored]
-        if classes[0] not in {"NCLDV", "MIRUS"} or classes[0] != classes[1]:
+        if not set(classes) <= {"NCLDV", "MIRUS"} and not classes[0] == classes[1] == "PPV":
+            continue
+        compositions = [
+            composition((item.gene, item.model) for item, _ in _qualified_core_items(result)) for result in scored
+        ]
+        if not may_merge(*compositions):
             continue
         accepted = [result.eve_id in accepted_ids for result in scored]
         if any(accepted) != all(accepted):
@@ -73,8 +79,6 @@ def eligible_joint_pairs(
         if all(accepted):
             families = [qualified_core_families(result) for result in scored]
             if right.start - left.end > 5000 or not any(families):
-                continue
-            if families[0] & families[1] & _STRICT_CORE_FAMILIES:
                 continue
         elif any(result.confidence_tier != "LOW" for result in scored):
             continue
@@ -86,7 +90,7 @@ def eligible_joint_pairs(
             continue
         if _has_third_overlap(ordered, children):
             continue
-        if all(_has_multi_marker_witness(result, classes[0]) for result in scored):
+        if all(_has_multi_marker_witness(result, cls) for result, cls in zip(scored, classes, strict=True)):
             continue
         if not _hull_fully_searched(children, query, proteome_index, taxonomy):
             continue
@@ -406,9 +410,13 @@ def _has_third_overlap(boundaries: list[RefinedBoundary], children: tuple[Refine
 
 
 def _has_multi_marker_witness(result: VerificationResult, family: str) -> bool:
-    panel = {"NCLDV": "Nucleocytoviricota", "MIRUS": "Mirusviricota"}[family]
+    panels = {
+        "NCLDV": {"Nucleocytoviricota"},
+        "MIRUS": {"Mirusviricota"},
+        "PPV": {"Polinton_like_viruses", "Maverick_Polintons", "Virophages"},
+    }[family]
     return any(
-        w.panel == panel and w.rule in {"capsid_partner_5kb", "three_core_15kb"}
+        w.panel in panels and w.rule in {"capsid_partner_5kb", "three_core_15kb"}
         for w in assess_hallmarks(result).witnesses
     )
 

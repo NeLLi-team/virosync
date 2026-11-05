@@ -112,6 +112,7 @@ def _run_identity(
         environment_payload = {
             "lock_sha256": digest,
             "runtime_sha256": canonical_sha256({"seed": seed, "kind": "runtime"}),
+            "host_lineage": "",
             "requested_device": "cpu",
             "effective_device": "cpu",
         }

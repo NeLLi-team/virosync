@@ -166,6 +166,50 @@ Incompatible checkpoint schemas cannot be reused. A changed run fingerprint
 starts a new run; otherwise only the validated sequence of completed phases
 can be reused.
 
+The run identity records `VIROSYNC_HOST_LINEAGE` as `environment.host_lineage`
+and includes its exact value in the run fingerprint. An unset or empty value is
+recorded as an empty string. Changing the value changes the run fingerprint and
+starts a new run. The value remains a fallback for an empty learned host lineage;
+recording it does not change how the detector uses it.
+`provenance.json` repeats this captured value as `configuration.host_lineage`.
+
+### V9g candidate policy and known limits
+
+The V9g defaults join Phase 1 markers within both 20,000 bp and 10 genes,
+use a zero-bp gap for merging candidate regions, and search 40 genes on each
+side in Phase 2. These defaults apply to no-config runs, both shipped presets,
+and the native Python entry points. Explicit configuration values take precedence.
+The Phase 1 seed search padding remains five genes per side, with a minimum
+of ten genes; the HHG anchor-merging distance is a separate setting.
+
+This candidate retains the received V9g detector. Its extension walk uses host
+share, not viral-hit veto or score competition, to count host genes. Neutral
+genes do not reset that count; support does. Searched no-hit genes are skipped.
+Any nonempty hit namespace with host share below 0.10 supplies foreign support,
+including bacterial hits. These are intentional V9g rules.
+
+Every candidate retains its full assigned seed hull and identities. A host stop
+may fall inside another candidate's seed interval; that other candidate retains
+its own seeds independently. The extension walk ignores the legacy neighboring
+`protected_seed_intervals` argument. Joint rescue retains the older host predicate
+and strict consecutive-gene counter. Its earlier `_crosses_stop` check still
+blocks joining across any recorded child stop. Predicate disagreement is not
+evidence that rescue can cross such a recorded stop.
+
+The GC heuristic has no minimum informative-base fraction. One G and 1,999 Ns
+can therefore give GC 1.0 for a 2 kb edge window. Sparse reference windows can
+also affect the comparison; fully ambiguous references disable the trim. GC
+changes do not update the existing stop-reason fields, and later TIR refinement
+can supersede the heuristic within the searched envelope. A GC information floor
+and shared rescue predicate remain separate experimental changes.
+
+V9g also admits mixed NCLDV/MIRUS rescue candidates under its hallmark-composition
+rule. Repeated partial hallmark sets alone do not block a pair. One qualifying
+scored core hallmark passes the NCLDV/MIRUS output gate without a length floor;
+retained Phase 1 core-hallmark genes count as support without a DIAMOND comparison.
+These V9g rules supersede the older dominance-experiment and gate descriptions
+below. Positive-control and full benchmark validation remain necessary.
+
 The repeat-candidate table is required even when it has only a header. If both
 root and Phase-3 copies are recorded, they must agree. Missing or altered pairs,
 invalid coordinates, inconsistent counts, or broken links to detailed candidates

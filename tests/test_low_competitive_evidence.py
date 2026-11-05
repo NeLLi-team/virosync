@@ -268,7 +268,7 @@ def test_only_scored_qualifying_core_exempts_low():
     ]
     assert evaluate_v2_quality_gate(result).kept
     result.end = 4037
-    assert not evaluate_v2_quality_gate(result).kept
+    assert evaluate_v2_quality_gate(result).kept
     result.end = 6000
     result.hallmark_evidence[0].model_roles[0]["excluded_from_scoring"] = True
     assert evaluate_v2_quality_gate(result).reason == "low_gene_evidence_unavailable"

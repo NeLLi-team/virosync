@@ -727,7 +727,15 @@ def _run_phase2_subflow(
                 InterventionCounts(opportunities=int(affected), interventions=int(affected), changed=int(affected)),
             )
         refined_boundaries.append(boundary)
-    refined_boundaries = merge_reachable_boundaries(refined_boundaries)
+    from virosync.pipeline.eve_type_rules import boundary_compatibility
+
+    refined_boundaries = merge_reachable_boundaries(
+        refined_boundaries, compatible=boundary_compatibility(validated_markers)
+    )
+    if raw_genome_path is not None:
+        from virosync.pipeline.phase2.gc_boundary import trim_boundaries_by_gc
+
+        refined_boundaries = trim_boundaries_by_gc(refined_boundaries, raw_genome_path)
     allowed_intervals = []
     for boundary in refined_boundaries:
         spans = [walked_intervals[core.seed_id] for core in boundary.confirmed_seeds]

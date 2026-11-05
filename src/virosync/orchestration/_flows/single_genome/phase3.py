@@ -821,6 +821,13 @@ def _verify_native_boundaries(
     boundary_taxonomy_index = _build_scaffold_start_index(boundary_taxonomy_map.values())
     validated_marker_index = _build_scaffold_start_index(validated_markers)
     validated_viral_genes = viral_marker_gene_ids(validated_markers)
+    from virosync.pipeline.eve_type_rules import core_roles
+
+    core_hallmark_genes = frozenset(
+        base_marker_gene_id(marker.query_porf)
+        for marker in validated_markers
+        if marker.validation_status == "validated" and marker.hmm_target in core_roles()
+    )
 
     logger.info(
         "Phase 3: Preparing data for batched verification of %d boundaries",
@@ -846,6 +853,7 @@ def _verify_native_boundaries(
                 record["phase1_validated_viral_marker"] = (
                     record.get("phase1_validated_viral_marker", False) or record["porf_id"] in validated_viral_genes
                 )
+                record["phase1_core_hallmark_marker"] = record["porf_id"] in core_hallmark_genes
             gene_taxonomy_map_batched[evidence.boundary_id] = evidence.gene_taxonomy
         if evidence.interproscan:
             interproscan_map_batched[evidence.boundary_id] = evidence.interproscan

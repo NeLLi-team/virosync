@@ -103,11 +103,11 @@ phase1:
   hmm_chunk_size: null
   # Native codon-aware rescue; see docs/FRAMESHIFT_SCREENING.md.
   frameshift_screening_enabled: false
-  initial_window_bp: 10000
-  initial_window_genes: 5
+  initial_window_bp: 20000
+  initial_window_genes: 10
   min_markers_initial: 1
   extension_kb: 5
-  merge_distance: 1000
+  merge_distance: 0
   # Disabled: identify_host_deviation_markers and filter_deviation_seed_markers
   # were never implemented, so enabling this raises ImportError at the start of
   # Phase 1 and the run processes nothing. The tuned keys below are kept as the
@@ -139,7 +139,7 @@ phase2:
   host_trim_enabled: true
   host_trim_score_threshold: 0.5
   host_signature_min_token_len: 6
-  diamond_flank_genes: 10
+  diamond_flank_genes: 40
   diamond_control_sample_size: 100
   diamond_control_min_distance: 30
   diamond_top_k: 10

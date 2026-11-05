@@ -274,6 +274,7 @@ def write_provenance(
             "masking": _json_safe(config.get("masking")),
             "marker_validation_top_k": config.get("marker_validation_top_k", 10),
             "reference_mask": _json_safe(config.get("reference_mask")),
+            "host_lineage": config.get("host_lineage", ""),
         },
         "masking_status": masking_status,
     }

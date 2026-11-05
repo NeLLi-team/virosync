@@ -10,8 +10,8 @@ This module:
 4. Outputs marker seed regions for Phase 2
 
 Key concepts:
-- Initial clustering: Group markers within initial_window_bp OR initial_window_genes
-- Iterative extension: Extend by extension_kb, check for new markers, repeat until no more markers found
+- Initial clustering: Group markers within initial_window_bp AND initial_window_genes
+- Iterative extension: Extend by five genes per side, at least ten genes, until no marker joins
 - Validated marker: HMM hit confirmed by the marker-reference validation rules
 - Candidate region: A search interval containing at least one seed-eligible marker
 
@@ -231,7 +231,7 @@ def initial_clustering(
     """Group validated markers within initial clustering windows.
 
     Markers are clustered if they are within initial_window_bp (bp distance)
-    OR within initial_window_genes (gene distance).
+    AND within initial_window_genes (gene distance).
 
     Args:
         validated_hits: List of validated marker hits for this scaffold
@@ -265,7 +265,7 @@ def initial_clustering(
         distance_genes = count_genes_between(last_marker, hit, gene_order)
 
         # Cluster if within either window
-        if distance_bp <= initial_window_bp or distance_genes <= initial_window_genes:
+        if distance_bp <= initial_window_bp and distance_genes <= initial_window_genes:
             current_cluster.append(hit)
         else:
             # Finalize current cluster
@@ -290,7 +290,7 @@ def initial_clustering(
 
     logger.debug(
         f"  {scaffold}: {len(hits)} markers → {len(clusters)} initial clusters "
-        f"(window: {initial_window_bp} bp or {initial_window_genes} genes, min: {min_markers_initial} markers)"
+        f"(window: {initial_window_bp} bp and {initial_window_genes} genes, min: {min_markers_initial} markers)"
     )
 
     return clusters
@@ -440,6 +440,42 @@ def iterative_extension(
     return region
 
 
+def iterative_extension_by_genes(cluster, scaffold, all_validated_hits, gene_order, *, flank_genes=5, min_genes=10):
+    """Extend a marker cluster to +-flank_genes genes, at least min_genes, until no marker joins."""
+    genes = sorted(gene_order.get(scaffold, []), key=lambda gene: (gene.start, gene.end))
+    region = CandidateRegion(scaffold=scaffold, start=0, end=0, markers=cluster.copy())
+    included = {marker.query_porf for marker in region.markers}
+    for _ in range(100):
+        region.start, region.end = _gene_window(
+            genes, min(m.start for m in region.markers), max(m.end for m in region.markers), flank_genes, min_genes
+        )
+        new_markers = find_validated_markers_in_range(
+            all_hits=all_validated_hits, scaffold=scaffold, start=region.start, end=region.end, exclude_ids=included
+        )
+        if not new_markers:
+            break
+        region.markers.extend(new_markers)
+        included.update(marker.query_porf for marker in new_markers)
+    region.update_has_mcp()
+    return region
+
+
+def _gene_window(genes, start, end, flank_genes, min_genes):
+    """Return the span of the genes over start-end plus flank_genes per side, at least min_genes."""
+    if not genes:
+        return start, end
+    inside = [index for index, gene in enumerate(genes) if gene.start < end and gene.end > start]
+    if not inside:
+        inside = [min(range(len(genes)), key=lambda index: abs(genes[index].start - start))]
+    first, last = max(0, inside[0] - flank_genes), min(len(genes) - 1, inside[-1] + flank_genes)
+    while last - first + 1 < min_genes and (first > 0 or last < len(genes) - 1):
+        if first > 0:
+            first -= 1
+        if last - first + 1 < min_genes and last < len(genes) - 1:
+            last += 1
+    return max(min(genes[first].start, start), start - 20_000), min(max(genes[last].end, end), end + 20_000)
+
+
 def assemble_compact_cress_regions(
     cress_hits: list[ValidatedMarkerHit],
     gene_order: dict[str, list[GenePrediction]],
@@ -501,7 +537,7 @@ def assemble_compact_cress_regions(
 
 def merge_overlapping_regions(
     regions: list[CandidateRegion],
-    merge_distance: int = 1000,
+    merge_distance: int = 0,
 ) -> list[CandidateRegion]:
     """Merge overlapping or adjacent regions on the same scaffold.
 
@@ -575,11 +611,11 @@ def assemble_candidate_regions(
     genome_fasta: Path,
     proteome_fasta: Path,
     output_dir: Path,
-    initial_window_bp: int = 10000,
-    initial_window_genes: int = 5,
+    initial_window_bp: int = 20000,
+    initial_window_genes: int = 10,
     min_markers_initial: int = 2,
     extension_kb: int = 5,
-    merge_distance: int = 1000,
+    merge_distance: int = 0,
     ablation_id: AblationID = AblationID.A0,
     single_marker_min_score: float = 50.0,
     write_outputs: bool = True,
@@ -602,12 +638,12 @@ def assemble_candidate_regions(
         genome_fasta: Path to genome FASTA (for scaffold lengths)
         proteome_fasta: Path to proteome FASTA (for gene-based distances)
         output_dir: Output directory for marker_seed_regions.bed
-        initial_window_bp: Max bp between markers for initial clustering (default: 10kb)
-        initial_window_genes: Max genes between markers for initial clustering (default: 5)
+        initial_window_bp: Max bp between markers for initial clustering (default: 20kb)
+        initial_window_genes: Max genes between markers for initial clustering (default: 10)
         min_markers_initial: Min markers to form initial cluster (default: 2). Cluster
             must contain at least one is_valid_seed_marker.
         extension_kb: Extension distance from outermost markers (default: 5kb)
-        merge_distance: Max gap to merge overlapping regions (default: 1kb)
+        merge_distance: Max gap to merge overlapping regions (default: 0bp)
         write_outputs: Write the BED and detailed TSV artifacts when true.
 
     Returns:
@@ -751,13 +787,7 @@ def assemble_candidate_regions(
 
         for cluster in clusters:
             total_clusters += 1
-            region = iterative_extension(
-                cluster=cluster,
-                scaffold=scaffold,
-                all_validated_hits=scaffold_hits,
-                extension_kb=extension_kb,
-                scaffold_length=scaffold_length,
-            )
+            region = iterative_extension_by_genes(cluster, scaffold, scaffold_hits, gene_order)
             added_markers = region.marker_count - len(cluster)
             if added_markers > 0:
                 extended_clusters += 1

@@ -97,11 +97,11 @@ def test_accepted_child_is_never_borrowed(pair_inputs: dict) -> None:
     assert eligible_joint_pairs(**pair_inputs) == []
 
 
-@pytest.mark.parametrize("family", ["MIRUS", "UNKNOWN"])
-def test_incompatible_or_unknown_class_abstains(pair_inputs: dict, family: str) -> None:
+@pytest.mark.parametrize("family,allowed", [("MIRUS", True), ("UNKNOWN", False)])
+def test_mixed_ncldv_mirus_allowed_but_unknown_abstains(pair_inputs: dict, family: str, allowed: bool) -> None:
     pair_inputs["results"][1].region_classification = family
     pair_inputs["results"][1].likely_family = family
-    assert eligible_joint_pairs(**pair_inputs) == []
+    assert bool(eligible_joint_pairs(**pair_inputs)) is allowed
 
 
 def test_recorded_host_stop_is_preserved(pair_inputs: dict) -> None:

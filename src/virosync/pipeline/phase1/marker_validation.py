@@ -108,7 +108,7 @@ class NovelMarkerCriteria:
     min_hmm_coverage: float = 0.5
     require_cluster: bool = True
     max_confidence_weight: float = 0.7
-    initial_window_bp: int = 10000
+    initial_window_bp: int = 20000
 
 
 @dataclass

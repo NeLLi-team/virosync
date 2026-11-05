@@ -24,7 +24,7 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "2dda962faf8f57a3cee64f0593442297a5bc2d79f19cf7622af24e2055f86d0b",
+  "effective_config_sha256": "14cf850c7b3db7fee038947c733f7981e7aed599c655c9c596527d21b63b2359",
   "execution": {
     "masking": {
       "backend": "off",
@@ -103,10 +103,10 @@
     "host_taxonomy_deviation_window_count": 25,
     "host_taxonomy_deviation_window_min_markers": 1,
     "host_taxonomy_deviation_window_seed": 13,
-    "initial_window_bp": 10000,
-    "initial_window_genes": 5,
+    "initial_window_bp": 20000,
+    "initial_window_genes": 10,
     "marker_validation_top_k": 10,
-    "merge_distance": 1000,
+    "merge_distance": 0,
     "min_markers_initial": 1,
     "novel_marker_min_coverage": 0.5,
     "novel_marker_min_score": 30.0,
@@ -118,7 +118,7 @@
     "diamond_chunk_size": 10000,
     "diamond_control_min_distance": 30,
     "diamond_control_sample_size": 100,
-    "diamond_flank_genes": 10,
+    "diamond_flank_genes": 40,
     "diamond_random_seed": 42,
     "diamond_superset_prototype_enabled": false,
     "diamond_top_k": 10,

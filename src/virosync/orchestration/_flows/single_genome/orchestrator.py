@@ -240,6 +240,7 @@ def _environment_identity(device: str) -> EnvironmentIdentity:
         "runtime_sha256": runtime_environment_sha256(),
         "requested_device": device,
         "effective_device": effective_device,
+        "host_lineage": os.environ.get("VIROSYNC_HOST_LINEAGE", ""),
     }
     return EnvironmentIdentity(**payload, sha256=canonical_sha256(payload))
 
@@ -2187,6 +2188,7 @@ def _single_genome_flow_impl(
                 "masking_status_path": str(masking_result.status_path),
                 "masking_status_sha256": masking_result.status_sha256,
                 "reference_mask": reference_mask.to_record(),
+                "host_lineage": run_identity["environment"]["host_lineage"],
             },
             input_genome=genome_path,
         )
@@ -2331,11 +2333,11 @@ def single_genome_flow(
     gvclass_path: Path | None = None,
     # HMM-gated workflow options
     rebuild_db: bool = False,
-    initial_window_bp: int = 10000,
-    initial_window_genes: int = 5,
+    initial_window_bp: int = 20000,
+    initial_window_genes: int = 10,
     min_markers_initial: int = 1,
     extension_kb: int = 5,
-    merge_distance: int = 1000,
+    merge_distance: int = 0,
     host_taxonomy_deviation_enabled: bool = False,
     host_taxonomy_deviation_allow_seeds: bool = False,
     host_taxonomy_deviation_min_token_len: int = 6,
@@ -2364,7 +2366,7 @@ def single_genome_flow(
     taxonomy_weight_mode: str = "rank",
     # Batched Diamond configuration (Phase 2)
     # Note: Batched Diamond is always enabled (use_batched_boundary_diamond removed Jan 2026)
-    boundary_diamond_flank_genes: int = 10,  # Seeds already extended by ±5 genes
+    boundary_diamond_flank_genes: int = 40,  # Seeds already extended by ±5 genes
     boundary_diamond_control_sample_size: int = 100,
     boundary_diamond_control_min_distance: int = 30,
     boundary_diamond_top_k: int = 10,

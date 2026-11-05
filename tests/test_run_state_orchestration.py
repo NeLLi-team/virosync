@@ -68,6 +68,7 @@ from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.reference_mask import ReferenceMask
 from virosync.utils import provenance
+from virosync.utils.provenance import write_provenance as write_native_provenance
 
 _PREDICTION_HEADER = (
     "eve_id\tscaffold\tstart\tend\tconfidence_tier\tlength\t"
@@ -166,6 +167,7 @@ class _MockPipeline:
         environment_payload = {
             "lock_sha256": "4" * 64,
             "runtime_sha256": "5" * 64,
+            "host_lineage": "",
             "requested_device": "cpu",
             "effective_device": "cpu",
         }
@@ -1532,6 +1534,43 @@ def test_exception_retains_prefix_and_retry_reuses_only_verified_phases(
     assert mocked_pipeline.resume_flags["phase3"] == [False, False]
     assert mocked_pipeline.phase3_boundaries[0].seed_id == "lossless-seed"
     assert mocked_pipeline.phase3_boundaries[0].hallmark_genes == ["MCP"]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+@pytest.mark.parametrize("with_lock", [False, True])
+def test_host_lineage_binds_native_checkpoint_reuse(
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, changed: bool, with_lock: bool
+) -> None:
+    monkeypatch.setattr(provenance, "write_provenance", write_native_provenance)
+    monkeypatch.setattr(provenance, "capture_tool_versions", lambda: {})
+    monkeypatch.setattr(provenance, "capture_gene_caller_identity", lambda version: {})
+    lock_path = mocked_pipeline.genome.parent / "pixi.lock"
+    lock_path.write_text("lock fixture", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_project_lock_path", lambda: lock_path if with_lock else None)
+    monkeypatch.setenv("VIROSYNC_HOST_LINEAGE", "euk|Viridiplantae|Chlorophyta")
+    mocked_pipeline.identity["environment"] = asdict(orchestrator._environment_identity("cpu"))
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
+    mocked_pipeline.fail_phase3_once = True
+    with pytest.raises(RuntimeError, match="injected Phase 3 failure"):
+        mocked_pipeline.run()
+
+    if changed:
+        monkeypatch.setenv("VIROSYNC_HOST_LINEAGE", "euk|Alveolata|Ciliophora")
+    mocked_pipeline.identity["environment"] = asdict(orchestrator._environment_identity("cpu"))
+    mocked_pipeline.fingerprint = compute_run_fingerprint(mocked_pipeline.identity)
+    plan = plan_resume(mocked_pipeline.output_dir, expected_run_fingerprint=mocked_pipeline.fingerprint)
+    assert plan.reusable_phases == (() if changed else (0, 1, 2))
+    assert plan.restart_phase == (0 if changed else 3)
+
+    assert mocked_pipeline.run()["success"] is True
+    assert mocked_pipeline.resume_flags["phase1"] == [False, not changed]
+    assert mocked_pipeline.resume_flags["phase2"] == [False, not changed]
+    state = load_run_state(mocked_pipeline.output_dir)
+    assert state.identities["environment"]["host_lineage"] == (
+        "euk|Alveolata|Ciliophora" if changed else "euk|Viridiplantae|Chlorophyta"
+    )
+    captured = json.loads((mocked_pipeline.output_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert captured["configuration"]["host_lineage"] == state.identities["environment"]["host_lineage"]
 
 
 def test_unmarked_partial_phase_files_are_recomputed(

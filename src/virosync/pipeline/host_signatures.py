@@ -7,6 +7,7 @@ outward extension stopping.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from math import log
@@ -313,8 +314,6 @@ def build_host_signature_model(
 
     for hit in marker_hits:
         hmm_target = hit.get("hmm_target") if isinstance(hit, dict) else getattr(hit, "hmm_target", "")
-        if not is_host_marker(str(hmm_target)):
-            continue
         top10_prefixes = _parse_top10_prefixes(hit)
         if any(p in validated for p in top10_prefixes):
             continue
@@ -483,6 +482,10 @@ def host_lineage(model: HostSignatureModel) -> HostLineage:
         root_weights[levels[0]] += weight
     root = max(_CELLULAR_ROOTS, key=lambda name: root_weights[name])
     if not root_weights[root]:
+        configured = os.environ.get("VIROSYNC_HOST_LINEAGE")
+        if configured:
+            levels = lineage_key(configured, model.min_token_length).split("|")
+            return HostLineage(levels[0], _signature_ranks([(levels, 1.0)]))
         return HostLineage("", ())
     return HostLineage(root, _signature_ranks([path for path in paths if path[0][0] == root]))
 

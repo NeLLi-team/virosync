@@ -226,6 +226,7 @@ class EnvironmentIdentity:
     runtime_sha256: str
     requested_device: str
     effective_device: str
+    host_lineage: str
     sha256: str
 
 
@@ -1294,7 +1295,7 @@ def build_environment_identity(
     requested_device: str,
     effective_device: str,
 ) -> EnvironmentIdentity:
-    """Bind the lockfile plus requested and effective accelerator choices."""
+    """Bind the lockfile, accelerator choices, and host-lineage fallback."""
     if not isinstance(requested_device, str) or not requested_device:
         raise ValueError("requested_device must be a non-empty string")
     if not isinstance(effective_device, str) or not effective_device:
@@ -1305,6 +1306,7 @@ def build_environment_identity(
         "runtime_sha256": runtime_environment_sha256(),
         "requested_device": requested_device,
         "effective_device": effective_device,
+        "host_lineage": os.environ.get("VIROSYNC_HOST_LINEAGE", ""),
     }
     return EnvironmentIdentity(**payload, sha256=canonical_sha256(payload))
 
@@ -1406,6 +1408,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
                 "runtime_sha256",
                 "requested_device",
                 "effective_device",
+                "host_lineage",
                 "sha256",
             },
             "environment",
@@ -1439,11 +1442,14 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(environment_identity.get(field), str) or not environment_identity[field]:
             raise ValueError(f"environment {field} must be a non-empty string")
     _require_sha256(environment_identity.get("sha256"), "environment sha256")
+    if not isinstance(environment_identity.get("host_lineage"), str):
+        raise ValueError("environment host_lineage must be a string")
     environment_payload = {
         "lock_sha256": environment_identity["lock_sha256"],
         "runtime_sha256": environment_identity["runtime_sha256"],
         "requested_device": environment_identity["requested_device"],
         "effective_device": environment_identity["effective_device"],
+        "host_lineage": environment_identity["host_lineage"],
     }
     if canonical_sha256(environment_payload) != environment_identity["sha256"]:
         raise ValueError("environment sha256 does not match its identity fields")

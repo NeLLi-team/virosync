@@ -47,13 +47,13 @@ def grow(
     model=True,
     middle="hit",
     disabled=False,
-    protected=(),
     marker=False,
     shallow_hosts=False,
 ):
     """Keep native classification/extension; isolate the configured host-share input."""
     monkeypatch.setattr(
-        "virosync.pipeline.phase2.seed_extension.host_lineage_share", lambda tax, model: 0.6 if tax.has_hit else 0.0
+        "virosync.pipeline.phase2.seed_extension.host_lineage_share",
+        lambda tax, model: 0.6 if tax.porf_id.startswith("h") and tax.has_hit else 0.0,
     )
     coordinates = [(2100, 2200), (2300, 2400), (2500, 2600), (2700, 2800), (2900, 3100)]
     if direction == -1:
@@ -77,10 +77,7 @@ def grow(
     start, end = (1000, 2000) if direction == 1 else (8000, 9000)
     seed = MergedSeed("ctg", start, end, seed_id="core", confirmed_seeds=(ConfirmedSeed("core", "ctg", start, end),))
     host_model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}) if model else None
-    protection = {"protected_seed_intervals": protected} if protected else {}
-    boundary = extend_confirmed_seed(
-        seed, genes, taxonomy, (0, 10000), host_model, 0.35, disable_host_stop=disabled, **protection
-    )
+    boundary = extend_confirmed_seed(seed, genes, taxonomy, (0, 10000), host_model, 0.35, disable_host_stop=disabled)
     return boundary, genes, taxonomy
 
 
@@ -94,14 +91,14 @@ def test_three_cellular_dominant_weak_viral_genes_stop_both_directions(monkeypat
 
 
 @pytest.mark.parametrize("viral,model", [(100.0, True), (150.0, True), (80.0, False)])
-def test_tie_stronger_deep_viral_or_no_model_does_not_stop(monkeypatch, viral, model):
+def test_host_share_stop_ignores_competition_but_requires_model(monkeypatch, viral, model):
     boundary, _, _ = grow(monkeypatch, viral=viral, model=model)
-    assert boundary.end == 3100
-    assert boundary.right_stop is None
+    assert boundary.end == (2200 if model else 3100)
+    assert boundary.right_stop == (2300 if model else None)
 
 
 @pytest.mark.parametrize("middle", ["nohit", "missing"])
-def test_nohit_and_missing_break_host_run_without_inventing_support(monkeypatch, middle):
+def test_two_hosts_do_not_stop_and_missing_taxonomy_limits_growth(monkeypatch, middle):
     boundary, _, _ = grow(monkeypatch, middle=middle)
     assert boundary.right_stop_reason != "host_stop"
     assert boundary.right_stop is None
@@ -111,18 +108,18 @@ def test_nohit_and_missing_break_host_run_without_inventing_support(monkeypatch,
         assert boundary.end == 3100
 
 
-def test_a4_disables_host_stop_but_isolated_gene_support_is_unchanged(monkeypatch):
+def test_a4_disables_host_stop_but_does_not_make_host_like_viral_hits_support(monkeypatch):
     boundary, _, _ = grow(monkeypatch, disabled=True)
     assert boundary.end == 3100
     assert boundary.right_stop is None
-    # The owner approved a three-gene stop, not suppression of isolated support.
-    gene, tax = classified("weak", 2100, 2200, viral=80.0, shallow_viral=True)
+    # A4 disables stopping; host-like hits still do not supply support.
+    gene, tax = classified("hweak", 2100, 2200, viral=80.0, shallow_viral=True)
     seed = MergedSeed("ctg", 1000, 2000, seed_id="core", confirmed_seeds=(ConfirmedSeed("core", "ctg", 1000, 2000),))
     model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
-    normal = extend_confirmed_seed(seed, [gene], {"weak": tax}, (0, 10000), model, 0.35)
-    disabled = extend_confirmed_seed(seed, [gene], {"weak": tax}, (0, 10000), model, 0.35, disable_host_stop=True)
-    assert normal.end == 2200
-    assert disabled.end == 2200
+    normal = extend_confirmed_seed(seed, [gene], {"hweak": tax}, (0, 10000), model, 0.35)
+    disabled = extend_confirmed_seed(seed, [gene], {"hweak": tax}, (0, 10000), model, 0.35, disable_host_stop=True)
+    assert normal.end == 2000
+    assert disabled.end == 2000
 
 
 def test_competition_uses_union_and_preserves_original10_fields():
@@ -146,11 +143,17 @@ def test_validated_phase1_marker_retains_its_independent_veto(monkeypatch):
     assert boundary.end == 3100
 
 
-@pytest.mark.parametrize("protected", [((2250, 2850),), ((2500, 2600),)])
-def test_new_barrier_does_not_form_inside_another_confirmed_core(monkeypatch, protected):
-    boundary, _, _ = grow(monkeypatch, protected=protected)
-    assert boundary.right_stop is None
-    assert boundary.end == 3100
+def test_neighboring_stop_does_not_remove_an_independently_assigned_core(monkeypatch):
+    boundary, genes, taxonomy = grow(monkeypatch)
+    own = ConfirmedSeed("other", "ctg", 2250, 2850)
+    seed = MergedSeed("ctg", own.start, own.end, seed_id="other", confirmed_seeds=(own,))
+    other = extend_confirmed_seed(seed, genes, taxonomy, (0, 10000), None, 0.35)
+    assert own.start < boundary.right_stop < own.end
+    assert other.start <= own.start < own.end <= other.end
+    outputs = merge_reachable_boundaries([boundary, other])
+    assert len(outputs) == 2
+    assert outputs[0].confirmed_seeds == boundary.confirmed_seeds
+    assert outputs[1].confirmed_seeds == (own,)
 
 
 def test_typed_checkpoint_and_record_preserve_competition():
@@ -189,7 +192,7 @@ def test_inside_host_genes_and_separate_confirmed_seed_remain(monkeypatch):
 
 
 @pytest.mark.parametrize("viral,expected", [(80.0, True), (100.0, False), (150.0, False)])
-def test_joint_gap_uses_same_three_gene_competition(monkeypatch, viral, expected):
+def test_joint_gap_retains_legacy_competition_predicate(monkeypatch, viral, expected):
     from virosync.pipeline.phase3.joint_seed_rescue import _gap_has_host_barrier
 
     monkeypatch.setattr("virosync.pipeline.phase3.joint_seed_rescue.host_lineage_share", lambda tax, model: 0.6)
@@ -271,12 +274,12 @@ def test_top10_positive_host_run_stops_only_when_three_gene_barrier_completes(mo
     without_stop, _, _ = grow(monkeypatch, shallow_hosts=True, disabled=True)
     assert without_stop.end == 3100
     # The same positive genes extend when no third host completes the barrier.
-    interrupted, _, _ = grow(monkeypatch, shallow_hosts=True, protected=((2500, 2600),))
+    interrupted, _, _ = grow(monkeypatch, shallow_hosts=True, marker=True)
     assert interrupted.right_stop is None
     assert interrupted.end == 3100
 
 
-def test_joint_pair_passes_separate_confirmed_core_to_real_gap_guard(pair_inputs, monkeypatch):
+def test_joint_pair_checks_each_gap_without_borrowing_separate_core(pair_inputs, monkeypatch):
     from virosync.pipeline.phase3 import joint_seed_rescue
 
     third = child("third", 2700, 3500)
@@ -289,13 +292,13 @@ def test_joint_pair_passes_separate_confirmed_core_to_real_gap_guard(pair_inputs
     checked = []
 
     def observe_gap_guard(children, *args, **kwargs):
-        checked.append((tuple(child.seed_id for child in children), kwargs["protected_seed_intervals"]))
+        checked.append(tuple(child.seed_id for child in children))
         return native_gap_guard(children, *args, **kwargs)
 
     monkeypatch.setattr(joint_seed_rescue, "_gap_has_host_barrier", observe_gap_guard)
     pairs = joint_seed_rescue.eligible_joint_pairs(**pair_inputs)
     assert len(pairs) == 2
     assert checked == [
-        (("left", "right"), ((100, 1000), (1500, 2500), (2700, 3500))),
-        (("right", "third"), ((100, 1000), (1500, 2500), (2700, 3500))),
+        ("left", "right"),
+        ("right", "third"),
     ]

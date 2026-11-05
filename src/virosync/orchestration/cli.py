@@ -1298,13 +1298,13 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     "--phase1-initial-window-bp",
     default=None,
     type=click.IntRange(min=1),
-    help="Phase 1: initial marker clustering window (bp, default: config value or 10000)",
+    help="Phase 1: initial marker clustering window (bp, default: config value or 20000)",
 )
 @click.option(
     "--phase1-initial-window-genes",
     default=None,
     type=click.IntRange(min=1),
-    help="Phase 1: initial marker clustering window (genes, default: config value or 5)",
+    help="Phase 1: initial marker clustering window (genes, default: config value or 10)",
 )
 @click.option(
     "--phase1-min-markers-initial",
@@ -1322,7 +1322,7 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     "--phase1-merge-distance",
     default=None,
     type=click.IntRange(min=0),
-    help="Phase 1: max gap to merge overlapping regions (bp, default: config value or 1000)",
+    help="Phase 1: max gap to merge overlapping regions (bp, default: config value or 0)",
 )
 @click.option(
     "--frameshift-screening/--no-frameshift-screening",

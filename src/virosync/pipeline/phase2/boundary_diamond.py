@@ -139,7 +139,7 @@ class BoundaryDiamondConfig:
         masked_genomes: Genome keys whose reference rows the Diamond search drops
     """
 
-    flank_genes: int = 10
+    flank_genes: int = 40
     control_sample_size: int = 100
     control_min_distance: int = 30
     control_region_genes: int = 11
@@ -1532,7 +1532,7 @@ def get_flanking_taxonomy(
     taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
     refined_boundary,
-    flank_genes: int = 10,
+    flank_genes: int = 40,
     seed_mapping: SeedGeneMapping | None = None,
 ) -> tuple[list[GeneTaxonomy], list[GeneTaxonomy]]:
     """Get flanking gene taxonomy for genes outside but near an EVE boundary.

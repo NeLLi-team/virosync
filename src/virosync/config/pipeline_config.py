@@ -274,11 +274,11 @@ class Phase1Config:
     pfam_arbitration_enabled: bool = True
 
     # Region assembly
-    initial_window_bp: int = 10000
-    initial_window_genes: int = 5
+    initial_window_bp: int = 20000
+    initial_window_genes: int = 10
     min_markers_initial: int = 1
     extension_kb: int = 5
-    merge_distance: int = 1000
+    merge_distance: int = 0
 
     # Host taxonomy deviation (Phase 1 optional extension signal)
     host_taxonomy_deviation_enabled: bool = False
@@ -327,7 +327,7 @@ class Phase2Config:
     terminal_repeat_enabled: bool = True
     host_signature_min_token_len: int = 3
     # Phase 2b: batched Diamond for boundary refinement (always enabled as of Jan 2026)
-    diamond_flank_genes: int = 10  # Number of flank genes searched around the complete seed
+    diamond_flank_genes: int = 40  # Number of flank genes searched around the complete seed
     diamond_control_sample_size: int = 100
     diamond_control_min_distance: int = 30
     diamond_top_k: int = 10

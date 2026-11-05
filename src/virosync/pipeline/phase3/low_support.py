@@ -57,6 +57,11 @@ def assess_competitive_viral_support(result: VerificationResult) -> CompetitiveV
     supporting = []
     assessed = 0
     for members in _gene_groups(records, loci):
+        if any(record.get("phase1_core_hallmark_marker") for record in members):
+            base_ids = {base_marker_gene_id(r["porf_id"]) for r in members}
+            supporting.append(min({loci[gene] for gene in base_ids if gene in loci} or base_ids))
+            assessed += 1
+            continue
         scores = [_competitive_scores(record) for record in members]
         if any(score is None for score in scores):
             unassessed += 1

@@ -92,6 +92,7 @@ def _closed_schema3_identity(
     environment_payload = {
         "lock_sha256": lock_sha256,
         "runtime_sha256": runtime_sha256,
+        "host_lineage": "",
         "requested_device": "cpu",
         "effective_device": "cpu",
     }
