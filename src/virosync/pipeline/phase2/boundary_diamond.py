@@ -33,6 +33,7 @@ import random
 import subprocess
 from collections import Counter
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -130,10 +131,10 @@ class BoundaryDiamondConfig:
         control_min_distance: Minimum genes away from any EVE boundary for controls
         control_region_genes: Number of consecutive genes per control sample
         top_k: Leading hits kept in every ``top10_*`` field, at most TOP_HIT_COUNT
-        viral_hit_depth: Hit limit for the separate veto search above ten; it
-            never supplies the original top10 taxonomy fields
+        viral_hit_depth: Retained hit depth for host veto; positive taxonomy
+            uses only the leading top_hit_count hits of the same search
         chunk_size: Maximum proteins per Diamond chunk for memory management
-        threads: Number of threads for Diamond execution
+        threads: Total CPU budget for concurrent eight-thread Diamond chunks
         random_seed: Seed for deterministic control sampling
         host_prefix: Expected host taxonomy prefix (EUK__ or ARC__ for archaeal hosts)
         masked_genomes: Genome keys whose reference rows the Diamond search drops
@@ -238,7 +239,7 @@ class GeneTaxonomy:
         has_ncldv_mirus: Whether NCLDV or MIRUS appears in top-10
         has_vp_plv: Whether VP or PLV appears in top-10
         has_viral: Whether any viral prefix appears in top-10
-        has_hit: Whether the original-limit search found a hit (False = no-hit entry)
+        has_hit: Whether the shared search found a hit (False = no-hit entry)
         viral_hit_within_depth: Whether a qualifying viral hit appears among the
             first ``viral_hit_depth`` hits, beyond the top 10 as well
         phase1_validated_viral_marker: Exact same-gene Phase1 validated viral
@@ -948,7 +949,7 @@ def run_diamond_blastp(
         query_fasta=query,
         db_path=db,
         output_tsv=output,
-        threads=threads,
+        threads=min(8, threads),
         backend=search_backend,
         evalue=evalue,
         max_target_seqs=max_target_seqs,
@@ -1034,12 +1035,9 @@ def classify_cached_diamond_query(
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None = None,
-    *,
-    viral_veto_hits: dict[str, list[DiamondHit]] | None = None,
 ) -> dict[str, GeneTaxonomy]:
-    """Slice original-limit hits independently from optional deep-veto hits."""
-    selected_hits = {porf_id: diamond_hits.get(porf_id, [])[: config.top_k] for porf_id in query.all_porf_ids}
-    return _classify_query_hits(query, selected_hits, proteome_index, config, taxonomy_lookup, viral_veto_hits)
+    """Classify positive and host-veto evidence from the same retained hits."""
+    return _classify_query_hits(query, diamond_hits, proteome_index, config, taxonomy_lookup)
 
 
 def _classify_query_hits(
@@ -1048,7 +1046,6 @@ def _classify_query_hits(
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None,
-    viral_veto_hits: dict[str, list[DiamondHit]] | None,
 ) -> dict[str, GeneTaxonomy]:
     taxonomy = classify_all_porfs(
         all_porf_ids=query.all_porf_ids,
@@ -1059,23 +1056,19 @@ def _classify_query_hits(
         taxonomy_weight_mode=config.taxonomy_weight_mode,
         top_hit_count=config.top_hit_count,
     )
-    if config.viral_hit_depth > TOP_HIT_COUNT and viral_veto_hits is None:
-        raise ValueError("independent deep-veto search results are required above depth10")
     for porf_id, record in taxonomy.items():
-        hits = []
-        if config.viral_hit_depth > TOP_HIT_COUNT:
-            hits = viral_veto_hits.get(porf_id, [])[: config.viral_hit_depth]
-            record.viral_hit_within_depth |= has_identity_qualified_viral_hit(
-                [extract_prefix(hit.target) for hit in hits], [hit.pident for hit in hits]
-            )
+        hits = diamond_hits.get(porf_id, [])[: config.viral_hit_depth]
+        record.viral_hit_within_depth |= has_identity_qualified_viral_hit(
+            [extract_prefix(hit.target) for hit in hits], [hit.pident for hit in hits]
+        )
         if record.start < record.end:
-            original = diamond_hits.get(porf_id, [])[: len(record.top10_targets)]
-            _assign_host_competition(record, [*original, *hits])
+            positive_hits = diamond_hits.get(porf_id, [])[: len(record.top10_targets)]
+            _assign_host_competition(record, [*positive_hits, *hits])
     return taxonomy
 
 
 def _assign_host_competition(taxonomy: GeneTaxonomy, hits: list[DiamondHit]) -> None:
-    """Retain exact maxima from the original and independent deep search rows."""
+    """Retain exact maxima from the positive and deeper retained hits."""
     viral, cellular = [], []
     for hit in hits:
         if not math.isfinite(hit.bits) or hit.bits < 0 or not math.isfinite(hit.pident) or not 0 <= hit.pident <= 100:
@@ -1152,8 +1145,8 @@ def run_diamond_chunked(
 ) -> dict[str, list[DiamondHit]]:
     """Run Diamond in chunks for large query sets.
 
-    Chunks are processed sequentially to avoid memory issues.
-    Results are merged.
+    Each process uses at most eight threads within the total CPU budget.
+    Results merge in input order; a failure cancels queued chunks and raises.
 
     Args:
         query_fasta: Path to query FASTA
@@ -1161,7 +1154,7 @@ def run_diamond_chunked(
         output_dir: Directory for output files
         chunk_size: Maximum sequences per chunk
         max_target_seqs: Maximum hits per query
-        threads: Number of threads
+        threads: Total CPU budget
         masked_genomes: Genome keys whose reference rows are dropped from the hits
 
     Returns:
@@ -1172,9 +1165,13 @@ def run_diamond_chunked(
 
     logger.info("Chunked %s into %d chunks of max %d sequences", query_fasta, len(chunks), chunk_size)
 
-    all_hits: dict[str, list[DiamondHit]] = {}
+    if not chunks:
+        return {}
+    chunk_threads = min(8, threads)
+    workers = min(len(chunks), max(1, threads // 8))
+    logger.info("Diamond chunk workers=%d threads_per_chunk=%d budget=%d", workers, chunk_threads, threads)
 
-    for i, chunk_fasta in enumerate(chunks):
+    def search_chunk(i: int, chunk_fasta: Path) -> dict[str, list[DiamondHit]]:
         chunk_output = output_dir / f"diamond_chunk_{i + 1}.tsv"
         logger.info("Processing chunk %d/%d", i + 1, len(chunks))
 
@@ -1183,13 +1180,27 @@ def run_diamond_chunked(
             db=diamond_db,
             output=chunk_output,
             max_target_seqs=max_target_seqs,
-            threads=threads,
+            threads=chunk_threads,
             search_backend=search_backend,
             masked_genomes=masked_genomes,
         )
 
-        chunk_hits = parse_diamond_output(chunk_output)
-        all_hits.update(chunk_hits)
+        return parse_diamond_output(chunk_output)
+
+    results: dict[int, dict[str, list[DiamondHit]]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(search_chunk, i, chunk): i for i, chunk in enumerate(chunks)}
+        try:
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+
+    all_hits: dict[str, list[DiamondHit]] = {}
+    for i in range(len(chunks)):
+        all_hits.update(results[i])
 
     return all_hits
 
@@ -1386,7 +1397,7 @@ def run_batched_diamond(
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None = None,
 ) -> dict[str, GeneTaxonomy]:
-    """Run the original query plus an independent deep-veto query when requested.
+    """Search once for positive and deeper host-veto evidence.
 
     Returns taxonomy keyed by pORF ID for fast lookup.
 
@@ -1479,11 +1490,8 @@ def run_batched_diamond(
             masked_genomes=config.masked_genomes,
         )
 
-    hits = search(output_dir, config.top_k)
-    viral_veto_hits = (
-        search(output_dir / "viral_veto", config.viral_hit_depth) if config.viral_hit_depth > TOP_HIT_COUNT else None
-    )
-    taxonomy_map = _classify_query_hits(query, hits, proteome_index, config, taxonomy_lookup, viral_veto_hits)
+    hits = search(output_dir, max(config.top_k, config.viral_hit_depth))
+    taxonomy_map = _classify_query_hits(query, hits, proteome_index, config, taxonomy_lookup)
 
     # Log summary statistics
     n_with_hits = sum(1 for t in taxonomy_map.values() if t.has_hit)

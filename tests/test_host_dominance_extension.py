@@ -23,18 +23,17 @@ from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed, merge
 
 
 def classified(name, start, end, *, viral=80.0, shallow_viral=False, nohit=False):
-    """Use separate actual cached search lanes, never infer deep rank from shallow."""
+    """Use one sorted retained search with distinct positive and veto depths."""
     gene = pORF(name, "ctg", start, end)
     cell = DiamondHit(name, "EUK__host|p", 1e-20, 100.0, 70.0, 90.0)
     virus = DiamondHit(name, "NCLDV__virus|p", 1e-20, viral, 30.0, 90.0)
-    shallow = [] if nohit else (sorted([virus, cell], key=lambda hit: -hit.bits) if shallow_viral else [cell])
-    deep = [] if nohit else sorted([virus, cell], key=lambda hit: -hit.bits)
+    cells = [cell] if shallow_viral else [replace(cell, target=f"EUK__host{i}|p") for i in range(10)]
+    hits = [] if nohit else sorted([virus, *cells], key=lambda hit: -hit.bits)
     tax = classify_cached_diamond_query(
         GenomeDiamondQuery(all_porf_ids=[name]),
-        {name: shallow},
+        {name: hits},
         {"ctg": [gene]},
         BoundaryDiamondConfig(viral_hit_depth=50),
-        viral_veto_hits={name: deep},
     )[name]
     return gene, tax
 
@@ -122,11 +121,12 @@ def test_a4_disables_host_stop_but_does_not_make_host_like_viral_hits_support(mo
     assert disabled.end == 2000
 
 
-def test_competition_uses_union_and_preserves_original10_fields():
+def test_competition_and_positive_fields_use_the_same_sorted_hits():
     _, weak = classified("g", 100, 400, viral=80.0)
     _, strong = classified("g", 100, 400, viral=150.0)
-    for field in ("top10_targets", "top10_bits", "top10_pidents", "top10_evalues", "top10_qcovhsp"):
-        assert getattr(weak, field) == getattr(strong, field)
+    assert weak.has_viral is False
+    assert strong.has_viral is True
+    assert strong.top10_targets[0] == "NCLDV__virus|p"
     assert weak.host_competition_assessed is True
     assert (weak.host_competition_cellular_bits, weak.host_competition_viral_bits) == (100.0, 80.0)
     assert (strong.host_competition_cellular_bits, strong.host_competition_viral_bits) == (100.0, 150.0)
@@ -212,25 +212,23 @@ def test_host_competition_keeps_native_viral_namespaces_and_identity(prefix, ide
     virus = DiamondHit("g", prefix + "__virus|p", 1e-20, 80.0, identity, 90.0)
     taxonomy = classify_cached_diamond_query(
         GenomeDiamondQuery(all_porf_ids=["g"]),
-        {"g": [cell]},
+        {"g": [cell, virus]},
         {"ctg": [pORF("g", "ctg", 100, 400)]},
         BoundaryDiamondConfig(viral_hit_depth=50),
-        viral_veto_hits={"g": [cell, virus]},
     )["g"]
     assert taxonomy.host_competition_viral_bits == expected
     assert taxonomy.host_competition_cellular_target == "EUK__host|p"
     assert taxonomy.viral_hit_within_depth is (expected is not None)
 
 
-def test_depth_ten_ignores_an_unrequested_deeper_search():
+def test_depth_ten_ignores_hits_beyond_ten():
     cell = DiamondHit("g", "EUK__host|p", 1e-20, 100.0, 70.0, 90.0)
-    virus = DiamondHit("g", "MIRUS__virus|p", 1e-20, 150.0, 80.0, 90.0)
+    virus = DiamondHit("g", "MIRUS__virus|p", 1e-20, 80.0, 80.0, 90.0)
     taxonomy = classify_cached_diamond_query(
         GenomeDiamondQuery(all_porf_ids=["g"]),
-        {"g": [cell]},
+        {"g": [cell] * 10 + [virus]},
         {"ctg": [pORF("g", "ctg", 100, 400)]},
         BoundaryDiamondConfig(viral_hit_depth=10),
-        viral_veto_hits={"g": [virus]},
     )["g"]
     assert taxonomy.host_competition_assessed
     assert taxonomy.host_competition_viral_bits is None

@@ -45,10 +45,9 @@ def _classify(hits: list[DiamondHit], *, viral_hit_depth: int = 10) -> GeneTaxon
     query = GenomeDiamondQuery(all_porf_ids=["g1"])
     return classify_cached_diamond_query(
         query,
-        {"g1": hits[:10]},
+        {"g1": hits},
         proteome_index,
         BoundaryDiamondConfig(viral_hit_depth=viral_hit_depth),
-        viral_veto_hits={"g1": hits} if viral_hit_depth > 10 else None,
     )["g1"]
 
 
@@ -187,25 +186,30 @@ def test_batched_search_keeps_viral_hit_depth_hits_per_query(
         config=config,
     )
 
-    assert set(search.limits) == ({10, depth} if depth > 10 else {10})
+    assert set(search.limits) == {max(10, depth)}
     assert len(taxonomy["g1"].top10_targets) == 10
     assert taxonomy["g1"].viral_hit_within_depth is expected_flag
 
 
-@pytest.mark.parametrize(("depth", "expected_flag"), [(10, False), (50, True)])
-def test_cached_search_slices_to_viral_hit_depth(tmp_path: Path, depth: int, expected_flag: bool) -> None:
+@pytest.mark.parametrize(
+    ("top_k", "depth", "viral_rank", "expected_flag"),
+    [(10, 10, 15, False), (10, 50, 15, True), (3, 10, 5, True), (30, 10, 11, False)],
+)
+def test_cached_search_slices_to_viral_hit_depth(
+    tmp_path: Path, top_k: int, depth: int, viral_rank: int, expected_flag: bool
+) -> None:
     query, _proteome, proteome_index = _write_query_inputs(tmp_path)
 
     taxonomy = classify_cached_diamond_query(
         query=query,
-        diamond_hits={"g1": _host_hits_with_viral_at(15)[:10]},
-        viral_veto_hits={"g1": _host_hits_with_viral_at(15)} if depth > 10 else None,
+        diamond_hits={"g1": _host_hits_with_viral_at(viral_rank)},
         proteome_index=proteome_index,
-        config=BoundaryDiamondConfig(viral_hit_depth=depth),
+        config=BoundaryDiamondConfig(top_k=top_k, viral_hit_depth=depth),
     )
 
-    assert len(taxonomy["g1"].top10_targets) == 10
+    assert len(taxonomy["g1"].top10_targets) == min(top_k, 10)
     assert taxonomy["g1"].viral_hit_within_depth is expected_flag
+    assert (taxonomy["g1"].host_competition_viral_bits is not None) is expected_flag
 
 
 def test_cached_and_batched_classification_agree_at_every_depth(tmp_path: Path, monkeypatch) -> None:
@@ -222,7 +226,7 @@ def test_cached_and_batched_classification_agree_at_every_depth(tmp_path: Path, 
         proteome_index=proteome_index,
         config=config,
     )
-    cached = classify_cached_diamond_query(query, hits, proteome_index, config, viral_veto_hits=hits)
+    cached = classify_cached_diamond_query(query, hits, proteome_index, config)
 
     assert batched == cached
     assert (batched["g1"].viral_hit_within_depth, batched["g2"].viral_hit_within_depth) == (True, False)
@@ -251,7 +255,9 @@ def test_taxonomy_map_preserves_original_fields_and_exports_measured_competition
 
 
 def _extend(taxonomy: dict[str, GeneTaxonomy], genes: list[pORF], monkeypatch) -> object:
-    monkeypatch.setattr(seed_extension, "host_lineage_share", lambda tax, model: 1.0)
+    monkeypatch.setattr(
+        seed_extension, "host_lineage_share", lambda tax, model: 1.0 if tax.porf_id.startswith("h") else 0.0
+    )
     seed = MergedSeed("ctg", 1000, 2000, seed_id="s", confirmed_seeds=(ConfirmedSeed("s", "ctg", 1000, 2000),))
     model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
     return seed_extension.extend_confirmed_seed(seed, genes, taxonomy, (0, 10000), model, 0.35)
@@ -279,10 +285,9 @@ def test_three_cellular_dominant_hosts_stop_even_with_weak_deep_viral_hits(
     }
     taxonomy = classify_cached_diamond_query(
         GenomeDiamondQuery(all_porf_ids=[gene.id for gene in genes]),
-        {gene_id: rows[:10] for gene_id, rows in hits.items()},
+        hits,
         {"ctg": genes},
         BoundaryDiamondConfig(viral_hit_depth=depth),
-        viral_veto_hits=hits if depth > 10 else None,
     )
 
     for name in ("h1", "h2", "h3"):

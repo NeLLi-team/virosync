@@ -488,7 +488,9 @@ def _run_diamond(
         elapsed = time.time() - start_time
         reason = "made no CPU/IO progress" if isinstance(e, DiamondNoProgressTimeout) else "timed out"
         retry_threads = (
-            DIAMOND_RETRY_THREADS if DIAMOND_RETRY_THREADS > 0 else max(1, min(threads, max(8, threads // 2)))
+            min(threads, DIAMOND_RETRY_THREADS)
+            if DIAMOND_RETRY_THREADS > 0
+            else max(1, min(threads, max(8, threads // 2)))
         )
         logger.warning(
             "Diamond blastp %s after %.1fs at threads=%d; retrying once with threads=%d",

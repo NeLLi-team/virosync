@@ -334,8 +334,8 @@ class Phase2Config:
     diamond_chunk_size: int = 10000
     diamond_random_seed: int = 42
     diamond_superset_prototype_enabled: bool = False
-    # Independent veto-search depth above ten; the original positive-evidence
-    # query and its top10 fields retain their original search limit.
+    # Host-veto depth from the shared search; positive evidence uses its
+    # leading ten retained hits.
     viral_hit_depth: int = 50
 
 
@@ -864,7 +864,7 @@ class PipelineConfig:
         if self.phase2.diamond_superset_prototype_enabled and self.phase2.diamond_top_k != 10:
             errors.append(
                 "phase2.diamond_superset_prototype_enabled requires "
-                "phase2.diamond_top_k=10 to preserve the original superset positive-evidence search; "
+                "phase2.diamond_top_k=10 to keep superset positive evidence limited to ten retained hits; "
                 "the optional deeper search supplies veto evidence only"
             )
 

@@ -306,15 +306,14 @@ def _run_boundary_diamond(
     gene_taxonomy_db: Path,
     output_dir: Path,
     config: PipelineConfig,
+    threads: int,
     superset_diamond_hits: dict | None,
     logger: object,
     reference_mask: ReferenceMask = ReferenceMask(),
-    superset_viral_veto_hits: dict | None = None,
     viral_marker_genes: frozenset[str] = frozenset(),
 ) -> _BoundaryEvidence:
     """Classify the shared seed, flank, and control protein query."""
     phase2 = config.phase2
-    threads = config.compute.gene_taxonomy_threads or config.compute.effective_threads()
     target_control_genes = max(1, phase2.diamond_control_sample_size)
     control_min_distance = max(1, phase2.diamond_control_min_distance)
     logger.info(
@@ -366,7 +365,6 @@ def _run_boundary_diamond(
         taxonomy_map = classify_cached_diamond_query(
             query=query,
             diamond_hits=superset_diamond_hits,
-            viral_veto_hits=superset_viral_veto_hits,
             proteome_index=proteome_index,
             config=diamond_config,
             taxonomy_lookup=tax_lookup,
@@ -462,7 +460,7 @@ def _run_phase2_subflow(
     boundary_taxonomy_ml_neighbor_window = phase2.taxonomy_ml_neighbor_window
     boundary_diamond_random_seed = phase2.diamond_random_seed
     boundary_diamond_superset_prototype_enabled = phase2.diamond_superset_prototype_enabled
-    gene_taxonomy_threads = compute.gene_taxonomy_threads
+    gene_taxonomy_threads = min(compute.gene_taxonomy_threads or threads, threads, compute.effective_threads())
     extended_output = phase3.extended_output
     search_backend = compute.search_backend.value
     refined_bed = output_dir / "phase2" / "refined_boundaries.bed"
@@ -516,7 +514,6 @@ def _run_phase2_subflow(
         )
 
     superset_diamond_hits = None
-    superset_viral_veto_hits = None
     superset_proteome_index = None
     if boundary_diamond_superset_prototype_enabled and not (resume and resume_authorized) and merged_seeds:
         superset_db = _require_phase2b_gene_taxonomy_db(
@@ -525,28 +522,18 @@ def _run_phase2_subflow(
         )
         superset_proteome_index = build_proteome_index(proteome_path)
         logger.info(
-            "Phase 2 superset prototype: original full-proteome search (top_k=%d)",
-            phase2.diamond_top_k,
+            "Phase 2 superset prototype: shared full-proteome search (retained_depth=%d)",
+            max(phase2.diamond_top_k, phase2.viral_hit_depth),
         )
         superset_diamond_hits = run_full_proteome_diamond(
             proteome_fasta=proteome_path,
             diamond_db=superset_db,
             output_dir=output_dir / "phase2" / "superset_diamond",
-            max_target_seqs=max(10, phase2.diamond_top_k),
-            threads=gene_taxonomy_threads or threads,
+            max_target_seqs=max(phase2.diamond_top_k, phase2.viral_hit_depth),
+            threads=gene_taxonomy_threads,
             search_backend=search_backend,
             masked_genomes=reference_mask.genome_keys,
         )
-        if phase2.viral_hit_depth > 10:
-            superset_viral_veto_hits = run_full_proteome_diamond(
-                proteome_fasta=proteome_path,
-                diamond_db=superset_db,
-                output_dir=output_dir / "phase2" / "superset_viral_veto",
-                max_target_seqs=phase2.viral_hit_depth,
-                threads=gene_taxonomy_threads or threads,
-                search_backend=search_backend,
-                masked_genomes=reference_mask.genome_keys,
-            )
     if resume and resume_authorized:
         missing_state = [path for path in (phase2_state_path, phase2_resume_state_path) if not path.is_file()]
         if missing_state:
@@ -664,8 +651,8 @@ def _run_phase2_subflow(
             gene_taxonomy_db=phase2b_db,
             output_dir=output_dir,
             config=config,
+            threads=gene_taxonomy_threads,
             superset_diamond_hits=superset_diamond_hits,
-            superset_viral_veto_hits=superset_viral_veto_hits,
             logger=logger,
             reference_mask=reference_mask,
         )

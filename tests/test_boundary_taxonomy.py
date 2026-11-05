@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     SeedGeneMapping,
@@ -143,3 +145,100 @@ def test_resolve_org_id_normalizes_legacy_vardna_namespace() -> None:
     )
 
     assert resolved == "PHAGE__GCA-000906975-1"
+
+
+@pytest.mark.parametrize("budget,workers,per_chunk", [(32, 4, 8), (19, 2, 8), (3, 1, 3)])
+def test_chunks_overlap_with_bounded_threads_and_merge_in_input_order(
+    tmp_path, monkeypatch, budget, workers, per_chunk
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event, Lock
+
+    from virosync.pipeline.phase2 import boundary_diamond as bd
+
+    fasta = tmp_path / "query.faa"
+    fasta.write_text("".join(f">g{i}\nMAAA\n" for i in range(workers + 2)))
+    barrier = Barrier(workers + 1)
+    release = Event()
+    second_finished = Event()
+    lock = Lock()
+    active = 0
+    peak = 0
+    calls = []
+
+    def search(**kwargs):
+        nonlocal active, peak
+        name = kwargs["query"].read_text().splitlines()[0][1:]
+        with lock:
+            calls.append(kwargs["threads"])
+            active += 1
+            peak = max(peak, active)
+        if int(name[1:]) < workers:
+            barrier.wait(timeout=5)
+            assert release.wait(timeout=5)
+        if name == "g0" and workers > 1:
+            assert second_finished.wait(timeout=5)
+        kwargs["output"].write_text(f"{name}\tEUK__host|p\t1e-20\t100\t80\t90\n")
+        if name == "g1":
+            second_finished.set()
+        with lock:
+            active -= 1
+
+    monkeypatch.setattr(bd, "run_diamond_blastp", search)
+    with ThreadPoolExecutor(max_workers=1) as controller:
+        future = controller.submit(bd.run_diamond_chunked, fasta, tmp_path / "db", tmp_path / "out", 1, 50, budget)
+        try:
+            barrier.wait(timeout=5)
+            assert peak == workers
+            assert len(calls) == workers
+        finally:
+            release.set()
+        hits = future.result(timeout=5)
+
+    assert list(hits) == [f"g{i}" for i in range(workers + 2)]
+    assert calls == [per_chunk] * (workers + 2)
+    assert peak <= workers
+
+
+def test_chunk_failure_cancels_queued_work_and_raises(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from virosync.pipeline.phase2 import boundary_diamond as bd
+
+    fasta = tmp_path / "query.faa"
+    fasta.write_text("".join(f">g{i}\nMAAA\n" for i in range(8)))
+    first_started = Event()
+    release = Event()
+    cancelled = Event()
+    submitted = []
+
+    class ObservedExecutor(ThreadPoolExecutor):
+        def submit(self, *args, **kwargs):
+            future = super().submit(*args, **kwargs)
+            future.add_done_callback(lambda completed: cancelled.set() if completed.cancelled() else None)
+            submitted.append(future)
+            return future
+
+    def search(**kwargs):
+        name = kwargs["query"].read_text().splitlines()[0][1:]
+        if name == "g0":
+            first_started.set()
+        if name == "g1":
+            assert first_started.wait(timeout=5)
+            raise RuntimeError("controlled DIAMOND failure")
+        assert release.wait(timeout=5)
+        kwargs["output"].write_text("")
+
+    monkeypatch.setattr(bd, "ThreadPoolExecutor", ObservedExecutor, raising=False)
+    monkeypatch.setattr(bd, "run_diamond_blastp", search)
+    with ThreadPoolExecutor(max_workers=1) as controller:
+        future = controller.submit(bd.run_diamond_chunked, fasta, tmp_path / "db", tmp_path / "out", 1, 50, 16)
+        try:
+            assert cancelled.wait(timeout=5)
+        finally:
+            release.set()
+        with pytest.raises(RuntimeError, match="controlled DIAMOND failure"):
+            future.result(timeout=5)
+
+    assert any(future.cancelled() for future in submitted)

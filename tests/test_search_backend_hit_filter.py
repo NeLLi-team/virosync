@@ -435,3 +435,41 @@ def test_genome_filtered_search_with_an_empty_mask_is_unchanged(
     assert cmd[cmd.index("--max-target-seqs") + 1] == str(10 * TARGET_FETCH_MULTIPLIER)
     assert _without_tmpdir(fake_diamond.commands[0]) == _without_tmpdir(cmd)
     assert masked.read_text(encoding="utf-8") == unmasked_rows
+
+
+@pytest.mark.parametrize("threads,retry_override,expected_retry", [(8, 16, 8), (3, 16, 3), (8, 2, 2)])
+def test_diamond_retry_stays_within_the_original_thread_budget(
+    tmp_path, monkeypatch, threads, retry_override, expected_retry
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append(int(command[command.index("--threads") + 1]))
+
+        def poll():
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(command, 1)
+            return 0
+
+        return SimpleNamespace(pid=0, poll=poll)
+
+    monkeypatch.setattr(search_backend.subprocess, "Popen", popen)
+    monkeypatch.setattr(search_backend, "_read_process_activity", lambda pid: None)
+    monkeypatch.setattr(search_backend, "DIAMOND_RETRY_THREADS", retry_override)
+
+    search_backend._run_diamond(
+        tmp_path / "query.faa",
+        tmp_path / "db",
+        tmp_path / "hits.tsv",
+        threads,
+        1e-5,
+        50,
+        ["qseqid", "sseqid"],
+        None,
+        1,
+    )
+
+    assert calls == [threads, expected_retry]

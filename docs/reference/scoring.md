@@ -232,7 +232,9 @@ and fragments linked to one scoring locus cannot count as independent genes.
 
 The experiment masks each background genome's whole species in both reference
 searches, including pEVE-labelled references, before retaining top-ten and
-separate top-50 host-veto evidence. Synthetic backgrounds determine the mask,
+top-50 host-veto evidence from the same retained Phase 2 search. A deeper native
+search may change the top ten; positive support still reads only that slice.
+Synthetic backgrounds determine the mask,
 not their inserted viral donors. Missing or malformed gene evidence is reported
 as unavailable, rather than treated as an observed zero-hit search.
 

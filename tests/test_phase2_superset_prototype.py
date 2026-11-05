@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from virosync.config import ApplicationConfig, ConfigError, PipelineConfig
+from virosync.config.pipeline_config import ComputeConfig
 from virosync.orchestration._flows.single_genome import orchestrator, phase2
 from virosync.orchestration._flows.single_genome.manifest import (
     _compute_config_fingerprint,
@@ -230,6 +231,8 @@ def _run_phase2(
     reference_mask: ReferenceMask = ReferenceMask(),
     viral_hit_depth: int | None = None,
     validated_markers: list | None = None,
+    compute: ComputeConfig | None = None,
+    subflow_threads: int | None = None,
 ) -> phase2.Phase2Result:
     config = PipelineConfig().with_overrides(
         resume=False,
@@ -241,6 +244,8 @@ def _run_phase2(
         gene_taxonomy_threads=1,
         extended_output=False,
     )
+    if compute is not None:
+        config.compute = compute
     config.phase2.diamond_flank_genes = 1
     config.phase2.diamond_control_sample_size = 1
     config.phase2.diamond_control_min_distance = 1
@@ -272,6 +277,7 @@ def _run_phase2(
         genome_start_time=time.time(),
         logger=logging.getLogger(__name__),
         reference_mask=reference_mask,
+        threads=subflow_threads,
     )
 
 
@@ -306,7 +312,6 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         return classify_cached_diamond_query(
             query=kwargs["query"],
             diamond_hits=raw_hits,
-            viral_veto_hits=raw_hits,
             proteome_index=kwargs["proteome_index"],
             config=kwargs["config"],
             taxonomy_lookup=kwargs["taxonomy_lookup"],
@@ -338,7 +343,7 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         prototype_enabled=True,
     )
 
-    assert search_counts == {"legacy": 1, "prototype": 2}
+    assert search_counts == {"legacy": 1, "prototype": 1}
     assert phase2_state_to_document(legacy.refined_boundaries) == (
         phase2_state_to_document(prototype.refined_boundaries)
     )
@@ -350,7 +355,7 @@ def test_superset_flow_matches_query_scoped_seed_preserving_surfaces(
         2,
     )
     assert "phase2/superset_diamond/full_proteome.tsv" in {artifact.relative_path for artifact in prototype_artifacts}
-    assert "phase2/superset_viral_veto/full_proteome.tsv" in {
+    assert "phase2/superset_viral_veto/full_proteome.tsv" not in {
         artifact.relative_path for artifact in prototype_artifacts
     }
 
@@ -447,7 +452,7 @@ def test_phase2_gives_the_reference_mask_to_its_gene_taxonomy_search(
         reference_mask=ReferenceMask(genome_keys=masked_genomes),
     )
 
-    assert masks_seen == [masked_genomes] * (2 if prototype_enabled else 1)
+    assert masks_seen == [masked_genomes]
 
 
 @pytest.mark.parametrize("depth", [10, 37])
@@ -485,7 +490,7 @@ def test_phase2_searches_viral_hit_depth_hits_per_gene(
         viral_hit_depth=depth,
     )
 
-    assert depths_seen == ([10, depth] if prototype_enabled and depth > 10 else [depth])
+    assert depths_seen == [depth]
 
 
 def test_phase2_gives_the_validated_viral_markers_to_seed_extension(tmp_path: Path, monkeypatch) -> None:
@@ -574,3 +579,32 @@ def test_superset_prototype_rejects_a_different_boundary_hit_limit() -> None:
                 }
             }
         )
+
+
+@pytest.mark.parametrize(
+    "override,max_threads,subflow_threads,expected",
+    [(64, 16, None, 16), (8, 16, None, 8), (None, 16, None, 16), (32, None, 16, 16)],
+)
+def test_boundary_search_budget_respects_pipeline_and_subflow_caps(
+    tmp_path, monkeypatch, override, max_threads, subflow_threads, expected
+):
+    masked = tmp_path / "masked.fna"
+    masked.write_text(">contig\n" + "ACGT" * 200 + "\n")
+    proteome = tmp_path / "proteome.faa"
+    _write_proteome(proteome)
+    database = tmp_path / "combined.dmnd"
+    database.write_bytes(b"database")
+    seen = []
+    monkeypatch.setattr(phase2, "run_batched_diamond", lambda **kwargs: seen.append(kwargs["config"].threads) or {})
+
+    _run_phase2(
+        output_dir=tmp_path / "result",
+        masked=masked,
+        proteome=proteome,
+        database=database,
+        prototype_enabled=False,
+        compute=ComputeConfig(threads=32, max_threads=max_threads, gene_taxonomy_threads=override),
+        subflow_threads=subflow_threads,
+    )
+
+    assert seen == [expected]

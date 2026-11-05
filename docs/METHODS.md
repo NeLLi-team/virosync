@@ -540,23 +540,35 @@ order:
    count as different genomes.
 3. The first N hits, where N is the requested number of targets.
 
-The original Phase 2 gene search retains its existing hit limit and ranking.
-When `phase2.viral_hit_depth` is greater than 10 (candidate default 50), a separate
-search retrieves veto evidence at that depth. Each gene's `top10_*` fields and
-host-lineage share use only the original search, including its original native
-fetch limit, masking and per-genome filtering. Depth 10 needs no second search. The gene also records `viral_hit_within_depth`
+Phase 2 searches once at the larger of `phase2.diamond_top_k` and
+`phase2.viral_hit_depth` (candidate default 50). After masking and per-genome
+filtering, retained hits are sorted by decreasing bitscore. Each gene's
+`top10_*` fields and host-lineage share use the first ten retained hits, or fewer
+when `phase2.diamond_top_k` is smaller.
+The gene also records `viral_hit_within_depth`
 (a column of `taxonomy_map.tsv`): whether a viral hit with at least 25% identity
-appears among the original hits or the first `phase2.viral_hit_depth` hits of the
-separate veto search. This matters when an element integrated in
+appears among the positive-evidence hits or the first `phase2.viral_hit_depth`
+retained hits. DIAMOND's [target limit affects its search heuristics](https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options)
+and can change its top ten; equivalence to a separate depth-ten search is not
+assumed. This matters when an element integrated in
 an ancestor of a host genus: related species can carry host-labelled copies
 that fill the top 10 and push viral references down.
 
 The private host-stop experiment also records the best qualifying viral and
-cellular bitscores and their target IDs across the original and separate deep
-searches. Viral hits need 25% identity; cellular competitors are EUK, BAC and
+cellular bitscores and their target IDs across the positive and deeper retained
+hits. Viral hits need 25% identity; cellular competitors are EUK, BAC and
 ARC. An assessed search with no such hit has a null maximum. Unavailable evidence
-is marked separately. Original top-ten arrays, host-share estimates and positive
-extension support remain unchanged.
+is marked separately. Positive extension support and host-share estimates read
+only the positive-evidence slice.
+
+Boundary DIAMOND chunks run concurrently within the gene-taxonomy CPU budget,
+capped by the effective pipeline budget. Each process uses eight threads, or
+the full budget when fewer than eight are available. The worker count is the
+budget divided by eight, rounded down, with a minimum of one and no more workers
+than chunks. Residual threads are idle. Small queries and the unchunked
+full-proteome prototype use one process with the same eight-thread cap.
+Timeout retries cannot exceed the original process's thread count. Results
+merge in input chunk order; any failed chunk fails the search.
 
 The Phase 2 taxonomy map and final per-EVE and combined gene taxonomy tables
 retain the assessment flag, both maxima and their target IDs. Missing scores

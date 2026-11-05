@@ -667,7 +667,6 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase2/refined_state.json",
             "phase2/resume_state.json",
             "phase2/superset_diamond/full_proteome.tsv",
-            "phase2/superset_viral_veto/full_proteome.tsv",
         ),
         3: ("phase3/ablation_events.json",),
     }[phase]
