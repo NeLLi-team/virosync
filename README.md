@@ -11,6 +11,13 @@ accepted regions with their evidence.
 
 ![ViroSync workflow](docs/virosync_workflow.png)
 
+Confirmed marker-bearing gene cores remain inside candidates as boundaries change.
+With default settings, an exterior gene counts as host when its host-lineage share
+is at least 0.35 and it carries no validated viral marker. A viral or EUK-pEVE hit
+does not override this host assignment. Three host genes stop extension before
+the first of them unless a gene supporting extension lies between them. Other
+genes do not reset the count, so the three need not be adjacent.
+
 ViroSync runs on CPUs by default. A GPU is not required for the core workflow.
 The default environment includes the executed notebook reports and their figures.
 Development tools, masking, machine-learning taxonomy, and structural analysis

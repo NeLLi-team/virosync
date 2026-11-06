@@ -61,7 +61,7 @@ def test_topology_problems_compares_lines_by_value() -> None:
 
 
 def test_topology_problems_reports_a_stop_off_a_line_it_lists() -> None:
-    stops = _moved("Host\nsignature\nmodel", y_low=wm.Y_HOST - 20, y_high=wm.Y_HOST - 20)
+    stops = _moved("Host\nsignature", y_low=wm.Y_HOST - 20, y_high=wm.Y_HOST - 20)
 
     problems = wm.topology_problems(stops, wm.ROUTES)
 

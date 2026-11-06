@@ -73,8 +73,8 @@ Y_HALLMARK = Y_MAIN + 11.0
 Y_OPTIONAL = Y_MAIN + 61.0
 Y_ANNOTATION = Y_OPTIONAL + 28.0
 Y_LEGEND = 12.0
-ANNOTATION_RISER_X = 398.0
-OPTIONAL_RISER_X = 426.0
+ANNOTATION_RISER_X = 409.0
+OPTIONAL_RISER_X = 433.0
 
 Point: TypeAlias = tuple[float, float]
 
@@ -115,8 +115,8 @@ class Phase:
 PHASES = (
     Phase(0, "Preprocessing", 8.0, 76.0),
     Phase(1, "Markers and seeds", 79.0, 236.0),
-    Phase(2, "Boundaries", 239.0, 416.0),
-    Phase(3, "Scoring and output", 419.0, 664.0),
+    Phase(2, "Boundaries", 239.0, 424.0),
+    Phase(3, "Scoring and output", 427.0, 664.0),
 )
 
 
@@ -167,18 +167,19 @@ STOPS = (
     Stop("Marker\nHMM scan", 105.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
     VALIDATION,
     Stop("Spatial\nwitnesses", 172.0, Y_HALLMARK, Y_HALLMARK, (HALLMARK,), "above"),
-    Stop("Host\nsignature\nmodel", 204.0, Y_HOST, Y_HOST, (HOST,), "below"),
+    Stop("Host\nsignature,\nmarker hits", 208.0, Y_HOST, Y_HOST, (HOST,), "below"),
     Stop("Seed\nregions", 214.0, Y_MAIN, Y_HALLMARK, (MAIN, HALLMARK), "above", "interchange"),
-    Stop("Gene\ntaxonomy,\nDIAMOND", 264.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
-    Stop("Seed-preserving\nextension,\nhost stop", 296.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "above", "interchange"),
-    Stop("Merge,\nTIR ends,\nsplits", 336.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
-    Stop("Composition\nGC, k-mer", 366.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
-    Stop("Direct\nrepeats", 406.0, Y_ANNOTATION, Y_ANNOTATION, (ANNOTATION,), "above", "dot", "right"),
-    Stop("Integration\ngenes, function\nlabels", 470.0, Y_HALLMARK, Y_HALLMARK, (HALLMARK,), "above"),
-    Stop("Domains", 444.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "above"),
+    Stop("Gene\ntaxonomy,\nDIAMOND", 264.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "above", "interchange"),
+    Stop("Extension,\nthree-host\nstop", 288.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
+    Stop("Merge if\ncompatible", 318.0, Y_HOST, Y_HALLMARK, (MAIN, HOST, HALLMARK), "above", "interchange"),
+    Stop("GC trim,\nTIR ends,\nsplits", 343.0, Y_HOST, Y_MAIN, BOUNDARY_TRACKS, "below", "interchange"),
+    Stop("Composition\nGC, k-mer", 377.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Direct\nrepeats", 416.0, Y_ANNOTATION, Y_ANNOTATION, (ANNOTATION,), "above", "dot", "right"),
+    Stop("Integration\ngenes, function\nlabels", 472.0, Y_HALLMARK, Y_HALLMARK, (HALLMARK,), "above"),
+    Stop("Domains", 449.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "above"),
     Stop("Structures,\nphylogeny", 536.0, Y_OPTIONAL, Y_OPTIONAL, (OPTIONAL,), "below"),
     SYNTHESIS,
-    Stop("Acceptance,\njoint rescue\nof rejected\nseeds", 612.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
+    Stop("Acceptance,\nLOW gate,\njoint rescue", 612.0, Y_MAIN, Y_MAIN, (MAIN,), "above"),
     Stop("ANI class\ntransfer", 634.0, Y_MAIN, Y_MAIN, (MAIN,), "below"),
     OUTPUTS,
 )
