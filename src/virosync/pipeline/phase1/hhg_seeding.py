@@ -213,6 +213,7 @@ def _run_diamond_marker_search(
     output_file: Path,
     threads: int,
     masked_genomes: frozenset[str] = frozenset(),
+    max_seqs: int = 20,
 ) -> None:
     tmp_dir = output_file.parent / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -242,7 +243,7 @@ def _run_diamond_marker_search(
         threads=threads,
         backend="diamond",
         evalue=1e-5,
-        max_target_seqs=20,
+        max_target_seqs=max_seqs,
         output_columns=["qseqid", "sseqid", "bitscore"],
         timeout=600,
         masked_genomes=masked_genomes,
@@ -318,6 +319,7 @@ def validate_hmm_hits_with_markers(
                     output_file=output_file,
                     threads=threads,
                     masked_genomes=masked_genomes,
+                    max_seqs=top_k,
                 )
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 logger.warning("Diamond failed for %s: %s", marker, exc)
@@ -428,7 +430,7 @@ def validate_hmm_hits_with_combined_db(
     Workflow:
     1. Extract sequences for HMM-hit pORFs only (1-10% of total pORFs)
     2. Run Diamond blastp on these sequences against combined FAA DB
-    3. Parse top-10 hits and validate markers based on taxonomy prefixes
+    3. Parse retained hits and validate markers based on taxonomy prefixes
     4. Return validated hits and detailed marker metadata
 
     Args:
@@ -436,7 +438,7 @@ def validate_hmm_hits_with_combined_db(
         proteome_fasta: Path to conceptual proteome FASTA
         marker_db: Path to marker Diamond database (marker.dmnd - TIER 1, ~1,500 curated marker sequences)
         threads: Number of CPU threads
-        top_k: Number of top hits to analyze (default 10)
+        top_k: Number of retained hits to analyze (default 20)
         evalue: E-value cutoff for Diamond
         output_dir: Optional directory for output files
         masked_genomes: Genome keys whose reference rows the search drops

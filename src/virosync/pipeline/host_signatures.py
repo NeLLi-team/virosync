@@ -1,6 +1,6 @@
 """Host signature modeling for EUK-like marker hits.
 
-Builds a weighted token model from unvalidated marker hits whose top-10
+Builds a weighted token model from distinct marker proteins whose top-10
 Diamond prefixes are purely cellular. Used for host-like scoring and
 outward extension stopping.
 """
@@ -288,7 +288,7 @@ def build_host_signature_model(
 ) -> HostSignatureModel:
     """Build a weighted host-signature model from marker hits.
 
-    Uses BUSCO/COG marker hits with NO NCLDV/MIRUS/VP/PLV/CRESS/PHAGE in top-10 prefixes.
+    Uses the first record per protein with no viral/supporting top-10 prefix.
     Token weights are weighted sums of taxonomy substrings (split at |).
     """
     validated = validated_prefixes or {
@@ -312,16 +312,23 @@ def build_host_signature_model(
     token_bits: dict[str, list[float]] = {}
     lineage_weights: dict[str, float] = {}
 
+    seen_proteins: set[tuple[str, str]] = set()
     for hit in marker_hits:
-        hmm_target = hit.get("hmm_target") if isinstance(hit, dict) else getattr(hit, "hmm_target", "")
-        top10_prefixes = _parse_top10_prefixes(hit)
+        # Marker DIAMOND searches full proteins; HMM domains share that evidence.
+        query = str(_get_record_attr(hit, "query_porf", "") or "")
+        if query:
+            protein = (str(_get_record_attr(hit, "scaffold", "")), query.split("|aa", 1)[0])
+            if protein in seen_proteins:
+                continue
+            seen_proteins.add(protein)
+        top10_prefixes = _parse_top10_prefixes(hit)[:10]
         if any(p in validated for p in top10_prefixes):
             continue
         if supporting and any(p in supporting for p in top10_prefixes):
             continue
         if host_prefixes and not any(p in host_prefixes for p in top10_prefixes):
             continue
-        top10_hits = _parse_top10_hits(hit)
+        top10_hits = _parse_top10_hits(hit)[:10]
         top10_hits = _filter_hits_by_prefix(top10_hits, host_prefixes)
         if not top10_hits or not taxonomy_lookup:
             continue

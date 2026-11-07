@@ -703,7 +703,6 @@ def _run_phase1_subflow(
         )
         for hit in validated_markers
     }
-    production_validated_markers = [hit for hit in validated_markers if marker_roles[id(hit)].is_production_validated]
     validated_only = [hit for hit in validated_markers if marker_roles[id(hit)].is_retained_evidence]
     tier1_bypassed_markers = [hit for hit in validated_markers if marker_roles[id(hit)].is_tier1_bypassed]
     phase1_ablation_counts = InterventionCounts(
@@ -918,7 +917,15 @@ def _run_phase1_subflow(
     if ablation_id is AblationID.A2 and tier1_bypassed_markers:
         from virosync.pipeline.phase1.region_assembly import assemble_candidate_regions
 
-        counterfactual_seed_markers = list(production_validated_markers)
+        counterfactual_seed_markers = [
+            hit
+            for hit in validated_markers
+            if decide_marker_hit_role(
+                hit,
+                ablation_id=AblationID.A0,
+                single_marker_min_score=single_marker_min_score,
+            ).is_retained_evidence
+        ]
         if host_taxonomy_deviation_allow_seeds and host_deviation_markers:
             counterfactual_seed_markers.extend(seedable_deviation_markers)
         counterfactual_regions = assemble_candidate_regions(

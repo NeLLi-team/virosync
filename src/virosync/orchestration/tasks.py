@@ -201,7 +201,7 @@ def hhg_seeding_task(
     hmm_allowlist: Path | None = None,
     marker_faa_dir: Path | None = None,
     marker_db: Path | None = None,
-    marker_top_k: int = 10,
+    marker_top_k: int = 20,
     window_size: int = 20000,
     threads: int = 8,
     assembly_mode: str | None = None,

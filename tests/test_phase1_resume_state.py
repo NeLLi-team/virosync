@@ -24,6 +24,7 @@ from virosync.orchestration._flows.single_genome.phase1_state import (
     phase1_state_to_document,
     write_phase1_state,
 )
+from virosync.pipeline.hallmark_evidence import summarize_hallmarks
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.frameshift_screening import (
     ANNOTATION_CLASS,
@@ -200,8 +201,16 @@ def _terminal_payload(result: object) -> dict[str, object]:
     return result.result
 
 
-@pytest.mark.parametrize("status", ["validated", "unvalidated"])
-def test_only_validated_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeypatch, status):
+@pytest.mark.parametrize(
+    ("status", "model", "expected_seed"),
+    [
+        ("validated", "GVOGm0003", True),
+        ("unvalidated", "GVOGm0003", True),
+        ("unvalidated", "EVE_CAPSID_NOVEL_0007", True),
+        ("unvalidated", "ATPase", False),
+    ],
+)
+def test_reported_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeypatch, status, model, expected_seed):
     from virosync.orchestration.tasks import marker_validation_task, region_assembly_task
 
     output_dir = tmp_path / "output"
@@ -219,8 +228,17 @@ def test_only_validated_capsid_creates_exact_native_seed_and_resumes(tmp_path, m
     marker.query_porf = "s_1|aa1-20"
     marker.scaffold, marker.start, marker.end = "s", 101, 999
     marker.validation_status = status
+    marker.hmm_target = model
+    if status == "unvalidated":
+        marker.hmm_score = 11.9
+        marker.hmm_evalue = 0.2
     marker.top10_prefixes = "NCLDV__" if status == "validated" else "EUK__"
     marker.top10_pidents = "30" if status == "validated" else "90"
+    marker.top10_targets = "NCLDV__virus|p" if status == "validated" else "EUK__host|p"
+    marker.best_hit_target = marker.top10_targets
+    marker.best_hit_pident = 30.0 if status == "validated" else 90.0
+    marker.has_ncldv = marker.has_viral = int(status == "validated")
+    marker.has_mirus = marker.has_plv = marker.has_vp = 0
     raw = HMMHit("s_1", marker.hmm_target, marker.hmm_score, marker.hmm_evalue, 62.123456789, 1, 20)
 
     def fake_call(task, **kw):
@@ -239,18 +257,29 @@ def test_only_validated_capsid_creates_exact_native_seed_and_resumes(tmp_path, m
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kw: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kw: None)
     fresh = _run_phase1_subflow(**kwargs)
-    if status == "unvalidated":
+    if not expected_seed:
         assert _terminal_payload(fresh)["predictions"] == 0
         return
     assert not isinstance(fresh, Phase1Terminal)
     assert [(s.start, s.end) for s in fresh.merged_seeds] == [(101, 999)]
-    assert fresh.validated_markers[0].validation_status == "validated"
+    assert fresh.validated_markers[0].validation_status == status
+    assert {(hit.gene, hit.start, hit.end) for hit in fresh.hallmark_evidence} == {("s_1", 101, 999)}
+    evidence_ids = {hit.evidence_id for hit in fresh.hallmark_evidence}
+    assert all(set(witness.evidence_ids) <= evidence_ids for witness in fresh.hallmark_witnesses)
+    assert [(core.start, core.end) for core in fresh.merged_seeds[0].confirmed_seeds] == [(101, 999)]
+    if status == "unvalidated":
+        assert fresh.validated_markers[0].has_viral == 0
+        assert {witness.rule for witness in fresh.hallmark_witnesses} == {"reported_capsid"}
+        assert {witness.tier for witness in fresh.hallmark_witnesses} == {"MEDIUM"}
+        assert {(witness.start, witness.end) for witness in fresh.hallmark_witnesses} == {(101, 999)}
+        assert summarize_hallmarks(fresh.hallmark_evidence).core_count == 0
     config.execution.resume = True
     kwargs["resume_authorized"] = True
     resumed = _run_phase1_subflow(**kwargs)
     assert resumed.hallmark_evidence == fresh.hallmark_evidence
     assert resumed.hallmark_witnesses == fresh.hallmark_witnesses
     assert resumed.merged_seeds == fresh.merged_seeds
+    assert resumed.validated_markers == fresh.validated_markers
 
 
 def test_phase1_state_file_round_trip_preserves_every_consumed_field(
@@ -818,3 +847,55 @@ def test_fresh_phase1_writes_exact_state_after_classification(
     assert loaded.validated_markers[0].hmm_score == 123.456789012345
     assert loaded.validated_markers[0].has_plv == 1
     assert loaded.validated_markers[0].has_vp == 1
+
+
+@pytest.mark.parametrize(("model", "expected_changed"), [("GVOGm0003", 0), ("ATPase", 1)])
+def test_a2_counterfactual_uses_current_a0_eligibility(tmp_path, monkeypatch, model, expected_changed):
+    from virosync.ablation import AblationID
+    from virosync.orchestration.tasks import marker_validation_task, region_assembly_task
+    from virosync.pipeline.phase1.region_assembly import assemble_candidate_regions
+
+    kwargs = _phase1_kwargs(tmp_path, tmp_path / "output")
+    config = kwargs["config"]
+    config.execution.resume = False
+    config.ablation.id = AblationID.A2
+    config.phase1.pfam_arbitration_enabled = False
+    config.phase1.frameshift_screening_enabled = False
+    config.databases.hmm_database = tmp_path / "markers.hmm"
+    config.databases.marker_db = tmp_path / "markers.dmnd"
+    config.databases.hmm_database.write_text("HMM\n")
+    config.databases.marker_db.write_text("DB\n")
+    kwargs["resume_authorized"] = False
+    kwargs["masked_path"].write_text(">s\n" + "A" * 2000 + "\n")
+    kwargs["proteome_path"].write_text(">s_1 # 102 # 999 # 1 # ID=1_1\n" + "M" * 299 + "\n")
+    marker = _complete_marker()
+    marker.query_porf = "s_1|aa1-299"
+    marker.scaffold, marker.start, marker.end = "s", 101, 999
+    marker.validation_status = "supported"
+    marker.hmm_target = model
+    marker.hmm_score, marker.hmm_evalue = 100.0, 1e-20
+    marker.top10_prefixes, marker.top10_pidents = "EUK__", "90"
+    marker.top10_targets = marker.best_hit_target = "EUK__host|p"
+    marker.has_ncldv = marker.has_mirus = marker.has_plv = marker.has_vp = marker.has_viral = 0
+    raw = HMMHit("s_1", model, 100.0, 1e-20, 100.0, 1, 299)
+
+    def fake_call(task, **kw):
+        if task is phase1_module.hhg_seeding_task:
+            return [], [raw]
+        if task is marker_validation_task:
+            return [marker]
+        if task is region_assembly_task:
+            kw["validated_hits"] = kw.pop("validated_markers")
+            kw["genome_fasta"] = kw.pop("genome_path")
+            kw["proteome_fasta"] = kw.pop("proteome_path")
+            return assemble_candidate_regions(**kw)
+        raise AssertionError(task)
+
+    monkeypatch.setattr(phase1_module, "call_task", fake_call)
+    result = _run_phase1_subflow(**kwargs)
+    assert [(seed.start, seed.end) for seed in result.merged_seeds] == [(101, 999)]
+    assert result.ablation_counts.changed == expected_changed
+    actual_a0 = assemble_candidate_regions(
+        [marker], kwargs["masked_path"], kwargs["proteome_path"], tmp_path / "a0", ablation_id=AblationID.A0
+    )
+    assert [(region.start, region.end) for region in actual_a0] == ([] if expected_changed else [(101, 999)])

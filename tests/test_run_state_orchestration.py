@@ -1128,8 +1128,9 @@ def test_flow_masks_nothing_when_the_own_assembly_mask_is_off(
     assert masks_seen["phase1"] == ReferenceMask()
 
 
+@pytest.mark.parametrize("marker_depth", [20, 35])
 def test_flow_records_the_reference_mask_in_provenance(
-    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    mocked_pipeline: _MockPipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, marker_depth: int
 ) -> None:
     genome_id = "GCF_000001215.4_Release_6"
     _use_genome_id(mocked_pipeline, tmp_path, genome_id)
@@ -1146,8 +1147,10 @@ def test_flow_records_the_reference_mask_in_provenance(
         genome_id=genome_id,
         device="cpu",
         resume=True,
+        marker_validation_top_k=marker_depth,
     )
 
+    assert [config["marker_validation_top_k"] for config in configurations] == [marker_depth]
     assert [config["reference_mask"] for config in configurations] == [
         {
             "n_genome_keys": 2,

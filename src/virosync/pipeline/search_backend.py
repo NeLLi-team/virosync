@@ -478,7 +478,10 @@ def _run_diamond(
                 sleep_for = poll_interval
                 if effective_timeout > 0:
                     sleep_for = min(sleep_for, max(0.1, effective_timeout - elapsed))
-                time.sleep(sleep_for)
+                try:
+                    proc.wait(timeout=sleep_for)
+                except subprocess.TimeoutExpired:
+                    pass
 
     start_time = time.time()
     try:

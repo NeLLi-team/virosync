@@ -92,6 +92,7 @@ A witness needs complete genes on one scaffold, in one panel:
 
 | Rule | Evidence | Floor |
 | --- | --- | --- |
+| `reported_capsid` | One complete reported semantic capsid or Penton gene, without a score, E-value or viral-reference cutoff | MEDIUM |
 | `capsid` | One capsid core | MEDIUM |
 | `three_core_15kb` | Three independent core families on three proteins, in a full-gene span of at most 15,000 bp | MEDIUM |
 | `capsid_partner_5kb` | A capsid core and a different core family on a different protein, at most 5,000 bp apart edge to edge | HIGH |

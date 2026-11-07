@@ -184,11 +184,16 @@ ViroSync counts `EUK-pEVE` as viral and never as cellular or host:
   a region whose viral hits are all `EUK-pEVE`, in the marker database, the
   proteome database or both, uses the `MIXED` rule: it has the likely family
   `MIXED` and takes the mixed path of the v2 gate, whatever lineage its marker
-  names or its Phase 1 region class suggest. When a lineage hit exists, the
+  names or its Phase 1 region class suggest. A retained reported-capsid witness
+  independently grants MEDIUM acceptance without a length or viral-reference
+  requirement. When a lineage hit exists, the
   `EUK-pEVE` hit changes nothing: in the region vote, a gene whose viral hits are
   all `EUK-pEVE` casts no vote while any other gene votes for a lineage, apart
   from the marker vote of a profile class. The A1 seed export applies the same
-  marker votes to the top-10 hits of the seed's validated markers. The
+  marker votes to all retained hits of the seed's validated markers (20 by
+  default). The search fetches at most 200 targets at this default before
+  masking, twin selection and one-hit-per-labelled-genome reduction. It does
+  not refill removed hits, so fewer than 20 can remain. The
   `taxonomy_best_hits` partition counts these genes in the bucket `EUK-pEVE`; no
   output class has that name.
 

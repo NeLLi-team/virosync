@@ -45,7 +45,7 @@ def search_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:
 def test_marker_validation_search_receives_the_mask(tmp_path: Path, search_calls: list) -> None:
     run_diamond_on_hmm_hits(tmp_path / "q.faa", tmp_path / "marker.dmnd", tmp_path / "out.tsv", masked_genomes=MASK)
 
-    assert search_calls == [("plain", MASK)]
+    assert search_calls == [("filtered", MASK)]
 
 
 def test_hhg_seeding_marker_search_receives_the_mask(tmp_path: Path, search_calls: list) -> None:
@@ -55,7 +55,7 @@ def test_hhg_seeding_marker_search_receives_the_mask(tmp_path: Path, search_call
 
     _run_diamond_marker_search(tmp_path / "q.faa", tmp_path / "marker.faa", output, threads=1, masked_genomes=MASK)
 
-    assert search_calls == [("plain", MASK)]
+    assert search_calls == [("filtered", MASK)]
 
 
 def test_boundary_search_receives_the_mask(tmp_path: Path, search_calls: list) -> None:
@@ -98,7 +98,7 @@ def test_searches_without_a_mask_pass_an_empty_one(tmp_path: Path, search_calls:
     run_diamond_on_hmm_hits(tmp_path / "q.faa", tmp_path / "marker.dmnd", tmp_path / "out.tsv")
     boundary_diamond.run_diamond_blastp(tmp_path / "q.faa", tmp_path / "proteome.dmnd", tmp_path / "out.tsv")
 
-    assert search_calls == [("plain", frozenset()), ("filtered", frozenset())]
+    assert search_calls == [("filtered", frozenset()), ("filtered", frozenset())]
 
 
 @pytest.fixture

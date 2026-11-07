@@ -271,14 +271,14 @@ later). ViroSync counts an `EUK-pEVE` hit with at least 25% identity as viral
 evidence, in marker validation, boundary refinement, gene-level taxonomy and
 region scoring, and never as cellular or host evidence. The class names no
 lineage: it adds no vote for `NCLDV`, `MIRUS`, `PPV` or `CRESS`, and a lineage
-hit in the same top 10 always decides. A gene or region whose viral hits are all
+hit in the retained marker hits always decides. A gene or region whose viral hits are all
 `EUK-pEVE` is `VIRAL_UNKNOWN`, unless a structure-derived profile supplies a
 class (see [Profile classes](#profile-classes-for-euk-peve-only-hits)). In the
 region vote, a gene whose viral hits are all `EUK-pEVE` casts no vote when any
 other gene votes for a lineage, so it never dilutes the lineage majority. It votes
 `VIRAL_UNKNOWN` only when no gene votes for a lineage. Votes of `VIRAL_UNKNOWN`
 that come from conflicting lineage hits do not change. The A1 seed export has no
-gene taxonomy. It applies the same marker votes to the top-10 hits of the seed's
+gene taxonomy. It applies the same marker votes to the retained hits of the seed's
 validated markers, so it publishes the class that Phase 3 gives for the same
 evidence. Whenever these rules decide the class (a profile class votes, or all
 qualified viral hits are `EUK-pEVE`), A1 derives the likely family with the Phase 3
@@ -346,7 +346,9 @@ A region whose viral hits are all `EUK-pEVE`, in the marker
 database, the proteome database or both, and whose markers supply no profile
 class, has the likely family `MIXED`. This holds whatever lineage the marker names
 or the Phase 1 region class suggest, and the gate reads a likely family of `MIXED`
-before the region class. The region passes the gate through the same rule as a
+before the region class. A retained reported-capsid witness independently grants
+MEDIUM acceptance without a minimum length or viral-reference requirement.
+Without that witness, the region passes the gate through the same rule as a
 `VIRAL_UNKNOWN` region of mixed markers: a length above 2,000 bp, and capsid
 evidence or two hallmarks with one non-ATPase hallmark. A region with any lineage
 viral hit keeps its family logic.
@@ -512,11 +514,20 @@ candidates.
 
 ### Reference hit selection
 
-Marker validation and host-signature estimation read 20 retained DIAMOND hits by
-default for each full-length HMM-hit protein against the marker database. They
+Marker validation reads 20 retained DIAMOND hits by default for each full-length
+HMM-hit protein against the marker database. The public API and HHG paths use
+the same default and honor an explicit hit limit. At the default, DIAMOND fetches
+at most 200 targets before selection; it does not refill after filtering, so
+fewer than 20 matches may remain. Run provenance records the effective limit.
+These searches
 use [reference masking](#reference-masking), viral/cellular protein-twin selection
 and reduction to one hit per labelled genome, as described below. Validation and
-marker class votes use all retained matches. The host-signature model does not
+marker class votes use all retained matches. Host-signature estimation uses only
+the first ten for viral/supporting exclusion, host presence and host votes, in
+both rank and bitscore modes. Each physical query protein contributes once:
+the first record for its scaffold and protein ID supplies the evidence, without
+counting HMM domain segments or model alternatives again. Host-prefix filtering
+and rank weights otherwise remain unchanged. The host-signature model does not
 create seeds. Gene-taxonomy hit limits remain separate.
 
 The sensitive marker-validation search sets `--ext-chunk-size 400` to examine
@@ -573,6 +584,18 @@ than chunks. Residual threads are idle. Small queries and the unchunked
 full-proteome prototype use one process with the same eight-thread cap.
 Timeout retries cannot exceed the original process's thread count. Results
 merge in input chunk order; any failed chunk fails the search.
+
+Boundary searches pin DIAMOND to query-indexed mode (`--algo 1`) in both
+single-call and chunked paths. Marker, HHG and full-proteome searches retain
+their own algorithm settings. The watchdog waits for child exit between
+activity checks, so a completed search need not wait for the next poll.
+
+Terminal-repeat planning uses scaffold-local forkserver workers within the
+pipeline CPU budget. Plans return to original boundary order before conflict
+resolution. Each worker reads its scaffold sequence and receives its seed,
+marker, taxonomy and proteome evidence. A short temporary socket directory
+supports deep run paths; planning falls back to serial execution if the
+socket path remains too long. Worker errors fail the step.
 
 The Phase 2 taxonomy map and final per-EVE and combined gene taxonomy tables
 retain the assessment flag, both maxima and their target IDs. Missing scores

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from virosync.ablation import AblationID
 from virosync.orchestration._flows.single_genome.phase1 import (
     _region_coordinate_surface,
@@ -15,14 +17,14 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
 )
 
 
-def _strong_supported_marker() -> ValidatedMarkerHit:
+def _strong_supported_marker(hmm_target: str = "GVOGm0003") -> ValidatedMarkerHit:
     return ValidatedMarkerHit(
         query_porf="ctg_1",
         scaffold="ctg",
         start=99,
         end=300,
         strand="+",
-        hmm_target="GVOGm0003",
+        hmm_target=hmm_target,
         hmm_score=100.0,
         hmm_evalue=1e-20,
         validation_status="supported",
@@ -46,11 +48,11 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path]:
     return genome, proteome
 
 
-def test_a2_strong_supported_marker_creates_explicit_bypass_seed(
+def test_a2_strong_supported_non_capsid_creates_explicit_bypass_seed(
     tmp_path: Path,
 ) -> None:
     genome, proteome = _inputs(tmp_path)
-    marker = _strong_supported_marker()
+    marker = _strong_supported_marker("ATPase")
 
     normal = assemble_candidate_regions(
         [marker],
@@ -90,6 +92,37 @@ def test_a2_strong_supported_marker_creates_explicit_bypass_seed(
     assert retained.is_valid_seed_marker is True
     assert _region_coordinate_surface(normal) == set()
     assert _region_coordinate_surface(bypassed) == {("ctg", 99, 300)}
+
+
+@pytest.mark.parametrize("model", ["GVOGm0003", "EVE_CAPSID_NOVEL_0007"])
+def test_normal_reported_capsid_seeds_without_viral_validation(tmp_path: Path, model: str) -> None:
+    """Capsid/Penton retains the full gene despite 90% host hits and no viral hits."""
+    genome, proteome = _inputs(tmp_path)
+    marker = _strong_supported_marker(model)
+    marker.validation_status = "unvalidated"
+    marker.hmm_score = 11.9
+    marker.hmm_evalue = 0.2
+    marker.best_hit_pident = 90.0
+    marker.top10_pidents = "90.0"
+    regions = assemble_candidate_regions(
+        [marker],
+        genome,
+        proteome,
+        tmp_path / "normal-capsid",
+        min_markers_initial=1,
+        extension_kb=0,
+        merge_distance=0,
+        ablation_id=AblationID.A0,
+        single_marker_min_score=100.0,
+    )
+    assert _region_coordinate_surface(regions) == {("ctg", 99, 300)}
+    retained = regions[0].markers[0]
+    assert (retained.scaffold, retained.start, retained.end) == ("ctg", 99, 300)
+    assert retained.validation_status == "unvalidated"
+    assert retained.has_viral == 0
+    assert retained.tier1_bypassed is False
+    assert retained.is_validated is False
+    assert retained.is_valid_seed_marker is True
 
 
 def test_counterfactual_region_assembly_does_not_write_artifacts(

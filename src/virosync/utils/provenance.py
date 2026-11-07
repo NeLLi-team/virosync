@@ -272,7 +272,7 @@ def write_provenance(
             "use_tmvec_database": config.get("use_tmvec_database", False),
             "use_interproscan": config.get("use_interproscan", False),
             "masking": _json_safe(config.get("masking")),
-            "marker_validation_top_k": config.get("marker_validation_top_k", 10),
+            "marker_validation_top_k": config.get("marker_validation_top_k", 20),
             "reference_mask": _json_safe(config.get("reference_mask")),
             "host_lineage": config.get("host_lineage", ""),
         },

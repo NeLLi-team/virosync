@@ -71,7 +71,7 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "91c907fee79aa898526ed3806d1e6b3e6f59474b11c55534197a22eb3d061a2a",
+  "effective_config_sha256": "68bee2b80affc7546a03e811ded6b0c312cc8aa27e9c4298932fc28c743815c2",
   "execution": {
     "masking": {
       "backend": "off",
@@ -150,7 +150,7 @@
     "host_taxonomy_deviation_window_seed": 13,
     "initial_window_bp": 20000,
     "initial_window_genes": 10,
-    "marker_validation_top_k": 10,
+    "marker_validation_top_k": 20,
     "merge_distance": 0,
     "min_markers_initial": 1,
     "novel_marker_min_coverage": 0.5,
