@@ -11,17 +11,24 @@ meet the identity threshold. ``tir_alignment_length`` and
 from __future__ import annotations
 
 import math
+import multiprocessing
+import os
+import signal
+import time
 from bisect import bisect_left
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import product
+from multiprocessing.connection import wait
 from pathlib import Path
 
 import numpy as np
 from Bio import SeqIO
 from numpy.typing import NDArray
 
+from virosync.pipeline.host_signatures import get_taxonomy_lookup, set_taxonomy_lookup
 from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.viral_markers import (
     get_region_classification_summary,
@@ -1399,10 +1406,31 @@ def refine_boundaries_with_terminal_repeats(
     boundary_taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
     extension_bp: int,
+    workers: int = 1,
 ) -> list[RefinedBoundary]:
     """Partition boundaries around independent, taxonomy-covered TIR pairs."""
     scaffold_index = SeqIO.index(str(raw_genome_path), "fasta")
     try:
+        if workers > 1 and len({boundary.scaffold for boundary in boundaries}) > 1:
+            for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
+                if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
+                    raise ValueError("allowed interval must contain parent")
+                if boundary.scaffold not in scaffold_index:
+                    raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
+            tasks = _build_scaffold_tasks(
+                boundaries,
+                allowed_intervals,
+                raw_genome_path,
+                validated_markers=validated_markers,
+                boundary_diamond_query=boundary_diamond_query,
+                boundary_taxonomy_map=boundary_taxonomy_map,
+                proteome_index=proteome_index,
+                extension_bp=extension_bp,
+            )
+            plans = _plan_scaffolds_in_workers(
+                tasks, len(boundaries), min(workers, len({boundary.scaffold for boundary in boundaries}))
+            )
+            return _resolve_partition_conflicts(boundaries, plans)
         plans: list[list[RefinedBoundary]] = []
         for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
             if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
@@ -1423,5 +1451,195 @@ def refine_boundaries_with_terminal_repeats(
                 )
             )
         return _resolve_partition_conflicts(boundaries, plans)
+    finally:
+        scaffold_index.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _ScaffoldPlanningTask:
+    """Everything one worker needs to plan the boundaries of one scaffold.
+
+    Planning reads markers, seed mappings, taxonomy and proteome genes only of
+    the boundary's own scaffold, so each field holds just that scaffold's data.
+    The worker reads the sequence itself, so no sequence is held or pickled here.
+    """
+
+    scaffold: str
+    raw_genome_path: str
+    boundaries: tuple[tuple[int, RefinedBoundary, tuple[int, int]], ...]
+    validated_markers: list[object]
+    boundary_diamond_query: GenomeDiamondQuery
+    boundary_taxonomy_map: dict[str, GeneTaxonomy]
+    proteome_index: dict[str, list[pORF]]
+    extension_bp: int
+
+
+def _build_scaffold_tasks(
+    boundaries: list[RefinedBoundary],
+    allowed_intervals: list[tuple[int, int]],
+    raw_genome_path: Path,
+    *,
+    validated_markers: list[object],
+    boundary_diamond_query: GenomeDiamondQuery,
+    boundary_taxonomy_map: dict[str, GeneTaxonomy],
+    proteome_index: dict[str, list[pORF]],
+    extension_bp: int,
+) -> Iterable[_ScaffoldPlanningTask]:
+    """Split the planning inputs per scaffold, in original scaffold order.
+
+    Only the next active scaffold payload is materialized for dispatch.
+    """
+    indices_by_scaffold: dict[str, list[int]] = defaultdict(list)
+    for index, boundary in enumerate(boundaries):
+        indices_by_scaffold[boundary.scaffold].append(index)
+    markers_by_scaffold: dict[str, list[object]] = defaultdict(list)
+    for marker in validated_markers:
+        markers_by_scaffold[marker.scaffold].append(marker)
+    mappings_by_scaffold: dict[str, dict[str, SeedGeneMapping]] = defaultdict(dict)
+    for seed_id, mapping in boundary_diamond_query.seed_gene_mappings.items():
+        mappings_by_scaffold[mapping.scaffold][seed_id] = mapping
+    taxonomy_by_scaffold: dict[str, dict[str, GeneTaxonomy]] = defaultdict(dict)
+    for porf_id, taxonomy in boundary_taxonomy_map.items():
+        taxonomy_by_scaffold[taxonomy.scaffold][porf_id] = taxonomy
+
+    for scaffold, indices in indices_by_scaffold.items():
+        # Planning reads the taxonomy map by entry scaffold (_has_viral_gene) and by the
+        # ID of each gene of this scaffold's proteome (missing_boundary_taxonomy_ids).
+        taxonomy = dict(taxonomy_by_scaffold.get(scaffold, {}))
+        scaffold_genes = proteome_index.get(scaffold)
+        for gene in scaffold_genes or []:
+            if gene.id in boundary_taxonomy_map:
+                taxonomy[gene.id] = boundary_taxonomy_map[gene.id]
+        yield _ScaffoldPlanningTask(
+            scaffold=scaffold,
+            raw_genome_path=str(raw_genome_path),
+            boundaries=tuple((index, boundaries[index], allowed_intervals[index]) for index in indices),
+            validated_markers=markers_by_scaffold.get(scaffold, []),
+            boundary_diamond_query=GenomeDiamondQuery(seed_gene_mappings=mappings_by_scaffold.get(scaffold, {})),
+            boundary_taxonomy_map=taxonomy,
+            proteome_index={} if scaffold_genes is None else {scaffold: scaffold_genes},
+            extension_bp=extension_bp,
+        )
+
+
+def _planning_worker(connection, planner, taxonomy_lookup, host_lineage):
+    """Own one process group and receive one scaffold at a time."""
+    from virosync.pipeline.phase2 import terminal_repeat_search
+
+    os.setsid()
+    terminal_repeat_search._OWNED_WORKER_GROUP = True
+    set_taxonomy_lookup(taxonomy_lookup)
+    if host_lineage is None:
+        os.environ.pop("VIROSYNC_HOST_LINEAGE", None)
+    else:
+        os.environ["VIROSYNC_HOST_LINEAGE"] = host_lineage
+    try:
+        connection.send(("ready", None))
+        while (task := connection.recv()) is not None:
+            try:
+                connection.send(("result", planner(task)))
+            except BaseException as error:
+                connection.send(("error", f"{type(error).__name__}: {error}"))
+                return
+    finally:
+        connection.close()
+
+
+def _stop_planning_workers(processes):
+    """Terminate owned groups even if their worker leader has already died."""
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            if process.is_alive():
+                process.terminate()
+    deadline = time.monotonic() + 0.5
+    for process in processes:
+        process.join(max(0, deadline - time.monotonic()))
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.is_alive():
+            process.kill()
+        process.join()
+        process.close()
+
+
+def _plan_scaffolds_in_workers(tasks, n_boundaries: int, workers: int):
+    """Dispatch bounded payloads and fail promptly on any worker error or death."""
+    context = multiprocessing.get_context("spawn")
+    taxonomy_lookup = get_taxonomy_lookup()
+    host_lineage = os.environ.get("VIROSYNC_HOST_LINEAGE")
+    plans = [[] for _ in range(n_boundaries)]
+    pending = iter(tasks)
+    processes = []
+    connections = []
+    active = {}
+    try:
+        for _ in range(workers):
+            parent, child = context.Pipe()
+            process = context.Process(
+                target=_planning_worker,
+                args=(child, _plan_scaffold_task, taxonomy_lookup, host_lineage),
+            )
+            process.start()
+            child.close()
+            processes.append(process)
+            connections.append(parent)
+            active[parent] = (process, time.monotonic())
+        while active:
+            ready = wait([*active, *(process.sentinel for process, _ in active.values())], timeout=0.1)
+            for connection in list(active):
+                process, started = active[connection]
+                if connection in ready:
+                    try:
+                        kind, value = connection.recv()
+                    except EOFError as error:
+                        raise RuntimeError(f"terminal-repeat worker {process.pid} exited without a result") from error
+                    if kind == "error":
+                        raise RuntimeError(f"terminal-repeat worker failed: {value}")
+                    if kind == "result":
+                        for index, plan in value:
+                            plans[index] = plan
+                    task = next(pending, None)
+                    connection.send(task)
+                    if task is None:
+                        del active[connection]
+                    else:
+                        active[connection] = (process, None)
+                elif process.sentinel in ready:
+                    raise RuntimeError(f"terminal-repeat worker {process.pid} died")
+                elif started is not None and time.monotonic() - started > 60:
+                    raise RuntimeError(f"terminal-repeat worker {process.pid} startup deadline exceeded")
+        return plans
+    finally:
+        _stop_planning_workers(processes)
+        for connection in connections:
+            connection.close()
+
+
+def _plan_scaffold_task(task: _ScaffoldPlanningTask):
+    """Read one scaffold once and release its index after planning."""
+    scaffold_index = SeqIO.index(task.raw_genome_path, "fasta")
+    try:
+        sequence = str(scaffold_index[task.scaffold].seq).upper()
+        return [
+            (
+                index,
+                _plan_boundary_partition(
+                    boundary,
+                    allowed_interval=allowed_interval,
+                    sequence=sequence,
+                    validated_markers=task.validated_markers,
+                    boundary_diamond_query=task.boundary_diamond_query,
+                    boundary_taxonomy_map=task.boundary_taxonomy_map,
+                    proteome_index=task.proteome_index,
+                    extension_bp=task.extension_bp,
+                ),
+            )
+            for index, boundary, allowed_interval in task.boundaries
+        ]
     finally:
         scaffold_index.close()

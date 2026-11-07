@@ -188,7 +188,7 @@ increment nor reset that count. Qualifying viral support, including deep-hit
 vetoes and confirmed markers, resets it. Existing non-host positive support,
 including foreign and ML evidence, also resets the count; joint assessment uses
 the support available there.
-Searched no-hit genes without marker or ML support are skipped in the five-gene lookahead; they never extend the hull
+Searched no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped in the five-gene lookahead; they never extend the hull
 on their own. Any nonempty hit namespace with host share below 0.10 still supplies foreign support, including
 bacterial hits; this separate positive-support rule is unchanged.
 
@@ -604,11 +604,16 @@ The full-proteome prototype remains an unchunked search. The watchdog waits for
 child exit between activity checks, so a completed search need not wait for the
 next poll.
 
-Terminal-repeat planning runs serially in original boundary order before conflict
-resolution. Each plan uses the current scaffold sequence, seed, marker, taxonomy
-and proteome evidence. Planning errors fail the step. The GenomeTools command
-has no separate per-command timeout; run-level service limits remain responsible
-for terminating a stalled native process.
+Terminal-repeat planning groups work by scaffold within the effective CPU budget.
+Spawned workers receive explicit taxonomy and host-lineage context, hold one
+scaffold payload at a time, and reuse its sequence for that scaffold's plans.
+The parent restores original boundary order before conflict resolution. One
+worker uses the serial reference path. Errors abort the pool and terminate its
+owned process groups, including GenomeTools descendants. Each GenomeTools
+command has a 30-minute deadline; quiet output alone does not signal a stall.
+Temporary-directory settings are never changed globally. Worker-count parity
+requires validation on the same source and inputs; speed alone is not evidence
+of equivalent scientific output.
 
 The Phase 2 taxonomy map and final per-EVE and combined gene taxonomy tables
 retain the assessment flag, both maxima and their target IDs. Missing scores
@@ -791,7 +796,7 @@ host-signature model as a positive feature. Ambiguous genes, genes without
 hits and isolated model-matched host genes do not extend the boundary on their
 own. Measured unsupported genes remain pending until connected positive support
 occurs within the five-gene lookahead and searched nucleotide envelope. Searched
-no-hit genes without marker or ML support are skipped, rather than consuming
+no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped, rather than consuming
 that lookahead; missing taxonomy still limits growth as unavailable context.
 Five unsupported genes end the support search. If the envelope ends after only
 one to four unsupported genes, the reported limit is the search envelope.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from itertools import product
 
 import pytest
@@ -103,3 +105,12 @@ def test_missing_genometools_raises_a_clear_error(monkeypatch: pytest.MonkeyPatc
 def test_genometools_failure_reports_its_stderr() -> None:
     with pytest.raises(RuntimeError, match="gt suffixerator failed with exit status 1: .*sequence must not be empty"):
         find_seed_positions("", 7, ("ACGTACG",))
+
+
+def test_genometools_command_deadline(monkeypatch) -> None:
+    """A quiet stuck command fails within its explicit deadline."""
+    monkeypatch.setattr(terminal_repeat_search, "GENOMETOOLS_TIMEOUT_SECONDS", 0.1, raising=False)
+    with pytest.raises(RuntimeError, match="deadline"):
+        terminal_repeat_search._run_genometools(
+            [sys.executable, "-c", "import time; time.sleep(1)"], stdout=subprocess.PIPE
+        )

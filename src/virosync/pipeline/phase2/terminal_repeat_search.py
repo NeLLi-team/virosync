@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -11,6 +13,9 @@ from pathlib import Path
 __all__ = ["find_seed_positions", "resolve_genometools_executable"]
 
 _DNA_BASES = frozenset("ACGT")
+GENOMETOOLS_TIMEOUT_SECONDS = 1800
+# Set only inside an isolated spawned planning worker, never in the parent.
+_OWNED_WORKER_GROUP = False
 
 
 def resolve_genometools_executable() -> Path:
@@ -118,12 +123,31 @@ def _run_repfind(
 
 
 def _run_genometools(command: list[str], *, stdout: object) -> None:
-    """Run one GenomeTools command and surface its stderr when it fails."""
-    try:
-        subprocess.run(command, check=True, stdout=stdout, stderr=subprocess.PIPE, text=True)
-    except subprocess.CalledProcessError as error:
-        detail = (error.stderr or "").strip()
-        raise RuntimeError(f"gt {command[1]} failed with exit status {error.returncode}: {detail}") from error
+    """Bound each command; keep worker descendants in the parent's owned group."""
+    with subprocess.Popen(
+        command,
+        stdout=stdout,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=not _OWNED_WORKER_GROUP,
+    ) as process:
+        try:
+            _, stderr = process.communicate(timeout=GENOMETOOLS_TIMEOUT_SECONDS)
+        except BaseException as error:
+            if _OWNED_WORKER_GROUP:
+                # The pool parent kills the complete worker group on this error.
+                process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait()
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise RuntimeError(f"gt {command[1]} exceeded {GENOMETOOLS_TIMEOUT_SECONDS}s deadline") from error
+            raise
+        if process.returncode:
+            raise RuntimeError(f"gt {command[1]} failed with exit status {process.returncode}: {stderr.strip()}")
 
 
 def _read_positions(

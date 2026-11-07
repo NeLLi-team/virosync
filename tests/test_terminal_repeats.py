@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import pickle
 import random
+import subprocess
+import sys
+import tempfile
 import threading
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +36,59 @@ from virosync.pipeline.phase2.terminal_repeats import (
 )
 
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
+
+
+def _runtime_fixture(task):
+    """Exercise real spawned-worker lifecycle without biological work."""
+    kind, path = task
+    if kind == "error":
+        raise RuntimeError("fixture planning failed")
+    if kind == "stall":
+        time.sleep(10)
+        return []
+    if kind == "kill":
+        from virosync.pipeline.phase2.terminal_repeat_search import _run_genometools
+
+        code = (
+            "import os,pathlib,signal,time; pathlib.Path("
+            + repr(path)
+            + ").write_text(str(os.getpid())); os.kill(os.getppid(),signal.SIGKILL); time.sleep(60)"
+        )
+        _run_genometools([sys.executable, "-c", code], stdout=subprocess.PIPE)
+    from virosync.pipeline.host_signatures import get_taxonomy_lookup
+
+    return [(0, [get_taxonomy_lookup(), os.environ.get("VIROSYNC_HOST_LINEAGE")])]
+
+
+def test_pool_failure_cancels_stalled_peer(monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="fixture planning failed"):
+        terminal_repeats._plan_scaffolds_in_workers([("stall", ""), ("error", "")], 0, 2)
+    assert time.monotonic() - started < 8
+
+
+def test_pool_worker_death_kills_genometools_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
+    child_file = tmp_path / "child.pid"
+    with pytest.raises(RuntimeError, match="worker"):
+        terminal_repeats._plan_scaffolds_in_workers([("kill", str(child_file))], 0, 1)
+    status = Path(f"/proc/{int(child_file.read_text())}/status")
+    deadline = time.monotonic() + 1
+    while status.exists() and "State:\tZ" not in status.read_text() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not status.exists() or "State:\tZ" in status.read_text()
+
+
+def test_pool_receives_explicit_taxonomy_and_host_context(monkeypatch):
+    from virosync.pipeline import host_signatures
+
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
+    monkeypatch.setattr(host_signatures, "_TAXONOMY_LOOKUP", {"fixture": "taxon"})
+    monkeypatch.setenv("VIROSYNC_HOST_LINEAGE", "fixture lineage")
+    assert terminal_repeats._plan_scaffolds_in_workers([("context", "")], 1, 1) == [
+        [{"fixture": "taxon"}, "fixture lineage"]
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1554,7 +1612,7 @@ class _Fixture:
     taxonomy_map: dict[str, GeneTaxonomy]
     proteome_index: dict[str, list[pORF]]
 
-    def refine(self) -> list[RefinedBoundary]:
+    def refine(self, workers: int = 1) -> list[RefinedBoundary]:
         return refine_boundaries_with_terminal_repeats(
             self.boundaries,
             allowed_intervals=self.allowed_intervals,
@@ -1564,6 +1622,7 @@ class _Fixture:
             boundary_taxonomy_map=self.taxonomy_map,
             proteome_index=self.proteome_index,
             extension_bp=500,
+            workers=workers,
         )
 
 
@@ -1730,7 +1789,10 @@ def test_serial_planning_raises_for_absent_scaffold(fixture: _Fixture) -> None:
         fixture.refine()
 
 
-def test_concurrent_genomes_each_get_their_own_serial_result(tmp_path: Path) -> None:
+def test_concurrent_pools_preserve_serial_results_and_deep_tempdir(tmp_path: Path, monkeypatch) -> None:
+    deep_tempdir = tmp_path / ("deep-" * 25)
+    deep_tempdir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(deep_tempdir))
     (tmp_path / "first").mkdir()
     (tmp_path / "second").mkdir()
     first = _build_fixture(tmp_path / "first")
@@ -1744,7 +1806,7 @@ def test_concurrent_genomes_each_get_their_own_serial_result(tmp_path: Path) -> 
     def run(name: str, genome: _Fixture) -> None:
         try:
             barrier.wait()
-            parallel[name] = genome.refine()
+            parallel[name] = genome.refine(workers=2)
         except BaseException as error:  # noqa: BLE001  # surface any thread failure in the main thread
             errors.append(error)
 
@@ -1757,6 +1819,7 @@ def test_concurrent_genomes_each_get_their_own_serial_result(tmp_path: Path) -> 
     assert not errors
     assert parallel == serial
     assert serial["first"] != serial["second"]
+    assert tempfile.gettempdir() == str(deep_tempdir)
 
 
 def test_planning_exception_propagates_to_the_caller(fixture: _Fixture) -> None:
@@ -1901,3 +1964,9 @@ def test_serial_taxonomy_decides_candidates_and_residuals(tmp_path: Path) -> Non
         # although the entry itself is viral.
         "orphan": [(0, 1200, "ambiguous")],
     }
+
+
+def test_spawned_scaffold_plans_match_serial_taxonomy_fixture(tmp_path: Path) -> None:
+    """Real repeat planning preserves every boundary field and input order."""
+    fixture = _taxonomy_fixture(tmp_path)
+    assert fixture.refine(workers=2) == fixture.refine(workers=1)
