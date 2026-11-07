@@ -264,9 +264,9 @@ def _extend(taxonomy: dict[str, GeneTaxonomy], genes: list[pORF], monkeypatch) -
 
 
 @pytest.mark.parametrize(
-    ("depth", "end", "reason"), [(10, 2200, "host_stop"), (50, 2200, "host_stop")], ids=["depth_10", "depth_50"]
+    ("depth", "end", "reason"), [(10, 2200, "host_stop"), (50, 3100, "search_envelope")], ids=["depth_10", "depth_50"]
 )
-def test_three_cellular_dominant_hosts_stop_even_with_weak_deep_viral_hits(
+def test_deep_viral_veto_prevents_cellular_dominant_host_stop_within_configured_depth(
     monkeypatch, depth: int, end: int, reason: str
 ) -> None:
     genes = [

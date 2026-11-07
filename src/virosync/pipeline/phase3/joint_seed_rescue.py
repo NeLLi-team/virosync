@@ -55,11 +55,6 @@ def eligible_joint_pairs(
         return []
     by_id = {result.eve_id: result for result in results}
     ordered = sorted(boundaries, key=lambda b: (b.scaffold, b.start, b.end, b.seed_id))
-    protected_cores: dict[str, set[tuple[int, int]]] = {}
-    for boundary in boundaries:
-        protected_cores.setdefault(boundary.scaffold, set()).update(
-            (core.start, core.end) for core in boundary.confirmed_seeds
-        )
     pairs = []
     for left, right in zip(ordered, ordered[1:]):
         children = (left, right)
@@ -112,7 +107,6 @@ def eligible_joint_pairs(
             host_model,
             host_threshold,
             viral_marker_genes,
-            protected_seed_intervals=tuple(sorted(protected_cores[left.scaffold])),
         ):
             continue
         pairs.append(children)
@@ -430,8 +424,6 @@ def _gap_has_host_barrier(
     model: HostSignatureModel,
     threshold: float,
     viral_marker_genes: frozenset[str],
-    *,
-    protected_seed_intervals: tuple[tuple[int, int], ...] = (),
 ) -> bool:
     left, right = children
     run = 0
@@ -443,7 +435,6 @@ def _gap_has_host_barrier(
             record,
             host_share_ok=host_lineage_share(record, model) >= threshold,
             marker=gene.id in viral_marker_genes,
-            protected=any(gene.start < end and gene.end > start for start, end in protected_seed_intervals),
         )
         run = run + 1 if host else 0
         if run == 3:

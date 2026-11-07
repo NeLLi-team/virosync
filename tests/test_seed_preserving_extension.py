@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
+from virosync.pipeline.phase2.boundary_diamond import has_viral_hit_veto
 from virosync.pipeline.phase2.seed_extension import extend_confirmed_seed
 
 
@@ -88,7 +89,7 @@ def test_three_host_genes_stop_remote_viral_support():
     assert boundary.right_stop == 2300
 
 
-def test_unassessed_deep_viral_hits_do_not_veto_host_share_stop():
+def test_deep_viral_hits_veto_host_stop_without_competition_assessment():
     boundary = grow(
         [
             gene("v", 2100, 2200, viral=True),
@@ -98,11 +99,11 @@ def test_unassessed_deep_viral_hits_do_not_veto_host_share_stop():
             gene("remote", 2900, 3100, viral=True),
         ]
     )
-    assert boundary.end == 2200
-    assert boundary.right_stop == 2300
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
 
 
-def test_one_deep_viral_gene_does_not_break_host_run():
+def test_one_deep_viral_gene_breaks_host_run():
     boundary = grow(
         [
             gene("v", 2100, 2200, viral=True),
@@ -112,8 +113,8 @@ def test_one_deep_viral_gene_does_not_break_host_run():
             gene("remote", 2900, 3100, viral=True),
         ]
     )
-    assert boundary.end == 2200
-    assert boundary.right_stop == 2300
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
 
 
 def test_three_host_like_genes_that_are_validated_viral_markers_do_not_stop_extension():
@@ -195,7 +196,7 @@ def test_support_gap_does_not_admit_remote_positive():
     assert boundary.right_stop_reason == "support_gap"
 
 
-def test_missing_taxonomy_stops_growth_but_searched_no_hit_is_skipped():
+def test_missing_taxonomy_stops_growth_but_one_searched_no_hit_can_be_bridged():
     seed = MergedSeed(
         "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
     )
@@ -208,6 +209,22 @@ def test_missing_taxonomy_stops_growth_but_searched_no_hit_is_skipped():
     assert missing.end == 2000
     assert missing.right_stop_reason == "taxonomy_unavailable"
     assert searched.end == 2400
+
+    unknown.start, unknown.end = 2500, 2600
+    hosts = [gene(f"h{i}", 2100 + i * 200, 2200 + i * 200, host=True) for i in (0, 1, 3, 4, 5)]
+    with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", side_effect=lambda record, model: 1.0):
+        interrupted = extend_confirmed_seed(
+            seed,
+            [*hosts, unknown],
+            {item.id: item for item in hosts},
+            (0, 10000),
+            SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0}),
+            0.35,
+        )
+    assert interrupted.end == 2000
+    assert interrupted.right_stop == 2700
+    assert interrupted.right_stop_reason == "taxonomy_unavailable"
+    assert interrupted.confirmed_seeds == seed.confirmed_seeds
 
 
 def test_repeat_partition_cannot_cut_core_or_create_unseeded_residual():
@@ -601,3 +618,59 @@ def test_deep_only_hit_is_not_positive_extension_support():
     boundary = grow([gene("deep", 2100, 2200, host=True, deep_viral=True)])
     assert boundary.end == 2000
     assert boundary.right_stop is None
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+@pytest.mark.parametrize("middle_kind", ["neutral", "nohit", "deep_viral"])
+@pytest.mark.parametrize("tail_hosts", [2, 3])
+def test_host_runs_restart_after_neutral_genes_in_extension_and_joint(direction, middle_kind, tail_hosts):
+    from virosync.pipeline.phase3.joint_seed_rescue import _gap_has_host_barrier
+
+    genes = [gene(f"h{i}", 2100 + i * 200, 2200 + i * 200, host=True) for i in range(3 + tail_hosts)]
+    middle = genes[2]
+    middle.host = middle_kind == "deep_viral"
+    middle.viral_hit_within_depth = middle_kind == "deep_viral"
+    if middle_kind == "nohit":
+        middle.top10_prefixes = []
+        middle.top10_pidents = []
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    start, end = (1000, 2000) if direction == 1 else (8000, 9000)
+    boundary = grow(genes, start=start, end=end)
+    stop = boundary.right_stop if direction == 1 else boundary.left_stop
+    expected_stop = (2700 if direction == 1 else 7300) if tail_hosts == 3 else None
+    assert stop == expected_stop
+    assert (boundary.start, boundary.end) == (start, end)
+    assert boundary.confirmed_seeds == (ConfirmedSeed("original", "s", start, end),)
+    children = (SimpleNamespace(end=0), SimpleNamespace(start=10000))
+    with patch(
+        "virosync.pipeline.phase3.joint_seed_rescue.host_lineage_share",
+        side_effect=lambda record, model: 1.0 if record.host else 0.2,
+    ):
+        blocked = _gap_has_host_barrier(children, genes, {g.id: g for g in genes}, None, 0.35, frozenset())
+    assert blocked is (tail_hosts == 3)
+
+
+@pytest.mark.parametrize("pident,expected_veto", [(24.9, False), (25.0, True)])
+def test_host_like_top10_viral_hit_vetoes_without_positive_extension(pident, expected_veto):
+    hit = gene("mixed", 2100, 2200, host=True, viral=True)
+    hit.top10_prefixes = ["EUK__"] * 9 + ["NCLDV__"]
+    hit.top10_pidents = [90.0] * 9 + [pident]
+    hit.viral_hit_within_depth = False
+    assert has_viral_hit_veto(hit) is expected_veto
+    boundary = grow([hit])
+    assert boundary.end == 2000
+    assert boundary.right_stop is None
+
+
+def test_five_searched_no_hit_genes_block_remote_support_without_host_stop():
+    genes = [gene(f"n{i}", 2100 + i * 200, 2200 + i * 200) for i in range(5)]
+    for item in genes:
+        item.top10_prefixes = []
+        item.top10_pidents = []
+    genes.append(gene("remote", 3100, 3200, viral=True))
+    boundary = grow(genes)
+    assert boundary.end == 2000
+    assert boundary.right_stop is None
+    assert boundary.right_stop_reason == "support_gap"

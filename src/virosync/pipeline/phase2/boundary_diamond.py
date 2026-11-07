@@ -112,9 +112,9 @@ def has_viral_hit_veto(taxonomy: GeneTaxonomy) -> bool:
 
     The hit can sit in the top 10 or anywhere within the first ``viral_hit_depth``
     hits of the gene search. A separate same-gene Phase1 validated viral marker
-    also vetoes host status without changing top10 taxonomy. The experimental
-    extension barrier can override weak DIAMOND support using measured scores;
-    it preserves the independent Phase 1 marker veto.
+    also vetoes host status without changing top10 taxonomy. Cellular score
+    dominance does not defeat this veto. Deep-only hits do not supply positive
+    extension support.
     """
     return (
         taxonomy.phase1_validated_viral_marker

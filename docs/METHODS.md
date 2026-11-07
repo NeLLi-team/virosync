@@ -182,33 +182,30 @@ and the native Python entry points. Explicit configuration values take precedenc
 The Phase 1 seed search padding remains five genes per side, with a minimum
 of ten genes; the HHG anchor-merging distance is a separate setting.
 
-This candidate retains the received V9g detector. Its extension walk uses host
-share, not viral-hit veto or score competition, to count host genes. Neutral
-genes do not reset that count; support does. Searched no-hit genes are skipped.
-Any nonempty hit namespace with host share below 0.10 supplies foreign support,
-including bacterial hits. These are intentional V9g rules.
+The extension walk and joint rescue use the documented three-consecutive-host
+rule: qualifying viral evidence vetoes host status, and every neutral or no-hit
+gene resets the host run. No-hit genes remain unsupported observations in the
+five-gene lookahead; they never extend the hull on their own. Any nonempty hit
+namespace with host share below 0.10 still supplies foreign support, including
+bacterial hits; this separate positive-support rule is unchanged.
 
 Every candidate retains its full assigned seed hull and identities. A host stop
 may fall inside another candidate's seed interval; that other candidate retains
-its own seeds independently. The extension walk ignores the legacy neighboring
-`protected_seed_intervals` argument. Joint rescue retains the older host predicate
-and strict consecutive-gene counter. Its earlier `_crosses_stop` check still
-blocks joining across any recorded child stop. Predicate disagreement is not
-evidence that rescue can cross such a recorded stop.
+its own seeds independently. Joint rescue uses the same host predicate and
+strict consecutive-gene counter as extension. Its `_crosses_stop` check also
+blocks joining across any recorded child stop.
 
 The GC heuristic has no minimum informative-base fraction. One G and 1,999 Ns
 can therefore give GC 1.0 for a 2 kb edge window. Sparse reference windows can
 also affect the comparison; fully ambiguous references disable the trim. GC
 changes do not update the existing stop-reason fields, and later TIR refinement
-can supersede the heuristic within the searched envelope. A GC information floor
-and shared rescue predicate remain separate experimental changes.
+can supersede the heuristic within the searched envelope. A GC information floor remains an experimental change.
 
 V9g also admits mixed NCLDV/MIRUS rescue candidates under its hallmark-composition
 rule. Repeated partial hallmark sets alone do not block a pair. One qualifying
 scored core hallmark passes the NCLDV/MIRUS output gate without a length floor;
 retained Phase 1 core-hallmark genes count as support without a DIAMOND comparison.
-These V9g rules supersede the older dominance-experiment and gate descriptions
-below. Positive-control and full benchmark validation remain necessary.
+Positive-control and full benchmark validation remain necessary.
 
 The repeat-candidate table is required even when it has only a header. If both
 root and Phase-3 copies are recorded, they must agree. Missing or altered pairs,
@@ -569,7 +566,7 @@ assumed. This matters when an element integrated in
 an ancestor of a host genus: related species can carry host-labelled copies
 that fill the top 10 and push viral references down.
 
-The private host-stop experiment also records the best qualifying viral and
+The taxonomy audit records the best qualifying viral and
 cellular bitscores and their target IDs across the positive and deeper retained
 hits. Viral hits need 25% identity; cellular competitors are EUK, BAC and
 ARC. An assessed search with no such hit has a null maximum. Unavailable evidence
@@ -602,14 +599,11 @@ retain the assessment flag, both maxima and their target IDs. Missing scores
 use `.` in TSV; measured zero stays zero. Evidence profiles retain the region's
 stop coordinates and reasons without duplicating the gene tables.
 
-The experiment changes only the three-gene host barrier. A host-signature gene
-can join that barrier when its best cellular score strictly exceeds its best
-viral score, despite weaker viral hits within the configured depth. Ties retain
-viral protection. Existing stops remain in force when competition is unavailable.
-Validated Phase 1 marker genes retain their veto, and the added dominance rule
-does not apply to genes overlapping any independently confirmed seed interval.
-One or two isolated dominated genes do not acquire a new stopping rule. Joint
-assessment uses the same predicate, and recorded stops still constrain repeats.
+The competition scores are diagnostic only. A stronger cellular hit does not
+defeat a qualifying viral veto. Extension and joint assessment require three
+consecutive host-signature matches without qualifying viral support; neutral
+and no-hit genes interrupt the run. Recorded stops still constrain repeats,
+and every assigned confirmed seed remains protected.
 
 The filter rewrites the DIAMOND table in place with the same columns. The
 all-against-all search among EVE core proteins in the Syntviz figure is not a
@@ -771,8 +765,10 @@ cap this outward walk. CRESS seeds and seeds without a searched mapping use
 their original container as the extension envelope.
 
 One controller starts at the seed and walks flanking genes in genomic order,
-independently on each side. Identity-qualified viral hits provide positive
-support. Optional taxonomy ML supplies per-gene support without using the
+independently on each side. Top-10 identity-qualified viral hits and marker-set
+membership provide positive support only below the configured host-share threshold.
+Independently validated Phase 1 viral markers provide positive support regardless
+of host share. Optional taxonomy ML supplies per-gene support without using the
 host-signature model as a positive feature. Ambiguous genes, genes without
 hits and isolated model-matched host genes do not extend the boundary on their
 own. They remain pending until connected positive support occurs within the
@@ -787,10 +783,11 @@ extension before the first gene in the run. A gene has qualifying viral support
 when a viral hit with at least 25% identity sits in its top 10 or anywhere within
 the first `phase2.viral_hit_depth` hits, or when Phase 1 validated its protein as a
 viral marker (status `validated`, from a model that is not a host kinase, COG or
-BUSCO model). The private dominance experiment described under reference hit
-selection additionally permits a stop when measured cellular hits strictly
-outscore qualifying viral hits, outside all confirmed cores. It keeps the
-Phase 1 marker veto and all existing stops when competition is unavailable.
+BUSCO model). A deeper viral hit vetoes host status but does not itself supply
+positive extension support. Top-10 identity-qualified hits provide positive support
+only below the host-share threshold; independently validated Phase 1 viral markers
+provide it regardless of host share. Every neutral or searched no-hit gene interrupts the host run.
+Cellular-versus-viral score competition does not override this veto.
 A single eukaryotic best hit does not establish this stop. A missing model, a model without a host lineage or
 missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
@@ -1455,11 +1452,11 @@ run; old completion fingerprints do not authorize reuse.
 
 The staged depth50 candidate keeps host weighting and positive Phase3 viral
 fractions based on the existing top10 evidence. A deeper-only qualifying hit
-vetoes the EUK penalty and normally vetoes host stopping, but is not new positive
-extension support. The private three-gene dominance experiment can override the
-DIAMOND host-stop veto using measured scores; it does not change the EUK penalty
-or gene-map category. Top10 viral evidence, existing ML support and same-gene Phase1
-validated viral markers can support extension. The host signature remains
+vetoes the EUK penalty and host stopping, but is not new positive extension
+support. Measured cellular dominance does not override this veto. Top10 viral
+evidence supplies positive extension support only below the host-share threshold;
+existing ML support and same-gene Phase1 validated viral markers retain their
+independent positive-support rules. The host signature remains
 trained from marker housekeeping evidence.
 
 `phase1_validated_viral_marker` is a separate boolean in searched-gene taxonomy

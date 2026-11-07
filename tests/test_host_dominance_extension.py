@@ -1,4 +1,4 @@
-"""Three-host dominance preserves positive support, confirmed cores, and audit evidence."""
+"""Viral vetoes, positive support, confirmed cores and diagnostic competition evidence."""
 
 from dataclasses import replace
 from types import SimpleNamespace
@@ -28,7 +28,7 @@ def classified(name, start, end, *, viral=80.0, shallow_viral=False, nohit=False
     cell = DiamondHit(name, "EUK__host|p", 1e-20, 100.0, 70.0, 90.0)
     virus = DiamondHit(name, "NCLDV__virus|p", 1e-20, viral, 30.0, 90.0)
     cells = [cell] if shallow_viral else [replace(cell, target=f"EUK__host{i}|p") for i in range(10)]
-    hits = [] if nohit else sorted([virus, *cells], key=lambda hit: -hit.bits)
+    hits = [] if nohit else sorted([*([virus] if viral is not None else []), *cells], key=lambda hit: -hit.bits)
     tax = classify_cached_diamond_query(
         GenomeDiamondQuery(all_porf_ids=[name]),
         {name: hits},
@@ -81,19 +81,19 @@ def grow(
 
 
 @pytest.mark.parametrize("direction", [1, -1])
-def test_three_cellular_dominant_weak_viral_genes_stop_both_directions(monkeypatch, direction):
+def test_qualifying_viral_hits_veto_cellular_dominance_in_both_directions(monkeypatch, direction):
     boundary, _, _ = grow(monkeypatch, direction=direction)
-    assert (boundary.start, boundary.end) == ((1000, 2200) if direction == 1 else (7800, 9000))
-    assert (boundary.right_stop if direction == 1 else boundary.left_stop) == (2300 if direction == 1 else 7700)
-    assert (boundary.right_stop_reason if direction == 1 else boundary.left_stop_reason) == "host_stop"
+    assert (boundary.start, boundary.end) == ((1000, 3100) if direction == 1 else (6900, 9000))
+    assert (boundary.right_stop if direction == 1 else boundary.left_stop) is None
+    assert (boundary.right_stop_reason if direction == 1 else boundary.left_stop_reason) != "host_stop"
     assert boundary.confirmed_seeds[0].seed_id == "core"
 
 
 @pytest.mark.parametrize("viral,model", [(100.0, True), (150.0, True), (80.0, False)])
-def test_host_share_stop_ignores_competition_but_requires_model(monkeypatch, viral, model):
+def test_viral_veto_does_not_depend_on_competition_or_host_model(monkeypatch, viral, model):
     boundary, _, _ = grow(monkeypatch, viral=viral, model=model)
-    assert boundary.end == (2200 if model else 3100)
-    assert boundary.right_stop == (2300 if model else None)
+    assert boundary.end == 3100
+    assert boundary.right_stop is None
 
 
 @pytest.mark.parametrize("middle", ["nohit", "missing"])
@@ -107,11 +107,11 @@ def test_two_hosts_do_not_stop_and_missing_taxonomy_limits_growth(monkeypatch, m
         assert boundary.end == 3100
 
 
-def test_a4_disables_host_stop_but_does_not_make_host_like_viral_hits_support(monkeypatch):
+def test_a4_and_production_preserve_host_like_positive_support_gate(monkeypatch):
     boundary, _, _ = grow(monkeypatch, disabled=True)
     assert boundary.end == 3100
     assert boundary.right_stop is None
-    # A4 disables stopping; host-like hits still do not supply support.
+    # Host-like top-10 viral evidence vetoes stopping but supplies no positive support.
     gene, tax = classified("hweak", 2100, 2200, viral=80.0, shallow_viral=True)
     seed = MergedSeed("ctg", 1000, 2000, seed_id="core", confirmed_seeds=(ConfirmedSeed("core", "ctg", 1000, 2000),))
     model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
@@ -144,7 +144,7 @@ def test_validated_phase1_marker_retains_its_independent_veto(monkeypatch):
 
 
 def test_neighboring_stop_does_not_remove_an_independently_assigned_core(monkeypatch):
-    boundary, genes, taxonomy = grow(monkeypatch)
+    boundary, genes, taxonomy = grow(monkeypatch, viral=None)
     own = ConfirmedSeed("other", "ctg", 2250, 2850)
     seed = MergedSeed("ctg", own.start, own.end, seed_id="other", confirmed_seeds=(own,))
     other = extend_confirmed_seed(seed, genes, taxonomy, (0, 10000), None, 0.35)
@@ -191,8 +191,8 @@ def test_inside_host_genes_and_separate_confirmed_seed_remain(monkeypatch):
     assert {core.seed_id for item in merged for core in item.confirmed_seeds} == {"core", "other"}
 
 
-@pytest.mark.parametrize("viral,expected", [(80.0, True), (100.0, False), (150.0, False)])
-def test_joint_gap_retains_legacy_competition_predicate(monkeypatch, viral, expected):
+@pytest.mark.parametrize("viral,expected", [(None, True), (80.0, False), (100.0, False), (150.0, False)])
+def test_joint_gap_uses_viral_veto_regardless_of_competition(monkeypatch, viral, expected):
     from virosync.pipeline.phase3.joint_seed_rescue import _gap_has_host_barrier
 
     monkeypatch.setattr("virosync.pipeline.phase3.joint_seed_rescue.host_lineage_share", lambda tax, model: 0.6)
@@ -261,17 +261,17 @@ def test_assessed_nohit_and_unavailable_roundtrip_as_distinct_states():
     assert nohit != unavailable
 
 
-def test_top10_positive_host_run_stops_only_when_three_gene_barrier_completes(monkeypatch):
+def test_three_top10_viral_supported_genes_do_not_form_a_host_barrier(monkeypatch):
     boundary, _, taxonomy = grow(monkeypatch, shallow_hosts=True)
     for name in ("h1", "h2", "h3"):
         assert taxonomy[name].has_viral
         assert taxonomy[name].host_competition_cellular_bits > taxonomy[name].host_competition_viral_bits
-    assert boundary.right_stop_reason == "host_stop"
-    assert boundary.right_stop == 2300
-    assert boundary.end == 2200
+    assert boundary.right_stop_reason != "host_stop"
+    assert boundary.right_stop is None
+    assert boundary.end == 3100
     without_stop, _, _ = grow(monkeypatch, shallow_hosts=True, disabled=True)
     assert without_stop.end == 3100
-    # The same positive genes extend when no third host completes the barrier.
+    # Independent Phase1 marker support also retains its veto.
     interrupted, _, _ = grow(monkeypatch, shallow_hosts=True, marker=True)
     assert interrupted.right_stop is None
     assert interrupted.end == 3100

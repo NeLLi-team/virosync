@@ -542,7 +542,7 @@ def test_the_host_stop_is_available_only_with_a_host_lineage(lineage: str, avail
     [
         ("EUK__SELF", None, 2000, 2100),
         ("EUK__FAR", None, 2800, None),
-        ("EUK__SELF", 25.0, 2000, 2100),
+        ("EUK__SELF", 25.0, 2800, None),
         ("EUK__SELF", 24.9, 2000, 2100),
     ],
 )
