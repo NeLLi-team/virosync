@@ -11,6 +11,7 @@ from virosync.output_contract import resolve_effective_eve_class
 from virosync.pipeline.eve_type_rules import composition, may_merge
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
 from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
@@ -282,6 +283,7 @@ def assess_joint_repeat_scan(
             for m in markers
             if m.scaffold == child.scaffold
             and m.validation_status in {"validated", "validated_novel"}
+            and is_ordinary_marker_evidence(m)
             and child.start <= m.start < m.end <= child.end
         ]
         if not retained:

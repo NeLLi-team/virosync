@@ -1625,3 +1625,32 @@ def test_native_host_competition_reaches_both_final_gene_tables(
         assert len(rows) == 1
         assert {name: rows[0][name] for name in expected} == expected
     assert record == original
+
+
+def test_prediction_marker_display_keeps_arbitration_selected_model(tmp_path, monkeypatch):
+    hits = tmp_path / "validated_marker_hits.tsv"
+    hits.write_text(
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\tvalidation_status\tpfam_override\n"
+        "s_1|aa1-20\ts\t100\t190\t+\tGVOGm0003\t200\tvalidated\treassigned\n"
+        "s_1|aa1-20\ts\t100\t190\t+\tGVOGm0054\t50\tvalidated\t\n"
+    )
+    generator = OutputGenerator(tmp_path)
+    monkeypatch.setattr(generator, "_validated_marker_hit_paths", lambda: [hits])
+    assert generator._marker_names_for_region("s", 100, 190) == ["GVOGm0054"]
+
+
+def test_reported_capsid_is_not_ordinary_pattern_credit_but_raw_display_survives(tmp_path, monkeypatch):
+    hits = tmp_path / "validated_marker_hits.tsv"
+    hits.write_text(
+        "query_porf\tscaffold\tstart\tend\tstrand\thmm_target\thmm_score\tvalidation_status\tpfam_override\n"
+        "s_1|aa1-20\ts\t100\t190\t+\tGVOGm0003\t200\tvalidated\treassigned\n"
+        "s_1|aa1-20\ts\t100\t190\t+\tGVOGm0054\t50\tvalidated\t\n"
+        "s_2|aa1-20\ts\t200\t290\t+\tVP_MCP_6\t300\tunvalidated\t\n"
+    )
+    generator = OutputGenerator(tmp_path)
+    monkeypatch.setattr(generator, "_validated_marker_hit_paths", lambda: [hits])
+    monkeypatch.setattr(generator, "_find_hmm_hits", lambda: hits)
+    _, models = generator._parse_validated_marker_hits()
+    assert dict(models) == {"s_1": {"GVOGm0054"}}
+    assert generator._load_hmm_targets()["s_1"] == {"GVOGm0054"}
+    assert generator._marker_names_for_region("s", 200, 290, status_filter="unvalidated") == ["VP_MCP_6"]

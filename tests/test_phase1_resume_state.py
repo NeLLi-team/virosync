@@ -24,7 +24,7 @@ from virosync.orchestration._flows.single_genome.phase1_state import (
     phase1_state_to_document,
     write_phase1_state,
 )
-from virosync.pipeline.hallmark_evidence import summarize_hallmarks
+from virosync.pipeline.hallmark_evidence import collect_hallmark_evidence, find_spatial_witnesses, summarize_hallmarks
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.frameshift_screening import (
     ANNOTATION_CLASS,
@@ -899,3 +899,63 @@ def test_a2_counterfactual_uses_current_a0_eligibility(tmp_path, monkeypatch, mo
         [marker], kwargs["masked_path"], kwargs["proteome_path"], tmp_path / "a0", ablation_id=AblationID.A0
     )
     assert [(region.start, region.end) for region in actual_a0] == ([] if expected_changed else [(101, 999)])
+
+
+def test_pfam_override_survives_native_state_and_keeps_only_reported_floor(tmp_path):
+    marker = _complete_marker()
+    marker.query_porf += "|aa1-100"
+    marker.pfam_override = "contradicted"
+    raw = HMMHit("scaffold/alpha_17", marker.hmm_target, marker.hmm_score, marker.hmm_evalue, 100, 1, 100)
+    evidence = collect_hallmark_evidence([marker], [raw])
+    seed = _complete_seed()
+    seed.anchors[0].pfam_override = "contradicted"
+    path = tmp_path / "state.json"
+    write_phase1_state(
+        path,
+        validated_markers=[marker],
+        hallmark_evidence=evidence,
+        hallmark_witnesses=find_spatial_witnesses(evidence),
+        merged_seeds=[seed],
+        host_signature_model=_complete_host_model(),
+        host_signatures={"Amoebozoa"},
+        host_deviation_summary=None,
+    )
+    loaded = load_phase1_state(path)
+    assert loaded.merged_seeds == [seed]
+    assert loaded.merged_seeds[0].anchors[0].pfam_override == "contradicted"
+    assert loaded.validated_markers == [marker]
+    assert loaded.hallmark_evidence == evidence
+    assert loaded.hallmark_evidence[0].pfam_override == "contradicted"
+    assert {(w.rule, w.tier) for w in find_spatial_witnesses(loaded.hallmark_evidence)} == {
+        ("reported_capsid", "MEDIUM")
+    }
+
+
+def test_actual_a2_bypass_survives_original_marker_to_anchor_and_resume(tmp_path):
+    from dataclasses import replace
+
+    from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
+    from virosync.pipeline.phase1.region_assembly import CandidateRegion
+    from virosync.pipeline.phase1.region_assembly import ValidatedMarkerHit as RegionMarker
+
+    marker = replace(_complete_marker(), hmm_target="GVOGm0054", validation_status="supported")
+    normalized = RegionMarker(**vars(marker), tier1_bypassed=True)
+    region = CandidateRegion(marker.scaffold, 0, 2000, [normalized])
+    (seed,) = phase1_module._candidate_regions_to_seeds([region], [marker], [], [])
+    assert seed.anchors[0].tier1_bypassed
+    assert is_ordinary_marker_evidence(seed.anchors[0])
+    path = tmp_path / "state.json"
+    write_phase1_state(
+        path,
+        validated_markers=[marker],
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
+        merged_seeds=[seed],
+        host_signature_model=_complete_host_model(),
+        host_signatures=set(),
+        host_deviation_summary=None,
+    )
+    loaded = load_phase1_state(path)
+    assert loaded.merged_seeds == [seed]
+    assert loaded.merged_seeds[0].anchors[0].tier1_bypassed
+    assert is_ordinary_marker_evidence(loaded.merged_seeds[0].anchors[0])

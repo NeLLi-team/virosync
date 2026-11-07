@@ -112,3 +112,21 @@ def test_parent_stays_whole_when_every_repeat_pair_holds_only_blocked_markers(tm
     refined = _partition(tmp_path, markers, (ConfirmedSeed("independent-source", "contig", 430, 500),))
 
     assert [(boundary.start, boundary.tir_status) for boundary in refined] == [(0, "not_detected")]
+
+
+def test_overridden_capsid_is_not_partition_credit_but_keeps_assigned_core(tmp_path):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from virosync.pipeline.phase2.terminal_repeats import _marker_groups
+
+    marker = SimpleNamespace(
+        **asdict(_Marker("contig", 220, 250, "first|aa1-30", hmm_target="GVOGm0003")),
+        pfam_override="contradicted",
+    )
+    core = ConfirmedSeed("first", "contig", 200, 260)
+    parent = RefinedBoundary(scaffold="contig", start=0, end=1200, seed_id="first", confirmed_seeds=(core,))
+    assert _marker_groups(parent, [marker]) == []
+    refined = _partition(tmp_path, [marker], (core,))
+    assert {seed for child in refined for seed in child.confirmed_seeds} == {core}
+    assert any(child.start <= core.start < core.end <= child.end for child in refined)

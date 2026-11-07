@@ -880,3 +880,78 @@ def test_phase3_flow_gives_the_validated_viral_markers_to_the_joint_rescue_barri
         )
 
     assert seen["viral_marker_genes"] == frozenset({"g1"})
+
+
+@pytest.mark.parametrize("mode,expected", [("relaxed", "NCLDV"), ("default", "UNKNOWN")])
+def test_joint_finalization_uses_configured_a2_assembly_floor(tmp_path, monkeypatch, mode, expected):
+    import os
+    import random
+    import sys
+    from pathlib import Path
+
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome.phase3 import _prepare_joint_boundaries
+    from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
+
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">s\n" + "".join(random.Random(21).choices("ACGT", k=8000)) + "\n")
+    config = PipelineConfig().with_overrides(ablation_id=AblationID.A2, assembly_mode=mode, extension_kb=1)
+    children = (child("a", 0, 2000), child("b", 3000, 7000))
+    left_marker = ValidatedMarkerHit(
+        "a",
+        "s",
+        500,
+        800,
+        "+",
+        "unclassified_model",
+        100,
+        1e-10,
+        "validated",
+        "NCLDV__",
+        "NCLDV__a",
+        35,
+        100,
+        1,
+        0,
+        0,
+        0,
+        1,
+    )
+    right_marker = replace(left_marker, query_porf="b", start=4000, end=4300)
+    bypass_marker = replace(
+        left_marker,
+        query_porf="c",
+        start=1000,
+        end=1300,
+        hmm_target="GVOGm0001",
+        hmm_score=80,
+        validation_status="supported",
+        top10_prefixes="GVMAG__",
+    )
+    markers = [left_marker, right_marker, bypass_marker]
+    query = GenomeDiamondQuery(
+        all_porf_ids=["a", "b", "c"],
+        seed_gene_mappings={
+            "a": SeedGeneMapping("a", "s", 0, 2000, flank_start_bp=0, flank_end_bp=5000),
+            "b": SeedGeneMapping("b", "s", 3000, 7000, flank_start_bp=1000, flank_end_bp=8000),
+        },
+    )
+    prepared = _prepare_joint_boundaries(
+        [children],
+        raw_genome_path=genome,
+        masked_path=genome,
+        validated_markers=markers,
+        boundary_diamond_query=query,
+        boundary_taxonomy_map={m.query_porf: GeneTaxonomy(m.query_porf, "s", m.start, m.end) for m in markers},
+        proteome_index={"s": [pORF(m.query_porf, "s", m.start, m.end) for m in markers]},
+        config=config,
+    )
+    assert len(prepared) == 1
+    boundary, retained_children = prepared[0]
+    assert boundary.predicted_family == expected
+    assert (boundary.start, boundary.end) == (0, 7000)
+    assert boundary.confirmed_seeds == children[0].confirmed_seeds + children[1].confirmed_seeds
+    assert retained_children == children
+    assert bypass_marker.validation_status == "supported"
+    assert not hasattr(bypass_marker, "tier1_bypassed")

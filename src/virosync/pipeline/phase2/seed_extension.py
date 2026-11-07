@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, TypeAlias
 
 from virosync.ablation import AblationID
 from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
+from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import DEFAULT_A2_SINGLE_MARKER_MIN_SCORE, decide_marker_hit_role
 from virosync.pipeline.phase1.seed_merger import (
     ConfirmedSeed,
@@ -313,15 +314,32 @@ def refresh_boundary_classification(
     ablation_id: AblationID = AblationID.A0,
     single_marker_min_score: float = DEFAULT_A2_SINGLE_MARKER_MIN_SCORE,
 ) -> None:
-    """Recompute family evidence using the same retained-marker roles as Phase3."""
+    """Recompute ordinary family evidence using the configured marker roles."""
     from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
-    by_scaffold: dict[str, list[ValidatedMarkerHit]] = {}
+    by_scaffold: dict[str, list[Anchor]] = {}
     for marker in markers:
-        if decide_marker_hit_role(
-            marker, ablation_id=ablation_id, single_marker_min_score=single_marker_min_score
-        ).is_retained_evidence:
-            by_scaffold.setdefault(marker.scaffold, []).append(marker)
+        role = decide_marker_hit_role(marker, ablation_id=ablation_id, single_marker_min_score=single_marker_min_score)
+        if not (role.is_production_validated or role.is_tier1_bypassed):
+            continue
+        by_scaffold.setdefault(marker.scaffold, []).append(
+            Anchor(
+                porf_id=marker.query_porf,
+                scaffold=marker.scaffold,
+                start=marker.start,
+                end=marker.end,
+                strand=getattr(marker, "strand", ""),
+                hallmark_gene=marker.hmm_target,
+                score=marker.hmm_score,
+                evalue=marker.hmm_evalue,
+                validation_status=marker.validation_status,
+                pfam_override=getattr(marker, "pfam_override", ""),
+                tier1_bypassed=role.is_tier1_bypassed,
+                top10_prefixes=getattr(marker, "top10_prefixes", ""),
+                top10_pidents=getattr(marker, "top10_pidents", ""),
+                top10_targets=getattr(marker, "top10_targets", ""),
+            )
+        )
     for boundary in boundaries:
         retained = [
             marker
@@ -336,7 +354,7 @@ def refresh_boundary_classification(
         boundary.region_classification_ncldv_markers = summary["ncldv_markers"]
         boundary.region_classification_vp_plv_markers = summary["vp_plv_markers"]
         boundary.region_classification_mirus_markers = summary["mirus_markers"]
-        boundary.seed_has_mcp = any(is_mcp_gene(marker.hmm_target) for marker in retained)
+        boundary.seed_has_mcp = any(is_mcp_gene(marker.hallmark_gene) for marker in retained)
 
 
 def validate_source_membership(seeds: Sequence[MergedSeed], boundaries: Sequence[RefinedBoundary]) -> None:

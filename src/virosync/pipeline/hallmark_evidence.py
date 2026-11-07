@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
-from virosync.pipeline.phase1.marker_roles import PRODUCTION_VALIDATION_STATUSES
+from virosync.pipeline.phase1.marker_roles import PRODUCTION_VALIDATION_STATUSES, is_ordinary_marker_evidence
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
@@ -46,6 +46,7 @@ class HallmarkEvidence:
     validation_status: str
     viral_top10_max_pident: float
     source: str
+    pfam_override: str = ""
 
     @property
     def evidence_id(self) -> str:
@@ -176,6 +177,7 @@ def collect_hallmark_evidence(
                 validation_status=marker.validation_status,
                 viral_top10_max_pident=viral_identity,
                 source="frameshift" if frameshift else "retained_hmm",
+                pfam_override=marker.pfam_override,
             )
         )
     return sorted(evidence, key=lambda h: (h.scaffold, h.start, h.end, h.query_porf, h.model))
@@ -404,7 +406,11 @@ def _catalogue() -> dict[tuple[str, str], list[dict]]:
 
 def _linked(evidence: Sequence[HallmarkEvidence]) -> Iterable[tuple[HallmarkEvidence, dict]]:
     for hit in evidence:
-        if hit.validation_status not in PRODUCTION_VALIDATION_STATUSES or not 0 <= hit.evalue <= WEAK_EVALUE:
+        if (
+            not is_ordinary_marker_evidence(hit)
+            or hit.validation_status not in PRODUCTION_VALIDATION_STATUSES
+            or not 0 <= hit.evalue <= WEAK_EVALUE
+        ):
             continue
         for link in hit.model_roles:
             if not link["excluded_from_scoring"] and link["marker"] not in EXCLUDED_FAMILIES:

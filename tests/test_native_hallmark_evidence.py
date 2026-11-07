@@ -807,6 +807,7 @@ def test_rescued_locus_count_keeps_independent_genes(different):
         "end": 400,
         "hallmark_gene": "VS000309",
         "hmm_score": 65,
+        "validation_status": "validated",
     }
     other = {**ordinary, "porf_id": "s_VSR0123456789abcdef", "start": 200, "end": 350, **different}
     loci = _scoring_locus_ids([ordinary, other])
@@ -819,7 +820,13 @@ def test_rescued_locus_count_keeps_independent_genes(different):
 def test_rescue_bridges_fragments_without_losing_raw_marker_records():
     from virosync.orchestration._flows.single_genome.phase3 import _scoring_locus_ids
 
-    base = {"scaffold": "s", "strand": "+", "hallmark_gene": "VS000309", "hmm_score": 65}
+    base = {
+        "scaffold": "s",
+        "strand": "+",
+        "hallmark_gene": "VS000309",
+        "hmm_score": 65,
+        "validation_status": "validated",
+    }
     markers = [
         {**base, "porf_id": "left", "start": 100, "end": 300},
         {**base, "porf_id": "right", "start": 400, "end": 600},
@@ -1348,3 +1355,70 @@ def test_explicit_support_changes_single_core_score_without_bypassing_high_cap(
     assert supported.hallmark_assessment.summary.coherence_bonus == pytest.approx(0.05)
     assert supported.hallmark_assessment.summary.floor_tier == ""
     assert supported.hallmark_assessment.witnesses == ()
+
+
+@pytest.mark.parametrize("with_selected", [True, False])
+@pytest.mark.parametrize("ablation", [AblationID.A0, AblationID.A2])
+@pytest.mark.parametrize("status,override", [("validated", "reassigned"), ("supported", ""), ("unvalidated", "")])
+def test_pfam_override_survives_phase3_without_ordinary_credit(tmp_path, with_selected, ablation, status, override):
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome.phase3 import _build_boundary_hallmarks
+    from virosync.pipeline.phase3.evidence_synthesizer import deduplicate_preferring_mcp
+
+    marker = ValidatedMarkerHit(
+        "s_1|aa1-20",
+        "s",
+        100,
+        190,
+        "+",
+        "GVOGm0003",
+        200,
+        1e-20,
+        "validated",
+        "NCLDV__",
+        "NCLDV__virus|p",
+        90,
+        100,
+        1,
+        0,
+        0,
+        0,
+        1,
+        top10_targets="NCLDV__virus|p",
+        top10_pidents="90",
+        pfam_override=override,
+    )
+    marker.validation_status = status
+    markers = [marker]
+    if with_selected:
+        markers.append(
+            replace(marker, hmm_target="GVOGm0054", hmm_score=50, validation_status="validated", pfam_override="")
+        )
+    config = PipelineConfig()
+    config.ablation.id = ablation
+    hallmarks = _build_boundary_hallmarks(markers, config)
+    assert hallmarks[0]["pfam_override"] == override
+    raw = [HMMHit("s_1", m.hmm_target, m.hmm_score, m.hmm_evalue, m.hmm_score, 1, 20) for m in markers]
+    evidence = collect_hallmark_evidence(markers, raw)
+    witnesses = find_spatial_witnesses(evidence)
+    (seed,) = add_rescue_seeds([], witnesses)
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(
+        boundary, [], hallmark_hits=hallmarks, hallmark_evidence=evidence, hallmark_witnesses=witnesses
+    )
+    assert result.hallmark_genes == (["GVOGm0054"] if with_selected else [])
+    assert not result.has_mcp
+    assert result.mcp_gene_ids == []
+    assert result.has_capsid_evidence is (status == "validated")
+    assert result.capsid_gene_ids == (["s_1"] if status == "validated" else [])
+    assert result.confidence_tier == "MEDIUM"
+    assert (result.start, result.end) == (100, 190)
+    assert [(core.start, core.end) for core in result.confirmed_seeds] == [(100, 190)]
+    assert all(h["hallmark_gene"] != "GVOGm0003" for h in deduplicate_preferring_mcp(hallmarks))
+    path = OutputGenerator(tmp_path).write_evidence_profiles([result])
+    profile = json.loads(path.read_text())[result.eve_id]
+    assert next(h for h in profile["hallmark_evidence"] if h["model"] == "GVOGm0003")["pfam_override"] == override

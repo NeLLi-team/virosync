@@ -14,7 +14,6 @@ References:
 - Gaïa et al. 2023: Mirusviricota discovery
 - Boratto et al. 2024: Mriyaviruses characterization
 """
-
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -22,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from virosync.pipeline.host_signatures import is_host_marker
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 
 if TYPE_CHECKING:
     from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
@@ -52,7 +52,7 @@ def is_identity_qualified_cress_marker(
         raw_prefixes = getattr(hit, "top10_prefixes", "") or ""
         raw_pidents = getattr(hit, "top10_pidents", "") or ""
 
-    if model not in CRESS_MARKER_MODELS or validation_status != "validated":
+    if not is_ordinary_marker_evidence(hit) or model not in CRESS_MARKER_MODELS or validation_status != "validated":
         return False
 
     prefixes = raw_prefixes.split(",") if isinstance(raw_prefixes, str) else list(raw_prefixes)
@@ -399,6 +399,7 @@ def viral_marker_gene_ids(markers: "Iterable[ValidatedMarkerHit]") -> frozenset[
         base_marker_gene_id(marker.query_porf)
         for marker in markers
         if marker.validation_status == "validated"
+        and is_ordinary_marker_evidence(marker)
         and not is_cellular_marker_model(marker.hmm_target)
         and base_marker_gene_id(marker.query_porf)
     )

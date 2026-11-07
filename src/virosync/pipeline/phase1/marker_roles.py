@@ -148,6 +148,31 @@ def decide_marker_role(
     )
 
 
+def is_arbitration_selected_marker(hit: object) -> bool:
+    """Check Pfam selection before validation has assigned a downstream role."""
+    override = hit.get("pfam_override", "") if isinstance(hit, dict) else getattr(hit, "pfam_override", "")
+    return not override
+
+
+def is_ordinary_marker_evidence(hit: object) -> bool:
+    """Allow production validation or an explicit noncapsid A2 bypass for ordinary credit."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+    if not is_arbitration_selected_marker(hit):
+        return False
+    if isinstance(hit, dict):
+        status = hit.get("validation_status", "")
+        bypassed = hit.get("tier1_bypassed", False)
+        model = hit.get("hmm_target") or hit.get("hallmark_gene") or hit.get("model") or ""
+    else:
+        status = getattr(hit, "validation_status", "")
+        bypassed = getattr(hit, "tier1_bypassed", False)
+        model = getattr(hit, "hmm_target", "") or getattr(hit, "hallmark_gene", "") or getattr(hit, "model", "")
+    return status in PRODUCTION_VALIDATION_STATUSES or (
+        bypassed is True and bool(model) and not is_capsid_evidence_gene(model)
+    )
+
+
 def decide_marker_hit_role(
     hit: MarkerRoleEvidence,
     *,
@@ -164,6 +189,8 @@ def decide_marker_hit_role(
         hmm_evalue=hit.hmm_evalue,
         single_marker_min_score=single_marker_min_score,
     )
-    if decision.is_rejected and is_capsid_evidence_gene(getattr(hit, "hmm_target", "")):
+    if is_capsid_evidence_gene(getattr(hit, "hmm_target", "")) and (
+        decision.is_rejected or decision.is_tier1_bypassed or not is_arbitration_selected_marker(hit)
+    ):
         return MarkerRoleDecision(MarkerRole.REPORTED_CAPSID, hit.validation_status)
     return decision

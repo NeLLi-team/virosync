@@ -69,6 +69,7 @@ class HMMHit:
     domain_score: float  # Best domain score
     query_start: int  # Hit start in query (aa)
     query_end: int  # Hit end in query (aa)
+    pfam_override: str = ""  # Arbitration outcome when retained only as a reported capsid.
 
 
 @dataclass
@@ -87,6 +88,8 @@ class Anchor:
     # came from. All empty for an anchor taken straight from an HMM hit, which has
     # not been validated or searched.
     validation_status: str = ""
+    pfam_override: str = ""
+    tier1_bypassed: bool = False
     top10_prefixes: str = ""
     top10_pidents: str = ""
     top10_targets: str = ""

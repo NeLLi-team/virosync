@@ -8,13 +8,14 @@ carries a full set of functional categories, because one degraded EVE often carr
 duplicated hallmark genes. Regions whose seed cores interleave are one EVE and always
 merge; refused regions that overlap are cut apart midway between their seed cores.
 """
-
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
 from typing import TypeAlias
+
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 
 CATALOGUE = Path(__file__).resolve().parents[1] / "data" / "hallmark_panels.json"
 GROUPS = {
@@ -76,7 +77,7 @@ def boundary_compatibility(validated_markers: Iterable[object]) -> Callable[[obj
     """Return a merge predicate over refined boundaries from the validated Phase 1 markers."""
     by_scaffold: dict[str, list[tuple[int, int, str, str]]] = {}
     for marker in validated_markers:
-        if getattr(marker, "validation_status", "validated") != "validated":
+        if not is_ordinary_marker_evidence(marker) or getattr(marker, "validation_status", "validated") != "validated":
             continue
         gene = str(getattr(marker, "query_porf", "")).split("|", 1)[0]
         by_scaffold.setdefault(marker.scaffold, []).append(

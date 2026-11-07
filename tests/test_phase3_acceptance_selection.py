@@ -433,6 +433,7 @@ def test_rescued_protein_id_reaches_verification_result() -> None:
                 "porf_id": "scaffold_VSR0123456789abcdef|aa1-90",
                 "hallmark_gene": "VS000087",
                 "hmm_score": 90.0,
+                "validation_status": "validated",
             }
         ],
     )

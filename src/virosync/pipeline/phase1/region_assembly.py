@@ -20,7 +20,6 @@ The iterative extension captures more EVE content by discovering markers that
 weren't initially clustered but fall within the extended boundaries. This is crucial
 for degraded or fragmented EVEs where markers may be spaced further apart.
 """
-
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -28,7 +27,7 @@ from pathlib import Path
 
 from virosync.ablation import AblationID
 from virosync.pipeline.phase0.prodigal import GenePrediction, load_gene_predictions
-from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role, is_ordinary_marker_evidence
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
     is_cellular_marker_model,
@@ -71,13 +70,18 @@ class ValidatedMarkerHit:
     taxonomy_substring_counts: str = ""
     taxonomy_raw_counts: str = ""
     tier1_bypassed: bool = False
+    pfam_override: str = ""
 
     @property
     def is_validated(self) -> bool:
         """Check if marker is validated (NCLDV/MIRUS in top-5) or validated_novel (HMM-only)."""
-        return self.tier1_bypassed or self.validation_status in (
-            "validated",
-            "validated_novel",
+        return is_ordinary_marker_evidence(self) and (
+            self.tier1_bypassed
+            or self.validation_status
+            in (
+                "validated",
+                "validated_novel",
+            )
         )
 
     @property
@@ -694,6 +698,7 @@ def assemble_candidate_regions(
                 hmm_score=hit.hmm_score,
                 hmm_evalue=getattr(hit, "hmm_evalue", 0.0),
                 validation_status=hit.validation_status,
+                pfam_override=getattr(hit, "pfam_override", ""),
                 top10_prefixes=top10_prefixes,
                 best_hit_target=getattr(hit, "best_hit_target", ""),
                 best_hit_pident=getattr(hit, "best_hit_pident", 0.0),

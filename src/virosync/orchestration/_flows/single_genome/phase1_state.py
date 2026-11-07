@@ -44,6 +44,7 @@ _HALLMARK_EVIDENCE_FIELDS = {
     "validation_status",
     "viral_top10_max_pident",
     "source",
+    "pfam_override",
 }
 _HALLMARK_WITNESS_FIELDS = {"scaffold", "panel", "rule", "tier", "start", "end", "evidence_ids"}
 
@@ -73,6 +74,7 @@ _MARKER_STRING_FIELDS = (
     "top10_evalues",
     "taxonomy_substring_counts",
     "taxonomy_raw_counts",
+    "pfam_override",
 )
 _MARKER_INTEGER_FIELDS = (
     "start",
@@ -102,6 +104,7 @@ _ANCHOR_STRING_FIELDS = (
     "strand",
     "hallmark_gene",
     "validation_status",
+    "pfam_override",
     "top10_prefixes",
     "top10_pidents",
     "top10_targets",
@@ -112,6 +115,7 @@ _ANCHOR_FIELDS = (
     *_ANCHOR_STRING_FIELDS,
     *_ANCHOR_INTEGER_FIELDS,
     *_ANCHOR_FLOAT_FIELDS,
+    "tier1_bypassed",
 )
 _ANCHOR_FIELD_SET = set(_ANCHOR_FIELDS)
 
@@ -330,6 +334,7 @@ def _anchor_to_document(anchor: object, context: str) -> dict[str, object]:
     if set(vars(anchor)) != _ANCHOR_FIELD_SET:
         raise Phase1StateError(f"{context} contains unsupported dynamic fields")
     document: dict[str, object] = {}
+    document["tier1_bypassed"] = _require_boolean(anchor.tier1_bypassed, f"{context}.tier1_bypassed")
     for name in _ANCHOR_STRING_FIELDS:
         document[name] = _require_string(getattr(anchor, name), f"{context}.{name}")
     for name in _ANCHOR_INTEGER_FIELDS:
@@ -345,6 +350,7 @@ def _anchor_to_document(anchor: object, context: str) -> dict[str, object]:
 def _anchor_from_document(value: object, context: str) -> Anchor:
     document = _require_exact_fields(value, _ANCHOR_FIELD_SET, context)
     kwargs: dict[str, object] = {}
+    kwargs["tier1_bypassed"] = _require_boolean(document["tier1_bypassed"], f"{context}.tier1_bypassed")
     for name in _ANCHOR_STRING_FIELDS:
         kwargs[name] = _require_string(document[name], f"{context}.{name}")
     for name in _ANCHOR_INTEGER_FIELDS:

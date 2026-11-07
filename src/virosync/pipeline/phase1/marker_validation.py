@@ -49,7 +49,6 @@ Validation rules in the production filter:
 - "supported": GVMAG__ top-10 support below the validation threshold
 - "unvalidated": cellular only, unknown, or below thresholds
 """
-
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -60,6 +59,7 @@ from pyhmmer.easel import SequenceFile
 
 from virosync.pipeline.phase0.prodigal import parse_prodigal_header
 from virosync.pipeline.phase1.coordinates import aa_to_nt_coords, parse_frame_id
+from virosync.pipeline.phase1.marker_roles import is_arbitration_selected_marker, is_ordinary_marker_evidence
 from virosync.pipeline.taxonomy_utils import EUK_PEVE_PREFIX, aggregate_taxonomy_substrings, resolve_org_id
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ class ValidatedMarkerHit:
     top10_evalues: str = ""
     taxonomy_substring_counts: str = ""
     taxonomy_raw_counts: str = ""
+    pfam_override: str = ""
 
 
 def validate_hmm_hit(
@@ -479,7 +480,7 @@ def filter_validated_markers(
 
     from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
-    # Preserve the original best model per segment, then add only capsid alternatives.
+    # Preserve the arbitration-selected best model per segment, then add capsid alternatives.
     # Diamond results are keyed by base protein name (full-protein search),
     # so we also build a mapping from base name → Diamond hits.
     hmm_hit_lookup = {}  # (segment, empty for the original winner) -> measured hit
@@ -487,19 +488,19 @@ def filter_validated_markers(
     for hit in hmm_hits:
         query_id = f"{hit.query_name}|aa{hit.query_start}-{hit.query_end}"
         key = (query_id, "")
-        measured = (hit.target_name, hit.score, hit.evalue, hit.query_start, hit.query_end)
-        if key not in hmm_hit_lookup or hit.score > hmm_hit_lookup[key][1]:
+        measured = (hit.target_name, hit.score, hit.evalue, hit.query_start, hit.query_end, hit.pfam_override)
+        if is_arbitration_selected_marker(hit) and (key not in hmm_hit_lookup or hit.score > hmm_hit_lookup[key][1]):
             hmm_hit_lookup[key] = measured
         if is_capsid_evidence_gene(hit.target_name):
             capsid_key = (query_id, hit.target_name)
             if capsid_key not in capsid_alternatives or hit.score > capsid_alternatives[capsid_key][1]:
                 capsid_alternatives[capsid_key] = measured
     for (query_id, model), measured in capsid_alternatives.items():
-        if hmm_hit_lookup[(query_id, "")][0] != model:
+        if (query_id, "") not in hmm_hit_lookup or hmm_hit_lookup[(query_id, "")][0] != model:
             hmm_hit_lookup[(query_id, model)] = measured
 
     hmm_group_counts = {"GVOGm": 0, "OG": 0, "OTHER": 0}
-    for hmm_target, _score, _evalue, _qstart, _qend in hmm_hit_lookup.values():
+    for hmm_target, _score, _evalue, _qstart, _qend, _pfam_override in hmm_hit_lookup.values():
         hmm_group_counts[_marker_group(hmm_target)] += 1
 
     # Use default novel criteria if not provided
@@ -518,7 +519,7 @@ def filter_validated_markers(
         "no_diamond_hits": 0,
     }
 
-    for (query_porf, _), (hmm_target, hmm_score, hmm_evalue, qstart, qend) in hmm_hit_lookup.items():
+    for (query_porf, _), (hmm_target, hmm_score, hmm_evalue, qstart, qend, pfam_override) in hmm_hit_lookup.items():
         # Get coordinates
         coords = porf_coords.get(query_porf)
         base_query = query_porf.split("|aa", 1)[0]
@@ -563,6 +564,7 @@ def filter_validated_markers(
                     end=end,
                     strand=strand,
                     hmm_target=hmm_target,
+                    pfam_override=pfam_override,
                     hmm_score=hmm_score,
                     hmm_evalue=hmm_evalue,
                     validation_status="unvalidated",
@@ -658,6 +660,7 @@ def filter_validated_markers(
                 end=end,
                 strand=strand,
                 hmm_target=hmm_target,
+                pfam_override=pfam_override,
                 hmm_score=hmm_score,
                 hmm_evalue=hmm_evalue,
                 validation_status=validation_status,
@@ -679,7 +682,11 @@ def filter_validated_markers(
             )
         )
 
-    validated_support = [marker for marker in validated_markers if marker.validation_status == "validated"]
+    validated_support = [
+        marker
+        for marker in validated_markers
+        if marker.validation_status == "validated" and is_ordinary_marker_evidence(marker)
+    ]
     for marker_index, base_query, hmm_coverage in novel_candidates:
         marker = validated_markers[marker_index]
         has_nearby_markers = any(
@@ -813,7 +820,7 @@ def filter_validated_markers(
                 "validation_status\ttop10_prefixes\tbest_hit_pident\tbest_hit_target\t"
                 "best_hit_bits\thas_ncldv\thas_mirus\thas_viral\t"
                 "top10_targets\ttop10_pidents\ttop10_bitscores\ttop10_evalues\t"
-                "taxonomy_substring_counts\ttaxonomy_raw_counts\n"
+                "taxonomy_substring_counts\ttaxonomy_raw_counts\tpfam_override\n"
             )
             for vm in validated_markers:
                 f.write(
@@ -822,7 +829,7 @@ def filter_validated_markers(
                     f"{vm.top10_prefixes}\t{vm.best_hit_pident:.1f}\t{vm.best_hit_target}\t"
                     f"{vm.best_hit_bits:.1f}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\t"
                     f"{vm.top10_targets}\t{vm.top10_pidents}\t{vm.top10_bitscores}\t"
-                    f"{vm.top10_evalues}\t{vm.taxonomy_substring_counts}\t{vm.taxonomy_raw_counts}\n"
+                    f"{vm.top10_evalues}\t{vm.taxonomy_substring_counts}\t{vm.taxonomy_raw_counts}\t{vm.pfam_override}\n"
                 )
         logger.info(f"Wrote validated marker hits: {validated_path}")
 
@@ -863,6 +870,7 @@ def load_validated_marker_hits(tsv_path: Path) -> list[ValidatedMarkerHit]:
                     hmm_target=parts[idx.get("hmm_target", 5)],
                     hmm_score=float(parts[idx.get("hmm_score", 6)]),
                     hmm_evalue=0.0,
+                    pfam_override=parts[idx["pfam_override"]],
                     validation_status=parts[idx.get("validation_status", 7)],
                     top10_prefixes=parts[idx.get("top10_prefixes", 8)],
                     best_hit_pident=float(parts[idx.get("best_hit_pident", 9)]),

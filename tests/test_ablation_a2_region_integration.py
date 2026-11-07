@@ -163,7 +163,7 @@ def test_a2_bypass_label_survives_hallmark_evidence_synthesis() -> None:
         [
             {
                 "porf_id": "ctg_1",
-                "hallmark_gene": "GVOGm0003",
+                "hallmark_gene": "GVOGm0054",
                 "hmm_score": 100.0,
                 "tier1_bypassed": True,
                 "validation_status": "supported",
@@ -173,7 +173,7 @@ def test_a2_bypass_label_survives_hallmark_evidence_synthesis() -> None:
 
     assert result.hallmark_count == 1
     assert result.tier1_bypassed_marker_ids == ["ctg_1"]
-    assert result.tier1_bypassed_marker_models == ["GVOGm0003"]
+    assert result.tier1_bypassed_marker_models == ["GVOGm0054"]
     document = result.to_dict()
     assert document["tier1_bypassed_marker_ids"] == ["ctg_1"]
-    assert document["tier1_bypassed_marker_models"] == ["GVOGm0003"]
+    assert document["tier1_bypassed_marker_models"] == ["GVOGm0054"]

@@ -160,3 +160,13 @@ def test_separate_overlap_cuts_between_seed_cores() -> None:
     cut_left, cut_right = rules.separate_overlap(left, right)
 
     assert (cut_left.start, cut_left.end, cut_right.start, cut_right.end) == (0, 4450, 4450, 9000)
+
+
+def test_overridden_capsids_do_not_complete_ordinary_core_sets():
+    left_markers = full_set("a", (1000, 1500, 2000), ("MCP", "PolB", "RNAPL"))
+    right_markers = full_set("b", (7000, 7500, 8000), ("MCP", "A32", "VLTF3"))
+    left_markers[0].pfam_override = "contradicted"
+    right_markers[0].pfam_override = "contradicted"
+    left = Boundary("s", 0, 5000, [Core(900, 3000)])
+    right = Boundary("s", 4000, 9500, [Core(6900, 9000)])
+    assert rules.boundary_compatibility([*left_markers, *right_markers])(left, right)

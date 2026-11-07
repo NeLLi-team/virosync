@@ -39,6 +39,7 @@ from virosync.pipeline.host_signatures import (
     get_taxonomy_lookup,
     host_signature_density_evalue_weighted,
 )
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, validate_confirmed_seed_containment
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
@@ -539,7 +540,11 @@ def _is_mcp_marker(hit: object) -> bool:
     It is viral and votes VIRAL_UNKNOWN, but it must not override the lineage
     votes of the other genes, so it counts as an ordinary marker.
     """
-    return is_mcp_gene(_hit_model_name(hit)) and not has_only_peve_viral_hits([_top10_record(hit)])
+    return (
+        is_ordinary_marker_evidence(hit)
+        and is_mcp_gene(_hit_model_name(hit))
+        and not has_only_peve_viral_hits([_top10_record(hit)])
+    )
 
 
 def marker_taxonomy_category(
@@ -586,7 +591,7 @@ def deduplicate_preferring_mcp(hallmark_hits: list) -> list:
     """
     by_gene: dict[str, dict] = {}
     for index, hit in enumerate(hallmark_hits):
-        if not _hit_model_name(hit):
+        if not is_ordinary_marker_evidence(hit) or not _hit_model_name(hit):
             continue
         porf_id = str(_hit_field(hit, "porf_id") or _hit_field(hit, "query_porf") or "")
         # Without a protein ID there is no evidence two hits share a protein, so
@@ -767,7 +772,7 @@ def is_validated_marker(hit: object) -> bool:
 
 
 def _has_validated_marker(hits: list) -> bool:
-    return any(is_validated_marker(hit) for hit in hits)
+    return any(is_ordinary_marker_evidence(hit) and is_validated_marker(hit) for hit in hits)
 
 
 def has_validated_capsid_hit(hits: list) -> bool:
@@ -779,7 +784,7 @@ def has_validated_capsid_hit(hits: list) -> bool:
     ``validation_status``.
     """
     capsid_hits = [hit for hit in hits if is_capsid_evidence_gene(str(_hit_field(hit, "hallmark_gene") or ""))]
-    return _has_validated_marker(capsid_hits)
+    return any(is_validated_marker(hit) for hit in capsid_hits)
 
 
 def validated_capsid_gene_ids(hits: Iterable[object]) -> list[str]:
@@ -2545,6 +2550,8 @@ class EvidenceSynthesizer:
         """
         by_gene: dict[str, dict] = {}
         for hit in hallmark_hits:
+            if not is_ordinary_marker_evidence(hit):
+                continue
             if isinstance(hit, dict):
                 gene_name = hit.get("hallmark_gene", "")
                 porf_id = hit.get("porf_id", "") or ""
@@ -2581,6 +2588,13 @@ class EvidenceSynthesizer:
         """
         if not hallmark_hits:
             return
+        result.capsid_gene_ids = validated_capsid_gene_ids(hallmark_hits)
+        result.has_capsid_evidence = has_validated_capsid_hit(hallmark_hits)
+        result.mcp_gene_ids = validated_capsid_gene_ids(
+            hit
+            for hit in hallmark_hits
+            if is_ordinary_marker_evidence(hit) and is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or ""))
+        )
         deduped_hits, hallmark_genes, by_gene = self._deduplicate_hallmark_hits(
             hallmark_hits,
         )
@@ -2591,10 +2605,6 @@ class EvidenceSynthesizer:
         result.hallmark_diversity = len(set(hallmark_genes))
         result.has_virus_specific_marker = True
         result.has_mcp = any(is_mcp_gene(g) for g in hallmark_genes)
-        result.mcp_gene_ids = validated_capsid_gene_ids(
-            hit for hit in hallmark_hits if is_mcp_gene(str(_hit_field(hit, "hallmark_gene") or ""))
-        )
-        result.capsid_gene_ids = validated_capsid_gene_ids(hallmark_hits)
         bypassed = [
             info
             for info in by_gene.values()
@@ -2635,9 +2645,9 @@ class EvidenceSynthesizer:
         result.marker_dominant_family = marker_summary["dominant_family"]
         result.marker_dominant_fraction = marker_summary["dominant_fraction"]
         result.has_mcp = result.has_mcp or marker_summary["has_mcp"]
-        # Deduplication keeps one profile per protein, so a stronger non-capsid
-        # profile can hide a capsid-type hit. The raw hits decide capsid evidence.
-        result.has_capsid_evidence = result.has_mcp or has_validated_capsid_hit(hallmark_hits)
+        # Keep the validated capsid annotation computed before deduplication,
+        # alongside the ordinary MCP summary.
+        result.has_capsid_evidence = result.has_capsid_evidence or result.has_mcp
         scored_hallmarks = [(info["hallmark_gene"], info["score"]) for info in by_gene.values()]
         result.likely_group = infer_likely_group(scored_hallmarks, self.marker_annotation_index)
         completeness = compute_marker_completeness(
@@ -3130,6 +3140,7 @@ class EvidenceSynthesizer:
         # Process evidence: contig-edge, hallmarks, taxonomy, interproscan
         self._detect_contig_edge(result, refined_boundary, scaffold_lengths)
         self._process_hallmark_hits(result, hallmark_hits)
+        hallmark_hits = [hit for hit in hallmark_hits or [] if is_ordinary_marker_evidence(hit)]
         self._process_gene_taxonomy(result, gene_taxonomy_records, gene_taxonomy_summary)
         self._assign_taxonomy_class(result, hallmark_hits, gene_taxonomy_records)
         self._process_interproscan(result, interproscan_summary)

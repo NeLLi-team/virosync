@@ -888,21 +888,21 @@ def test_a1_keeps_the_family_when_another_marker_has_the_lineage_hit() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "prefixes", "pidents"),
+    ("status", "prefixes", "pidents", "expected"),
     [
-        ("validated_novel", "", ""),
-        ("validated", "EUK-pEVE__", "20"),
-        ("supported", "EUK-pEVE__", "80"),
-        ("unvalidated", "EUK-pEVE__", "80"),
-        ("validated", "", ""),
+        ("validated_novel", "", "", "NCLDV"),
+        ("validated", "EUK-pEVE__", "20", "NCLDV"),
+        ("supported", "EUK-pEVE__", "80", "UNKNOWN"),
+        ("unvalidated", "EUK-pEVE__", "80", "UNKNOWN"),
+        ("validated", "", "", "NCLDV"),
     ],
 )
 def test_a1_keeps_the_family_without_qualified_peve_evidence_from_validated_markers(
-    status: str, prefixes: str, pidents: str
+    status: str, prefixes: str, pidents: str, expected: str
 ) -> None:
     result = _a1_result("NCLDV", _a1_anchor("GVOGm0003", status=status, prefixes=prefixes, pidents=pidents))
 
-    assert (result.taxonomy_class, result.likely_family) == ("NCLDV", "NCLDV")
+    assert (result.taxonomy_class, result.likely_family) == (expected, expected)
 
 
 def test_a1_ignores_an_unvalidated_lineage_hit_beside_validated_peve_evidence() -> None:

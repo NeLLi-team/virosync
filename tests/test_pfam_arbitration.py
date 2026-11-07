@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
@@ -129,3 +131,52 @@ def test_cress_rep_accepts_gemini_al1_but_not_its_generic_signature() -> None:
     assert [hit.target_name for hit in catalytic] == ["VS000806"]
     assert generic == []
     assert generic_records[0].outcome == "contradicted"
+
+
+@pytest.mark.parametrize(
+    ("observed", "expected_models", "outcome"),
+    [
+        ({"HostDomain"}, {"GVOGm0003", "GVOGm0054"}, "reassigned"),
+        ({"UnrelatedDomain"}, {"GVOGm0003"}, "contradicted"),
+    ],
+)
+def test_overridden_capsid_keeps_only_reported_floor_and_selected_non_capsid(
+    tmp_path, observed, expected_models, outcome
+):
+    from virosync.ablation import AblationID
+    from virosync.pipeline.hallmark_evidence import collect_hallmark_evidence, find_spatial_witnesses
+    from virosync.pipeline.phase1.marker_roles import MarkerRole, decide_marker_hit_role
+    from virosync.pipeline.phase1.marker_validation import filter_validated_markers, load_validated_marker_hits
+
+    capsid = _hit("GVOGm0003", 200)
+    noncapsid = _hit("GVOGm0054", 100)
+    retained, records = arbitrate_hits(
+        [capsid, noncapsid],
+        {"protein-1": observed},
+        {"GVOGm0003": _annotation("CapsidDomain"), "GVOGm0054": _annotation("HostDomain")},
+    )
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">protein-1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("protein-1\tNCLDV__virus|p1\t1e-30\t100\t90\t100\n")
+    markers = filter_validated_markers(retained, diamond, proteome, output_dir=tmp_path / "validation")
+    assert records[0].outcome == outcome
+    assert {marker.hmm_target for marker in markers} == expected_models
+    capsid_marker = next(marker for marker in markers if marker.hmm_target == "GVOGm0003")
+    assert capsid_marker.validation_status == "validated"
+    assert decide_marker_hit_role(capsid_marker, ablation_id=AblationID.A0).role is MarkerRole.REPORTED_CAPSID
+    assert capsid_marker.pfam_override == records[0].outcome
+    loaded = load_validated_marker_hits(tmp_path / "validation/validated_marker_hits.tsv")
+    assert next(marker for marker in loaded if marker.hmm_target == "GVOGm0003").pfam_override == records[0].outcome
+    evidence = collect_hallmark_evidence(markers, retained)
+    partner = replace(
+        evidence[0],
+        query_porf="partner|aa1-100",
+        gene="partner",
+        model="GVOGm0760",
+        start=500,
+        end=800,
+        pfam_override="",
+    )
+    witnesses = find_spatial_witnesses([*evidence, partner])
+    assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}

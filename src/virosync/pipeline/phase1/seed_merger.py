@@ -5,10 +5,11 @@ The active pipeline produces HHG seeds only; the legacy novelty and
 compositional seed sources are retained in the dataclass schema as
 zero placeholders but are no longer populated in the main flow.
 """
-
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 
 from .hhg_seeding import Anchor
 
@@ -74,7 +75,7 @@ class MergedSeed:
         from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
         all_anchors = self.anchors + self.hhg_anchors
-        return any(is_mcp_gene(a.hallmark_gene) for a in all_anchors)
+        return any(is_ordinary_marker_evidence(a) and is_mcp_gene(a.hallmark_gene) for a in all_anchors)
 
     def compute_classification(self, seed_marker_allowlist: list[str] | None = None) -> None:
         """Compute region classification based on hallmark genes.
@@ -121,6 +122,8 @@ def classify_marker_hits(hits: Sequence[object], seed_marker_allowlist: list[str
 
     best_by_gene: dict[str, tuple[float, object]] = {}
     for hit in hits:
+        if not is_ordinary_marker_evidence(hit):
+            continue
         protein = str(getattr(hit, "porf_id", "") or getattr(hit, "query_porf", ""))
         gene = base_marker_gene_id(protein)
         score = float(getattr(hit, "hmm_score", getattr(hit, "score", 0.0)))

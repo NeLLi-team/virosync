@@ -26,7 +26,7 @@ from virosync.pipeline.hallmark_evidence import (
     find_spatial_witnesses,
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role, is_ordinary_marker_evidence
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
 from virosync.pipeline.phase1.region_assembly import can_seed_marker
 from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode
@@ -120,6 +120,11 @@ def _candidate_regions_to_seeds(
             )
         identity = f"seed_{index}_{region.scaffold}_{region.start}"
         anchors = []
+        bypassed_members = {
+            (marker.query_porf, marker.hmm_target)
+            for marker in region.markers
+            if getattr(marker, "tier1_bypassed", False)
+        }
         region_anchor_markers = region.markers if cress else anchor_markers
         for marker in region_anchor_markers:
             if marker.scaffold != region.scaffold:
@@ -138,6 +143,8 @@ def _candidate_regions_to_seeds(
                     score=marker.hmm_score,
                     evalue=getattr(marker, "hmm_evalue", 0.0),
                     validation_status=getattr(marker, "validation_status", ""),
+                    pfam_override=getattr(marker, "pfam_override", ""),
+                    tier1_bypassed=(porf_id, marker.hmm_target) in bypassed_members,
                     top10_prefixes=getattr(marker, "top10_prefixes", ""),
                     top10_pidents=getattr(marker, "top10_pidents", ""),
                     top10_targets=getattr(marker, "top10_targets", ""),
@@ -164,7 +171,9 @@ def _candidate_regions_to_seeds(
                     ),
                 ),
                 sources=sources,
-                confidence="high" if any(is_mcp_gene(anchor.hallmark_gene) for anchor in anchors) else "medium",
+                confidence="high"
+                if any(is_ordinary_marker_evidence(anchor) and is_mcp_gene(anchor.hallmark_gene) for anchor in anchors)
+                else "medium",
                 hhg_score=len(anchors) * 10.0,
                 novelty_score=0.0,
                 compositional_score=0.0,

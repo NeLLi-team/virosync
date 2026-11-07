@@ -91,8 +91,8 @@ def test_public_mcp_gene_ids_preserve_outscored_validated_mcp_annotations() -> N
 
     assert result.to_dict()["mcp_gene_ids"] == ["mcp"]
     assert result.to_dict()["capsid_gene_ids"] == ["mcp"]
-    assert result.hallmark_genes == [NON_CAPSID_MODEL, "EVE_CAPSID_NOVEL_0029"]
-    assert result.hallmark_count == 2
+    assert result.hallmark_genes == [NON_CAPSID_MODEL]
+    assert result.hallmark_count == 1
     score = calculate_eve_confidence(result, 0)
     result.mcp_gene_ids = []
     assert calculate_eve_confidence(result, 0) == score
@@ -168,7 +168,7 @@ def test_hidden_unvalidated_capsid_hit_gives_no_capsid_evidence() -> None:
 
 
 @pytest.mark.parametrize("status", ["supported", "unvalidated", ""])
-def test_unvalidated_capsid_profile_that_wins_deduplication_gives_no_capsid_evidence(status: str) -> None:
+def test_unvalidated_capsid_cannot_displace_validated_non_capsid(status: str) -> None:
     synthesizer = EvidenceSynthesizer(config=EvidenceSynthesizerConfig())
     result = _result()
 
@@ -177,7 +177,7 @@ def test_unvalidated_capsid_profile_that_wins_deduplication_gives_no_capsid_evid
         [_hit(NON_CAPSID_MODEL, "p1", 90.0), _hit(CAPSID_MODEL, "p1", 100.0, status)],
     )
 
-    assert result.hallmark_genes == [CAPSID_MODEL]
+    assert result.hallmark_genes == [NON_CAPSID_MODEL]
     assert result.has_capsid_evidence is False
     assert result.has_mcp is False
 

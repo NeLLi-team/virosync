@@ -31,6 +31,7 @@ from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 from numpy.typing import NDArray
 
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.viral_markers import (
     get_region_classification_summary,
     is_cellular_marker_model,
@@ -664,7 +665,7 @@ def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_Ma
     for marker in markers:
         if marker.scaffold != boundary.scaffold:
             continue
-        if marker.validation_status not in ("validated", "validated_novel"):
+        if not is_ordinary_marker_evidence(marker) or marker.validation_status not in ("validated", "validated_novel"):
             continue
         midpoint = (marker.start + marker.end) // 2
         if not parent_start <= midpoint <= parent_end:

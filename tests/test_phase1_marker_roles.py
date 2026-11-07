@@ -182,7 +182,9 @@ def test_hit_helper_preserves_original_object_and_status() -> None:
 
 @pytest.mark.parametrize("hit_type", [ValidationMarkerHit, RegionMarkerHit])
 def test_hit_helper_accepts_both_existing_validated_marker_shapes(hit_type: type[object]) -> None:
-    hit = hit_type(**_complete_marker_fields())
+    fields = _complete_marker_fields()
+    fields["hmm_target"] = "GVOGm0054"
+    hit = hit_type(**fields)
 
     decision = decide_marker_hit_role(hit, ablation_id=AblationID.A2)  # type: ignore[arg-type]
 
@@ -234,3 +236,28 @@ def test_seed_annotation_preserves_rejected_historical_marker_surface() -> None:
     )
 
     assert markers == [production_marker, rejected_marker, deviation_marker]
+
+
+@pytest.mark.parametrize("status", ["supported", "unvalidated"])
+def test_a2_does_not_count_already_retained_capsid_as_bypass(status):
+    fields = _complete_marker_fields()
+    fields.update(hmm_target="GVOGm0003", validation_status=status)
+    hit = ValidationMarkerHit(**fields)
+    assert decide_marker_hit_role(hit, ablation_id=AblationID.A0).role is MarkerRole.REPORTED_CAPSID
+    decision = decide_marker_hit_role(hit, ablation_id=AblationID.A2)
+    assert decision.role is MarkerRole.REPORTED_CAPSID
+    assert not decision.is_tier1_bypassed
+    assert hit.validation_status == status
+
+
+def test_override_does_not_erase_eligible_viral_support_on_same_gene():
+    from dataclasses import replace
+
+    from virosync.pipeline.phase1.viral_markers import viral_marker_gene_ids
+
+    fields = _complete_marker_fields()
+    fields.update(validation_status="validated", hmm_target="GVOGm0003")
+    override = ValidationMarkerHit(**fields, pfam_override="reassigned")
+    selected = replace(override, hmm_target="GVOGm0054", pfam_override="")
+    assert viral_marker_gene_ids([override]) == frozenset()
+    assert viral_marker_gene_ids([override, selected]) == frozenset({"scaffold_1_1"})

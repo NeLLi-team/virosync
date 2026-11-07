@@ -12,6 +12,7 @@ from virosync.output_contract import (
 )
 from virosync.pipeline.host_signatures import get_taxonomy_lookup
 from virosync.pipeline.phase1.hhg_seeding import Anchor
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.seed_merger import MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
@@ -77,6 +78,8 @@ def _eligible_anchors(anchors: Sequence[Anchor]) -> tuple[tuple[str, Anchor], ..
     """Return one deterministic best marker hit per protein."""
     grouped: dict[str, list[Anchor]] = {}
     for anchor in anchors:
+        if not is_ordinary_marker_evidence(anchor):
+            continue
         grouped.setdefault(_base_gene_id(anchor), []).append(anchor)
 
     selected: list[tuple[str, Anchor]] = []
@@ -128,7 +131,9 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         seed.compute_classification()
     eligible_anchors = _eligible_anchors(overlapping_anchors)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
-    validated_anchors = [anchor for anchor in overlapping_anchors if is_validated_marker(anchor)]
+    validated_anchors = [
+        anchor for anchor in overlapping_anchors if is_validated_marker(anchor) and is_ordinary_marker_evidence(anchor)
+    ]
     # The class family comes from the profile that wins each protein in the Phase 3
     # vote, so family and class never disagree on a tie.
     marker_summary = with_profile_class_families(
@@ -169,7 +174,9 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         # Every overlapping anchor decides, not only the best profile per protein.
         has_capsid_evidence=bool(mcp_gene_ids) or has_validated_capsid_hit(overlapping_anchors),
         mcp_gene_ids=validated_capsid_gene_ids(
-            anchor for anchor in overlapping_anchors if is_mcp_gene(anchor.hallmark_gene)
+            anchor
+            for anchor in overlapping_anchors
+            if is_ordinary_marker_evidence(anchor) and is_mcp_gene(anchor.hallmark_gene)
         ),
         capsid_gene_ids=validated_capsid_gene_ids(overlapping_anchors),
         region_classification=region_classification,

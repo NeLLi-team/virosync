@@ -177,6 +177,13 @@ def arbitrate_hits(
         or selected_hits.get(hit.query_name) is hit
         or is_capsid_evidence_gene(hit.target_name)
     ]
+    outcomes = {record.protein: record.outcome for record in records}
+    for hit in retained:
+        hit.pfam_override = (
+            outcomes[hit.query_name]
+            if hit.query_name in ambiguous and selected_hits.get(hit.query_name) is not hit
+            else ""
+        )
     return retained, records
 
 

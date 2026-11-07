@@ -161,7 +161,6 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
 def test_a1_classification_excludes_markers_in_removed_search_padding() -> None:
     inside = _anchor("inside", "GVOGm0003", 80.0, start=4000, end=5000)
     outside = _anchor("outside", "plv_mcp_1", 90.0, start=8000, end=9000)
-    outside.validation_status = "supported"
     seed = MergedSeed(
         "ctg",
         0,
@@ -319,3 +318,26 @@ def test_a1_uses_frozen_original_core_instead_of_mutated_active_span() -> None:
     assert result.confirmed_seeds == (core,)
     assert result.eve_id == "EVE_ctg_0-101"
     assert (seed.start, seed.end) == (0, 100)
+
+
+def test_a1_ordinary_winner_preserves_reported_capsid_span_and_annotation():
+    capsid = _anchor("gene-a", "GVOGm0003", 200)
+    capsid.pfam_override = "reassigned"
+    selected = _anchor("gene-a", "GVOGm0054", 50)
+    seed = MergedSeed(
+        scaffold="ctg",
+        start=0,
+        end=100,
+        seed_id="seed-a",
+        anchors=[capsid, selected],
+        seed_gene_ids=("gene-a",),
+        confirmed_seeds=(ConfirmedSeed("seed-a", "ctg", 10, 40),),
+    )
+    result = build_phase1_seed_surface([seed]).results[0]
+    assert result.hallmark_genes == ["GVOGm0054"]
+    assert not result.has_mcp
+    assert result.mcp_gene_ids == []
+    assert result.has_capsid_evidence
+    assert result.capsid_gene_ids == ["gene-a"]
+    assert (result.start, result.end) == (10, 40)
+    assert result.confirmed_seeds == seed.confirmed_seeds

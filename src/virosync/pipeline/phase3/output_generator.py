@@ -38,6 +38,7 @@ from virosync.output_contract import (
     resolve_effective_eve_class,
 )
 from virosync.pipeline.hallmark_evidence import EXCLUDED_FAMILIES, has_spatial_rescue
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
 
@@ -124,7 +125,7 @@ class _DetailedOutputSources:
     rescued_protein_ids: set[str]
     diamond_flags: dict[str, tuple[bool, bool]]
     hmm_targets: dict[str, set[str]]
-    marker_hits_by_scaffold: dict[str, list[tuple[int, int, str, str, str, float]]]
+    marker_hits_by_scaffold: dict[str, list[tuple[int, int, str, str, str, float, bool]]]
     genome_gc: float
 
 
@@ -1116,7 +1117,7 @@ class OutputGenerator:
                         status = row.get("validation_status", "")
 
                         # Only include validated markers
-                        if status not in ("validated", "validated_novel"):
+                        if status not in ("validated", "validated_novel") or not is_ordinary_marker_evidence(row):
                             continue
 
                         # Extract base protein ID
@@ -1237,11 +1238,11 @@ class OutputGenerator:
             ]
         )
 
-    def _load_marker_hits(self) -> dict[str, list[tuple[int, int, str, str, str, float]]]:
+    def _load_marker_hits(self) -> dict[str, list[tuple[int, int, str, str, str, float, bool]]]:
         if self._marker_hits is not None:
             return self._marker_hits
 
-        hits_by_scaffold: dict[str, list[tuple[int, int, str, str, str, float]]] = {}
+        hits_by_scaffold: dict[str, list[tuple[int, int, str, str, str, float, bool]]] = {}
         hits_paths = self._validated_marker_hit_paths()
         if not hits_paths:
             self._marker_hits = hits_by_scaffold
@@ -1255,6 +1256,7 @@ class OutputGenerator:
                     parts = line.rstrip("\n").split("\t")
                     if len(parts) < 7:
                         continue
+                    ordinary = is_ordinary_marker_evidence(dict(zip(header, parts, strict=False)))
                     scaffold = parts[idx.get("scaffold", 1)]
                     try:
                         start = int(parts[idx.get("start", 2)])
@@ -1268,7 +1270,9 @@ class OutputGenerator:
                         hmm_score = float(parts[idx.get("hmm_score", 6)])
                     except (ValueError, IndexError):
                         hmm_score = 0.0
-                    hits_by_scaffold.setdefault(scaffold, []).append((start, end, target, status, porf_id, hmm_score))
+                    hits_by_scaffold.setdefault(scaffold, []).append(
+                        (start, end, target, status, porf_id, hmm_score, ordinary)
+                    )
 
         for scaffold in hits_by_scaffold:
             hits_by_scaffold[scaffold].sort(key=lambda x: x[0])
@@ -1284,22 +1288,23 @@ class OutputGenerator:
     ) -> list[str]:
         """Return deduplicated marker names for a region.
 
-        When multiple HMM profiles hit the same protein, only the
-        best-scoring model (highest hmm_score) is returned.
+        Prefer ordinary evidence on a shared protein, then the highest score.
+        Raw unvalidated records remain available for their separate display.
         """
         hits_by_scaffold = self._load_marker_hits()
         hits = hits_by_scaffold.get(scaffold, [])
         # Collect hits overlapping the region, then deduplicate by base gene
-        by_gene: dict[str, tuple[str, float]] = {}  # base_gene -> (target, score)
-        for h_start, h_end, target, status, porf_id, hmm_score in hits:
+        by_gene: dict[str, tuple[str, tuple[bool, float]]] = {}  # base_gene -> (target, ordinary rank)
+        for h_start, h_end, target, status, porf_id, hmm_score, ordinary in hits:
             if h_start < end and h_end > start:
-                if status_filter == "validated" and status not in ("validated", "validated_novel"):
+                if status_filter == "validated" and (not ordinary or status not in ("validated", "validated_novel")):
                     continue
                 if status_filter == "unvalidated" and status in ("validated", "validated_novel"):
                     continue
                 base_gene = porf_id.split("|aa")[0] if porf_id else target
-                if base_gene not in by_gene or hmm_score > by_gene[base_gene][1]:
-                    by_gene[base_gene] = (target, hmm_score)
+                rank = (ordinary, hmm_score)
+                if base_gene not in by_gene or rank > by_gene[base_gene][1]:
+                    by_gene[base_gene] = (target, rank)
         return [target for target, _ in by_gene.values()]
 
     def _load_porfs_by_scaffold(self) -> dict[str, list[tuple[int, int, str]]]:
@@ -1437,7 +1442,9 @@ class OutputGenerator:
                     query = parts[0]
                     target = parts[5] if len(parts) > 5 else ""
                     validation_status = parts[7] if len(parts) > 7 else ""
-                    if validation_status not in ("validated", "validated_novel"):
+                    if validation_status not in ("validated", "validated_novel") or not is_ordinary_marker_evidence(
+                        dict(zip(header.rstrip("\n").split("\t"), parts, strict=False))
+                    ):
                         continue
                 else:
                     query, target = parts[0], parts[1]
@@ -1905,7 +1912,7 @@ class OutputGenerator:
 
         unvalidated_gvogm_names: set[str] = set()
         unvalidated_og_names: set[str] = set()
-        for hit_start, hit_end, target, status, _porf_id, _score in sources.marker_hits_by_scaffold.get(
+        for hit_start, hit_end, target, status, _porf_id, _score, _ordinary in sources.marker_hits_by_scaffold.get(
             result.scaffold, []
         ):
             if hit_start >= result.end or hit_end <= result.start:

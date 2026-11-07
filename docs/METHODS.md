@@ -700,6 +700,26 @@ capsid or Penton hit survives model arbitration and protects its complete gene
 span. It supplies a MEDIUM witness without a score, E-value, coverage or viral
 DIAMOND requirement, while keeping its original validation status and catalogue
 annotation. This exception does not add ordinary core credit or force HIGH.
+Pfam-overridden capsids retain the recorded arbitration outcome and receive only
+this reported-capsid role and floor; they cannot replace the arbitration-selected
+noncapsid model, supply HMM-only novelty cluster support, or contribute to
+ordinary core and HIGH rules. Capsids retained
+by ordinary arbitration still use the ordinary biological qualification rules.
+A2 does not count a capsid already retained by A0 as a Tier-1 bypass intervention.
+The arbitration outcome also follows marker-to-anchor and Phase 3 conversions.
+After validation, ordinary eligibility requires production `validated` or
+`validated_novel` status, or an explicit noncapsid A2 bypass, and no Pfam override.
+Pre-validation HMM arbitration uses only the Pfam selection condition. Phase 1,
+final Phase 2 classification and Phase 3 compute marker roles with the active
+ablation and assembly-mode threshold. A2 bypass provenance follows the actual
+region marker into its anchor and saved state; final classification carries its
+computed role into that same typed representation. Ordinary-credit consumers
+use those explicit roles rather than inferring a bypass independently.
+Only ordinary-eligible records
+determine marker winners, core composition,
+merge compatibility and marker taxonomy votes. Reported capsid records still
+protect all assigned seed spans and remain visible in the final evidence JSON,
+including when no ordinary marker remains.
 Three independent qualifying core families on three
 proteins in one compatible panel and scaffold, within a full-gene span of at
 most 15,000 bp, give a provisional MEDIUM floor. A mapped MCP or CRESS capsid

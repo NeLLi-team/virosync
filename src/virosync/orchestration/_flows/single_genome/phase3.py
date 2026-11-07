@@ -1,5 +1,4 @@
 """Phase 3 subflow: evidence synthesis, verification, tiering."""
-
 import json
 import logging
 from bisect import bisect_left
@@ -22,7 +21,7 @@ from virosync.output_contract import (
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkSupport, HallmarkWitness
 from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
-from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role, is_ordinary_marker_evidence
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode, viral_marker_gene_ids
 from virosync.pipeline.phase2.boundary_diamond import (
@@ -621,6 +620,7 @@ def _build_boundary_hallmarks(
                 "top10_pidents": getattr(marker, "top10_pidents", ""),
                 "best_hit_target": getattr(marker, "best_hit_target", ""),
                 "validation_status": marker_role.original_validation_status,
+                "pfam_override": getattr(marker, "pfam_override", ""),
                 "tier1_bypassed": marker_role.is_tier1_bypassed,
             }
         )
@@ -826,7 +826,9 @@ def _verify_native_boundaries(
     core_hallmark_genes = frozenset(
         base_marker_gene_id(marker.query_porf)
         for marker in validated_markers
-        if marker.validation_status == "validated" and marker.hmm_target in core_roles()
+        if marker.validation_status == "validated"
+        and is_ordinary_marker_evidence(marker)
+        and marker.hmm_target in core_roles()
     )
 
     logger.info(
@@ -1446,7 +1448,12 @@ def _prepare_joint_boundaries(
         if len(finalized) != 1 or (finalized[0].start, finalized[0].end) != (joint.start, joint.end):
             continue
         finalized[0].joint_seed_provenance = joint.joint_seed_provenance
-        refresh_boundary_classification(finalized, validated_markers, ablation_id=config.ablation.id)
+        refresh_boundary_classification(
+            finalized,
+            validated_markers,
+            ablation_id=config.ablation.id,
+            single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+        )
         _recalculate_boundary_composition(finalized, masked_path=masked_path)
         finalized = assign_boundary_candidate_ids(finalized)
         try:

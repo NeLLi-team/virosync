@@ -486,3 +486,24 @@ def test_filter_reads_genome_for_frame_coordinates(tmp_path: Path) -> None:
         30,
         "+",
     )
+
+
+@pytest.mark.parametrize("override, expected", [("contradicted", "unvalidated"), ("", "validated_novel")])
+def test_only_ordinary_capsid_can_supply_novel_marker_neighbor_support(tmp_path, override, expected):
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        ">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n"
+        ">scaffold_2 # 501 # 800 # 1 # ID=1_2\n" + "M" * 100 + "\n"
+    )
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("scaffold_1\tNCLDV__virus|p1\t1e-30\t100\t90\t100\n")
+    markers = filter_validated_markers(
+        [
+            HMMHit("scaffold_1", "GVOGm0003", 100, 1e-20, 100, 1, 100, pfam_override=override),
+            HMMHit("scaffold_2", "GVOGm0054", 100, 1e-20, 100, 1, 100),
+        ],
+        diamond,
+        proteome,
+    )
+    assert next(marker for marker in markers if marker.hmm_target == "GVOGm0054").validation_status == expected
+    assert next(marker for marker in markers if marker.hmm_target == "GVOGm0003").validation_status == "validated"
