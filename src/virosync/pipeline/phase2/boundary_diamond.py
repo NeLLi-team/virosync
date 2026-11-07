@@ -800,7 +800,8 @@ def sample_control_porfs_genome_wide(
     # Step 1: Build eligible gene stretches (outside exclusion zones)
     eligible_stretches = []  # List of (scaffold, start_idx, end_idx, porfs)
 
-    for scaffold, porfs in proteome_index.items():
+    for scaffold in sorted(proteome_index):
+        porfs = proteome_index[scaffold]
         excluded = excluded_indices.get(scaffold, set())
 
         # Expand exclusion zone by min_distance

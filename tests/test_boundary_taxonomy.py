@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,22 @@ from virosync.pipeline.phase2.boundary_diamond import (
     extract_sequences,
     get_flanking_taxonomy,
     pORF,
+    sample_control_porfs_genome_wide,
 )
 from virosync.pipeline.taxonomy_utils import resolve_org_id
+
+
+def test_control_sampling_ignores_scaffold_insertion_order() -> None:
+    """Identical eligible genes give identical controls after scaffold reordering."""
+    index = {
+        scaffold: [pORF(f"{scaffold}_{i}", scaffold, i * 100, i * 100 + 90, "+") for i in range(22)]
+        for scaffold in ("a", "b")
+    }
+    forward = sample_control_porfs_genome_wide(index, {}, 11, 0, random.Random(7))
+    reverse = sample_control_porfs_genome_wide(dict(reversed(list(index.items()))), {}, 11, 0, random.Random(7))
+
+    assert len(forward) == len(reverse) == 11
+    assert forward == reverse
 
 
 def _taxonomy(porf_id: str, start: int, end: int) -> GeneTaxonomy:

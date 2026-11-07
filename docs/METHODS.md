@@ -574,7 +574,10 @@ order:
 
 Phase 2 searches once at the larger of `phase2.diamond_top_k` and
 `phase2.viral_hit_depth` (candidate default 50). After masking and per-genome
-filtering, retained hits are sorted by decreasing bitscore. Each gene's
+filtering, retained hits are sorted by decreasing bitscore. Control windows are
+built in sorted scaffold-name order before seeded sampling, so changing FASTA
+scaffold order does not change control membership. Within-scaffold gene order,
+exclusion distances and window sizes remain unchanged. Each gene's
 `top10_*` fields and host-lineage share use the first ten retained hits, or fewer
 when `phase2.diamond_top_k` is smaller.
 The gene also records `viral_hit_within_depth`
