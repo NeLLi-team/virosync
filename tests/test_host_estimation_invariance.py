@@ -1,9 +1,10 @@
-"""Marker alternatives and deeper validation hits must not reweight the host."""
+"""Viral marker evidence gates host training; eligible domains keep their weights."""
 
 from types import SimpleNamespace
 
 import pytest
 
+from virosync.ablation import AblationID
 from virosync.pipeline import host_signatures as hs
 
 
@@ -34,14 +35,17 @@ def marker(query, target="EUK__a", scaffold="ctg"):
 
 @pytest.mark.parametrize("mode", ["rank", "bitscore"])
 @pytest.mark.parametrize("as_object", [False, True])
-def test_alternatives_and_domains_cannot_flip_host(mode, as_object):
+def test_domain_records_retain_original_host_weights(mode, as_object):
     original = [marker("p1|aa1-100"), marker("p2", "EUK__b"), marker("p3", "EUK__b")]
     alternatives = [dict(original[0], hmm_target="GVOGm0003"), dict(original[0], query_porf="p1|aa20-80")]
     convert = (lambda rows: [SimpleNamespace(**row) for row in rows]) if as_object else list
     baseline = hs.build_host_signature_model(convert(original), weight_mode=mode)
     expanded = hs.build_host_signature_model(convert(original + alternatives), weight_mode=mode)
-    assert expanded.to_dict() == baseline.to_dict()
-    assert hs.host_lineage(expanded) == hs.host_lineage(baseline)
+    assert (
+        expanded.lineage_weights["euk|metamonada||trichomonadida"]
+        == 3 * baseline.lineage_weights["euk|metamonada||trichomonadida"]
+    )
+    assert expanded.lineage_weights["euk|discoba||euglenida"] == baseline.lineage_weights["euk|discoba||euglenida"]
 
 
 @pytest.mark.parametrize("mode", ["rank", "bitscore"])
@@ -80,10 +84,10 @@ def test_independent_proteins_and_scaffolds_remain_independent():
     assert three.lineage_weights == {key: value * 3 for key, value in one.lineage_weights.items()}
 
 
-def test_first_protein_record_retains_original_evidence():
+def test_separate_domain_records_each_contribute():
     first = marker("p1|aa1-100", "EUK__b")
     later = marker("p1|aa20-80", "EUK__a")
-    assert hs.build_host_signature_model([first, later]).to_dict() == hs.build_host_signature_model([first]).to_dict()
+    assert len(hs.build_host_signature_model([first, later]).lineage_weights) == 2
 
 
 @pytest.mark.parametrize("masked", [frozenset(), frozenset({"self"})])
@@ -113,7 +117,6 @@ def test_host_search_keeps_prior_candidate_limit_and_duplicate_order(tmp_path, m
 def test_host_task_keeps_rank13_viral_marker_out_of_host_votes(tmp_path, monkeypatch):
     from virosync.orchestration import tasks
     from virosync.pipeline import search_backend as backend
-    from virosync.pipeline.phase1 import marker_validation as mv
     from virosync.pipeline.phase1.hhg_seeding import HMMHit
 
     proteome = tmp_path / "proteome.faa"
@@ -134,19 +137,12 @@ def test_host_task_keeps_rank13_viral_marker_out_of_host_votes(tmp_path, monkeyp
     marker, host_records = tasks.marker_validation_task(
         [hit], proteome, tmp_path / "db", tmp_path / "out", max_seqs=27, threads=1
     )
-    assert calls == [("marker", 27), ("host", 10)]
+    assert calls == [("marker", 27)]
     assert marker[0].top10_prefixes.split(",")[0] == "PLV__"
-    assert host_records[0].top10_prefixes.split(",")[0] == "EUK__"
-    assert hs.build_host_signature_model(host_records).lineage_weights
-    assert not hs.build_host_signature_model(marker).lineage_weights
-    assert mv.collect_host_signatures(host_records) == {"EUK__a"}
-    assert mv.collect_host_signatures(marker) == set()
-    monkeypatch.setattr(hs, "_TAXONOMY_LOOKUP", None)
-    assert not hs.build_host_signature_model(host_records).lineage_weights
-    assert mv.collect_host_signatures(host_records) == {"EUK__a"}
+    assert host_records == []
 
 
-def test_host_sampling_does_not_erase_or_apply_non_capsid_pfam_arbitration(tmp_path, monkeypatch):
+def test_host_sampling_excludes_pfam_overridden_records(tmp_path, monkeypatch):
     from virosync.orchestration import tasks
     from virosync.pipeline.phase1.hhg_seeding import HMMHit
 
@@ -163,7 +159,8 @@ def test_host_sampling_does_not_erase_or_apply_non_capsid_pfam_arbitration(tmp_p
     markers, host_records = tasks.marker_validation_task([hit], proteome, tmp_path / "db", tmp_path / "out", threads=1)
     assert markers == []
     assert hit.pfam_override == "contradicted"
-    assert hs.build_host_signature_model(host_records).lineage_weights
+    assert host_records == []
+    assert not hs.build_host_signature_model(host_records).lineage_weights
 
 
 @pytest.mark.parametrize("no_hits", [True, False])
@@ -179,3 +176,101 @@ def test_no_query_host_evidence_is_explicit_and_does_not_search(tmp_path, monkey
     out = tmp_path / "validation"
     assert tasks.marker_validation_task([] if no_hits else [object()], tmp_path / "p", tmp_path / "db", out) == ([], [])
     assert (out / "host_diamond_top10.tsv").read_bytes() == b""
+    assert (out / "host_hmm_hit_porfs.faa").read_bytes() == b""
+
+
+@pytest.mark.parametrize(
+    "domain,queries_expected,weights_expected",
+    [
+        ("Wrong", ["ctg_3"], {"euk|discoba||euglenida": 55.0}),
+        (
+            "Polymerase",
+            ["ctg_3"],
+            {"euk|discoba||euglenida": 55.0},
+        ),
+    ],
+)
+def test_pfam_capsid_retention_does_not_expand_host_queries_or_votes(
+    tmp_path, monkeypatch, domain, queries_expected, weights_expected
+):
+    from virosync.orchestration import tasks
+    from virosync.pipeline.phase1.hhg_seeding import HMMHit
+    from virosync.pipeline.phase1.pfam_arbitration import ModelPfamAnnotation, arbitrate_hits
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        "".join(
+            f">ctg_{i} # {1000 * i + 1} # {1000 * i + 300} # 1 # ID=1_{i}\n" + "M" * 100 + "\n" for i in range(1, 4)
+        )
+    )
+    hits = [
+        HMMHit(f"ctg_{i}", model, score, 1e-20, score, 1, 100)
+        for i in (1, 2)
+        for model, score in [("GVOGm0003", 200), ("GVOGm0054", 100)]
+    ]
+    hits.append(HMMHit("ctg_3", "COG0001", 100, 1e-20, 100, 1, 100))
+    selected, _ = arbitrate_hits(
+        hits,
+        {"ctg_1": {domain}, "ctg_2": {domain}},
+        {
+            "GVOGm0003": ModelPfamAnnotation(frozenset({"CapsidDomain"}), ""),
+            "GVOGm0054": ModelPfamAnnotation(frozenset({"Polymerase"}), ""),
+        },
+    )
+    queries = []
+
+    def diamond(**kwargs):
+        ids = [line[1:] for line in kwargs["query_fasta"].read_text().splitlines() if line.startswith(">")]
+        queries.append(ids)
+        kwargs["output_tsv"].write_text(
+            "".join(
+                f"{q}\tEUK__{'b' if q == 'ctg_3' else 'a'}|p{i}\t1e-20\t{300 - i}\t80\t100\n"
+                for q in ids
+                for i in range(10)
+            )
+        )
+
+    monkeypatch.setattr("virosync.pipeline.search_backend._run_diamond", diamond)
+    markers, host = tasks.marker_validation_task(selected, proteome, tmp_path / "db", tmp_path / "out", threads=1)
+    assert {m.query_porf.split("|aa", 1)[0] for m in markers if m.hmm_target == "GVOGm0003"} == {"ctg_1", "ctg_2"}
+    from virosync.pipeline.phase1.marker_roles import MarkerRole, decide_marker_hit_role
+
+    assert all(
+        decide_marker_hit_role(m, ablation_id=AblationID.A0).role is MarkerRole.REPORTED_CAPSID
+        for m in markers
+        if m.hmm_target == "GVOGm0003"
+    )
+    assert queries[-1] == queries_expected
+    assert {m.query_porf.split("|aa", 1)[0] for m in host} == set(queries_expected)
+    model = hs.build_host_signature_model(host)
+    assert model.lineage_weights == weights_expected
+    assert (tmp_path / "out/host_hmm_hit_porfs.faa").read_text().count(">") == len(queries_expected)
+
+
+@pytest.mark.parametrize("prefix", ["NCLDV__", "GVMAG__", "PHAGE__"])
+def test_retained_rank20_viral_match_excludes_non_capsid_host(tmp_path, monkeypatch, prefix):
+    from virosync.orchestration import tasks
+    from virosync.pipeline.phase1.hhg_seeding import HMMHit
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">ctg_1 # 1 # 300 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    calls = []
+
+    def diamond(**kwargs):
+        calls.append(kwargs)
+        rows = [f"ctg_1\tEUK__g{i}|p\t1e-20\t{300 - i}\t80\t100\n" for i in range(19)]
+        rows.append(f"ctg_1\t{prefix}virus|p\t1e-20\t100\t40\t100\n")
+        kwargs["output_tsv"].write_text("".join(rows))
+
+    monkeypatch.setattr("virosync.pipeline.search_backend._run_diamond", diamond)
+    markers, host = tasks.marker_validation_task(
+        [HMMHit("ctg_1", "GVOGm0054", 100, 1e-20, 100, 1, 100)],
+        proteome,
+        tmp_path / "db",
+        tmp_path / "out",
+        threads=1,
+    )
+    assert len(markers[0].top10_prefixes.split(",")) == 20
+    assert host == []
+    assert len(calls) == 1
+    assert (tmp_path / "out/host_hmm_hit_porfs.faa").read_text() == ""

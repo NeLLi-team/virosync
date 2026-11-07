@@ -74,10 +74,17 @@ def test_pool_worker_death_kills_genometools_child(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="worker"):
         terminal_repeats._plan_scaffolds_in_workers([("kill", str(child_file))], 0, 1)
     status = Path(f"/proc/{int(child_file.read_text())}/status")
+
+    def child_is_live():
+        try:
+            return "State:\tZ" not in status.read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
     deadline = time.monotonic() + 1
-    while status.exists() and "State:\tZ" not in status.read_text() and time.monotonic() < deadline:
+    while child_is_live() and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert not status.exists() or "State:\tZ" in status.read_text()
+    assert not child_is_live()
 
 
 def test_pool_receives_explicit_taxonomy_and_host_context(monkeypatch):

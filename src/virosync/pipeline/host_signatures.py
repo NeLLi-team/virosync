@@ -1,8 +1,9 @@
 """Host signature modeling for EUK-like marker hits.
 
-Builds a weighted token model from distinct marker proteins whose top-10
-Diamond prefixes are purely cellular. Used for host-like scoring and
-outward extension stopping.
+Builds a weighted token model from eligible marker records using their first ten
+DIAMOND matches. Each projected domain contributes separately. The caller excludes
+proteins with viral marker-search evidence or reported capsids before host search.
+Used for host-like scoring and outward extension stopping.
 """
 
 from __future__ import annotations
@@ -288,7 +289,7 @@ def build_host_signature_model(
 ) -> HostSignatureModel:
     """Build a weighted host-signature model from marker hits.
 
-    Uses the first record per protein with no viral/supporting top-10 prefix.
+    Uses each record with no excluded viral/supporting top-ten prefix.
     Token weights are weighted sums of taxonomy substrings (split at |).
     """
     validated = validated_prefixes or {
@@ -312,15 +313,7 @@ def build_host_signature_model(
     token_bits: dict[str, list[float]] = {}
     lineage_weights: dict[str, float] = {}
 
-    seen_proteins: set[tuple[str, str]] = set()
     for hit in marker_hits:
-        # Marker DIAMOND searches full proteins; HMM domains share that evidence.
-        query = str(_get_record_attr(hit, "query_porf", "") or "")
-        if query:
-            protein = (str(_get_record_attr(hit, "scaffold", "")), query.split("|aa", 1)[0])
-            if protein in seen_proteins:
-                continue
-            seen_proteins.add(protein)
         top10_prefixes = _parse_top10_prefixes(hit)[:10]
         if any(p in validated for p in top10_prefixes):
             continue

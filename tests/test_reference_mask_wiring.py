@@ -227,7 +227,12 @@ def test_marker_validation_task_forwards_the_mask(
 
     calls: list[dict] = []
     monkeypatch.setattr(phase1_package, "extract_hmm_hit_sequences", lambda **_kwargs: 1)
-    monkeypatch.setattr(phase1_package, "run_diamond_on_hmm_hits", lambda **kwargs: calls.append(kwargs))
+
+    def marker_search(**kwargs):
+        calls.append(kwargs)
+        kwargs["output_tsv"].write_text("p1\tEUK__host|protein\t1e-5\t100\t80\t100\n")
+
+    monkeypatch.setattr(phase1_package, "run_diamond_on_hmm_hits", marker_search)
     monkeypatch.setattr(phase1_package, "filter_validated_markers", lambda **_kwargs: [])
 
     monkeypatch.setattr(

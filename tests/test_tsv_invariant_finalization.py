@@ -345,6 +345,7 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
         host_output = output_dir / "phase1/marker_validation/host_diamond_top10.tsv"
         host_output.parent.mkdir(parents=True, exist_ok=True)
         host_output.write_text("", encoding="utf-8")
+        host_output.with_name("host_hmm_hit_porfs.faa").write_text("")
         host_signature_model = HostSignatureModel()
         merged_seeds = [
             MergedSeed(

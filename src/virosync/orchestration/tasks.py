@@ -5,7 +5,6 @@ the single-genome orchestrator.
 """
 
 import logging
-from dataclasses import replace
 from pathlib import Path
 
 # Import pipeline functions for testing/mocking
@@ -364,7 +363,14 @@ def marker_validation_task(
         filter_validated_markers,
         run_diamond_on_hmm_hits,
     )
-    from virosync.pipeline.phase1.marker_validation import run_host_diamond_on_hmm_hits
+    from virosync.pipeline.phase1.marker_roles import is_arbitration_selected_marker
+    from virosync.pipeline.phase1.marker_validation import (
+        SUPPORTING_PREFIXES,
+        VALIDATED_PREFIXES,
+        parse_taxonomy_prefix,
+        run_host_diamond_on_hmm_hits,
+    )
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir)
@@ -378,6 +384,8 @@ def marker_validation_task(
         logger.info(f"Loaded {len(taxonomy_lookup)} taxonomy labels")
 
     host_output = output_dir / "host_diamond_top10.tsv"
+    host_query = output_dir / "host_hmm_hit_porfs.faa"
+    host_query.write_text("")
     if not hmm_hits:
         logger.info("marker_validation: skipped (no HMM hits)")
         host_output.write_text("")
@@ -441,8 +449,27 @@ def marker_validation_task(
             max_seqs=max_seqs,
         )
 
+        excluded_host_proteins = {hit.query_name for hit in hmm_hits if is_capsid_evidence_gene(hit.target_name)}
+        with diamond_output.open() as handle:
+            for line in handle:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                query, target, *_ = line.rstrip().split("\t")
+                if parse_taxonomy_prefix(target) in VALIDATED_PREFIXES | SUPPORTING_PREFIXES:
+                    excluded_host_proteins.add(query)
+        host_hits = [
+            hit
+            for hit in hmm_hits
+            if is_arbitration_selected_marker(hit) and hit.query_name not in excluded_host_proteins
+        ]
+        host_count = extract_hmm_hit_sequences(
+            hmm_hits=host_hits, proteome_fasta=Path(proteome_path), output_fasta=host_query
+        )
+        if not host_count:
+            host_output.write_text("")
+            return validated_markers, []
         run_host_diamond_on_hmm_hits(
-            tmp_faa_path,
+            host_query,
             Path(marker_db),
             host_output,
             threads=threads,
@@ -450,10 +477,8 @@ def marker_validation_task(
             search_backend=search_backend,
             masked_genomes=masked_genomes,
         )
-        # Host sampling concerns queried proteins, not their seed/Pfam role.
-        # Copy only for this projection; measured HMM and marker facts stay intact.
         host_records = filter_validated_markers(
-            hmm_hits=[replace(hit, pfam_override="") for hit in hmm_hits],
+            hmm_hits=host_hits,
             diamond_output_tsv=host_output,
             proteome_fasta=Path(proteome_path),
             genome_fasta=Path(genome_path) if genome_path else None,

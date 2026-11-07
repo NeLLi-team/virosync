@@ -257,6 +257,7 @@ class _MockPipeline:
         if not resumed:
             host_path.parent.mkdir(parents=True, exist_ok=True)
             host_path.write_text("p1\tEUK__host|p\t1e-20\t100\t90\t100\n")
+            host_path.with_name("host_hmm_hit_porfs.faa").write_text(">p1\nMMM\n")
         merged_seeds = [
             MergedSeed(
                 scaffold="scaffold",
@@ -698,6 +699,7 @@ _REQUIRED_PHASE_ARTIFACTS = (
     (1, "phase1/ablation_events.json"),
     (1, "phase1/resume_state.json"),
     (1, "phase1/marker_validation/host_diamond_top10.tsv"),
+    (1, "phase1/marker_validation/host_hmm_hit_porfs.faa"),
     (2, "phase2/ablation_events.json"),
     (2, "phase2/refined_boundaries.bed"),
     (2, "phase2/refined_state.json"),

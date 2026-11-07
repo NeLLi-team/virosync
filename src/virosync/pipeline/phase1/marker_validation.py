@@ -49,6 +49,7 @@ Validation rules in the production filter:
 - "supported": GVMAG__ retained-hit support below the validation threshold
 - "unvalidated": cellular only, unknown, or below thresholds
 """
+
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -337,6 +338,9 @@ def run_diamond_on_hmm_hits(
         max_target_seqs=max_seqs,
         extra_flags=extra_flags,
         masked_genomes=masked_genomes,
+        preferred_hit=lambda target, identity: (
+            parse_taxonomy_prefix(target) in VALIDATED_PREFIXES and identity >= VALIDATION_MIN_PIDENT
+        ),
     )
 
     logger.info(f"Diamond search complete: {output_tsv}")

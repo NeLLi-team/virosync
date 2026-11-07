@@ -521,23 +521,31 @@ at most 200 targets before selection; it does not refill after filtering, so
 fewer than 20 matches may remain. Run provenance records the effective limit.
 These searches
 use [reference masking](#reference-masking), viral/cellular protein-twin selection
-and reduction to one hit per labelled genome, as described below. Validation and
-marker class votes use all retained matches. Host-signature estimation uses a separate ten-hit search on the same full-length
-HMM-hit proteins. This search applies the same reference mask, retains reference
-order and duplicate target genomes, and does not apply twin or per-genome
-selection. It uses the prior candidate limit: ten targets without a mask or
-100 before masking, then at most ten unmasked matches. It is not the first ten
-of the marker-validation search's 200 candidates. Both searches use the same
-sensitivity flags. Host exclusion, host presence, token collection and weighted
-votes use only the separate host evidence, including confirmed frameshift
-proteins when enabled. Each physical protein contributes once, without counting
-HMM domain segments or model alternatives again. Host sampling follows queried
-proteins independently of seed-role or Pfam arbitration; the host-only record
-projection does not alter the measured HMM or marker records. The separate
-`host_diamond_top10.tsv` files are authenticated Phase1 resume artifacts;
-resuming retains the saved host model and rejects missing or changed evidence.
-Host-prefix filtering and rank weights otherwise remain unchanged. The host-signature model does not
-create seeds. Gene-taxonomy hit limits remain separate.
+and reduction to one hit per labelled genome, as described below. Within each
+already selected genome group, marker validation keeps its best-ranked viral
+match meeting the existing validation-prefix and 25% identity rules when available.
+This preserves selected genome membership, table slot order and the 20-genome limit. Validation and
+marker class votes use all retained matches. Host training first excludes proteins
+with any viral or supporting prefix in these retained marker matches, including
+PHAGE and GVMAG. Any reported semantic capsid or Penton hit also excludes its
+whole protein from host training, even without viral DIAMOND support or with a
+Pfam override. Its reported-capsid seed and MEDIUM floor remain unchanged; this
+does not grant automatic HIGH confidence.
+
+The remaining current arbitration-selected noncapsid cohort receives a separate
+ten-hit host search. It applies the same reference mask, retains reference order
+and duplicate genomes, and does not apply twin or per-genome selection. Its
+candidate limit remains ten without a mask or100 before masking, followed by at
+most ten unmasked matches. Host exclusion, presence and weighting use these ten
+matches. Each projected HMM segment contributes its original rank or bitscore
+weights; different segments of one protein can contribute separately. This does
+not restore historical HMM eligibility thresholds.
+
+Both searches use the same sensitivity flags. The separate
+`host_hmm_hit_porfs.faa` and `host_diamond_top10.tsv` files are authenticated
+Phase1 resume artifacts, including enabled confirmed frameshift validation.
+Resuming retains the saved host model and rejects missing or changed evidence.
+Host models do not create seeds; gene-taxonomy hit limits remain separate.
 
 The sensitive marker-validation search sets `--ext-chunk-size 400` to examine
 larger batches of candidate targets during DIAMOND's ranking heuristic. This

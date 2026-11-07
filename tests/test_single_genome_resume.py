@@ -212,6 +212,8 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     host_hits = output_dir / "phase1/marker_validation/host_diamond_top10.tsv"
     host_hits.parent.mkdir(parents=True, exist_ok=True)
     host_hits.write_text("")
+    host_query = host_hits.with_name("host_hmm_hit_porfs.faa")
+    host_query.write_text("")
     phase1_artifacts = tuple(
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
@@ -219,6 +221,7 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
             (frameshift_hits, "frameshift-hits-v2"),
             (phase1_state, PHASE1_STATE_SCHEMA),
             (host_hits, "virosync-tsv-v1:phase1/marker_validation/host_diamond_top10.tsv"),
+            (host_query, "virosync-faa-v1:phase1/marker_validation/host_hmm_hit_porfs.faa"),
         )
     )
     publish_phase_completion(

@@ -507,3 +507,97 @@ def test_only_ordinary_capsid_can_supply_novel_marker_neighbor_support(tmp_path,
     )
     assert next(marker for marker in markers if marker.hmm_target == "GVOGm0054").validation_status == expected
     assert next(marker for marker in markers if marker.hmm_target == "GVOGm0003").validation_status == "validated"
+
+
+def test_marker_wrapper_preserves_qualifying_viral_member_of_selected_genome(tmp_path, monkeypatch):
+    from virosync.pipeline.phase1.marker_validation import run_diamond_on_hmm_hits
+    from virosync.pipeline.phase1.region_assembly import can_seed_marker
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">ctg_1 # 1 # 300 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+
+    def diamond(**kwargs):
+        kwargs["output_tsv"].write_text(
+            "ctg_1\tNCLDV__v|weak\t1e-20\t300\t24\t100\nctg_1\tNCLDV__v|qualifying\t1e-20\t290\t40\t100\n"
+        )
+
+    monkeypatch.setattr("virosync.pipeline.search_backend._run_diamond", diamond)
+    output = tmp_path / "selected.tsv"
+    run_diamond_on_hmm_hits(proteome, tmp_path / "db", output, threads=1)
+    markers = filter_validated_markers([HMMHit("ctg_1", "GVOGm0054", 100, 1e-20, 100, 1, 100)], output, proteome)
+    assert len(markers) == 1
+    assert markers[0].validation_status == "validated"
+    assert "qualifying" in markers[0].top10_targets
+    assert can_seed_marker(markers[0].hmm_target, markers[0].validation_status)
+
+
+def test_marker_preference_keeps_mask_twins_and_first20_genome_slots(tmp_path, monkeypatch):
+    from virosync.pipeline import search_backend
+    from virosync.pipeline.phase1.marker_validation import run_diamond_on_hmm_hits
+
+    rows = [
+        "q\tNCLDV__masked|p\t1e-20\t400\t90\t100\n",
+        "q\tEUK__v|twin\t1e-20\t350\t80\t100\n",
+        "q\tNCLDV__v|twin\t1e-20\t340\t24\t100\n",
+    ]
+    rows.extend(f"q\tEUK__g{i}|p\t1e-20\t{330 - i}\t80\t100\n" for i in range(19))
+    rows.extend(["q\tNCLDV__v|qualifying\t1e-20\t290\t40\t100\n", "q\tNCLDV__late|p\t1e-20\t280\t90\t100\n"])
+
+    def diamond(**kwargs):
+        kwargs["output_tsv"].write_text("".join(rows))
+
+    monkeypatch.setattr(search_backend, "_run_diamond", diamond)
+    selected = tmp_path / "marker.tsv"
+    run_diamond_on_hmm_hits(
+        tmp_path / "q.faa", tmp_path / "db", selected, threads=1, masked_genomes=frozenset({"masked"})
+    )
+    targets = [line.split("\t")[1] for line in selected.read_text().splitlines()]
+    assert targets == ["NCLDV__v|qualifying", *[f"EUK__g{i}|p" for i in range(19)]]
+    ordinary = tmp_path / "ordinary.tsv"
+    search_backend.run_genome_filtered_search(
+        tmp_path / "q.faa",
+        tmp_path / "db",
+        ordinary,
+        threads=1,
+        max_target_seqs=20,
+        masked_genomes=frozenset({"masked"}),
+    )
+    assert ordinary.read_text().splitlines()[0].split("\t")[1] == "NCLDV__v|twin"
+
+
+def test_marker_representative_restores_nearby_three_core_rescue(tmp_path, monkeypatch):
+    from virosync.orchestration.tasks import marker_validation_task
+    from virosync.pipeline.hallmark_evidence import add_rescue_seeds, collect_hallmark_evidence, find_spatial_witnesses
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(
+        "".join(
+            f">ctg_{i + 1} # {i * 1000 + 1} # {i * 1000 + 300} # 1 # ID=1_{i + 1}\n" + "M" * 100 + "\n"
+            for i in range(4)
+        )
+    )
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">ctg\n" + "A" * 5000 + "\n")
+    hits = [
+        HMMHit(f"ctg_{i + 1}", model, 100, 1e-20, 100, 1, 100)
+        for i, model in enumerate(["VS000375", "GVOGm0054", "GVOGm0760", "VS000106"])
+    ]
+
+    def diamond(**kwargs):
+        kwargs["output_tsv"].write_text(
+            "ctg_1\tNCLDV__v|weak\t1e-20\t300\t24\t100\nctg_1\tNCLDV__v|qualifying\t1e-20\t290\t40\t100\n"
+        )
+
+    monkeypatch.setattr("virosync.pipeline.search_backend._run_diamond", diamond)
+    markers, _ = marker_validation_task(
+        hits, proteome, tmp_path / "db", tmp_path / "out", genome_path=genome, threads=1
+    )
+    assert [m.validation_status for m in markers] == [
+        "validated",
+        "validated_novel",
+        "validated_novel",
+        "validated_novel",
+    ]
+    witnesses = find_spatial_witnesses(collect_hallmark_evidence(markers, hits))
+    assert [(w.rule, w.start, w.end) for w in witnesses] == [("three_core_15kb", 1000, 3300)]
+    assert [(seed.start, seed.end) for seed in add_rescue_seeds([], witnesses)] == [(1000, 3300)]

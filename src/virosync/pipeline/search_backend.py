@@ -9,8 +9,9 @@ proteome database repeats subject IDs, holds several near-identical proteins per
 genome, and lists some proteins under both a cellular and a viral label, so its
 gene-taxonomy callers use run_genome_filtered_search(), which fetches
 TARGET_FETCH_MULTIPLIER times the requested hits and reduces them per query with
-select_target_hits(). Marker validation uses the same selection with 20 retained
-hits. The plain search remains available to callers that need raw ranked rows.
+select_target_hits(). Marker validation keeps the same 20 genome slots but prefers
+a qualifying viral row within each slot. The plain search remains available to
+callers that need raw ranked rows.
 
 Both searches take the run's reference mask, a set of genome keys (see
 virosync.pipeline.reference_mask). They fetch TARGET_FETCH_MULTIPLIER times the
@@ -127,6 +128,7 @@ def run_genome_filtered_search(
     extra_flags: list[str] | None = None,
     timeout: int = DEFAULT_SEARCH_TIMEOUT,
     masked_genomes: frozenset[str] = frozenset(),
+    preferred_hit: Callable[[str, float], bool] | None = None,
 ) -> Path:
     """Run a protein search that keeps one hit per target genome.
 
@@ -135,6 +137,8 @@ def run_genome_filtered_search(
     keeps the first ``max_target_seqs`` after the mask, the twin rule and the
     per-genome rule of select_target_hits(). A ``max_target_seqs`` of 0 means
     unlimited and skips the twin and per-genome rules; masked rows are still dropped.
+    ``preferred_hit`` can replace a selected genome's representative with its
+    first qualifying row, without changing the selected genomes or their order.
     """
     columns = list(DEFAULT_COLUMNS) if output_columns is None else output_columns
     fetch_limit = max_target_seqs * TARGET_FETCH_MULTIPLIER if max_target_seqs > 0 else 0
@@ -151,7 +155,7 @@ def run_genome_filtered_search(
         timeout=timeout,
     )
     if max_target_seqs > 0:
-        filter_hits_file(output_tsv, columns, max_target_seqs, masked_genomes)
+        filter_hits_file(output_tsv, columns, max_target_seqs, masked_genomes, preferred_hit=preferred_hit)
     elif masked_genomes:
         mask_hits_file(output_tsv, columns, 0, masked_genomes)
     return output_tsv
@@ -232,11 +236,14 @@ def filter_hits_file(
     output_columns: Sequence[str],
     max_targets: int,
     masked_genomes: frozenset[str] = frozenset(),
+    *,
+    preferred_hit: Callable[[str, float], bool] | None = None,
 ) -> None:
     """Rewrite a DIAMOND table in place, keeping select_target_hits() rows per query.
 
     The columns stay as DIAMOND wrote them. Rows of one query must be adjacent,
     which DIAMOND guarantees.
+    A preferred representative changes neither genome membership nor rank.
 
     Raises:
         ValueError: If ``output_columns`` lacks ``qseqid`` or ``sseqid``.
@@ -245,6 +252,7 @@ def filter_hits_file(
         hits_tsv,
         output_columns,
         lambda subject_ids: select_target_hits(subject_ids, max_targets, masked_genomes),
+        preferred_hit=preferred_hit,
     )
 
 
@@ -274,6 +282,8 @@ def _rewrite_hits_per_query(
     hits_tsv: Path,
     output_columns: Sequence[str],
     choose_rows: Callable[[list[str]], list[int]],
+    *,
+    preferred_hit: Callable[[str, float], bool] | None = None,
 ) -> None:
     """Replace each query's rows in place by the rows ``choose_rows`` picks from its subject IDs."""
     for required in ("qseqid", "sseqid"):
@@ -281,6 +291,7 @@ def _rewrite_hits_per_query(
             raise ValueError(f"cannot filter hits without {required} in {list(output_columns)}")
     query_idx = output_columns.index("qseqid")
     subject_idx = output_columns.index("sseqid")
+    identity_idx = output_columns.index("pident") if preferred_hit is not None else None
 
     filtered_path = hits_tsv.with_name(hits_tsv.name + ".filtered")
     with hits_tsv.open(encoding="utf-8") as src, filtered_path.open("w", encoding="utf-8") as dst:
@@ -288,7 +299,14 @@ def _rewrite_hits_per_query(
         for _, query_lines in groupby(lines, key=lambda line: line.split("\t", query_idx + 1)[query_idx]):
             hits = list(query_lines)
             subjects = [line.split("\t")[subject_idx] for line in hits]
-            dst.writelines(hits[idx] for idx in choose_rows(subjects))
+            selected = choose_rows(subjects)
+            if preferred_hit is not None:
+                preferred = {}
+                for idx, subject in enumerate(subjects):
+                    if preferred_hit(subject, float(hits[idx].split("\t")[identity_idx])):
+                        preferred.setdefault(subject.partition("|")[0], idx)
+                selected = [preferred.get(subjects[idx].partition("|")[0], idx) for idx in selected]
+            dst.writelines(hits[idx] for idx in selected)
     os.replace(filtered_path, hits_tsv)
 
 
