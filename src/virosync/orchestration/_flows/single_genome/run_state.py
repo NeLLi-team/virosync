@@ -114,6 +114,7 @@ _PHASE_REQUIRED_PATHS = {
         {
             "phase1/ablation_events.json",
             "phase1/resume_state.json",
+            "phase1/marker_validation/host_diamond_top10.tsv",
         }
     ),
     2: frozenset(
@@ -822,7 +823,12 @@ def _validate_phase_checkpoint(
     if record.phase == 1:
         from .phase1_state import phase1_state_from_document
 
-        phase1_state_from_document(_read_artifact_json(root, "phase1/resume_state.json"))
+        state = phase1_state_from_document(_read_artifact_json(root, "phase1/resume_state.json"))
+        from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
+
+        if any(is_rescued_protein_id(marker.query_porf) for marker in state.validated_markers):
+            if "phase1/frameshift_screening/validation/host_diamond_top10.tsv" not in artifacts:
+                raise ValueError("Phase 1 is missing authenticated frameshift host-search evidence")
     elif record.phase == 2:
         from virosync.pipeline.phase2.boundary_refiner import boundary_candidate_id
 

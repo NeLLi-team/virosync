@@ -299,10 +299,11 @@ def _run_phase1_subflow(
             set_taxonomy_lookup,
         )
 
-        # Initialize taxonomy lookup on resume (needed for host signature scoring)
+        # Initialize taxonomy lookup on resume (needed for host signature scoring).
+        tax_lookup = None
         if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
             tax_lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
-            set_taxonomy_lookup(tax_lookup)
+        set_taxonomy_lookup(tax_lookup)
 
         if not phase1_state_path.is_file():
             raise ValueError("authenticated Phase 1 is missing phase1/resume_state.json")
@@ -573,16 +574,17 @@ def _run_phase1_subflow(
     tax_lookup = None
     if taxonomy_labels_file and Path(taxonomy_labels_file).exists():
         tax_lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
-        set_taxonomy_lookup(tax_lookup)
         logger.info(
             "Loaded taxonomy labels: %d entries from %s",
             len(tax_lookup),
             taxonomy_labels_file,
         )
 
+    set_taxonomy_lookup(tax_lookup)
+
     # Step 2-3: Marker validation (HMM-gated Diamond)
     logger.info("Steps 2-3: Running marker validation (HMM-gated Diamond)...")
-    validated_markers = call_task(
+    validated_markers, host_records = call_task(
         marker_validation_task,
         hmm_hits=hhg_hits,
         proteome_path=hmm_query_fasta or proteome_path,
@@ -630,7 +632,7 @@ def _run_phase1_subflow(
             for protein_id, hit in frameshift_by_protein_id.items()
         ]
         frameshift_validation_dir = frameshift_dir / "validation"
-        rescue_validation = call_task(
+        rescue_validation, rescue_host_records = call_task(
             marker_validation_task,
             hmm_hits=rescue_hmm_hits,
             proteome_path=candidate_faa,
@@ -668,6 +670,10 @@ def _run_phase1_subflow(
             frameshift_dir / "confirmed_frameshift_markers.tsv",
         )
         validated_markers.extend(confirmed_frameshift_markers)
+        confirmed_ids = {marker.query_porf.split("|aa", 1)[0] for marker in confirmed_frameshift_markers}
+        host_records.extend(
+            marker for marker in rescue_host_records if marker.query_porf.split("|aa", 1)[0] in confirmed_ids
+        )
         logger.info(
             "Frameshift rescue validation: candidates=%d diamond_validated=%d confirmed_loci=%d faa_records=%d",
             len(frameshift_hits),
@@ -720,11 +726,11 @@ def _run_phase1_subflow(
         changed=0,
     )
     host_signatures = collect_host_signatures(
-        validated_markers,
+        host_records,
         host_prefixes=set(host_prefixes),
     )
     host_signature_model = build_host_signature_model(
-        validated_markers,
+        host_records,
         min_token_length=boundary_host_signature_min_token_len,
         host_prefixes=set(host_prefixes),
         weight_mode=taxonomy_weight_mode,

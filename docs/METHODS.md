@@ -182,17 +182,20 @@ and the native Python entry points. Explicit configuration values take precedenc
 The Phase 1 seed search padding remains five genes per side, with a minimum
 of ten genes; the HHG anchor-merging distance is a separate setting.
 
-The extension walk and joint rescue use the documented three-consecutive-host
-rule: qualifying viral evidence vetoes host status, and every neutral or no-hit
-gene resets the host run. No-hit genes remain unsupported observations in the
-five-gene lookahead; they never extend the hull on their own. Any nonempty hit
-namespace with host share below 0.10 still supplies foreign support, including
+The extension walk and joint rescue count three host-signature matches without
+intervening qualifying viral support. Neutral and searched no-hit genes neither
+increment nor reset that count. Qualifying viral support, including deep-hit
+vetoes and confirmed markers, resets it. Existing non-host positive support,
+including foreign and ML evidence, also resets the count; joint assessment uses
+the support available there.
+Searched no-hit genes without marker or ML support are skipped in the five-gene lookahead; they never extend the hull
+on their own. Any nonempty hit namespace with host share below 0.10 still supplies foreign support, including
 bacterial hits; this separate positive-support rule is unchanged.
 
 Every candidate retains its full assigned seed hull and identities. A host stop
 may fall inside another candidate's seed interval; that other candidate retains
 its own seeds independently. Joint rescue uses the same host predicate and
-strict consecutive-gene counter as extension. Its `_crosses_stop` check also
+host-evidence counter as extension. Its `_crosses_stop` check also
 blocks joining across any recorded child stop.
 
 The GC heuristic has no minimum informative-base fraction. One G and 1,999 Ns
@@ -519,12 +522,21 @@ fewer than 20 matches may remain. Run provenance records the effective limit.
 These searches
 use [reference masking](#reference-masking), viral/cellular protein-twin selection
 and reduction to one hit per labelled genome, as described below. Validation and
-marker class votes use all retained matches. Host-signature estimation uses only
-the first ten for viral/supporting exclusion, host presence and host votes, in
-both rank and bitscore modes. Each physical query protein contributes once:
-the first record for its scaffold and protein ID supplies the evidence, without
-counting HMM domain segments or model alternatives again. Host-prefix filtering
-and rank weights otherwise remain unchanged. The host-signature model does not
+marker class votes use all retained matches. Host-signature estimation uses a separate ten-hit search on the same full-length
+HMM-hit proteins. This search applies the same reference mask, retains reference
+order and duplicate target genomes, and does not apply twin or per-genome
+selection. It uses the prior candidate limit: ten targets without a mask or
+100 before masking, then at most ten unmasked matches. It is not the first ten
+of the marker-validation search's 200 candidates. Both searches use the same
+sensitivity flags. Host exclusion, host presence, token collection and weighted
+votes use only the separate host evidence, including confirmed frameshift
+proteins when enabled. Each physical protein contributes once, without counting
+HMM domain segments or model alternatives again. Host sampling follows queried
+proteins independently of seed-role or Pfam arbitration; the host-only record
+projection does not alter the measured HMM or marker records. The separate
+`host_diamond_top10.tsv` files are authenticated Phase1 resume artifacts;
+resuming retains the saved host model and rejects missing or changed evidence.
+Host-prefix filtering and rank weights otherwise remain unchanged. The host-signature model does not
 create seeds. Gene-taxonomy hit limits remain separate.
 
 The sensitive marker-validation search sets `--ext-chunk-size 400` to examine
@@ -582,17 +594,21 @@ full-proteome prototype use one process with the same eight-thread cap.
 Timeout retries cannot exceed the original process's thread count. Results
 merge in input chunk order; any failed chunk fails the search.
 
-Boundary searches pin DIAMOND to query-indexed mode (`--algo 1`) in both
-single-call and chunked paths. Marker, HHG and full-proteome searches retain
-their own algorithm settings. The watchdog waits for child exit between
-activity checks, so a completed search need not wait for the next poll.
+Boundary searches use DIAMOND's automatic algorithm selection in both
+single-call and chunked paths, with a default of 10,000 proteins per chunk.
+Changes to algorithm selection or query partitioning require scientific
+validation; argument checks do not establish equivalent search results.
+Automatic selection can choose different algorithms for full and final short
+chunks, so changing chunk boundaries may change the returned hits.
+The full-proteome prototype remains an unchunked search. The watchdog waits for
+child exit between activity checks, so a completed search need not wait for the
+next poll.
 
-Terminal-repeat planning uses scaffold-local forkserver workers within the
-pipeline CPU budget. Plans return to original boundary order before conflict
-resolution. Each worker reads its scaffold sequence and receives its seed,
-marker, taxonomy and proteome evidence. A short temporary socket directory
-supports deep run paths; planning falls back to serial execution if the
-socket path remains too long. Worker errors fail the step.
+Terminal-repeat planning runs serially in original boundary order before conflict
+resolution. Each plan uses the current scaffold sequence, seed, marker, taxonomy
+and proteome evidence. Planning errors fail the step. The GenomeTools command
+has no separate per-command timeout; run-level service limits remain responsible
+for terminating a stalled native process.
 
 The Phase 2 taxonomy map and final per-EVE and combined gene taxonomy tables
 retain the assessment flag, both maxima and their target IDs. Missing scores
@@ -601,8 +617,8 @@ stop coordinates and reasons without duplicating the gene tables.
 
 The competition scores are diagnostic only. A stronger cellular hit does not
 defeat a qualifying viral veto. Extension and joint assessment require three
-consecutive host-signature matches without qualifying viral support; neutral
-and no-hit genes interrupt the run. Recorded stops still constrain repeats,
+host-signature matches without intervening qualifying viral support; neutral
+and no-hit genes do not interrupt the count. Recorded stops still constrain repeats,
 and every assigned confirmed seed remains protected.
 
 The filter rewrites the DIAMOND table in place with the same columns. The
@@ -655,7 +671,9 @@ underscore suffixes. Two sources add keys:
 The mask removes rows before the search keeps its hits. With a mask, DIAMOND
 fetches ten times the requested number of targets. The searches that keep one hit
 per genome apply the mask first and then their rules above. The marker-database
-searches keep the first N unmasked rows in DIAMOND's order. When masked rows fill
+host-only searches keep the first N unmasked rows in DIAMOND's order. Marker
+validation also applies twin selection and one-hit-per-labelled-genome reduction
+before keeping its configured matches. When masked rows fill
 the whole fetch, a query keeps fewer than N hits. With an empty mask, every search
 runs and returns as it does without masking.
 
@@ -771,22 +789,24 @@ Independently validated Phase 1 viral markers provide positive support regardles
 of host share. Optional taxonomy ML supplies per-gene support without using the
 host-signature model as a positive feature. Ambiguous genes, genes without
 hits and isolated model-matched host genes do not extend the boundary on their
-own. They remain pending until connected positive support occurs within the
-five-gene lookahead and the searched nucleotide envelope.
+own. Measured unsupported genes remain pending until connected positive support
+occurs within the five-gene lookahead and searched nucleotide envelope. Searched
+no-hit genes without marker or ML support are skipped, rather than consuming
+that lookahead; missing taxonomy still limits growth as unavailable context.
 Five unsupported genes end the support search. If the envelope ends after only
 one to four unsupported genes, the reported limit is the search envelope.
 
-Three consecutive exterior genes matching the host-signature model at the
-configured host-lineage-share threshold (default 0.35), with no qualifying viral
-support in those genes, stop
-extension before the first gene in the run. A gene has qualifying viral support
+Three exterior host matches at the configured host-lineage-share threshold (default 0.35), with no qualifying viral
+support in those genes, stop extension before the first gene in the run. A gene has qualifying viral support
 when a viral hit with at least 25% identity sits in its top 10 or anywhere within
 the first `phase2.viral_hit_depth` hits, or when Phase 1 validated its protein as a
 viral marker (status `validated`, from a model that is not a host kinase, COG or
 BUSCO model). A deeper viral hit vetoes host status but does not itself supply
 positive extension support. Top-10 identity-qualified hits provide positive support
 only below the host-share threshold; independently validated Phase 1 viral markers
-provide it regardless of host share. Every neutral or searched no-hit gene interrupts the host run.
+provide it regardless of host share. Neutral and searched no-hit genes neither
+increment nor reset the host count. Qualifying viral support, including a
+deeper-hit veto or confirmed marker, resets it.
 Cellular-versus-viral score competition does not override this veto.
 A single eukaryotic best hit does not establish this stop. A missing model, a model without a host lineage or
 missing taxonomy is reported as
@@ -1374,7 +1394,7 @@ objects remain intact. A missing host model or a host model without a host linea
 prevents rescue. Rejected pairs also require resolved ACGT sequence throughout the
 inter-core gap. For two already accepted children, only the newly added exterior
 gap must be fully resolved; ambiguous bases inside their original intervals are
-retained and recorded as uncertainty. Recorded host stops and three consecutive
+retained and recorded as uncertainty. Recorded host stops and three
 host-positive genes between the candidates, without qualifying viral support (as defined
 for the host stop), block a pair. A third
 seed or accepted-call conflict blocks rescue. After full native reassessment,
@@ -1457,7 +1477,8 @@ support. Measured cellular dominance does not override this veto. Top10 viral
 evidence supplies positive extension support only below the host-share threshold;
 existing ML support and same-gene Phase1 validated viral markers retain their
 independent positive-support rules. The host signature remains
-trained from marker housekeeping evidence.
+estimated from HMM-hit proteins that pass the host-search exclusion and
+host-prefix checks. It is not restricted to housekeeping models.
 
 `phase1_validated_viral_marker` is a separate boolean in searched-gene taxonomy
 records, full Phase2 checkpoints and taxonomy TSV exports. It requires exact

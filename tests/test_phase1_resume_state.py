@@ -245,7 +245,7 @@ def test_reported_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeyp
         if task is phase1_module.hhg_seeding_task:
             return [], [raw]
         if task is marker_validation_task:
-            return [marker]
+            return [marker], [marker]
         if task is region_assembly_task:
             assert kw["validated_markers"] == [marker]
             return []
@@ -655,7 +655,7 @@ def test_missing_pfam_resource_skips_arbitration_and_preserves_marker_validation
         if task.__name__ == "marker_validation_task":
             events.append("marker")
             assert task_kwargs["hmm_hits"] == hits
-            return []
+            return [], []
         if task is phase1_module.generate_outputs_task:
             events.append("outputs")
             return {}
@@ -751,12 +751,12 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
         if task.__name__ == "marker_validation_task":
             masks_seen["marker_validation"].append(task_kwargs["masked_genomes"])
             if task_kwargs["output_dir"].name == "marker_validation":
-                return []
+                return [], []
             task_kwargs["output_dir"].mkdir(parents=True)
             (task_kwargs["output_dir"] / "diamond_top10.tsv").write_text(
                 f"{protein_id}\tNCLDV__reference\t1e-20\t80\t35\t75\n"
             )
-            return [marker]
+            return [marker], [marker]
         if task.__name__ == "region_assembly_task":
             assert task_kwargs["validated_markers"] == [marker]
             return [
@@ -818,7 +818,7 @@ def test_fresh_phase1_writes_exact_state_after_classification(
                 )
             ]
         if task.__name__ == "marker_validation_task":
-            return [marker]
+            return [marker], [marker]
         if task.__name__ == "region_assembly_task":
             return [
                 SimpleNamespace(
@@ -883,7 +883,7 @@ def test_a2_counterfactual_uses_current_a0_eligibility(tmp_path, monkeypatch, mo
         if task is phase1_module.hhg_seeding_task:
             return [], [raw]
         if task is marker_validation_task:
-            return [marker]
+            return [marker], [marker]
         if task is region_assembly_task:
             kw["validated_hits"] = kw.pop("validated_markers")
             kw["genome_fasta"] = kw.pop("genome_path")
@@ -959,3 +959,74 @@ def test_actual_a2_bypass_survives_original_marker_to_anchor_and_resume(tmp_path
     assert loaded.merged_seeds == [seed]
     assert loaded.merged_seeds[0].anchors[0].tier1_bypassed
     assert is_ordinary_marker_evidence(loaded.merged_seeds[0].anchors[0])
+
+
+@pytest.mark.parametrize("saved_markers", [False, True])
+def test_phase3_resume_uses_exact_phase1_host_state_not_marker_report(tmp_path, monkeypatch, saved_markers):
+    from virosync.orchestration._flows.single_genome import phase3
+
+    output = tmp_path / "out"
+    checkpoint = output / "phase1/resume_state.json"
+    checkpoint.parent.mkdir(parents=True)
+    write_phase1_state(
+        checkpoint,
+        hallmark_evidence=[],
+        hallmark_witnesses=[],
+        validated_markers=[_complete_marker()] if saved_markers else [],
+        merged_seeds=[],
+        host_signature_model=_complete_host_model(),
+        host_signatures={"raw-host-token"},
+        host_deviation_summary=None,
+    )
+    report = output / "selected_marker_report.tsv"
+    report.write_text("deliberately not authoritative\n")
+    config = PipelineConfig()
+    config.execution.resume = True
+    monkeypatch.setattr(phase3, "_run_interproscan", lambda **kwargs: {})
+    monkeypatch.setattr(phase3, "_precompute_tmvec", lambda **kwargs: ({}, "cpu"))
+    monkeypatch.setattr(phase3, "_load_or_classify_jelly_roll", lambda **kwargs: {})
+
+    class ReachedVerification(Exception):
+        pass
+
+    def verify(boundaries, **kwargs):
+        assert kwargs["host_signatures"] == {"raw-host-token"}
+        assert kwargs["host_signature_model_payload"] == _complete_host_model().to_dict()
+        assert kwargs["validated_markers"] == ([_complete_marker()] if saved_markers else [])
+        raise ReachedVerification
+
+    monkeypatch.setattr(phase3, "_verify_native_boundaries", verify)
+    with pytest.raises(ReachedVerification):
+        phase3._run_phase3_subflow(
+            masked_path=tmp_path / "input",
+            proteome_path=tmp_path / "proteome",
+            validated_markers=[],
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
+            host_signatures={"selected-marker-token"},
+            host_signature_model_payload=None,
+            refined_boundaries=[],
+            boundary_taxonomy_map={},
+            boundary_diamond_query=None,
+            proteome_index={},
+            merged_seeds=[],
+            output_dir=output,
+            config=config,
+            validated_hits_tsv=report,
+            logger=logging.getLogger("host-resume"),
+            resume_authorized=True,
+        )
+
+
+def test_missing_taxonomy_labels_cannot_reuse_another_genomes_lookup(tmp_path, monkeypatch):
+    from virosync.pipeline import host_signatures
+
+    output = tmp_path / "out"
+    output.mkdir()
+    _write_complete_state(output / "phase1/resume_state.json")
+    kwargs = _phase1_kwargs(tmp_path, output)
+    kwargs["config"].databases.taxonomy_labels_file = None
+    monkeypatch.setattr(host_signatures, "_TAXONOMY_LOOKUP", {"EUK__stale": "EUK|OldHost"})
+    result = _run_phase1_subflow(**kwargs)
+    assert result.host_signature_model == _complete_host_model()
+    assert host_signatures.get_taxonomy_lookup() is None

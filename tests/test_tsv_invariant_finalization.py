@@ -342,6 +342,9 @@ def test_fresh_normal_path_enforces_invariants_before_success_markers(
     monkeypatch.setattr(orchestrator, "_run_phase0_subflow", _fake_phase0)
 
     def _fake_phase1(**kwargs):
+        host_output = output_dir / "phase1/marker_validation/host_diamond_top10.tsv"
+        host_output.parent.mkdir(parents=True, exist_ok=True)
+        host_output.write_text("", encoding="utf-8")
         host_signature_model = HostSignatureModel()
         merged_seeds = [
             MergedSeed(

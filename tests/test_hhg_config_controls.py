@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from virosync.orchestration import tasks
+from virosync.pipeline.phase1.hhg_seeding import HMMHit
 from virosync.pipeline.phase1.marker_validation import NovelMarkerCriteria
 
 
@@ -24,7 +25,7 @@ def test_marker_validation_task_forwards_top_k_and_novel_criteria(
         kwargs["output_tsv"].write_text("")
 
     def fake_filter(**kwargs):
-        seen["filter_max_seqs"] = kwargs["max_seqs"]
+        seen.setdefault("filter_max_seqs", []).append(kwargs["max_seqs"])
         seen["novel_criteria"] = kwargs["novel_criteria"]
         return []
 
@@ -36,6 +37,10 @@ def test_marker_validation_task_forwards_top_k_and_novel_criteria(
         "virosync.pipeline.phase1.filter_validated_markers",
         fake_filter,
     )
+    monkeypatch.setattr(
+        "virosync.pipeline.phase1.marker_validation.run_host_diamond_on_hmm_hits",
+        lambda *args, **kwargs: args[2].write_text(""),
+    )
     criteria = NovelMarkerCriteria(
         min_hmm_score=41.0,
         min_hmm_coverage=0.65,
@@ -44,7 +49,7 @@ def test_marker_validation_task_forwards_top_k_and_novel_criteria(
     run_task = getattr(tasks.marker_validation_task, "fn", tasks.marker_validation_task)
 
     result = run_task(
-        hmm_hits=[object()],
+        hmm_hits=[HMMHit("p1", "model", 10, 1e-5, 10, 1, 1)],
         proteome_path=proteome,
         marker_db=marker_db,
         output_dir=tmp_path / "out",
@@ -53,7 +58,7 @@ def test_marker_validation_task_forwards_top_k_and_novel_criteria(
         novel_criteria=criteria,
     )
 
-    assert result == []
+    assert result == ([], [])
     assert seen["diamond_max_seqs"] == 7
-    assert seen["filter_max_seqs"] == 7
+    assert seen["filter_max_seqs"] == [7, 10]
     assert seen["novel_criteria"] is criteria

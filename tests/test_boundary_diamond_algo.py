@@ -1,4 +1,4 @@
-"""The Phase 2 boundary search pins DIAMOND to query-indexed mode."""
+"""Boundary searches preserve DIAMOND's automatic algorithm selection."""
 
 import os
 import shlex
@@ -30,7 +30,7 @@ def _calls(log: Path) -> list[str]:
 
 
 @pytest.mark.parametrize("chunk_size", [100, 1], ids=["single-call", "chunked"])
-def test_batched_boundary_search_passes_algo_1(tmp_path: Path, recorded_argv: Path, chunk_size: int) -> None:
+def test_batched_boundary_search_does_not_pin_algo(tmp_path: Path, recorded_argv: Path, chunk_size: int) -> None:
     proteome = tmp_path / "proteome.faa"
     proteome.write_text(
         ">p1 # 1 # 90 # + # ID=contig_1;\nMPEPTIDE\n>p2 # 101 # 190 # + # ID=contig_2;\nMPEPTIDE\n",
@@ -49,7 +49,7 @@ def test_batched_boundary_search_passes_algo_1(tmp_path: Path, recorded_argv: Pa
 
     calls = _calls(recorded_argv)
     assert len(calls) == (2 if chunk_size == 1 else 1)
-    assert all("--algo 1" in call for call in calls)
+    assert all("--algo" not in call for call in calls)
 
 
 def test_full_proteome_search_does_not_pin_algo(tmp_path: Path, recorded_argv: Path) -> None:

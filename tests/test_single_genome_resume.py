@@ -209,12 +209,16 @@ def _publish_schema3_success(output_dir: Path, run_fingerprint: str) -> None:
     frameshift_hits = output_dir / "phase1" / "frameshift_screening" / "frameshift_hits.tsv"
     frameshift_hits.parent.mkdir(parents=True, exist_ok=True)
     frameshift_hits.write_text("annotation_class\n")
+    host_hits = output_dir / "phase1/marker_validation/host_diamond_top10.tsv"
+    host_hits.parent.mkdir(parents=True, exist_ok=True)
+    host_hits.write_text("")
     phase1_artifacts = tuple(
         build_artifact_identity(path, root=output_dir, schema=schema)
         for path, schema in (
             (phase1_ablation, "virosync.ablation_events/v1"),
             (frameshift_hits, "frameshift-hits-v2"),
             (phase1_state, PHASE1_STATE_SCHEMA),
+            (host_hits, "virosync-tsv-v1:phase1/marker_validation/host_diamond_top10.tsv"),
         )
     )
     publish_phase_completion(

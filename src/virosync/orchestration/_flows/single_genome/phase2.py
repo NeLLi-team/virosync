@@ -757,7 +757,6 @@ def _run_phase2_subflow(
             boundary_taxonomy_map=boundary_taxonomy_map,
             proteome_index=proteome_index,
             extension_bp=config.phase1.extension_kb * 1000,
-            workers=threads,
         )
         n_tir_overrides = sum(boundary.tir_boundary_override for boundary in refined_boundaries)
         n_tir_present = sum(boundary.tir_present for boundary in refined_boundaries)

@@ -9,7 +9,7 @@ with 20 retained taxonomy matches from the marker.dmnd database.
 TIER 1 (THIS MODULE): marker.dmnd validation (Phase 1, Steps 2-3)
   - Database: marker.dmnd
   - Input: Only HMM-hit proteins (1-10% of proteome)
-  - Purpose: Validate markers (NCLDV/MIRUS/VP/PLV/CRESS top-10 hit at >=25% identity,
+  - Purpose: Validate markers (NCLDV/MIRUS/VP/PLV/CRESS retained hit at >=25% identity,
              or HMM-only novel marker gates)
   - Output: Validated markers that become EVE region seeds
 
@@ -41,12 +41,12 @@ Taxonomy prefixes (from marker.dmnd database):
 - PLV__: Polinton-like viruses - VALIDATES marker
 - CRESS__: CRESS/ssDNA viruses - VALIDATES marker
 - GVMAG__: Giant virus MAGs - SUPPORTS marker
-- PHAGE__: Bacteriophages - viral top-10 evidence
+- PHAGE__: Bacteriophages - viral retained-hit evidence
 
 Validation rules in the production filter:
-- "validated": at least one validated-prefix top-10 hit with >=25% identity
+- "validated": at least one validated-prefix retained hit with >=25% identity
 - "validated_novel": no Diamond match, but HMM-only gates pass
-- "supported": GVMAG__ top-10 support below the validation threshold
+- "supported": GVMAG__ retained-hit support below the validation threshold
 - "unvalidated": cellular only, unknown, or below thresholds
 """
 import logging
@@ -77,9 +77,9 @@ class ValidationStatus(Enum):
     """Marker validation status.
 
     Attributes:
-        VALIDATED: At least one validated-prefix top-10 hit with >=25% identity
+        VALIDATED: At least one validated-prefix retained hit with >=25% identity
         VALIDATED_NOVEL: HMM hit with no Diamond match, but meets gating criteria
-        SUPPORTED: GVMAG in top-10 below the validation threshold
+        SUPPORTED: GVMAG among retained matches below the validation threshold
         UNVALIDATED: Cellular only or below threshold
     """
 
@@ -125,13 +125,13 @@ class ValidatedMarkerHit:
         hmm_score: HMM bit score
         hmm_evalue: HMM E-value
         validation_status: "validated" | "validated_novel" | "supported" | "unvalidated"
-        top10_prefixes: Comma-separated list of taxonomy prefixes from top-10 hits
+        top10_prefixes: Comma-separated list of taxonomy prefixes from retained hits (legacy field name)
         best_hit_target: Best Diamond hit target ID
         best_hit_pident: Percent identity of best hit
         best_hit_bits: Bit score of best hit
-        has_ncldv: 1 if NCLDV__ in top-10, else 0
-        has_mirus: 1 if MIRUS__ in top-10, else 0
-        has_viral: 1 if any viral prefix in top-10, else 0
+        has_ncldv: 1 if NCLDV__ among retained matches, else 0
+        has_mirus: 1 if MIRUS__ among retained matches, else 0
+        has_viral: 1 if any viral prefix among retained matches, else 0
         top10_targets: All 10 target IDs (comma-separated)
         top10_pidents: All 10 pident values (comma-separated)
         top10_bitscores: All 10 bitscores (comma-separated)
@@ -305,7 +305,7 @@ def run_diamond_on_hmm_hits(
         output_tsv: Output TSV file path
         threads: Number of CPU threads
         evalue: E-value cutoff
-        max_seqs: Maximum hits per query (default 10 for top-10 analysis)
+        max_seqs: Maximum retained hits per query (default 20)
         search_backend: "diamond" (the only supported backend)
         sensitive: Use Diamond --sensitive with 400-target ranking chunks
             to improve retrieval of divergent homologs at small hit limits.
@@ -341,6 +341,31 @@ def run_diamond_on_hmm_hits(
 
     logger.info(f"Diamond search complete: {output_tsv}")
     return output_tsv
+
+
+def run_host_diamond_on_hmm_hits(
+    hmm_hit_fasta: Path,
+    diamond_db: Path,
+    output_tsv: Path,
+    threads: int = 4,
+    evalue: float = 1e-5,
+    search_backend: str = "diamond",
+    masked_genomes: frozenset[str] = frozenset(),
+) -> Path:
+    """Keep the prior ten-hit host search, including duplicate target genomes."""
+    from virosync.pipeline.search_backend import run_sequence_search
+
+    return run_sequence_search(
+        query_fasta=hmm_hit_fasta,
+        db_path=diamond_db,
+        output_tsv=output_tsv,
+        threads=threads,
+        backend=search_backend,
+        evalue=evalue,
+        max_target_seqs=10,
+        extra_flags=["--sensitive", "--ext-chunk-size", "400"],
+        masked_genomes=masked_genomes,
+    )
 
 
 def collect_host_signatures(
@@ -413,13 +438,13 @@ def filter_validated_markers(
     taxonomy_weight_mode: str = "rank",
     max_seqs: int = 20,
 ) -> list[ValidatedMarkerHit]:
-    """Filter HMM hits to validated markers based on Diamond top-10 taxonomy.
+    """Filter HMM hits using the configured retained Diamond matches.
 
     Validation rules:
-    1. "validated": at least one top-10 hit from a validated viral prefix
+    1. "validated": at least one retained hit from a validated viral prefix
        (NCLDV__, MIRUS__, VP__, PLV__, CRESS__, or EUK-pEVE__) with >=25% identity
     2. "validated_novel": HMM hit with no Diamond match, meets gating criteria
-    3. "supported": GVMAG__ top-10 support below the validation threshold
+    3. "supported": supporting-prefix evidence among the retained hits
     4. "unvalidated": cellular only, unknown, or below thresholds
 
     Args:
@@ -590,7 +615,7 @@ def filter_validated_markers(
         while len(top10_hits) < max_seqs:
             top10_hits.append(("", 0.0, 0.0, 1.0))
 
-        # Extract ALL details from top-10 hits
+        # Legacy top10 fields hold all configured retained marker matches.
         top10_targets = ",".join(target for target, _, _, _ in top10_hits)
         # Preserve the parsed DIAMOND identity exactly enough for downstream
         # threshold checks. Rounding to one decimal can turn 24.96 into 25.0
@@ -622,7 +647,7 @@ def filter_validated_markers(
         )
 
         # Determine validation status
-        # Require one validated viral reference in the top-10 at >=25% identity.
+        # Require one retained validated viral reference at >=25% identity.
         if max_validated_pident >= VALIDATION_MIN_PIDENT:
             validation_status = "validated"
             stats["validated"] += 1
@@ -714,9 +739,9 @@ def filter_validated_markers(
         hmm_group_counts["OG"],
         hmm_group_counts["OTHER"],
     )
-    logger.info(f"  Validated (validated-prefix top-10 hit >=25% identity): {stats['validated']}")
+    logger.info(f"  Validated (validated-prefix retained hit >=25% identity): {stats['validated']}")
     logger.info(f"  Validated novel (HMM-only, meets criteria): {stats['validated_novel']}")
-    logger.info(f"  Supported (GVMAG in top-10): {stats['supported']}")
+    logger.info(f"  Supported (GVMAG among retained matches): {stats['supported']}")
     logger.info(f"  Unvalidated (cellular only): {stats['unvalidated']}")
     logger.info(f"  No Diamond hits: {stats['no_diamond_hits']}")
 
@@ -774,7 +799,7 @@ def filter_validated_markers(
             else:
                 taxonomy_counts["OTHER"] += 1
 
-    logger.info("  Diamond top-10 by marker group:")
+    logger.info("  Diamond retained matches by marker group:")
     for group in ("GVOGm", "OG", "OTHER"):
         logger.info(
             "    %s: total=%s ncldv_top10=%s mirus_top10=%s",
@@ -789,7 +814,7 @@ def filter_validated_markers(
         mirus_total,
         len(validated_markers),
     )
-    logger.info("  Taxonomy breakdown (top1 overridden by NCLDV/MIRUS in top-10):")
+    logger.info("  Taxonomy breakdown (top1 overridden by NCLDV/MIRUS among retained matches):")
     for prefix in (
         "NCLDV__",
         "MIRUS__",
@@ -843,7 +868,7 @@ def filter_validated_markers(
                     f"{vm.query_porf}\t{vm.hmm_target}\t{top1_prefix}\t"
                     f"{vm.top10_prefixes}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\n"
                 )
-        logger.info(f"Wrote top-10 taxonomy summary: {taxonomy_path}")
+        logger.info(f"Wrote retained-match taxonomy summary: {taxonomy_path}")
 
     return validated_markers
 

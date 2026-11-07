@@ -30,7 +30,8 @@ if TYPE_CHECKING:
     from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 
 
-GeneEvidence: TypeAlias = tuple[pORF, bool, bool, bool]
+# Gene, positive growth support, host match, queried, independent viral/marker reset.
+GeneEvidence: TypeAlias = tuple[pORF, bool, bool, bool, bool]
 
 
 def confirmed_seed_core(seed: MergedSeed) -> MergedSeed:
@@ -61,8 +62,8 @@ def extend_confirmed_seed(
 ) -> RefinedBoundary:
     """Retain the core and commit only connected support inside the searched span.
 
-    Three consecutive host-signature matches without qualifying viral support
-    stop growth. Every nonhost gene interrupts the run. Top-10 viral hits and
+    Three host-signature matches without intervening qualifying viral support
+    stop growth. Neutral genes do not reset the count. Top-10 viral hits and
     marker-set membership support growth below the host-share threshold;
     independently validated Phase1 markers support it at any host share.
     Deep-only hits veto host status without extending the hull.
@@ -93,8 +94,12 @@ def extend_confirmed_seed(
         foreign = bool(
             share is not None and share < 0.10 and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
         )
+        has_hits = tax is not None and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
+        reset_host_run = marker or (tax is not None and has_viral_hit_veto(tax))
+        if tax is not None and not has_hits and not reset_host_run and gene.id not in ml_support:
+            continue
         coverage_complete &= tax is not None
-        evidence.append((gene, viral or foreign or gene.id in ml_support, host, tax is not None))
+        evidence.append((gene, viral or foreign or gene.id in ml_support, host, tax is not None, reset_host_run))
     left, left_reason, left_stop = _walk(seed.start, envelope[0], evidence, -1, disable_host_stop)
     right, right_reason, right_stop = _walk(seed.end, envelope[1], evidence, 1, disable_host_stop)
     return RefinedBoundary(
@@ -144,8 +149,9 @@ def _walk(
                 support,
                 host,
                 covered,
+                reset_host_run,
             )
-            for g, support, host, covered in evidence
+            for g, support, host, covered, reset_host_run in evidence
             if max(direction * g.start, direction * g.end) > edge
         ),
         key=lambda row: (row[0], row[1]),
@@ -153,22 +159,24 @@ def _walk(
     barrier = None
     run: list[int] = []
     if not disable_host_stop:
-        for start, end, support, host, covered in ordered:
+        for start, end, support, host, covered, reset_host_run in ordered:
             if host:
                 run = [*run, start]
-            else:
+            elif support or reset_host_run:
                 run = []
             if len(run) == 3:
                 barrier = max(edge, run[0])
                 break
-    missing_edge = next((max(edge, start) for start, end, support, host, covered in ordered if not covered), None)
+    missing_edge = next(
+        (max(edge, start) for start, end, support, host, covered, reset_host_run in ordered if not covered), None
+    )
     limit = min(cap, barrier) if barrier is not None else cap
     if missing_edge is not None:
         limit = min(limit, missing_edge)
     accepted = edge
     pending = 0
     reason = "search_envelope"
-    for start, end, support, host, covered in ordered:
+    for start, end, support, host, covered, reset_host_run in ordered:
         if start >= limit:
             break
         if support:

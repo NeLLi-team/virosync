@@ -660,6 +660,8 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase1/frameshift_screening/frameshift_events.tsv",
             "phase1/pfam_arbitration.tsv",
             "phase1/resume_state.json",
+            "phase1/marker_validation/host_diamond_top10.tsv",
+            "phase1/frameshift_screening/validation/host_diamond_top10.tsv",
         ),
         2: (
             "phase2/ablation_events.json",

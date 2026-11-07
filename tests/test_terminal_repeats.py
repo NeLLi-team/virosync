@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import pickle
 import random
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1540,3 +1542,362 @@ def test_shared_pair_restoration_retains_identical_not_partial_collision_evidenc
         restored.tir_identity,
         restored.tsd_sequence,
     ) == (500, 530, 670, 700, 0.97, "ACGT")
+
+
+@dataclass(frozen=True, slots=True)
+class _Fixture:
+    genome_path: Path
+    boundaries: list[RefinedBoundary]
+    allowed_intervals: list[tuple[int, int]]
+    markers: list[_Marker]
+    query: GenomeDiamondQuery
+    taxonomy_map: dict[str, GeneTaxonomy]
+    proteome_index: dict[str, list[pORF]]
+
+    def refine(self) -> list[RefinedBoundary]:
+        return refine_boundaries_with_terminal_repeats(
+            self.boundaries,
+            allowed_intervals=self.allowed_intervals,
+            raw_genome_path=self.genome_path,
+            validated_markers=self.markers,
+            boundary_diamond_query=self.query,
+            boundary_taxonomy_map=self.taxonomy_map,
+            proteome_index=self.proteome_index,
+            extension_bp=500,
+        )
+
+
+def _boundary(scaffold: str, seed_id: str, start: int, end: int, core: tuple[int, int]) -> RefinedBoundary:
+    return RefinedBoundary(
+        scaffold=scaffold,
+        start=start,
+        end=end,
+        seed_id=seed_id,
+        original_start=core[0],
+        original_end=core[1],
+        confirmed_seeds=(ConfirmedSeed(seed_id, scaffold, *core),),
+    )
+
+
+def _mapping(scaffold: str, seed_id: str, start: int, end: int, length: int) -> SeedGeneMapping:
+    return SeedGeneMapping(
+        seed_id=seed_id,
+        scaffold=scaffold,
+        seed_start=start,
+        seed_end=end,
+        flank_start_bp=0,
+        flank_end_bp=length,
+    )
+
+
+def _viral_gene(porf_id: str, scaffold: str, start: int, end: int) -> tuple[pORF, GeneTaxonomy]:
+    taxonomy = GeneTaxonomy(
+        porf_id=porf_id,
+        scaffold=scaffold,
+        start=start,
+        end=end,
+        top1_target="NCLDV__ref|p1",
+        top1_prefix="NCLDV__",
+        top1_pident=60.0,
+        top10_prefixes=["NCLDV__"],
+        has_ncldv_mirus=True,
+        has_viral=True,
+        has_hit=True,
+    )
+    return pORF(porf_id, scaffold, start, end), taxonomy
+
+
+def _build_fixture(tmp_path: Path) -> _Fixture:
+    """Four parent boundaries on three scaffolds: one partition, a shared pair, one trim.
+
+    Viral-covered genes sit in the flanks that the TIR pairs trim away.
+    """
+    adjacent, _ = _adjacent_repeat_sequence()
+    planted, _ = _planted_repeat()
+    genome_path = tmp_path / "raw.fna"
+    genome_path.write_text(f">adj\n{adjacent}\n>shared\n{planted}\n>trim\n{planted}\n", encoding="utf-8")
+    partition_parent = RefinedBoundary(
+        scaffold="adj",
+        start=0,
+        end=len(adjacent),
+        seed_id="adj-1",
+        original_start=200,
+        original_end=1100,
+        confirmed_seeds=(
+            ConfirmedSeed("adj-1", "adj", 200, 260),
+            ConfirmedSeed("adj-2", "adj", 620, 680),
+            ConfirmedSeed("adj-3", "adj", 980, 1100),
+        ),
+        seed_sources=["hhg", "marker_validation"],
+    )
+    boundaries = [
+        _boundary("shared", "shared-1", 180, 245, (180, 245)),
+        partition_parent,
+        _boundary("shared", "shared-2", 260, 340, (260, 340)),
+        _boundary("trim", "trim-1", 50, 470, (150, 350)),
+    ]
+    allowed_intervals = [(0, 520), (0, len(adjacent)), (0, 520), (50, 470)]
+    markers = [
+        _Marker("adj", 220, 235, "first|aa1-15", hmm_target="gvogm0003"),
+        _Marker("adj", 235, 250, "first|aa16-30", hmm_target="gvogm0004"),
+        _Marker("adj", 640, 660, "second|aa1-20", hmm_target="plv_mcp"),
+        _Marker("adj", 1000, 1020, "neighbor|aa1-20", hmm_target="mirus_core"),
+        _Marker("shared", 220, 230, "marker-1"),
+        _Marker("shared", 280, 290, "marker-2"),
+        _Marker("trim", 250, 270, "marker-3"),
+    ]
+    mappings = {
+        mapping.seed_id: mapping
+        for mapping in (
+            _mapping("adj", "adj-1", 200, 260, len(adjacent)),
+            _mapping("shared", "shared-1", 180, 245, len(planted)),
+            _mapping("shared", "shared-2", 260, 340, len(planted)),
+            _mapping("trim", "trim-1", 150, 350, len(planted)),
+        )
+    }
+    genes = [
+        _viral_gene("adj_1", "adj", 20, 80),
+        _viral_gene("adj_2", "adj", 880, 940),
+        _viral_gene("shared_1", "shared", 190, 240),
+        _viral_gene("trim_1", "trim", 60, 90),
+        _viral_gene("trim_2", "trim", 430, 460),
+    ]
+    proteome_index = {scaffold: [] for scaffold in ("adj", "shared", "trim")}
+    for gene, _ in genes:
+        proteome_index[gene.scaffold].append(gene)
+    return _Fixture(
+        genome_path=genome_path,
+        boundaries=boundaries,
+        allowed_intervals=allowed_intervals,
+        markers=markers,
+        query=GenomeDiamondQuery(seed_gene_mappings=mappings),
+        taxonomy_map={gene.id: taxonomy for gene, taxonomy in genes},
+        proteome_index=proteome_index,
+    )
+
+
+@pytest.fixture
+def fixture(tmp_path: Path) -> _Fixture:
+    return _build_fixture(tmp_path)
+
+
+def test_serial_planning_preserves_populated_query_role_ids(fixture: _Fixture) -> None:
+    query = fixture.query
+    query.eve_porf_ids = {"adj-1": ["adj_2"], "shared-1": ["shared_1"]}
+    query.boundary_porf_ids = {"adj-1": ["adj_1"], "trim-1": ["trim_1"]}
+    query.control_porf_ids = ["trim_2"]
+    query.all_porf_ids = ["adj_1", "adj_2", "shared_1", "trim_1", "trim_2"]
+    original_roles = pickle.dumps(
+        (query.eve_porf_ids, query.boundary_porf_ids, query.control_porf_ids, query.all_porf_ids)
+    )
+
+    fixture.refine()
+
+    assert (
+        pickle.dumps((query.eve_porf_ids, query.boundary_porf_ids, query.control_porf_ids, query.all_porf_ids))
+        == original_roles
+    )
+
+
+def test_serial_fixture_changes_boundaries_by_tir(fixture: _Fixture) -> None:
+    refined = fixture.refine()
+
+    assert len(refined) == 6
+    assert sum(boundary.tir_boundary_override for boundary in refined) >= 3
+    assert {boundary.tir_status for boundary in refined} >= {"detected", "shared_pair"}
+    assert [(boundary.start, boundary.end) for boundary in refined if boundary.scaffold == "trim"] == [(100, 420)]
+    assert {core for boundary in refined for core in boundary.confirmed_seeds} == {
+        core for boundary in fixture.boundaries for core in boundary.confirmed_seeds
+    }
+    assert all(
+        boundary.start <= core.start < core.end <= boundary.end
+        for boundary in refined
+        for core in boundary.confirmed_seeds
+    )
+
+
+def test_serial_planning_raises_same_validation_error(fixture: _Fixture) -> None:
+    fixture.allowed_intervals[2] = (300, 340)
+
+    with pytest.raises(ValueError, match="allowed interval must contain parent"):
+        fixture.refine()
+
+
+def test_serial_planning_raises_for_absent_scaffold(fixture: _Fixture) -> None:
+    fixture.boundaries[3] = _boundary("missing", "missing-1", 50, 470, (150, 350))
+
+    with pytest.raises(ValueError, match="boundary scaffold absent from raw genome: missing"):
+        fixture.refine()
+
+
+def test_concurrent_genomes_each_get_their_own_serial_result(tmp_path: Path) -> None:
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first = _build_fixture(tmp_path / "first")
+    second = _build_fixture(tmp_path / "second")
+    del second.boundaries[3], second.allowed_intervals[3]
+    serial = {"first": first.refine(), "second": second.refine()}
+    parallel: dict[str, list[RefinedBoundary]] = {}
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def run(name: str, genome: _Fixture) -> None:
+        try:
+            barrier.wait()
+            parallel[name] = genome.refine()
+        except BaseException as error:  # noqa: BLE001  # surface any thread failure in the main thread
+            errors.append(error)
+
+    threads = [threading.Thread(target=run, args=item) for item in (("first", first), ("second", second))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert parallel == serial
+    assert serial["first"] != serial["second"]
+
+
+def test_planning_exception_propagates_to_the_caller(fixture: _Fixture) -> None:
+    # A marker without a protein ID passes the scaffold and span filters, then fails
+    # inside serial planning. Nothing is patched.
+    broken = SimpleNamespace(
+        scaffold="shared", validation_status="validated", start=220, end=230, query_porf=None, hmm_target="x"
+    )
+    fixture.markers.append(broken)
+
+    with pytest.raises(AttributeError):
+        fixture.refine()
+
+
+def test_serial_planning_reads_each_scaffold_sequence(tmp_path: Path) -> None:
+    # Both scaffolds carry identical boundaries and markers; only the sequence differs.
+    planted, _ = _planted_repeat()
+    plain = "".join(random.Random(5).choice("acgt") for _ in planted)
+    genome_path = tmp_path / "raw.fna"
+    genome_path.write_text(f">plain\n{plain}\n>repeat\n{planted.lower()}\n>plain2\n{plain}\n", encoding="utf-8")
+    scaffolds = ["plain", "repeat", "plain2"]
+    fixture = _Fixture(
+        genome_path=genome_path,
+        boundaries=[_boundary(name, f"{name}-1", 50, 470, (150, 350)) for name in scaffolds],
+        allowed_intervals=[(50, 470)] * 3,
+        markers=[_Marker(name, 250, 270, f"{name}-marker") for name in scaffolds],
+        query=GenomeDiamondQuery(
+            seed_gene_mappings={f"{name}-1": _mapping(name, f"{name}-1", 150, 350, len(planted)) for name in scaffolds}
+        ),
+        taxonomy_map={},
+        proteome_index={name: [] for name in scaffolds},
+    )
+
+    refined = {boundary.scaffold: boundary for boundary in fixture.refine()}
+
+    assert (refined["repeat"].start, refined["repeat"].end, refined["repeat"].tir_status) == (100, 420, "detected")
+    assert (refined["plain"].start, refined["plain"].end, refined["plain"].tir_status) == (50, 470, "not_detected")
+    assert (refined["plain2"].start, refined["plain2"].end) == (50, 470)
+
+
+def _viral_entry(porf_id: str, scaffold: str, start: int, end: int, *, pident: float) -> GeneTaxonomy:
+    """A gene whose only top-10 hit is NCLDV; it counts as viral evidence from 25% identity."""
+    return GeneTaxonomy(
+        porf_id=porf_id,
+        scaffold=scaffold,
+        start=start,
+        end=end,
+        top10_prefixes=["NCLDV__"],
+        top10_pidents=[pident],
+    )
+
+
+def _taxonomy_fixture(tmp_path: Path) -> _Fixture:
+    """One parent per scaffold on the two-pair sequence; taxonomy decides each outcome.
+
+    cand_*: the left pair holds only a cellular marker, so it needs a viral gene to count.
+    res_*: the tail slice holds only a cellular marker, so it needs a viral gene to stay.
+    alias: the map key differs from the entry's ``porf_id``.
+    dup: two entries share one ``porf_id``; only the second one is viral.
+    res_dup: like dup for the tail slice, but the viral entry is the EARLIER duplicate and
+        is the gene's own entry, so no lookup by ``porf_id`` can recover it.
+    orphan: the map key is not the ID of the scaffold's gene, so that gene has no taxonomy.
+    """
+    _serial_adjacent_sequence, _ = _adjacent_repeat_sequence()
+    length = len(_serial_adjacent_sequence)
+    names = ["cand_viral", "cand_weak", "res_viral", "res_weak", "alias", "dup", "res_dup", "orphan"]
+    genome_path = tmp_path / "raw.fna"
+    genome_path.write_text("".join(f">{name}\n{_serial_adjacent_sequence}\n" for name in names), encoding="utf-8")
+    boundaries, markers, mappings, proteome_index, taxonomy_map = [], [], {}, {}, {}
+    for name in names:
+        spans = [(200, 260), (620, 680)] + ([(980, 1100)] if name.startswith("res") else [])
+        seeds = tuple(ConfirmedSeed(f"{name}-{number}", name, *span) for number, span in enumerate(spans))
+        boundaries.append(
+            RefinedBoundary(
+                scaffold=name,
+                start=0,
+                end=length,
+                seed_id=seeds[0].seed_id,
+                original_start=200,
+                original_end=spans[-1][1],
+                confirmed_seeds=seeds,
+                seed_sources=["hhg", "marker_validation"],
+            )
+        )
+        mappings[seeds[0].seed_id] = _mapping(name, seeds[0].seed_id, 200, 260, length)
+        if name.startswith("res"):
+            markers += [
+                _Marker(name, 220, 250, "a|aa1-30", hmm_target="gvogm0003"),
+                _Marker(name, 640, 660, "b|aa1-20", hmm_target="plv_mcp"),
+                _Marker(name, 1000, 1020, "c|aa1-20", hmm_target="VS000087"),
+            ]
+            gene_start, gene_end = 1000, 1020
+        else:
+            markers += [
+                _Marker(name, 220, 250, "a|aa1-30", hmm_target="VS000087"),
+                _Marker(name, 640, 660, "b|aa1-20", hmm_target="plv_mcp"),
+            ]
+            gene_start, gene_end = 220, 250
+        gene_id = f"{name}_gene"
+        proteome_index[name] = [pORF(gene_id, name, gene_start, gene_end)]
+        pident = 10.0 if name.endswith("weak") else 60.0
+        taxonomy_map[gene_id] = _viral_entry(gene_id, name, gene_start, gene_end, pident=pident)
+    taxonomy_map["alias_key"] = taxonomy_map.pop("alias_gene")
+    proteome_index["alias"] = [pORF("alias_key", "alias", 220, 250)]
+    taxonomy_map["dup_gene"] = _viral_entry("dup_shared", "dup", 220, 250, pident=10.0)
+    taxonomy_map["dup_second"] = _viral_entry("dup_shared", "dup", 220, 250, pident=60.0)
+    taxonomy_map["res_dup_gene"] = _viral_entry("dup_shared", "res_dup", 1000, 1020, pident=60.0)
+    taxonomy_map["res_dup_late"] = _viral_entry("dup_shared", "res_dup", 1000, 1020, pident=10.0)
+    taxonomy_map["orphan_key"] = taxonomy_map.pop("orphan_gene")
+    return _Fixture(
+        genome_path=genome_path,
+        boundaries=boundaries,
+        allowed_intervals=[(0, length)] * len(boundaries),
+        markers=markers,
+        query=GenomeDiamondQuery(seed_gene_mappings=mappings),
+        taxonomy_map=taxonomy_map,
+        proteome_index=proteome_index,
+    )
+
+
+def test_serial_taxonomy_decides_candidates_and_residuals(tmp_path: Path) -> None:
+    fixture = _taxonomy_fixture(tmp_path)
+
+    serial = fixture.refine()
+
+    spans: dict[str, list[tuple[int, int, str]]] = {}
+    for boundary in serial:
+        spans.setdefault(boundary.scaffold, []).append((boundary.start, boundary.end, boundary.tir_status))
+    assert spans == {
+        # A viral gene in the cellular-only pair makes it a candidate; a weak hit does not.
+        "cand_viral": [(100, 420, "detected"), (520, 840, "detected")],
+        "cand_weak": [(0, 1200, "ambiguous")],
+        # A viral gene in the tail keeps that residual slice; a weak hit drops it.
+        "res_viral": [(100, 420, "detected"), (520, 840, "detected"), (840, 1200, "not_detected")],
+        "res_weak": [(0, 1200, "ambiguous")],
+        # Map key unlike porf_id, and two entries with one porf_id, give the viral result.
+        "alias": [(100, 420, "detected"), (520, 840, "detected")],
+        "dup": [(100, 420, "detected"), (520, 840, "detected")],
+        # The viral entry is the earlier duplicate; a weak entry with the same porf_id follows it.
+        "res_dup": [(100, 420, "detected"), (520, 840, "detected"), (840, 1200, "not_detected")],
+        # A key that is not the gene's ID leaves that gene uncovered, so the split is refused
+        # although the entry itself is viral.
+        "orphan": [(0, 1200, "ambiguous")],
+    }

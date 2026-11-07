@@ -68,9 +68,6 @@ MIN_VIRAL_HIT_PIDENT = 25.0
 # Leading hits that every top10_* field of a GeneTaxonomy holds.
 TOP_HIT_COUNT = 10
 
-# Keep boundary searches query-indexed regardless of query chunk size.
-BOUNDARY_DIAMOND_FLAGS = ["--algo", "1"]
-
 
 def _listify_top10_field(value) -> list:
     if value is None:
@@ -933,8 +930,6 @@ def run_diamond_blastp(
     evalue: float = 1e-5,
     search_backend: str = "diamond",
     masked_genomes: frozenset[str] = frozenset(),
-    *,
-    extra_flags: list[str] | None = None,
 ) -> None:
     """Run protein sequence search.
 
@@ -947,7 +942,6 @@ def run_diamond_blastp(
         evalue: E-value cutoff
         search_backend: "diamond" (the only supported backend)
         masked_genomes: Genome keys whose reference rows are dropped from the hits
-        extra_flags: Additional DIAMOND command-line flags
     """
     from virosync.pipeline.search_backend import run_genome_filtered_search
 
@@ -960,7 +954,6 @@ def run_diamond_blastp(
         evalue=evalue,
         max_target_seqs=max_target_seqs,
         masked_genomes=masked_genomes,
-        extra_flags=extra_flags,
     )
 
 
@@ -1149,8 +1142,6 @@ def run_diamond_chunked(
     threads: int,
     search_backend: str = "diamond",
     masked_genomes: frozenset[str] = frozenset(),
-    *,
-    extra_flags: list[str] | None = None,
 ) -> dict[str, list[DiamondHit]]:
     """Run Diamond in chunks for large query sets.
 
@@ -1165,7 +1156,6 @@ def run_diamond_chunked(
         max_target_seqs: Maximum hits per query
         threads: Total CPU budget
         masked_genomes: Genome keys whose reference rows are dropped from the hits
-        extra_flags: Additional DIAMOND command-line flags
 
     Returns:
         Dict mapping query ID to list of DiamondHit
@@ -1193,7 +1183,6 @@ def run_diamond_chunked(
             threads=chunk_threads,
             search_backend=search_backend,
             masked_genomes=masked_genomes,
-            extra_flags=extra_flags,
         )
 
         return parse_diamond_output(chunk_output)
@@ -1488,7 +1477,6 @@ def run_batched_diamond(
                 threads=config.threads,
                 search_backend=config.search_backend,
                 masked_genomes=config.masked_genomes,
-                extra_flags=BOUNDARY_DIAMOND_FLAGS,
             )
             return parse_diamond_output(diamond_output)
         return run_diamond_chunked(
@@ -1500,7 +1488,6 @@ def run_batched_diamond(
             threads=config.threads,
             search_backend=config.search_backend,
             masked_genomes=config.masked_genomes,
-            extra_flags=BOUNDARY_DIAMOND_FLAGS,
         )
 
     hits = search(output_dir, max(config.top_k, config.viral_hit_depth))

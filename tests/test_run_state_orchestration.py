@@ -253,6 +253,10 @@ class _MockPipeline:
         phase_dir = Path(kwargs["output_dir"]) / "phase1"
         phase_dir.mkdir(parents=True, exist_ok=True)
         state_path = phase_dir / "resume_state.json"
+        host_path = phase_dir / "marker_validation/host_diamond_top10.tsv"
+        if not resumed:
+            host_path.parent.mkdir(parents=True, exist_ok=True)
+            host_path.write_text("p1\tEUK__host|p\t1e-20\t100\t90\t100\n")
         merged_seeds = [
             MergedSeed(
                 scaffold="scaffold",
@@ -693,6 +697,7 @@ _REQUIRED_PHASE_ARTIFACTS = (
     (0, "phase0/genes.gff"),
     (1, "phase1/ablation_events.json"),
     (1, "phase1/resume_state.json"),
+    (1, "phase1/marker_validation/host_diamond_top10.tsv"),
     (2, "phase2/ablation_events.json"),
     (2, "phase2/refined_boundaries.bed"),
     (2, "phase2/refined_state.json"),
@@ -2048,3 +2053,37 @@ def test_output_files_are_identical_for_fresh_resumed_and_recovered_success(
             key=lambda item: item.relative_path,
         )
     }
+
+
+def test_frameshift_host_evidence_cannot_be_omitted_from_authenticated_phase1(mocked_pipeline):
+    from test_phase1_resume_state import _complete_marker
+
+    from virosync.orchestration._flows.single_genome.phase1_state import phase1_state_to_document
+
+    mocked_pipeline.run()
+    state_path = mocked_pipeline.output_dir / "phase1/resume_state.json"
+    state = load_phase1_state(state_path)
+    marker = _complete_marker()
+    marker.query_porf = "contig_VSR0123456789abcdef|aa1-80"
+    from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
+
+    assert is_rescued_protein_id(marker.query_porf)
+    state.validated_markers.append(marker)
+    document = phase1_state_to_document(
+        validated_markers=state.validated_markers,
+        merged_seeds=state.merged_seeds,
+        hallmark_evidence=state.hallmark_evidence,
+        hallmark_witnesses=state.hallmark_witnesses,
+        host_signature_model=state.host_signature_model,
+        host_signatures=state.host_signatures,
+        host_deviation_summary=state.host_deviation_summary,
+    )
+    state_path.write_text(json.dumps(document))
+    _rebind_phase_artifact(mocked_pipeline.output_dir, phase=1, relative_path="phase1/resume_state.json")
+    plan = plan_resume(mocked_pipeline.output_dir, expected_run_fingerprint=mocked_pipeline.fingerprint)
+    assert plan.restart_phase == 1
+    record = run_state_module._load_phase_record(mocked_pipeline.output_dir / PHASE_MARKER_FILENAMES[1])
+    with pytest.raises(ValueError, match="frameshift host-search evidence"):
+        run_state_module._validate_phase_checkpoint(
+            mocked_pipeline.output_dir, record, load_run_state(mocked_pipeline.output_dir).identities
+        )

@@ -5,6 +5,7 @@ the single-genome orchestrator.
 """
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 # Import pipeline functions for testing/mocking
@@ -334,11 +335,11 @@ def marker_validation_task(
     taxonomy_weight_mode: str = "rank",
     search_backend: str = "diamond",
     masked_genomes: frozenset[str] = frozenset(),
-) -> list:
+) -> tuple[list, list]:
     """Run HMM-gated Diamond validation workflow (Steps 2-3).
 
     This is the key optimization: only run Diamond on HMM-hit sequences,
-    not all genes. Validates markers based on top-10 taxonomy (NCLDV/MIRUS in top-10).
+    not all genes. Validates markers from retained matches and searches separate host evidence.
 
     Args:
         hmm_hits: List of HMMHit objects from hhg_seeding_task
@@ -348,13 +349,13 @@ def marker_validation_task(
         genome_path: Optional genome FASTA for coordinate mapping
         threads: Number of threads for Diamond
         evalue: E-value cutoff for Diamond
-        max_seqs: Top-K hits to retrieve (default 10)
+        max_seqs: Retained marker hits to retrieve (default 20)
         novel_criteria: Optional HMM-only novel-marker acceptance criteria
         taxonomy_labels_file: Optional path to taxonomy labels TSV for host fingerprinting
         masked_genomes: Genome keys whose reference rows the Diamond search drops
 
     Returns:
-        List of ValidatedMarkerHit objects
+        Marker-validation records and separate raw-order ten-hit host records
     """
     from virosync.orchestration.resource_monitor import ResourceMonitor
     from virosync.pipeline.host_signatures import TaxonomyLabelLookup
@@ -363,6 +364,7 @@ def marker_validation_task(
         filter_validated_markers,
         run_diamond_on_hmm_hits,
     )
+    from virosync.pipeline.phase1.marker_validation import run_host_diamond_on_hmm_hits
 
     logger = get_orchestration_logger(__name__)
     output_dir = Path(output_dir)
@@ -375,9 +377,11 @@ def marker_validation_task(
         taxonomy_lookup = TaxonomyLabelLookup.load(Path(taxonomy_labels_file))
         logger.info(f"Loaded {len(taxonomy_lookup)} taxonomy labels")
 
+    host_output = output_dir / "host_diamond_top10.tsv"
     if not hmm_hits:
         logger.info("marker_validation: skipped (no HMM hits)")
-        return []
+        host_output.write_text("")
+        return [], []
 
     logger.info(
         "marker_validation: hits=%s proteome=%s db=%s output_dir=%s threads=%s",
@@ -405,7 +409,8 @@ def marker_validation_task(
         )
 
         if n_extracted == 0:
-            return []
+            host_output.write_text("")
+            return [], []
 
         # Step 2b: Run Diamond on HMM-hit sequences only
         # Use --sensitive for Tier-1 marker validation to detect divergent
@@ -423,7 +428,7 @@ def marker_validation_task(
             masked_genomes=masked_genomes,
         )
 
-        # Step 3: Filter validated markers based on top-10 taxonomy
+        # Step 3: Classify retained marker matches.
         validated_markers = filter_validated_markers(
             hmm_hits=hmm_hits,
             diamond_output_tsv=diamond_output,
@@ -436,8 +441,30 @@ def marker_validation_task(
             max_seqs=max_seqs,
         )
 
+        run_host_diamond_on_hmm_hits(
+            tmp_faa_path,
+            Path(marker_db),
+            host_output,
+            threads=threads,
+            evalue=evalue,
+            search_backend=search_backend,
+            masked_genomes=masked_genomes,
+        )
+        # Host sampling concerns queried proteins, not their seed/Pfam role.
+        # Copy only for this projection; measured HMM and marker facts stay intact.
+        host_records = filter_validated_markers(
+            hmm_hits=[replace(hit, pfam_override="") for hit in hmm_hits],
+            diamond_output_tsv=host_output,
+            proteome_fasta=Path(proteome_path),
+            genome_fasta=Path(genome_path) if genome_path else None,
+            output_dir=None,
+            taxonomy_lookup=taxonomy_lookup,
+            taxonomy_weight_mode=taxonomy_weight_mode,
+            novel_criteria=novel_criteria,
+            max_seqs=10,
+        )
         logger.info("marker_validation: validated=%s", len(validated_markers))
-        return validated_markers
+        return validated_markers, host_records
 
 
 def region_assembly_task(

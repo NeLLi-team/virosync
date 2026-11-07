@@ -16,6 +16,8 @@ from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     GenomeDiamondQuery,
+    _listify_top10_field,
+    has_viral_hit_veto,
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary, boundary_candidate_id
@@ -431,12 +433,14 @@ def _gap_has_host_barrier(
         if gene.end <= left.end or gene.start >= right.start:
             continue
         record = taxonomy[gene.id]
-        host = is_extension_host_gene(
-            record,
-            host_share_ok=host_lineage_share(record, model) >= threshold,
-            marker=gene.id in viral_marker_genes,
-        )
-        run = run + 1 if host else 0
+        share = host_lineage_share(record, model)
+        marker = gene.id in viral_marker_genes
+        host = is_extension_host_gene(record, host_share_ok=share >= threshold, marker=marker)
+        foreign = share < 0.10 and any(str(p).strip() for p in _listify_top10_field(record.top10_prefixes))
+        if host:
+            run += 1
+        elif marker or has_viral_hit_veto(record) or foreign:
+            run = 0
         if run == 3:
             return True
     return False

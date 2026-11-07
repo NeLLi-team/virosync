@@ -223,20 +223,26 @@ def null_resource_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_marker_validation_task_forwards_the_mask(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, null_resource_monitor: None
 ) -> None:
+    from virosync.pipeline.phase1.hhg_seeding import HMMHit
+
     calls: list[dict] = []
     monkeypatch.setattr(phase1_package, "extract_hmm_hit_sequences", lambda **_kwargs: 1)
     monkeypatch.setattr(phase1_package, "run_diamond_on_hmm_hits", lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(phase1_package, "filter_validated_markers", lambda **_kwargs: [])
 
+    monkeypatch.setattr(
+        "virosync.pipeline.phase1.marker_validation.run_host_diamond_on_hmm_hits",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
     tasks.marker_validation_task(
-        hmm_hits=[object()],
+        hmm_hits=[HMMHit("p1", "model", 10, 1e-5, 10, 1, 1)],
         proteome_path=tmp_path / "phase0" / "run" / "proteome.faa",
         marker_db=tmp_path / "marker.dmnd",
         output_dir=tmp_path / "validation",
         masked_genomes=MASK,
     )
 
-    assert [call["masked_genomes"] for call in calls] == [MASK]
+    assert [call["masked_genomes"] for call in calls] == [MASK, MASK]
 
 
 def test_hhg_seeding_task_forwards_the_mask(

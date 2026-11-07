@@ -943,7 +943,6 @@ def _run_phase3_subflow(
     resume = config.execution.resume
     ablation_id = config.ablation.id
     threads = config.compute.effective_threads()
-    host_prefixes = config.host.prefixes
 
     phase3_start = time.time()
     logger.info("-" * 60)
@@ -954,27 +953,15 @@ def _run_phase3_subflow(
         label="candidate ID",
     )
 
-    # Load validated markers on resume if needed
-    if (not validated_markers) and resume and resume_authorized and validated_hits_tsv.exists():
-        from virosync.pipeline.phase1.marker_validation import (
-            collect_host_signatures,
-            load_validated_marker_hits,
-        )
+    # Resume the authenticated model and token set, never the marker report.
+    if not validated_markers and resume and resume_authorized:
+        from .phase1_state import load_phase1_state
 
-        validated_markers = load_validated_marker_hits(validated_hits_tsv)
-        host_signatures = collect_host_signatures(
-            validated_markers,
-            host_prefixes=set(host_prefixes),
-        )
-        model_path = output_dir / "phase1" / "marker_validation" / "host_signature_model.json"
-        if model_path.exists():
-            with model_path.open() as handle:
-                host_signature_model_payload = json.load(handle)
-                # Parse eagerly and discard: the payload is consumed downstream
-                # as a raw dict, so this is the only place a resumed run rejects
-                # a well-formed but wrongly-typed model file before Phase 3 work.
-                HostSignatureModel.from_dict(host_signature_model_payload)
-        logger.info("Resume: loaded %d validated marker hits", len(validated_markers))
+        phase1_state = load_phase1_state(output_dir / "phase1/resume_state.json")
+        validated_markers = phase1_state.validated_markers
+        host_signatures = phase1_state.host_signatures
+        host_signature_model_payload = phase1_state.host_signature_model.to_dict()
+        logger.info("Resume: loaded %d validated marker hits from Phase1 state", len(validated_markers))
 
     # NOTE: Phase 3 gene taxonomy is ALWAYS pre-computed in Phase 2b
     # No fallback Diamond batch in Phase 3 (Phase 2b is mandatory)

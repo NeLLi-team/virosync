@@ -222,8 +222,9 @@ def test_missing_taxonomy_stops_growth_but_one_searched_no_hit_can_be_bridged():
             0.35,
         )
     assert interrupted.end == 2000
-    assert interrupted.right_stop == 2700
-    assert interrupted.right_stop_reason == "taxonomy_unavailable"
+    assert interrupted.right_stop == 2100
+    assert interrupted.right_stop_reason == "host_stop"
+    assert interrupted.host_stop_available is False
     assert interrupted.confirmed_seeds == seed.confirmed_seeds
 
 
@@ -623,7 +624,7 @@ def test_deep_only_hit_is_not_positive_extension_support():
 @pytest.mark.parametrize("direction", [1, -1])
 @pytest.mark.parametrize("middle_kind", ["neutral", "nohit", "deep_viral"])
 @pytest.mark.parametrize("tail_hosts", [2, 3])
-def test_host_runs_restart_after_neutral_genes_in_extension_and_joint(direction, middle_kind, tail_hosts):
+def test_neutral_genes_preserve_host_count_and_deep_viral_resets_it(direction, middle_kind, tail_hosts):
     from virosync.pipeline.phase3.joint_seed_rescue import _gap_has_host_barrier
 
     genes = [gene(f"h{i}", 2100 + i * 200, 2200 + i * 200, host=True) for i in range(3 + tail_hosts)]
@@ -639,7 +640,11 @@ def test_host_runs_restart_after_neutral_genes_in_extension_and_joint(direction,
     start, end = (1000, 2000) if direction == 1 else (8000, 9000)
     boundary = grow(genes, start=start, end=end)
     stop = boundary.right_stop if direction == 1 else boundary.left_stop
-    expected_stop = (2700 if direction == 1 else 7300) if tail_hosts == 3 else None
+    expected_stop = (
+        (2100 if direction == 1 else 7900)
+        if middle_kind != "deep_viral"
+        else ((2700 if direction == 1 else 7300) if tail_hosts == 3 else None)
+    )
     assert stop == expected_stop
     assert (boundary.start, boundary.end) == (start, end)
     assert boundary.confirmed_seeds == (ConfirmedSeed("original", "s", start, end),)
@@ -649,7 +654,7 @@ def test_host_runs_restart_after_neutral_genes_in_extension_and_joint(direction,
         side_effect=lambda record, model: 1.0 if record.host else 0.2,
     ):
         blocked = _gap_has_host_barrier(children, genes, {g.id: g for g in genes}, None, 0.35, frozenset())
-    assert blocked is (tail_hosts == 3)
+    assert blocked is (middle_kind != "deep_viral" or tail_hosts == 3)
 
 
 @pytest.mark.parametrize("pident,expected_veto", [(24.9, False), (25.0, True)])
@@ -664,13 +669,76 @@ def test_host_like_top10_viral_hit_vetoes_without_positive_extension(pident, exp
     assert boundary.right_stop is None
 
 
-def test_five_searched_no_hit_genes_block_remote_support_without_host_stop():
-    genes = [gene(f"n{i}", 2100 + i * 200, 2200 + i * 200) for i in range(5)]
-    for item in genes:
+@pytest.mark.parametrize("direction", [1, -1])
+def test_five_searched_no_hit_fragments_do_not_discard_connected_viral_span(direction):
+    genes = [gene("near", 2100, 2200, viral=True)]
+    genes.extend(gene(f"n{i}", 2300 + i * 200, 2400 + i * 200) for i in range(5))
+    for item in genes[1:]:
         item.top10_prefixes = []
         item.top10_pidents = []
-    genes.append(gene("remote", 3100, 3200, viral=True))
-    boundary = grow(genes)
-    assert boundary.end == 2000
+    genes.append(gene("remote", 3300, 3400, viral=True))
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    start, end = (1000, 2000) if direction == 1 else (8000, 9000)
+    boundary = grow(genes, start=start, end=end)
+    assert (boundary.start, boundary.end) == ((1000, 3400) if direction == 1 else (6600, 9000))
+    assert (boundary.right_stop if direction == 1 else boundary.left_stop) is None
+    assert boundary.confirmed_seeds == (ConfirmedSeed("original", "s", start, end),)
+
+
+@pytest.mark.parametrize("support", ["marker", "ml"])
+def test_searched_no_hit_marker_and_ml_support_are_not_skipped(support):
+    seed = MergedSeed(
+        "s", 1000, 2000, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", 1000, 2000),)
+    )
+    hit = gene("supported", 2100, 2200)
+    hit.top10_prefixes = []
+    hit.top10_pidents = []
+    hit.phase1_validated_viral_marker = support == "marker"
+    boundary = extend_confirmed_seed(
+        seed,
+        [hit],
+        {hit.id: hit},
+        (0, 10000),
+        None,
+        0.35,
+        ml_support=frozenset({hit.id}) if support == "ml" else frozenset(),
+    )
+    assert boundary.end == 2200
     assert boundary.right_stop is None
-    assert boundary.right_stop_reason == "support_gap"
+    assert boundary.confirmed_seeds == seed.confirmed_seeds
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+@pytest.mark.parametrize("reset_kind", ["deep_viral", "marker_member"])
+def test_empty_top10_independent_evidence_resets_host_run_without_growth(direction, reset_kind):
+    genes = [gene(f"h{i}", 2100 + i * 200, 2200 + i * 200, host=True) for i in range(5)]
+    middle = genes[2]
+    middle.top10_prefixes = []
+    middle.top10_pidents = []
+    middle.viral_hit_within_depth = reset_kind == "deep_viral"
+    assert middle.phase1_validated_viral_marker is False
+    marker_ids = frozenset({middle.id}) if reset_kind == "marker_member" else frozenset()
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    start, end = (1000, 2000) if direction == 1 else (8000, 9000)
+    seed = MergedSeed(
+        "s", start, end, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", start, end),)
+    )
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
+    with patch("virosync.pipeline.phase2.seed_extension.host_lineage_share", return_value=1.0):
+        boundary = extend_confirmed_seed(
+            seed,
+            genes,
+            {item.id: item for item in genes},
+            (0, 10000),
+            model,
+            0.35,
+            viral_marker_genes=marker_ids,
+        )
+    assert (boundary.right_stop if direction == 1 else boundary.left_stop) is None
+    assert (boundary.start, boundary.end) == (start, end)
+    assert boundary.confirmed_seeds == seed.confirmed_seeds
+    assert boundary.host_stop_available is True

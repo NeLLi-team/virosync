@@ -10,17 +10,9 @@ meet the identity threshold. ``tir_alignment_length`` and
 
 from __future__ import annotations
 
-import logging
 import math
-import multiprocessing
-import multiprocessing.util
-import os
-import tempfile
-import threading
 from bisect import bisect_left
 from collections import Counter, defaultdict
-from collections.abc import Mapping
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import product
@@ -28,7 +20,6 @@ from pathlib import Path
 
 import numpy as np
 from Bio import SeqIO
-from Bio.SeqRecord import SeqRecord
 from numpy.typing import NDArray
 
 from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
@@ -50,17 +41,6 @@ from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
 from virosync.pipeline.phase3.evidence_synthesizer import deduplicate_preferring_mcp
 from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
-
-logger = logging.getLogger(__name__)
-
-# A Unix socket path holds at most 107 bytes. multiprocessing puts the forkserver
-# socket at "<tmp>/pymp-XXXXXXXX/listener-XXXXXXXX", which adds 32 bytes to the
-# temp dir. Run directories set TMPDIR to deep paths, so a longer temp dir is
-# replaced by /tmp for that one directory, and a socket dir that is still too long
-# means no worker pool.
-_MAX_TEMP_DIR_BYTES = 60
-_MAX_SOCKET_DIR_BYTES = 107 - len("/listener-XXXXXXXX")
-_WORKER_SOCKET_DIR_LOCK = threading.Lock()
 
 MIN_TIR_ARM_BP = 50
 MAX_TIR_ARM_BP = 500
@@ -1419,33 +1399,16 @@ def refine_boundaries_with_terminal_repeats(
     boundary_taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
     extension_bp: int,
-    workers: int = 1,
 ) -> list[RefinedBoundary]:
-    """Partition boundaries around independent, taxonomy-covered TIR pairs.
-
-    Plans are independent until conflict resolution, so ``workers`` > 1 plans
-    scaffolds in separate processes. The result is identical for any worker count.
-    """
+    """Partition boundaries around independent, taxonomy-covered TIR pairs."""
     scaffold_index = SeqIO.index(str(raw_genome_path), "fasta")
     try:
-        if workers > 1 and len(boundaries) > 1 and _worker_sockets_fit():
-            for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
-                _validate_boundary_inputs(boundary, allowed_interval, scaffold_index)
-            tasks = _build_scaffold_tasks(
-                boundaries,
-                allowed_intervals,
-                raw_genome_path,
-                validated_markers=validated_markers,
-                boundary_diamond_query=boundary_diamond_query,
-                boundary_taxonomy_map=boundary_taxonomy_map,
-                proteome_index=proteome_index,
-                extension_bp=extension_bp,
-            )
-            plans = _plan_scaffolds_in_workers(tasks, len(boundaries), workers)
-            return _resolve_partition_conflicts(boundaries, plans)
         plans: list[list[RefinedBoundary]] = []
         for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
-            _validate_boundary_inputs(boundary, allowed_interval, scaffold_index)
+            if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
+                raise ValueError("allowed interval must contain parent")
+            if boundary.scaffold not in scaffold_index:
+                raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
             sequence = str(scaffold_index[boundary.scaffold].seq).upper()
             plans.append(
                 _plan_boundary_partition(
@@ -1462,159 +1425,3 @@ def refine_boundaries_with_terminal_repeats(
         return _resolve_partition_conflicts(boundaries, plans)
     finally:
         scaffold_index.close()
-
-
-def _validate_boundary_inputs(
-    boundary: RefinedBoundary,
-    allowed_interval: tuple[int, int],
-    scaffold_index: Mapping[str, SeqRecord],
-) -> None:
-    """Reject a boundary whose interval or scaffold cannot be planned."""
-    if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
-        raise ValueError("allowed interval must contain parent")
-    if boundary.scaffold not in scaffold_index:
-        raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
-
-
-def _worker_sockets_fit() -> bool:
-    """Return whether the forkserver socket path fits, logging a warning if it cannot.
-
-    multiprocessing creates its temp dir once per process and keeps it, so a short
-    one is made here before the first pool.
-    """
-    with _WORKER_SOCKET_DIR_LOCK:
-        saved_tempdir = tempfile.tempdir
-        if len(os.fsencode(tempfile.gettempdir())) > _MAX_TEMP_DIR_BYTES:
-            tempfile.tempdir = "/tmp"
-        try:
-            socket_dir = multiprocessing.util.get_temp_dir()
-        finally:
-            tempfile.tempdir = saved_tempdir
-    if len(os.fsencode(socket_dir)) <= _MAX_SOCKET_DIR_BYTES:
-        return True
-    logger.warning(
-        "Terminal-repeat planning runs serially: the multiprocessing socket directory %s is too long for a Unix socket",
-        socket_dir,
-    )
-    return False
-
-
-@dataclass(frozen=True, slots=True)
-class _ScaffoldPlanningTask:
-    """Everything one worker needs to plan the boundaries of one scaffold.
-
-    Planning reads markers, seed mappings, taxonomy and proteome genes only of
-    the boundary's own scaffold, so each field holds just that scaffold's data.
-    The worker reads the sequence itself, so no sequence is held or pickled here.
-    """
-
-    scaffold: str
-    raw_genome_path: str
-    boundaries: tuple[tuple[int, RefinedBoundary, tuple[int, int]], ...]
-    validated_markers: list[object]
-    boundary_diamond_query: GenomeDiamondQuery
-    boundary_taxonomy_map: dict[str, GeneTaxonomy]
-    proteome_index: dict[str, list[pORF]]
-    extension_bp: int
-
-
-def _build_scaffold_tasks(
-    boundaries: list[RefinedBoundary],
-    allowed_intervals: list[tuple[int, int]],
-    raw_genome_path: Path,
-    *,
-    validated_markers: list[object],
-    boundary_diamond_query: GenomeDiamondQuery,
-    boundary_taxonomy_map: dict[str, GeneTaxonomy],
-    proteome_index: dict[str, list[pORF]],
-    extension_bp: int,
-) -> list[_ScaffoldPlanningTask]:
-    """Split the planning inputs per scaffold, tasks with most boundaries first.
-
-    Biopython's index has no scaffold length without loading the record, so ties
-    keep input order instead of ordering by length.
-    """
-    indices_by_scaffold: dict[str, list[int]] = defaultdict(list)
-    for index, boundary in enumerate(boundaries):
-        indices_by_scaffold[boundary.scaffold].append(index)
-    markers_by_scaffold: dict[str, list[object]] = defaultdict(list)
-    for marker in validated_markers:
-        markers_by_scaffold[marker.scaffold].append(marker)
-    mappings_by_scaffold: dict[str, dict[str, SeedGeneMapping]] = defaultdict(dict)
-    for seed_id, mapping in boundary_diamond_query.seed_gene_mappings.items():
-        mappings_by_scaffold[mapping.scaffold][seed_id] = mapping
-    taxonomy_by_scaffold: dict[str, dict[str, GeneTaxonomy]] = defaultdict(dict)
-    for porf_id, taxonomy in boundary_taxonomy_map.items():
-        taxonomy_by_scaffold[taxonomy.scaffold][porf_id] = taxonomy
-
-    tasks = []
-    for scaffold, indices in indices_by_scaffold.items():
-        # Planning reads the taxonomy map by entry scaffold (_has_viral_gene) and by the
-        # ID of each gene of this scaffold's proteome (missing_boundary_taxonomy_ids).
-        taxonomy = dict(taxonomy_by_scaffold.get(scaffold, {}))
-        scaffold_genes = proteome_index.get(scaffold)
-        for gene in scaffold_genes or []:
-            if gene.id in boundary_taxonomy_map:
-                taxonomy[gene.id] = boundary_taxonomy_map[gene.id]
-        tasks.append(
-            _ScaffoldPlanningTask(
-                scaffold=scaffold,
-                raw_genome_path=str(raw_genome_path),
-                boundaries=tuple((index, boundaries[index], allowed_intervals[index]) for index in indices),
-                validated_markers=markers_by_scaffold.get(scaffold, []),
-                boundary_diamond_query=GenomeDiamondQuery(seed_gene_mappings=mappings_by_scaffold.get(scaffold, {})),
-                boundary_taxonomy_map=taxonomy,
-                proteome_index={} if scaffold_genes is None else {scaffold: scaffold_genes},
-                extension_bp=extension_bp,
-            )
-        )
-    return sorted(tasks, key=lambda task: -len(task.boundaries))
-
-
-def _plan_scaffolds_in_workers(
-    tasks: list[_ScaffoldPlanningTask],
-    n_boundaries: int,
-    workers: int,
-) -> list[list[RefinedBoundary]]:
-    """Plan every scaffold task in worker processes, returning plans in boundary order."""
-    # The runner is multi-threaded (genome threads, resource monitor). Forking it could
-    # hand a worker a lock or stream buffer held by another thread, so workers start
-    # from the forkserver, a clean single-threaded process, and only the scaffold-local
-    # task data is pickled.
-    plans: list[list[RefinedBoundary]] = [[] for _ in range(n_boundaries)]
-    with ProcessPoolExecutor(
-        max_workers=min(workers, len(tasks)),
-        mp_context=multiprocessing.get_context("forkserver"),
-    ) as pool:
-        for task_plans in pool.map(_plan_scaffold_task, tasks, chunksize=1):
-            for index, plan in task_plans:
-                plans[index] = plan
-    return plans
-
-
-_WORKER_GENOME_INDEXES: dict[str, Mapping[str, SeqRecord]] = {}
-
-
-def _plan_scaffold_task(task: _ScaffoldPlanningTask) -> list[tuple[int, list[RefinedBoundary]]]:
-    """Plan each boundary of one scaffold, returning ``(boundary index, plan)`` pairs."""
-    # Each worker process opens its own index of the raw genome, once, and reads
-    # only the scaffolds it is given.
-    if task.raw_genome_path not in _WORKER_GENOME_INDEXES:
-        _WORKER_GENOME_INDEXES[task.raw_genome_path] = SeqIO.index(task.raw_genome_path, "fasta")
-    sequence = str(_WORKER_GENOME_INDEXES[task.raw_genome_path][task.scaffold].seq).upper()
-    return [
-        (
-            index,
-            _plan_boundary_partition(
-                boundary,
-                allowed_interval=allowed_interval,
-                sequence=sequence,
-                validated_markers=task.validated_markers,
-                boundary_diamond_query=task.boundary_diamond_query,
-                boundary_taxonomy_map=task.boundary_taxonomy_map,
-                proteome_index=task.proteome_index,
-                extension_bp=task.extension_bp,
-            ),
-        )
-        for index, boundary, allowed_interval in task.boundaries
-    ]
