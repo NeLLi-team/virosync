@@ -28,6 +28,18 @@ def _annotation(
     return ModelPfamAnnotation(frozenset(domains), source_scope)
 
 
+def test_reported_penton_survives_stronger_non_capsid_domain_assignment():
+    capsid = _hit("EVE_CAPSID_NOVEL_0002", -5)
+    noncapsid = _hit("model-a", 200)
+    retained, records = arbitrate_hits(
+        [noncapsid, capsid],
+        {"protein-1": {"HostDomain"}},
+        {"model-a": _annotation("HostDomain"), "EVE_CAPSID_NOVEL_0002": _annotation("CapsidDomain")},
+    )
+    assert retained == [noncapsid, capsid]
+    assert records[0].final_model == "model-a"
+
+
 @pytest.mark.parametrize(
     ("observed", "annotations", "expected_model", "expected_outcome"),
     [

@@ -207,6 +207,7 @@ def test_invalid_assembly_floor_is_rejected(floor: object) -> None:
 def test_closed_role_values_are_stable() -> None:
     assert [role.value for role in MarkerRole] == [
         "production_validated",
+        "reported_capsid",
         "tier1_bypassed",
         "rejected",
     ]

@@ -57,10 +57,34 @@ def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="validated", i
     )
 
 
+@pytest.mark.parametrize("model", ["VP_MCP_6", "VP_Penton_1", "EVE_CAPSID_NOVEL_0002", "EVE_CAPSID_NOVEL_0012"])
+def test_reported_capsid_keeps_full_gene_and_medium_without_taxonomy(tmp_path, model):
+    evidence = [
+        replace(hit("capsid", model, start=100, end=190, evalue=1000, status="unvalidated", identity=0), score=-5)
+    ]
+    witnesses = find_spatial_witnesses(evidence)
+    (seed,) = add_rescue_seeds([], witnesses)
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    assert (result.start, result.end) == (100, 190)
+    assert result.confidence_tier == "MEDIUM"
+    assert result.hallmark_assessment.summary.core_count == 0
+    assert select_phase3_acceptance([result], AblationID.A0).canonical_results == (result,)
+    assert evidence[0].validation_status == "unvalidated"
+
+
+def test_unvalidated_protease_does_not_get_capsid_exception():
+    assert find_spatial_witnesses([hit("protease", "EVE_CAPSID_NOVEL_0001", status="unvalidated")]) == []
+
+
 @pytest.mark.parametrize("model", ["VP_MCP_6", "VS000792", "VS000652", "VS000745", "VS000783", "VS000788", "VS000791"])
 @pytest.mark.parametrize("evalue", [0.0021, 1e-8])
 @pytest.mark.parametrize("status,identity", [("unvalidated", 0), ("supported", 20), ("unvalidated", 30)])
-def test_unvalidated_capsid_cannot_supply_core_floor_or_rescue_seed(model, evalue, status, identity):
+def test_unvalidated_capsid_gets_medium_witness_without_core_credit(model, evalue, status, identity):
     evidence = [hit("capsid", model, evalue=evalue, status=status, identity=identity)]
     original = evidence[0]
 
@@ -70,8 +94,8 @@ def test_unvalidated_capsid_cannot_supply_core_floor_or_rescue_seed(model, evalu
     assert summary.core_count == 0
     assert summary.qualifying_evidence_ids == ()
     assert summary.floor_tier == ""
-    assert witnesses == []
-    assert add_rescue_seeds([], witnesses) == []
+    assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}
+    assert len(add_rescue_seeds([], witnesses)) == 1
     assert evidence == [original]
 
 
@@ -108,11 +132,12 @@ def test_validated_frameshift_twin_supplies_core_without_unvalidated_ordinary_co
     rescued = replace(hit("rescued", "GVOGm0003", evalue=1e-10), source="frameshift")
 
     summary = summarize_hallmarks([raw, rescued], scoring_locus_ids={"rescued": "ordinary"})
-    (witness,) = find_spatial_witnesses([raw, rescued])
+    witnesses = find_spatial_witnesses([raw, rescued])
 
     assert summary.core_count == summary.strong_count == 1
     assert summary.qualifying_evidence_ids == (rescued.evidence_id,)
-    assert witness.evidence_ids == (rescued.evidence_id,)
+    assert {w.evidence_ids for w in witnesses} == {(raw.evidence_id,), (rescued.evidence_id,)}
+    assert {w.tier for w in witnesses} == {"MEDIUM"}
 
 
 @pytest.mark.parametrize("extended", [False, True])
@@ -939,7 +964,11 @@ def test_completed_catalogue_resolves_exact_models_and_excludes_noncapsid_contex
     assert summary.coherence_bonus == 0
     assert summary.floor_tier == ""
     assert summary.capsid_fraction == 0
-    assert find_spatial_witnesses([evidence]) == []
+    witnesses = find_spatial_witnesses([evidence])
+    if model not in noncore and model != "VS000382":
+        assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}
+    else:
+        assert witnesses == []
 
 
 @pytest.mark.parametrize(
@@ -982,12 +1011,12 @@ def test_completed_catalogue_keeps_validation_and_evalue_gates(
     if weighted == 0:
         assert summary.qualifying_evidence_ids == ()
         assert summary.floor_tier == ""
-        assert find_spatial_witnesses(evidence) == []
+        assert {w.tier for w in find_spatial_witnesses(evidence)} == {"MEDIUM"}
     elif model == "EVE_CAPSID_NOVEL_0031":
         assert summary.marker_score == pytest.approx(0.05)
         assert summary.capsid_fraction == 0
         assert summary.floor_tier == ""
-        assert find_spatial_witnesses(evidence) == []
+        assert {w.tier for w in find_spatial_witnesses(evidence)} == {"MEDIUM"}
 
 
 def test_completed_catalogue_unresolved_panel_cannot_combine_with_established_cores() -> None:
@@ -1003,7 +1032,7 @@ def test_completed_catalogue_unresolved_panel_cannot_combine_with_established_co
     assert summary.marker_score == pytest.approx(0.2)
     assert summary.coherence_bonus == summary.capsid_fraction == 0
     assert summary.floor_tier == ""
-    assert find_spatial_witnesses(evidence) == []
+    assert {(w.rule, w.tier) for w in find_spatial_witnesses(evidence)} == {("reported_capsid", "MEDIUM")}
 
 
 @pytest.mark.parametrize("status", ["validated", "validated_novel", "unvalidated"])
@@ -1015,7 +1044,7 @@ def test_completed_catalogue_putative_mcp_keeps_core_credit_without_catalogue_ca
     witnesses = find_spatial_witnesses([capsid, partner])
     assert singleton.floor_tier == pair.floor_tier == ""
     assert singleton.capsid_fraction == pair.capsid_fraction == 0
-    assert witnesses == []
+    assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}
     if status == "unvalidated":
         assert singleton.core_count == 0
         assert pair.core_count == 1
@@ -1069,7 +1098,7 @@ def test_completed_catalogue_penton_writer_formats_outputs_and_preserves_seed(tm
     assert result.hallmark_assessment.summary.core_count == 1
     assert result.hallmark_assessment.summary.marker_score == pytest.approx(0.2)
     assert result.hallmark_assessment.summary.floor_tier == ""
-    assert result.hallmark_assessment.witnesses == ()
+    assert {w.rule for w in result.hallmark_assessment.witnesses} == {"reported_capsid"}
     assert result.confirmed_seeds == (seed,)
     assert (result.start, result.end) == (50, 1500)
     with canonical_path.open() as stream:
@@ -1137,7 +1166,8 @@ def test_penton_alias_joins_virophage_core_without_extra_minor_capsid_family(mod
     assert summary.panel == "Virophages"
     assert summary.core_count == summary.compatible_count == 1
     assert summary.capsid_fraction == 0
-    assert find_spatial_witnesses(evidence) == []
+    assert len(find_spatial_witnesses(evidence)) == 2
+    assert {w.rule for w in find_spatial_witnesses(evidence)} == {"reported_capsid"}
 
 
 @pytest.mark.parametrize(
@@ -1209,7 +1239,8 @@ def test_completed_catalogue_noncapsid_cores_join_three_core_medium_witnesses(mo
     assert result.hallmark_assessment.summary.capsid_fraction == 0
     assert result.hallmark_assessment.summary.floor_tier == ""
     assert {(w.panel, w.rule, w.tier) for w in result.hallmark_assessment.witnesses} == {
-        (panel, "three_core_15kb", "MEDIUM")
+        (panel, "three_core_15kb", "MEDIUM"),
+        ("Capsid", "reported_capsid", "MEDIUM"),
     }
     assert result.score_components["hallmark_floor"] == pytest.approx(0.2)
 
@@ -1227,6 +1258,7 @@ def test_completed_catalogue_virophage_penton_partners_real_mcp_for_high_floor()
     assert {(w.rule, w.tier) for w in result.hallmark_assessment.witnesses} == {
         ("capsid", "MEDIUM"),
         ("capsid_partner_5kb", "HIGH"),
+        ("reported_capsid", "MEDIUM"),
     }
     assert result.score_components["hallmark_floor"] == pytest.approx(0.7)
     assert confidence >= 0.7

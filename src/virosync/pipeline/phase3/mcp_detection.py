@@ -31,14 +31,17 @@ rejected.
 Capsid evidence is a wider decision. A hit to one of the capsid-type
 structure-derived profiles (:data:`CAPSID_EVIDENCE_MODELS`) is capsid evidence
 without being an MCP. These annotations support the existing class-specific
-acceptance rules. Graduated scoring and spatial floors require exact roles in
-``hallmark_panels.json``; this broader annotation alone supplies no floor.
+acceptance rules. Reported semantic capsid hits supply a separate MEDIUM floor;
+ordinary graduated scoring still requires the exact catalogue roles and thresholds.
 Everything that names a major capsid protein still asks :func:`is_mcp_gene`.
 """
 
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
 
 NCLDV_MCP_MODELS: frozenset[str] = frozenset(
     {
@@ -169,13 +172,25 @@ is_mcp_model = is_mcp_gene
 
 
 def is_capsid_evidence_gene(name: str | None) -> bool:
-    """Return True when ``name`` is an MCP or a capsid-type structure-derived profile.
+    """Recognize curated MCP, capsid, coat and Penton models.
 
     The profile name is lower-cased and stripped, as in :func:`is_mcp_gene`.
     """
     if not name:
         return False
-    return is_mcp_gene(name) or name.lower().strip() in CAPSID_EVIDENCE_MODELS
+    return is_mcp_gene(name) or name.lower().strip() in CAPSID_EVIDENCE_MODELS | _catalogue_capsid_models()
+
+
+@lru_cache(maxsize=1)
+def _catalogue_capsid_models() -> frozenset[str]:
+    """Read curated capsid and Penton identities without changing their raw roles."""
+    catalogue = Path(__file__).resolve().parents[2] / "data" / "hallmark_panels.json"
+    links = json.loads(catalogue.read_text(encoding="utf-8"))["links"]
+    return frozenset(
+        link["model"].lower()
+        for link in links
+        if not link["excluded_from_scoring"] and (link["capsid"] or link["marker"] in {"Penton", "mCP"})
+    )
 
 
 def structure_profile_class(name: str | None) -> str:

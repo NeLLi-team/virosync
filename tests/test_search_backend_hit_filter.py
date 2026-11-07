@@ -274,6 +274,29 @@ def test_marker_search_breadth_preserves_mask_and_retained_limit(
     assert targets == [f"NCLDV__V{n}|p1" for n in range(10)]
 
 
+def test_marker_search_keeps_twenty_genomes_and_prefers_viral_twins(tmp_path, fake_diamond):
+    fake_diamond.rows = (
+        [("q1", "EUK__SELF|p1")]
+        + [("q1", f"EUK__G1|p{n}") for n in range(25)]
+        + [("q1", "EUK-pEVE__G1|p0")]
+        + [("q1", f"EUK__G{n}|p1") for n in range(2, 20)]
+        + [("q1", "NCLDV__V1|p1")]
+    )
+    output = run_diamond_on_hmm_hits(
+        tmp_path / "q.faa",
+        tmp_path / "db.dmnd",
+        tmp_path / "out.tsv",
+        threads=1,
+        masked_genomes=frozenset({"SELF"}),
+    )
+    targets = [line.split("\t")[1] for line in output.read_text().splitlines()]
+    assert len(targets) == 20
+    assert targets[0] == "EUK-pEVE__G1|p0"
+    # The existing combined-taxonomy rule keeps one row per labelled genome.
+    assert targets[1] == "EUK__G1|p1"
+    assert fake_diamond.commands[0][fake_diamond.commands[0].index("--max-target-seqs") + 1] == "200"
+
+
 def _masked(subject_ids: list[str], masked_genomes: set[str], max_targets: int = 10) -> list[str]:
     kept = select_target_hits(subject_ids, max_targets, frozenset(masked_genomes))
     return [subject_ids[idx] for idx in kept]

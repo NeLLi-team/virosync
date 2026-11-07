@@ -144,9 +144,9 @@ def can_seed_marker(model: str, validation_status: str, *, tier1_bypassed: bool 
 
     if is_cellular_marker_model(model):
         return False
-    if tier1_bypassed or validation_status == "validated":
+    if is_capsid_evidence_gene(model) or tier1_bypassed or validation_status == "validated":
         return True
-    return validation_status == "validated_novel" and is_capsid_evidence_gene(model)
+    return False
 
 
 @dataclass
@@ -716,7 +716,7 @@ def assemble_candidate_regions(
     # Group validated hits by scaffold
     hits_by_scaffold = defaultdict(list)
     for hit in normalized_hits:
-        if hit.is_validated:  # Only use validated markers
+        if hit.is_validated or hit.is_valid_seed_marker:
             hits_by_scaffold[hit.scaffold].append(hit)
 
     logger.info(f"Validated markers on {len(hits_by_scaffold)} scaffolds")

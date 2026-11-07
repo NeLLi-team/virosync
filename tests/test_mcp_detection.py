@@ -353,7 +353,12 @@ def test_capsid_profiles_other_than_the_mcp_are_not_mcps(name: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["", None, "dmcp", "polb", "vp_penton_3", "OG1590", "hypothetical_protein", "EVE_CAPSID_NOVEL_0034"],
+    ["", None, "dmcp", "polb", "OG1590", "hypothetical_protein", "EVE_CAPSID_NOVEL_0034"],
 )
 def test_other_names_are_not_capsid_evidence(name: str | None) -> None:
     assert is_capsid_evidence_gene(name) is False
+
+
+def test_curated_penton_is_capsid_evidence_but_not_major_capsid() -> None:
+    assert is_capsid_evidence_gene("vp_penton_3") is True
+    assert is_mcp_gene("vp_penton_3") is False

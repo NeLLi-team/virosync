@@ -71,7 +71,7 @@ phase1:
   host_taxonomy_deviation_window_min_markers: 1
   host_taxonomy_deviation_seed_window_bp: 10000
   host_taxonomy_deviation_seed_min_markers: 3
-  marker_validation_top_k: 10
+  marker_validation_top_k: 20
   novel_marker_min_score: 30.0
   novel_marker_min_coverage: 0.5
   novel_marker_require_cluster: true

@@ -143,11 +143,13 @@ def collect_hallmark_evidence(
     frameshift_ids: set[str] | None = None,
 ) -> list[HallmarkEvidence]:
     """Join exact retained identities; never restore discarded model alternatives."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
     raw = {(f"{h.query_name}|aa{h.query_start}-{h.query_end}", h.target_name): h for h in raw_hits}
     catalogue = _catalogue()
     evidence = []
     for marker in markers:
-        if ("phase1_marker", marker.hmm_target) not in catalogue:
+        if ("phase1_marker", marker.hmm_target) not in catalogue and not is_capsid_evidence_gene(marker.hmm_target):
             continue
         gene = marker.query_porf.split("|aa", 1)[0]
         measured = raw.get((marker.query_porf, marker.hmm_target))
@@ -181,11 +183,22 @@ def collect_hallmark_evidence(
 
 def find_spatial_witnesses(evidence: Sequence[HallmarkEvidence]) -> list[HallmarkWitness]:
     """Find independent full-ORF witnesses, including contained three-core windows."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
     grouped = defaultdict(list)
+    ordinary_capsids = set()
     for hit, link in _linked(evidence):
         if link["role"] == "core_marker":
             grouped[hit.scaffold, link["panel"]].append((hit, link))
+            if link["capsid"]:
+                ordinary_capsids.add(hit.evidence_id)
     witnesses = {}
+    for hit in evidence:
+        if is_capsid_evidence_gene(hit.model) and hit.evidence_id not in ordinary_capsids:
+            witness = HallmarkWitness(
+                hit.scaffold, "Capsid", "reported_capsid", "MEDIUM", hit.start, hit.end, (hit.evidence_id,)
+            )
+            witnesses[witness.witness_id] = witness
 
     def add(panel: str, selected: list[tuple[HallmarkEvidence, dict]], rule: str, tier: str) -> None:
         members = tuple(

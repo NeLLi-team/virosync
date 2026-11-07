@@ -26,7 +26,93 @@ from virosync.pipeline.phase1.hhg_seeding import (
 from virosync.pipeline.phase1.marker_validation import (
     NovelMarkerCriteria,
     filter_validated_markers,
+    validate_hmm_hit,
 )
+
+
+def test_marker_validation_uses_viral_reference_at_rank_twenty():
+    hits = [(f"EUK__G{n}|p1", 100.0, 60.0, 1e-20) for n in range(19)]
+    hits.append(("NCLDV__virus|p1", 50.0, 30.0, 1e-10))
+    assert validate_hmm_hit(50, 1, hits, NovelMarkerCriteria()).value == "validated"
+
+
+def test_production_marker_validation_and_class_vote_use_rank_twenty(tmp_path):
+    from virosync.pipeline.phase3.evidence_synthesizer import marker_taxonomy_category
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        "".join(f"scaffold_1\tEUK__G{n}|p1\t1e-30\t{100 - n}\t60\t100\n" for n in range(19))
+        + "scaffold_1\tNCLDV__virus|p1\t1e-10\t50\t30\t100\n"
+    )
+    (marker,) = filter_validated_markers([HMMHit("scaffold_1", "VS000185", 50, 1e-8, 50, 1, 50)], diamond, proteome)
+    assert marker.validation_status == "validated"
+    assert len(marker.top10_targets.split(",")) == 20
+    assert marker_taxonomy_category(marker) == "NCLDV"
+
+
+def test_capsid_winner_does_not_restore_losing_non_capsid_on_same_segment(tmp_path):
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("scaffold_1\tNCLDV__virus|p1\t1e-30\t100\t90\t100\n")
+    markers = filter_validated_markers(
+        [
+            HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0002", 200, 1e-30, 200, 10, 50),
+            HMMHit("scaffold_1", "VS000185", 50, 1e-8, 50, 10, 50),
+            HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0012", 20, 0.1, 20, 10, 50),
+        ],
+        diamond,
+        proteome,
+    )
+    assert [marker.hmm_target for marker in markers] == ["EVE_CAPSID_NOVEL_0002", "EVE_CAPSID_NOVEL_0012"]
+    assert all(marker.validation_status == "validated" for marker in markers)
+
+
+def test_production_marker_validation_does_not_use_rank_twenty_one(tmp_path):
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        "".join(f"scaffold_1\tEUK__G{n}|p1\t1e-30\t{100 - n}\t60\t100\n" for n in range(20))
+        + "scaffold_1\tNCLDV__virus|p1\t1e-10\t50\t30\t100\n"
+    )
+    (marker,) = filter_validated_markers(
+        [HMMHit("scaffold_1", "VS000185", 50, 1e-8, 50, 1, 50)], diamond, proteome, max_seqs=20
+    )
+    assert marker.validation_status == "unvalidated"
+    assert len(marker.top10_targets.split(",")) == 20
+
+
+def test_competing_segment_retains_unvalidated_capsid_and_full_gene(tmp_path):
+    from virosync.ablation import AblationID
+    from virosync.orchestration._flows.single_genome.phase1 import _candidate_regions_to_seeds
+    from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+    from virosync.pipeline.phase1.region_assembly import assemble_candidate_regions
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("scaffold_1\tEUK__host|p1\t1e-30\t100\t90\t100\n")
+    hits = [
+        HMMHit("scaffold_1", "VS000087", 200, 1e-30, 200, 10, 50),
+        HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0002", -5, 1000, -5, 10, 50),
+    ]
+    markers = filter_validated_markers(hits, diamond, proteome)
+    assert {marker.hmm_target for marker in markers} == {"VS000087", "EVE_CAPSID_NOVEL_0002"}
+    capsid = next(marker for marker in markers if marker.hmm_target == "EVE_CAPSID_NOVEL_0002")
+    assert (capsid.start, capsid.end, capsid.validation_status) == (100, 400, "unvalidated")
+    retained = [
+        marker for marker in markers if decide_marker_hit_role(marker, ablation_id=AblationID.A0).is_retained_evidence
+    ]
+    assert retained == [capsid]
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">scaffold\n" + "A" * 1000 + "\n")
+    regions = assemble_candidate_regions(retained, genome, proteome, tmp_path / "regions")
+    seeds = _candidate_regions_to_seeds(regions, markers, [], [])
+    assert len(seeds) == 1
+    assert (seeds[0].confirmed_seeds[0].start, seeds[0].confirmed_seeds[0].end) == (100, 400)
 
 
 def _fake_extract(hits, proteome_fasta, output_fasta):

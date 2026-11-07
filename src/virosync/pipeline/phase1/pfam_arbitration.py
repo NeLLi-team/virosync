@@ -118,6 +118,8 @@ def arbitrate_hits(
     annotations: dict[str, ModelPfamAnnotation],
 ) -> tuple[list[HMMHit], list[PfamArbitrationRecord]]:
     """Apply the handoff's Pfam arbitration rules to ambiguous proteins."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
     best_by_protein = _best_candidate_hits(hits)
     ambiguous = {protein for protein, candidates in best_by_protein.items() if len(candidates) >= 2}
     records = []
@@ -168,7 +170,13 @@ def arbitrate_hits(
             )
         )
 
-    retained = [hit for hit in hits if hit.query_name not in ambiguous or selected_hits.get(hit.query_name) is hit]
+    retained = [
+        hit
+        for hit in hits
+        if hit.query_name not in ambiguous
+        or selected_hits.get(hit.query_name) is hit
+        or is_capsid_evidence_gene(hit.target_name)
+    ]
     return retained, records
 
 

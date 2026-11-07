@@ -25,6 +25,7 @@ class MarkerRole(str, Enum):
     """Closed downstream role assigned to one Tier-1 marker result."""
 
     PRODUCTION_VALIDATED = "production_validated"
+    REPORTED_CAPSID = "reported_capsid"
     TIER1_BYPASSED = "tier1_bypassed"
     REJECTED = "rejected"
 
@@ -154,10 +155,15 @@ def decide_marker_hit_role(
     single_marker_min_score: float = DEFAULT_A2_SINGLE_MARKER_MIN_SCORE,
 ) -> MarkerRoleDecision:
     """Assign a role from either existing ``ValidatedMarkerHit`` shape."""
-    return decide_marker_role(
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+    decision = decide_marker_role(
         ablation_id=ablation_id,
         validation_status=hit.validation_status,
         hmm_score=hit.hmm_score,
         hmm_evalue=hit.hmm_evalue,
         single_marker_min_score=single_marker_min_score,
     )
+    if decision.is_rejected and is_capsid_evidence_gene(getattr(hit, "hmm_target", "")):
+        return MarkerRoleDecision(MarkerRole.REPORTED_CAPSID, hit.validation_status)
+    return decision

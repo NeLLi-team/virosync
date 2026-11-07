@@ -465,9 +465,11 @@ def test_marker_validated_on_peve_references_alone_seeds_a_region(tmp_path: Path
     assert len(regions) == 1
 
 
-def test_unvalidated_and_supported_capsid_hits_do_not_seed() -> None:
-    assert _region_marker(CAPSID_MODEL, "unvalidated").is_valid_seed_marker is False
-    assert _region_marker(CAPSID_MODEL, "supported").is_valid_seed_marker is False
+@pytest.mark.parametrize("status", ["unvalidated", "supported"])
+def test_unvalidated_and_supported_capsid_hits_seed_without_relabelling(status) -> None:
+    marker = _region_marker(CAPSID_MODEL, status)
+    assert marker.is_valid_seed_marker
+    assert marker.validation_status == status
 
 
 def test_validated_novel_capsid_hit_alone_seeds_a_region_that_is_not_an_mcp_region(tmp_path: Path) -> None:

@@ -30,20 +30,20 @@ def searches(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
-def test_marker_validation_search_is_unfiltered(tmp_path: Path, searches: list[str]) -> None:
+def test_marker_validation_search_is_genome_filtered(tmp_path: Path, searches: list[str]) -> None:
     run_diamond_on_hmm_hits(tmp_path / "q.faa", tmp_path / "marker.dmnd", tmp_path / "out.tsv")
 
-    assert searches == ["plain"]
+    assert searches == ["filtered"]
 
 
-def test_hhg_seeding_marker_search_is_unfiltered(tmp_path: Path, searches: list[str]) -> None:
+def test_hhg_seeding_marker_search_is_genome_filtered(tmp_path: Path, searches: list[str]) -> None:
     output = tmp_path / "work" / "out.tsv"
     (output.parent / "tmp").mkdir(parents=True)
     (output.parent / "tmp" / "marker.dmnd").write_text("", encoding="utf-8")
 
     _run_diamond_marker_search(tmp_path / "q.faa", tmp_path / "marker.faa", output, threads=1)
 
-    assert searches == ["plain"]
+    assert searches == ["filtered"]
 
 
 def test_boundary_search_is_genome_filtered(tmp_path: Path, searches: list[str]) -> None:

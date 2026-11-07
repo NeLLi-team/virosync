@@ -296,7 +296,7 @@ class Phase1Config:
     host_taxonomy_deviation_seed_min_markers: int = 3
 
     # HMM-gated marker validation
-    marker_validation_top_k: int = 10
+    marker_validation_top_k: int = 20
     novel_marker_min_score: float = 30.0
     novel_marker_min_coverage: float = 0.5
     novel_marker_require_cluster: bool = True

@@ -2,17 +2,16 @@
 
 This module implements the key optimization from PIPELINE_HMM_GATED_PLAN.md:
 Only run Diamond on HMM-hit pORFs (not all pORFs), validating viral markers
-with top-10 taxonomy analysis using the SMALL marker.dmnd database.
+with 20 retained taxonomy matches from the marker.dmnd database.
 
 === ViroSync's Two-Tier Diamond Strategy ===
 
 TIER 1 (THIS MODULE): marker.dmnd validation (Phase 1, Steps 2-3)
-  - Database: marker.dmnd (~1,500 curated marker sequences)
+  - Database: marker.dmnd
   - Input: Only HMM-hit proteins (1-10% of proteome)
   - Purpose: Validate markers (NCLDV/MIRUS/VP/PLV/CRESS top-10 hit at >=25% identity,
              or HMM-only novel marker gates)
   - Output: Validated markers that become EVE region seeds
-  - Speed: FAST (small database, small input)
 
 TIER 2 (Phase 2b/3): combined_proteome.dmnd taxonomy
   - Database: combined_proteome.dmnd (millions of sequences)
@@ -23,12 +22,13 @@ TIER 2 (Phase 2b/3): combined_proteome.dmnd taxonomy
 Key optimization steps:
 1. Run HMM search first (fast, targeted)
 2. Extract only HMM-hit pORF sequences (typically 1-10% of total)
-3. Run Diamond vs marker.dmnd (TIER 1 - small, fast)
-4. Validate markers based on top-10 hit taxonomy
+3. Run Diamond vs marker.dmnd with reference masking, twins and per-genome selection
+4. Validate markers using all retained matches (default 20)
 5. Assemble regions from validated markers, extend ±5kb, merge adjacent
 6. Run Diamond vs combined_proteome.dmnd ONLY on candidate regions (TIER 2)
 
-This reduces Phase 1 runtime from hours to minutes on large genomes.
+The legacy ``top10_*`` field and file names hold the configured number of marker
+matches. Gene-taxonomy top-ten fields have a separate limit.
 
 Taxonomy prefixes (from marker.dmnd database):
 - EUK__: Eukaryote (cellular)
@@ -201,10 +201,10 @@ def validate_hmm_hit(
             return ValidationStatus.UNVALIDATED
 
     # Diamond hits exist - classify based on taxonomy prefixes.
-    top10_prefixes = [parse_taxonomy_prefix(target) for target, _, _, _ in diamond_hits[:10]]
+    top10_prefixes = [parse_taxonomy_prefix(target) for target, _, _, _ in diamond_hits]
 
     max_validated_pident = max(
-        (pident for (_, _, pident, _), p in zip(diamond_hits[:10], top10_prefixes) if p in VALIDATED_PREFIXES),
+        (pident for (_, _, pident, _), p in zip(diamond_hits, top10_prefixes) if p in VALIDATED_PREFIXES),
         default=0.0,
     )
     if max_validated_pident >= VALIDATION_MIN_PIDENT:
@@ -288,7 +288,7 @@ def run_diamond_on_hmm_hits(
     output_tsv: Path,
     threads: int = 4,
     evalue: float = 1e-5,
-    max_seqs: int = 10,
+    max_seqs: int = 20,
     search_backend: str = "diamond",
     sensitive: bool = False,
     masked_genomes: frozenset[str] = frozenset(),
@@ -313,7 +313,7 @@ def run_diamond_on_hmm_hits(
     Returns:
         Path to output TSV file
     """
-    from virosync.pipeline.search_backend import run_sequence_search
+    from virosync.pipeline.search_backend import run_genome_filtered_search
 
     mode_str = " (sensitive)" if sensitive else ""
     logger.info(
@@ -326,7 +326,7 @@ def run_diamond_on_hmm_hits(
     logger.info("  Database: %s", diamond_db.name)
 
     extra_flags = ["--sensitive", "--ext-chunk-size", "400"] if sensitive else None
-    run_sequence_search(
+    run_genome_filtered_search(
         query_fasta=hmm_hit_fasta,
         db_path=diamond_db,
         output_tsv=output_tsv,
@@ -410,7 +410,7 @@ def filter_validated_markers(
     novel_criteria: NovelMarkerCriteria | None = None,
     taxonomy_lookup: dict | None = None,
     taxonomy_weight_mode: str = "rank",
-    max_seqs: int = 10,
+    max_seqs: int = 20,
 ) -> list[ValidatedMarkerHit]:
     """Filter HMM hits to validated markers based on Diamond top-10 taxonomy.
 
@@ -477,29 +477,26 @@ def filter_validated_markers(
                     diamond_hits[query] = []
                 diamond_hits[query].append((target, bits_val, pident_val, evalue_val))
 
-    # Build HMM hit lookup keyed by query|aaX-Y (unique per HMM hit).
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+    # Preserve the original best model per segment, then add only capsid alternatives.
     # Diamond results are keyed by base protein name (full-protein search),
     # so we also build a mapping from base name → Diamond hits.
-    hmm_hit_lookup = {}  # query|aaX-Y -> (target_name, score, evalue, qstart, qend)
+    hmm_hit_lookup = {}  # (segment, empty for the original winner) -> measured hit
+    capsid_alternatives = {}
     for hit in hmm_hits:
         query_id = f"{hit.query_name}|aa{hit.query_start}-{hit.query_end}"
-        if query_id not in hmm_hit_lookup:
-            hmm_hit_lookup[query_id] = (
-                hit.target_name,
-                hit.score,
-                hit.evalue,
-                hit.query_start,
-                hit.query_end,
-            )
-        elif hit.score > hmm_hit_lookup[query_id][1]:
-            # Keep best HMM score if multiple hits for identical segment
-            hmm_hit_lookup[query_id] = (
-                hit.target_name,
-                hit.score,
-                hit.evalue,
-                hit.query_start,
-                hit.query_end,
-            )
+        key = (query_id, "")
+        measured = (hit.target_name, hit.score, hit.evalue, hit.query_start, hit.query_end)
+        if key not in hmm_hit_lookup or hit.score > hmm_hit_lookup[key][1]:
+            hmm_hit_lookup[key] = measured
+        if is_capsid_evidence_gene(hit.target_name):
+            capsid_key = (query_id, hit.target_name)
+            if capsid_key not in capsid_alternatives or hit.score > capsid_alternatives[capsid_key][1]:
+                capsid_alternatives[capsid_key] = measured
+    for (query_id, model), measured in capsid_alternatives.items():
+        if hmm_hit_lookup[(query_id, "")][0] != model:
+            hmm_hit_lookup[(query_id, model)] = measured
 
     hmm_group_counts = {"GVOGm": 0, "OG": 0, "OTHER": 0}
     for hmm_target, _score, _evalue, _qstart, _qend in hmm_hit_lookup.values():
@@ -521,7 +518,7 @@ def filter_validated_markers(
         "no_diamond_hits": 0,
     }
 
-    for query_porf, (hmm_target, hmm_score, hmm_evalue, qstart, qend) in hmm_hit_lookup.items():
+    for (query_porf, _), (hmm_target, hmm_score, hmm_evalue, qstart, qend) in hmm_hit_lookup.items():
         # Get coordinates
         coords = porf_coords.get(query_porf)
         base_query = query_porf.split("|aa", 1)[0]

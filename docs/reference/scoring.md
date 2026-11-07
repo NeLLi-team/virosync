@@ -13,12 +13,15 @@ shows where each step runs.
 
 ## Steps from marker to accepted EVE
 
-1. **Validate markers.** A marker HMM hit is `validated` when one of its ten best
-   DIAMOND matches has the prefix `NCLDV`, `MIRUS`, `PLV`, `VP`, `PPV`, `CRESS` or
+1. **Validate markers.** Marker searches retain 20 matches after reference masking,
+   viral/cellular protein-twin selection and reduction to one hit per labelled
+   genome. A marker HMM hit is `validated` when one of these DIAMOND matches
+   has the prefix `NCLDV`, `MIRUS`, `PLV`, `VP`, `PPV`, `CRESS` or
    `EUK-pEVE` at 25% identity or more. `GVMAG` and `PHAGE` matches do not validate
    a hit. A hit with no DIAMOND match can be `validated_novel` under separate HMM
-   rules. `supported` and `unvalidated` hits stay diagnostic and earn no credit
-   below.
+   rules. Reported capsid and Penton hits can seed and receive a MEDIUM floor
+   even when `supported` or `unvalidated`; their validation status stays unchanged.
+   Other markers keep their validation and HMM thresholds.
 2. **Find spatial witnesses.** Validated hits at E ≤ 0.01 to catalogue core models
    can form a witness (see [Spatial witnesses](#spatial-witnesses)). The widest
    witnesses outside ordinary seeds become seeds; nested or identical ones add no
@@ -70,8 +73,18 @@ presence, then more compatible families, then the panel name that sorts last.
 | Marker score | min(0.2 × weighted cores + 0.4 if the capsid fraction is 1, 1); a weak capsid adds 0.4 × capsid fraction |
 | Coherence bonus | 0.05 × min(compatible families − 1, 3) × weighted cores / cores |
 
-Support-only links need E ≤ 1e-5. They add compatible families inside a panel
-that has a qualifying core. They never add a core, a floor or a witness.
+Ordinary support-only credit needs E ≤ 1e-5 and a qualifying core in the same
+panel. It never adds a core or a HIGH floor. The capsid exception below is separate.
+
+The capsid exception is separate from catalogue core scoring. Every reported
+hit to a curated capsid, minor capsid, coat or Penton model protects its complete
+gene span and supplies a MEDIUM witness, with no HMM score, E-value, coverage or
+DIAMOND requirement. This includes semantic capsid models whose catalogue role
+is support-only. Raw catalogue roles and validation remain in the evidence.
+The exception alone never supplies a HIGH floor or an extra qualifying core.
+The retained complete gene is sufficient for canonical acceptance, with no
+minimum region length. Protease profiles such as `EVE_CAPSID_NOVEL_0001` do not
+receive this exception.
 
 ### Spatial witnesses
 

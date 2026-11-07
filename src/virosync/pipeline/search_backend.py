@@ -9,7 +9,8 @@ proteome database repeats subject IDs, holds several near-identical proteins per
 genome, and lists some proteins under both a cellular and a viral label, so its
 gene-taxonomy callers use run_genome_filtered_search(), which fetches
 TARGET_FETCH_MULTIPLIER times the requested hits and reduces them per query with
-select_target_hits(). The marker database keeps the plain search.
+select_target_hits(). Marker validation uses the same selection with 20 retained
+hits. The plain search remains available to callers that need raw ranked rows.
 
 Both searches take the run's reference mask, a set of genome keys (see
 virosync.pipeline.reference_mask). They fetch TARGET_FETCH_MULTIPLIER times the

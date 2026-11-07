@@ -328,7 +328,7 @@ def marker_validation_task(
     genome_path: Path | None = None,
     threads: int = 8,
     evalue: float = 1e-5,
-    max_seqs: int = 10,
+    max_seqs: int = 20,
     novel_criteria=None,
     taxonomy_labels_file: Path | None = None,
     taxonomy_weight_mode: str = "rank",

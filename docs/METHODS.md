@@ -339,6 +339,8 @@ spatial rescue use the separate exact-model catalogue described under
 [Confidence and limitations](#confidence-and-limitations). A catalogue structural
 anchor is distinct from a catalogue capsid assignment. Neither the flag nor
 a model-name substring adds an unlisted model to that catalogue.
+The reported-capsid MEDIUM witness is separate from this annotation flag:
+curated capsid and Penton hits can receive that floor without viral DIAMOND support.
 
 A region whose viral hits are all `EUK-pEVE`, in the marker
 database, the proteome database or both, and whose markers supply no profile
@@ -510,10 +512,12 @@ candidates.
 
 ### Reference hit selection
 
-Marker validation and host-signature estimation read the top 10 DIAMOND hits of
-each full-length HMM-hit protein against the marker database. They use DIAMOND's rows
-as they are, after [reference masking](#reference-masking). The host-signature
-model does not create seeds.
+Marker validation and host-signature estimation read 20 retained DIAMOND hits by
+default for each full-length HMM-hit protein against the marker database. They
+use [reference masking](#reference-masking), viral/cellular protein-twin selection
+and reduction to one hit per labelled genome, as described below. Validation and
+marker class votes use all retained matches. The host-signature model does not
+create seeds. Gene-taxonomy hit limits remain separate.
 
 The sensitive marker-validation search sets `--ext-chunk-size 400` to examine
 larger batches of candidate targets during DIAMOND's ranking heuristic. This
@@ -667,10 +671,13 @@ A blocked marker can still appear in marker counts when another marker seeded
 the region that contains it. Only catalogue-qualified evidence contributes to
 the graduated hallmark score.
 
-The additive hallmark rescue examines retained Phase 1 marker records with status
-`validated` or `validated_novel`, at E <= 0.01. `supported` and `unvalidated`
-records stay diagnostic. The rescue does not recover HMM models discarded by marker
-retention. Three independent core families on three
+Ordinary catalogue rescue examines retained Phase 1 marker records with status
+`validated` or `validated_novel`, at E <= 0.01. Separately, every reported semantic
+capsid or Penton hit survives model arbitration and protects its complete gene
+span. It supplies a MEDIUM witness without a score, E-value, coverage or viral
+DIAMOND requirement, while keeping its original validation status and catalogue
+annotation. This exception does not add ordinary core credit or force HIGH.
+Three independent qualifying core families on three
 proteins in one compatible panel and scaffold, within a full-gene span of at
 most 15,000 bp, give a provisional MEDIUM floor. A mapped MCP or CRESS capsid
 alone gives a MEDIUM floor; a distinct compatible core family on a different
@@ -845,7 +852,8 @@ exact runtime MCP recognition and explicit MCP labels, with their catalogue
 roles and panel assignments unchanged.
 
 All 33 `EVE_CAPSID_NOVEL_*` models resolve by exact ID. Penton models share
-the `Penton` family and cannot anchor a capsid bonus or capsid-alone floor.
+the `Penton` family and cannot anchor an ordinary catalogue capsid bonus or floor.
+They receive the separate reported-capsid MEDIUM witness.
 Virophages pentons can join three-core witnesses for a MEDIUM floor or partner
 a capsid MCP within 5 kb for a HIGH floor. Profiles
 without an established panel assignment use one-family unresolved panels,
@@ -874,23 +882,27 @@ containment apply. These domain assignments do not establish viral specificity.
 independent family. The putative MCP `EVE_CAPSID_NOVEL_0029` belongs to the
 existing `MCP` family in Nucleocytoviricota and Polinton-like virus panels.
 It contributes core credit with `capsid=false`, which withholds the graduated
-capsid term, catalogue capsid-alone floor and capsid spatial witness. Its separate
+capsid term, catalogue capsid-alone floor and capsid spatial witness. The separate
+reported-capsid exception still supplies a MEDIUM floor. Its
 MCP registration in `mcp_detection.py` still governs MCP annotation, Phase 1 seed
 confidence, class-vote overrides and output keep rules. It can join ordinary three-core
-witnesses within 15 kb for a MEDIUM floor. Available controls contain no
-qualified positive 0029 hit to justify enabling those capsid effects;
-catalogue tests alone do not validate this biological assignment.
+witnesses within 15 kb for a MEDIUM floor. Catalogue tests alone do not validate
+this biological assignment.
 
 Graduated core evidence requires 0 <= E <= 0.01 and validated marker evidence.
-An ordinary validated marker must have a viral top-10 reference hit at >=25%
+An ordinary validated marker must have a viral reference hit among the retained
+marker matches (default 20) at >=25%
 identity; the existing `validated_novel` criteria remain separate. Supported
 or unvalidated hits remain diagnostic records and cannot supply qualifying
-cores, confidence floors or rescue seeds, including structural-anchor models.
+ordinary cores or HIGH floors. Reported semantic capsid hits can still seed and
+supply their separate MEDIUM witness. Other structural-anchor models keep the
+ordinary restrictions.
 Maximum family-to-protein matching prevents repeated profiles,
 families or one protein from counting twice. Strong evidence has E <= 1e-5.
 Support-only links require this strong threshold in both Phase 1 and Phase 3.
 They add coherence only within a panel with a qualifying core and cannot add
-cores, catalogue floors or rescue witnesses. Coherence can raise a single-core
+cores or catalogue floors. Semantic capsid models with support-only annotations
+still supply their separate MEDIUM witness. Coherence can raise a single-core
 score, but the fewer-than-two-core cap still prevents a HIGH score.
 Three or more independent core groups receive weight 1 each. A pair receives
 weight 1 per strong group and 0.5 per weak group, using the valid assignment
@@ -943,6 +955,10 @@ capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
 group supplies a HIGH floor without a distance restriction. The spatial rules
 add their floors only when all witness genes remain fully contained. Floors
 use the configured tier thresholds, whose defaults are 0.2 and 0.7.
+The reported-capsid witness supplies at least MEDIUM after these caps, even with
+no qualifying ordinary core. Its complete retained gene is sufficient for
+acceptance without a minimum region length. It does not create an automatic
+HIGH floor; independently qualifying ordinary evidence can still support HIGH.
 
 A retained spatial witness can pass acceptance with an explicit rescue reason,
 including for an `UNKNOWN` class, and survives the no-viral-evidence ANI filter.

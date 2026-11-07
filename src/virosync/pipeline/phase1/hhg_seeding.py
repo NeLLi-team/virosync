@@ -233,16 +233,16 @@ def _run_diamond_marker_search(
     # Route the actual blastp through the central hardened wrapper so this
     # call benefits from the per-call tempdir + retry that prevents the
     # Diamond 2.1.21 finalization-phase futex deadlock.
-    from virosync.pipeline.search_backend import run_sequence_search
+    from virosync.pipeline.search_backend import run_genome_filtered_search
 
-    run_sequence_search(
+    run_genome_filtered_search(
         query_fasta=query_fasta,
         db_path=db_path,
         output_tsv=output_file,
         threads=threads,
         backend="diamond",
         evalue=1e-5,
-        max_target_seqs=10,
+        max_target_seqs=20,
         output_columns=["qseqid", "sseqid", "bitscore"],
         timeout=600,
         masked_genomes=masked_genomes,
@@ -254,7 +254,7 @@ def validate_hmm_hits_with_markers(
     proteome_fasta: Path,
     marker_faa_dir: Path,
     threads: int = 4,
-    top_k: int = 10,
+    top_k: int = 20,
     neighbor_genes: int = 5,
     output_dir: Path | None = None,
     masked_genomes: frozenset[str] = frozenset(),
@@ -414,7 +414,7 @@ def validate_hmm_hits_with_combined_db(
     proteome_fasta: Path,
     marker_db: Path,
     threads: int = 4,
-    top_k: int = 10,
+    top_k: int = 20,
     evalue: float = 1e-5,
     output_dir: Path | None = None,
     genome_fasta: Path | None = None,
@@ -500,6 +500,7 @@ def validate_hmm_hits_with_combined_db(
             proteome_fasta=proteome_fasta,
             genome_fasta=genome_fasta,
             output_dir=output_dir,
+            max_seqs=top_k,
         )
 
         # Copy Diamond results to output_dir if provided
@@ -537,12 +538,6 @@ def validate_hmm_hits_with_combined_db(
 # gate (which requires a non-ATPase hallmark) rather than filtered at search time.
 GA_FLOOR_MARKERS: frozenset = frozenset({"PLV_PC_054"})
 
-# capscan MCP profiles (named *_caps_*) carry no GA cutoff and fire promiscuously at
-# E<=1e-5 on giant-virus metagenomes (cross-hitting NCLDV/Mirus capsids). Apply capscan's
-# own strong-hit bitscore threshold (>=75, capscan.sh) so they detect their groups without
-# seeding false positives. Enforced via the same enforce_ga_cutoffs path.
-CAPS_BITSCORE_FLOOR = 75.0
-
 
 def run_hmmsearch(
     proteome_fasta: Path,
@@ -560,16 +555,8 @@ def run_hmmsearch(
         evalue_cutoff: Maximum E-value for reporting hits. None reports all hits.
         threads: Number of CPU threads
         chunk_size: Number of sequences per chunk (None to load all at once)
-        enforce_ga_cutoffs: If True, apply per-marker bitscore floors (sequence and
-            best-domain score) in addition to the E-value, for two marker classes:
-            (1) the broad packaging-ATPase markers in GA_FLOOR_MARKERS, gated at their
-            own GA gathering cutoff (suppresses A32 / FtsK-HerA cross-hits onto cellular
-            P-loop NTPases); and (2) the integrated capscan MCP markers (name contains
-            "_caps_"), which carry no GA cutoff, gated at CAPS_BITSCORE_FLOOR (=75, the
-            capscan strong-hit threshold) to stop promiscuous cross-hits on giant-virus
-            metagenomes. All other markers keep plain E-value reporting (their GA cutoffs
-            are not calibrated for gathering use, and enforcing them globally collapses
-            seeding).
+        enforce_ga_cutoffs: Apply the noncapsid packaging-ATPase GA floors in
+            GA_FLOOR_MARKERS. Capsid models have no GA or bit-score floor.
 
     Returns:
         List of HMMHit objects for reported hits
@@ -598,13 +585,6 @@ def run_hmmsearch(
             _name = _hmm.name.decode() if isinstance(_hmm.name, bytes) else _hmm.name
             if _name in GA_FLOOR_MARKERS and _hmm.cutoffs.gathering_available():
                 ga_map[_name] = tuple(_hmm.cutoffs.gathering)
-            elif "_caps_" in _name:
-                # Use a calibrated GA cutoff if the capscan profile carries one;
-                # otherwise fall back to the fixed bitscore floor.
-                if _hmm.cutoffs.gathering_available():
-                    ga_map[_name] = tuple(_hmm.cutoffs.gathering)
-                else:
-                    ga_map[_name] = (CAPS_BITSCORE_FLOOR, CAPS_BITSCORE_FLOOR)
 
     def search_sequences(sequence_batch: list[pyhmmer.easel.DigitalSequence]) -> None:
         for hmm, top_hits in zip(
@@ -1190,7 +1170,7 @@ def hhg_seeding_pipeline(
     hmm_allowlist: Path | None = None,
     marker_faa_dir: Path | None = None,
     marker_db: Path | None = None,
-    marker_top_k: int = 10,
+    marker_top_k: int = 20,
     marker_neighbor_genes: int = 5,
     evalue_cutoff: float | None = None,
     min_anchor_score: float = 50.0,
@@ -1214,9 +1194,9 @@ def hhg_seeding_pipeline(
 
     Marker Validation Options (choose ONE):
     1. marker_db: HMM-gated Diamond workflow (CURRENT, RECOMMENDED)
-       - Points to marker.dmnd (SMALL, ~1,500 curated marker sequences)
+       - Points to marker.dmnd
        - Only runs Diamond on HMM-hit pORFs (1-10% of total proteome)
-       - Validates markers with top-10 taxonomy analysis
+       - Validates markers with 20 retained taxonomy matches
        - Implements PIPELINE_HMM_GATED_PLAN.md Steps 2-3
     2. marker_faa_dir: Legacy per-marker FAA validation (DEPRECATED, slow)
        - Runs separate Diamond searches for each marker type (MCP, PolB, etc.)
@@ -1228,8 +1208,8 @@ def hhg_seeding_pipeline(
         hmm_file: Path to viral hallmark HMM database
         hmm_allowlist: Optional path to file with allowed HMM names (one per line)
         marker_faa_dir: Optional directory containing marker-specific FAA files (LEGACY, not used)
-        marker_db: Path to marker.dmnd for HMM-gated validation (TIER 1, ~1,500 curated marker sequences)
-        marker_top_k: Top-k hits to check for NCLDV/MIRUS/VP/PLV support (default 10)
+        marker_db: Path to marker.dmnd for HMM-gated validation
+        marker_top_k: Retained hits to check for viral support (default 20)
         marker_neighbor_genes: Neighbor window (genes) for supporting markers (legacy mode only)
         evalue_cutoff: E-value threshold for HMM search. None reports all hits.
         min_anchor_score: Minimum bit score for anchor designation
