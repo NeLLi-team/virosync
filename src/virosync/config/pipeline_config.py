@@ -331,7 +331,7 @@ class Phase2Config:
     diamond_control_sample_size: int = 100
     diamond_control_min_distance: int = 30
     diamond_top_k: int = 10
-    diamond_chunk_size: int = 10000
+    diamond_chunk_size: int = 100000
     diamond_random_seed: int = 42
     diamond_superset_prototype_enabled: bool = False
     # Host-veto depth from the shared search; positive evidence uses its
@@ -483,6 +483,7 @@ class ExecutionConfig:
 
     masking: MaskingConfig = field(default_factory=MaskingConfig)
     resume: bool = True
+    generate_plots: bool = False
 
     @property
     def skip_masking(self) -> bool:
@@ -632,6 +633,7 @@ FIELD_SPECS: list[FieldSpec] = [
     # --- execution (flat-only) ---
     _spec("masking", "execution", "masking"),
     _spec("resume", "execution", "resume"),
+    _spec("generate_plots", "execution", "generate_plots"),
 ]
 
 # Lookups derived once from FIELD_SPECS.

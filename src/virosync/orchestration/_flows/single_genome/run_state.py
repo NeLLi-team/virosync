@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
 from functools import wraps
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote
 
 from virosync.ablation import (
@@ -33,7 +33,7 @@ from virosync.ablation import (
     validate_ablation_events_bytes,
 )
 
-RUN_STATE_SCHEMA_VERSION = 3
+RUN_STATE_SCHEMA_VERSION = 4
 RUN_STATE_FILENAME = "virosync_run_state.json"
 PHASE_MARKER_FILENAMES = tuple(f"phase{phase}.complete.json" for phase in range(4))
 RUN_STATUSES = frozenset({"running", "failed", "success"})
@@ -42,8 +42,9 @@ _TERMINAL_PHASE_OUTCOMES = frozenset({"terminal_zero", "terminal_ablation"})
 
 _SHA256_LENGTH = 64
 _MAX_STATE_BYTES = 16 * 1024 * 1024
-# The largest measured Phase-1 state is 597,742,200 bytes; 1 GiB gives 1.80x room.
-_MAX_CHECKPOINT_BYTES = 1024 * 1024 * 1024
+# A measured Phase-2 checkpoint is 1,209,509,818 bytes. Keep a finite file cap;
+# decoding and typed validation need more memory than this serialized size.
+_MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024 * 1024
 _ARTIFACT_OBSERVATION_CACHE: ContextVar[dict[tuple[str, str, str], tuple[int, str, int | None]] | None] = ContextVar(
     "artifact_observation_cache", default=None
 )
@@ -100,7 +101,7 @@ def _scoped_validation_cache(function: Any) -> Any:
 # These are the minimum reloadable artifacts for a non-terminal phase.  A phase
 # marker may record additional diagnostics, but it cannot make an empty or
 # report-only directory authoritative.  Phase 1's JSON path is the lossless
-# checkpoint consumed by schema-v3 resume; the public TSVs remain reports.
+# checkpoint consumed by schema-v4 resume; the public TSVs remain reports.
 _PHASE_REQUIRED_PATHS = {
     0: frozenset(
         {
@@ -154,7 +155,6 @@ _FINAL_REQUIRED_PATH_GROUPS = (
     ("virosync_tsv_invariant_report.tsv",),
     ("run.log",),
     ("virosync_run_complete.json",),
-    ("notebooks/jupyter/eve_analysis.ipynb",),
 )
 
 _KNOWN_ARTIFACT_SCHEMAS = {
@@ -210,6 +210,7 @@ class ConfigIdentity:
     sha256: str
     ablation_id: str
     ablation_contract_sha256: str
+    generate_plots: bool
 
 
 @dataclass(frozen=True)
@@ -549,9 +550,9 @@ def _read_artifact_json(root: Path, relative_path: str) -> dict[str, object]:
             f"(observed={metadata.st_size}, allowed=1-{_MAX_CHECKPOINT_BYTES})"
         )
     with os.fdopen(descriptor, "rb", closefd=True) as handle:
-        content = handle.read()
+        content = handle.read(metadata.st_size + 1)
         after = os.fstat(handle.fileno())
-    if (
+    if len(content) != metadata.st_size or (
         metadata.st_dev,
         metadata.st_ino,
         metadata.st_size,
@@ -625,7 +626,7 @@ def _coerce_artifact(value: ArtifactIdentity | Mapping[str, object]) -> Artifact
     elif isinstance(value, Mapping):
         required = {"relative_path", "size", "sha256", "schema", "row_count"}
         if set(value) != required:
-            raise ValueError("artifact identity fields differ from schema v3")
+            raise ValueError("artifact identity fields differ from schema v4")
         artifact = ArtifactIdentity(
             relative_path=value["relative_path"],  # type: ignore[arg-type]
             size=value["size"],  # type: ignore[arg-type]
@@ -666,17 +667,21 @@ def _require_known_artifact_schemas(
 
 def _require_final_artifact_set(
     artifacts: Sequence[ArtifactIdentity | Mapping[str, object]],
+    *,
+    generate_plots: bool,
 ) -> dict[str, ArtifactIdentity]:
     by_path = _artifacts_by_path(artifacts)
     _require_known_artifact_schemas(by_path)
     missing = [choices for choices in _FINAL_REQUIRED_PATH_GROUPS if not any(path in by_path for path in choices)]
+    if generate_plots and "notebooks/jupyter/eve_analysis.ipynb" not in by_path:
+        missing.append(("notebooks/jupyter/eve_analysis.ipynb",))
     if missing:
         rendered = [" or ".join(group) for group in missing]
         raise ValueError(f"final artifact set is incomplete: {rendered!r}")
     return by_path
 
 
-def _require_phase_artifact_set(record: PhaseRecord) -> None:
+def _require_phase_artifact_set(record: PhaseRecord, identities: Mapping[str, object]) -> None:
     by_path = _artifacts_by_path(record.artifacts)
     _require_known_artifact_schemas(by_path)
     if record.phase == 0:
@@ -687,7 +692,9 @@ def _require_phase_artifact_set(record: PhaseRecord) -> None:
             raise ValueError("Phase 0 masking state does not bind masking_status.json")
     required = set(_PHASE_REQUIRED_PATHS[record.phase])
     if record.outcome in _TERMINAL_PHASE_OUTCOMES or record.phase == 3:
-        _require_final_artifact_set(record.artifacts)
+        _require_final_artifact_set(
+            record.artifacts, generate_plots=cast(dict[str, Any], identities["config"])["generate_plots"]
+        )
     if record.outcome == "terminal_zero" and record.phase not in {0, 3}:
         # Early exits need not have produced the normal phase checkpoint, but
         # their final zero-result contract must be complete.
@@ -811,6 +818,8 @@ def _validate_phase_checkpoint(
         if owner_phase is not None and record.phase > owner_phase and phase_events.counters != previous_events.counters:
             raise ValueError("ablation counters changed after their owner phase")
     if record.phase == 3 or record.outcome in _TERMINAL_PHASE_OUTCOMES:
+        if any(artifact.relative_path == "notebooks/jupyter/eve_analysis.ipynb" for artifact in record.artifacts):
+            _validate_notebook(root)
         root_events = _validate_ablation_event_binding(
             root,
             "ablation_events.json",
@@ -1383,7 +1392,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
     }
     if set(document) != required:
         raise ValueError(
-            "run identity fields differ from schema v3; "
+            "run identity fields differ from schema v4; "
             f"missing={sorted(required - set(document))}, "
             f"extra={sorted(set(document) - required)}"
         )
@@ -1410,7 +1419,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
         (input_identity, {"size", "sha256"}, "input"),
         (
             config_identity,
-            {"sha256", "ablation_id", "ablation_contract_sha256"},
+            {"sha256", "ablation_id", "ablation_contract_sha256", "generate_plots"},
             "config",
         ),
         (code_identity, {"version", "source_sha256"}, "code"),
@@ -1429,10 +1438,12 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
     )
     for nested, expected_fields, label in nested_fields:
         if set(nested) != expected_fields:
-            raise ValueError(f"run identity {label} fields differ from schema v3")
+            raise ValueError(f"run identity {label} fields differ from schema v4")
     _require_nonnegative_int(input_identity.get("size"), "input size")
     _require_sha256(input_identity.get("sha256"), "input sha256")
     _require_sha256(config_identity.get("sha256"), "config sha256")
+    if type(config_identity.get("generate_plots")) is not bool:
+        raise ValueError("config generate_plots must be a boolean")
     try:
         AblationID(config_identity.get("ablation_id"))
     except (TypeError, ValueError) as exc:
@@ -1488,7 +1499,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
         "repeatmasker_library_sha256",
     }
     if set(requested_masking) != masking_fields:
-        raise ValueError("requested_masking fields differ from schema v3")
+        raise ValueError("requested_masking fields differ from schema v4")
     resources = document["resources"]
     if not isinstance(resources, list):
         raise ValueError("resources must be a list")
@@ -1497,7 +1508,7 @@ def _validate_run_identity(identity: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(resource, dict):
             raise ValueError("each resource identity must be an object")
         if set(resource) != {"name", "kind", "version", "manifest_sha256"}:
-            raise ValueError("resource identity fields differ from schema v3")
+            raise ValueError("resource identity fields differ from schema v4")
         for field in ("name", "kind", "version"):
             if not isinstance(resource.get(field), str) or not resource[field]:
                 raise ValueError(f"resource {field} must be a non-empty string")
@@ -1697,7 +1708,7 @@ def _phase_record_from_payload(payload: Mapping[str, object]) -> PhaseRecord:
         "actual_masking",
     }
     if set(payload) != required or payload.get("schema_version") != RUN_STATE_SCHEMA_VERSION:
-        raise ValueError("phase marker fields differ from schema v3")
+        raise ValueError("phase marker fields differ from schema v4")
     artifacts = payload["artifacts"]
     if not isinstance(artifacts, list):
         raise ValueError("phase artifacts must be a list")
@@ -1720,7 +1731,7 @@ def _phase_record_from_payload(payload: Mapping[str, object]) -> PhaseRecord:
         actual_masking=actual,
     )
     if _jsonable(record) != dict(payload):
-        raise ValueError("phase marker is not canonical schema-v3 state")
+        raise ValueError("phase marker is not canonical schema-v4 state")
     return record
 
 
@@ -1757,7 +1768,7 @@ def _validated_phase_prefix(
         if record.dependency_sha256 != dependency:
             return tuple(records), f"{filename} has a stale phase dependency"
         try:
-            _require_phase_artifact_set(record)
+            _require_phase_artifact_set(record, state.identities)
             _validate_phase0_binding(output_dir, record, state.identities)
             _validate_phase_checkpoint(output_dir, record, state.identities)
         except (OSError, TypeError, ValueError) as exc:
@@ -1819,8 +1830,8 @@ def publish_phase_completion(
         raise TypeError("record fields cannot accompany an explicit PhaseRecord")
     if not isinstance(record, PhaseRecord):
         raise TypeError("record must be a PhaseRecord")
-    _require_phase_artifact_set(record)
     current_state = _load_run_state(root)
+    _require_phase_artifact_set(record, current_state.identities)
     if current_state.run_fingerprint != record.run_fingerprint:
         raise ValueError("phase marker run fingerprint differs from run state")
     if current_state.status != "running":
@@ -1863,7 +1874,7 @@ def _state_from_payload(payload: Mapping[str, object]) -> RunState:
         or not set(payload).issubset(allowed)
         or payload.get("schema_version") != RUN_STATE_SCHEMA_VERSION
     ):
-        raise ValueError("run-state fields differ from schema v3")
+        raise ValueError("run-state fields differ from schema v4")
     run_fingerprint = _require_sha256(payload["run_fingerprint"], "run_fingerprint")
     status = payload["status"]
     if status not in RUN_STATUSES:
@@ -1918,7 +1929,7 @@ def _load_run_state(output_dir: Path) -> RunState:
 
 
 def load_run_state(output_dir: str | Path) -> RunState:
-    """Load a structurally valid schema-v3 run state."""
+    """Load a structurally valid schema-v4 run state."""
     root = _require_directory_no_follow(Path(output_dir), "output directory")
     return _load_run_state(root)
 
@@ -2546,7 +2557,9 @@ def _validate_success_artifacts(
             key=lambda artifact: artifact.relative_path,
         )
     )
-    by_path = _require_final_artifact_set(normalized)
+    by_path = _require_final_artifact_set(
+        normalized, generate_plots=cast(dict[str, Any], identities["config"])["generate_plots"]
+    )
     if any(not validate_artifact_identity(artifact, root=root) for artifact in normalized):
         raise ValueError("success artifact identity validation failed")
     _validate_ablation_event_binding(
@@ -2574,7 +2587,6 @@ def _validate_success_artifacts(
         "run.log",
         "virosync_run_complete.json",
         "virosync_tsv_invariant_report.tsv",
-        "notebooks/jupyter/eve_analysis.ipynb",
     ):
         if by_path[relative_path].size <= 0:
             raise ValueError(f"required final artifact is empty: {relative_path}")
@@ -2649,7 +2661,8 @@ def _validate_success_artifacts(
     ):
         if gff_path in by_path:
             _validate_gff_export(root, gff_path, canonical_coordinates)
-    _validate_notebook(root)
+    if "notebooks/jupyter/eve_analysis.ipynb" in by_path:
+        _validate_notebook(root)
     _validate_run_log(root)
     _validate_invariant_report(
         root / "virosync_tsv_invariant_report.tsv",

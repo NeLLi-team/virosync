@@ -1,4 +1,4 @@
-"""Viral marker evidence gates host training; eligible domains keep their weights."""
+"""Viral marker evidence gates host training; each eligible protein keeps its original hit weights."""
 
 from types import SimpleNamespace
 
@@ -42,10 +42,9 @@ def test_domain_records_retain_original_host_weights(mode, as_object):
     baseline = hs.build_host_signature_model(convert(original), weight_mode=mode)
     expanded = hs.build_host_signature_model(convert(original + alternatives), weight_mode=mode)
     assert (
-        expanded.lineage_weights["euk|metamonada||trichomonadida"]
-        == 3 * baseline.lineage_weights["euk|metamonada||trichomonadida"]
+        expanded.lineage_weights["metamonada|trichomonadida"] == baseline.lineage_weights["metamonada|trichomonadida"]
     )
-    assert expanded.lineage_weights["euk|discoba||euglenida"] == baseline.lineage_weights["euk|discoba||euglenida"]
+    assert expanded.lineage_weights["discoba|euglenida"] == baseline.lineage_weights["discoba|euglenida"]
 
 
 @pytest.mark.parametrize("mode", ["rank", "bitscore"])
@@ -84,10 +83,10 @@ def test_independent_proteins_and_scaffolds_remain_independent():
     assert three.lineage_weights == {key: value * 3 for key, value in one.lineage_weights.items()}
 
 
-def test_separate_domain_records_each_contribute():
+def test_repeated_full_protein_search_contributes_once():
     first = marker("p1|aa1-100", "EUK__b")
     later = marker("p1|aa20-80", "EUK__a")
-    assert len(hs.build_host_signature_model([first, later]).lineage_weights) == 2
+    assert hs.build_host_signature_model([first, later]).to_dict() == hs.build_host_signature_model([first]).to_dict()
 
 
 @pytest.mark.parametrize("masked", [frozenset(), frozenset({"self"})])
@@ -182,11 +181,11 @@ def test_no_query_host_evidence_is_explicit_and_does_not_search(tmp_path, monkey
 @pytest.mark.parametrize(
     "domain,queries_expected,weights_expected",
     [
-        ("Wrong", ["ctg_3"], {"euk|discoba||euglenida": 55.0}),
+        ("Wrong", ["ctg_3"], {"discoba|euglenida": 55.0}),
         (
             "Polymerase",
             ["ctg_3"],
-            {"euk|discoba||euglenida": 55.0},
+            {"discoba|euglenida": 55.0},
         ),
     ],
 )

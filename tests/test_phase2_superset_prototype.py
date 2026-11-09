@@ -278,6 +278,7 @@ def _run_phase2(
         logger=logging.getLogger(__name__),
         reference_mask=reference_mask,
         threads=subflow_threads,
+        metadata_families={},
     )
 
 
@@ -515,8 +516,8 @@ def test_phase2_gives_the_validated_viral_markers_to_seed_extension(tmp_path: Pa
         raise StopAfterExtension
 
     markers = [
-        SimpleNamespace(query_porf="contig_3|aa1", validation_status="validated", hmm_target="GVOGm0003"),
-        SimpleNamespace(query_porf="contig_4", validation_status="supported", hmm_target="GVOGm0003"),
+        SimpleNamespace(query_porf="contig_3|aa1", validation_status="validated", hmm_target="GVOGm0003", hmm_score=50),
+        SimpleNamespace(query_porf="contig_4", validation_status="supported", hmm_target="GVOGm0003", hmm_score=50),
     ]
     from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy
 

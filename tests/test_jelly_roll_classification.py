@@ -33,8 +33,8 @@ def _write_inputs(
 ) -> tuple[Path, Path]:
     marker_hits_path = tmp_path / "validated_marker_hits.tsv"
     marker_hits_path.write_text(
-        "query_porf\thmm_target\tvalidation_status\n"
-        + "".join(f"{porf_id}\t{marker}\t{status}\n" for porf_id, marker, status in hits)
+        "query_porf\thmm_target\tvalidation_status\thmm_score\n"
+        + "".join(f"{porf_id}\t{marker}\t{status}\t50.0\n" for porf_id, marker, status in hits)
     )
     sequences_path = tmp_path / "hmm_hit_porfs.faa"
     sequences_path.write_text("".join(f">{porf_id}\n{sequence}\n" for porf_id, sequence in sequences))
@@ -489,3 +489,117 @@ def test_cli_loads_base_id_and_prefers_exact_nonempty_domain_sequence(tmp_path: 
     assert sequence_rows["both|aa101-480"]["sequence"] == "D" * 80
     assert sequence_rows["both|aa101-480"]["mcp_support"] == "sequence_supported"
     assert sequence_rows["both|aa101-480"]["validation_status"] == "validated"
+
+
+@pytest.mark.parametrize("score", ["9.999", "9.9996", "bad", "", "nan", "inf"])
+@pytest.mark.parametrize("model", ["PLV_MCP", "Mirus_MCP"])
+def test_sequence_support_requires_full_score_floor(tmp_path, score, model):
+    from classify_jelly_roll import classify_proteins, load_marker_hits
+
+    path = tmp_path / "hits.tsv"
+    path.write_text(f"query_porf\thmm_target\thmm_score\tvalidation_status\nprotein\t{model}\t{score}\tvalidated\n")
+    (result,) = classify_proteins(load_marker_hits(path), {"protein": "A" * 500})
+    assert result.mcp_support == "candidate"
+    assert result.validation_status == "validated"
+    if model == "Mirus_MCP":
+        assert result.jelly_roll_type != "HK97"
+
+
+def test_low_validated_hit_preserves_independent_foldseek_support(tmp_path):
+    from classify_jelly_roll import classify_proteins, load_foldseek_results, load_marker_hits
+
+    path = tmp_path / "hits.tsv"
+    path.write_text("query_porf\thmm_target\thmm_score\tvalidation_status\nprotein\tMirus_MCP\t9.999\tvalidated\n")
+    foldseek = tmp_path / "foldseek.tsv"
+    foldseek.write_text("protein_model\tpdb100#1OHG_A\t1e-10\t100\t0.8\t0.8\t0.9\t0.7\n")
+    (result,) = classify_proteins(
+        load_marker_hits(path), {"protein": "A" * 500}, foldseek_results=load_foldseek_results(foldseek)
+    )
+    assert result.mcp_support == "structure_supported"
+    assert result.jelly_roll_type == "HK97"
+    assert result.validation_status == "validated"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_eligible_alternate_hit_supports_same_base_protein(tmp_path, reverse):
+    from classify_jelly_roll import classify_proteins, load_marker_hits
+
+    rows = ["protein|aa1-100\tPLV_MCP\t9.999\tvalidated\n", "protein|aa200-300\tMirus_MCP\t10\tvalidated_novel\n"]
+    if reverse:
+        rows.reverse()
+    path = tmp_path / "hits.tsv"
+    path.write_text("query_porf\thmm_target\thmm_score\tvalidation_status\n" + "".join(rows))
+    (result,) = classify_proteins(load_marker_hits(path), {"protein": "A" * 500})
+    assert result.protein_id == rows[0].split("\t")[0]
+    assert result.mcp_support == "sequence_supported"
+    assert result.validation_status == rows[0].strip().split("\t")[-1]
+
+
+@pytest.mark.parametrize("score, support", [(9.9996, "candidate"), (10.0, "sequence_supported")])
+def test_validation_writer_preserves_capsid_score_boundary(tmp_path, score, support):
+    from classify_jelly_roll import classify_proteins, load_marker_hits
+
+    from virosync.pipeline.phase1.hhg_seeding import HMMHit
+    from virosync.pipeline.phase1.marker_validation import filter_validated_markers
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 1600 # 1 # ID=1_1\n" + "M" * 500 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text("scaffold_1\tNCLDV__virus|p1\t1e-30\t100\t90\t100\n")
+    hit = HMMHit("scaffold_1", "PLV_MCP", score, 1e-8, score, 1, 100)
+    (marker,) = filter_validated_markers([hit], diamond, proteome, output_dir=tmp_path / "validated")
+    assert marker.validation_status == "validated"
+    path = tmp_path / "validated/validated_marker_hits.tsv"
+    assert float(_read_rows(path)[0]["hmm_score"]) == score
+    (result,) = classify_proteins(load_marker_hits(path), {"scaffold_1": "M" * 500})
+    assert result.mcp_support == support
+    assert result.validation_status == marker.validation_status
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("alternate", ["weak", "blocked", "eligible_hk97"])
+def test_duplicate_query_alternatives_preserve_eligible_support(tmp_path, reverse, alternate):
+    from classify_jelly_roll import classify_proteins, count_hmm_domains_per_protein, load_marker_hits
+
+    other = {
+        "weak": "Mirus_MCP\t9.9996\tvalidated\t",
+        "blocked": "Mirus_MCP\t50\tvalidated\tcellular",
+        "eligible_hk97": "Mirus_MCP\t10\tvalidated\t",
+    }[alternate]
+    rows = ["protein|aa1-100\tPLV_MCP\t10\tvalidated\t\n", f"protein|aa1-100\t{other}\n"]
+    if reverse:
+        rows.reverse()
+    path = tmp_path / "hits.tsv"
+    path.write_text("query_porf\thmm_target\thmm_score\tvalidation_status\tpfam_override\n" + "".join(rows))
+    hits = load_marker_hits(path)
+    assert len(hits["protein|aa1-100"]) == 2
+    assert count_hmm_domains_per_protein(hits) == {"protein": 1}
+    (result,) = classify_proteins(hits, {"protein": "A" * 500})
+    assert result.mcp_support == "sequence_supported"
+    assert result.validation_status == "validated"
+    assert result.protein_id == "protein|aa1-100"
+    assert result.marker == rows[0].split("\t")[1]
+    if alternate == "eligible_hk97":
+        assert result.jelly_roll_type == "HK97"
+    else:
+        assert result.jelly_roll_type != "HK97"
+
+
+@pytest.mark.parametrize("structural", [False, True])
+def test_blocked_validated_capsid_needs_independent_structural_support(tmp_path, structural):
+    from classify_jelly_roll import classify_proteins, load_foldseek_results, load_marker_hits
+
+    path = tmp_path / "hits.tsv"
+    path.write_text(
+        "query_porf\thmm_target\thmm_score\tvalidation_status\tpfam_override\nprotein\tMirus_MCP\t50\tvalidated\tcellular\n"
+    )
+    foldseek = tmp_path / "foldseek.tsv"
+    foldseek.write_text("protein_model\tpdb100#1OHG_A\t1e-10\t100\t0.8\t0.8\t0.9\t0.7\n")
+    (result,) = classify_proteins(
+        load_marker_hits(path),
+        {"protein": "A" * 500},
+        foldseek_results=load_foldseek_results(foldseek) if structural else None,
+    )
+    assert result.mcp_support == ("structure_supported" if structural else "candidate")
+    assert result.validation_status == "validated"
+    assert result.jelly_roll_type == ("HK97" if structural else "UNKNOWN")

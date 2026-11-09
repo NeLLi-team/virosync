@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from virosync.orchestration._flows.single_genome.run_state import RUN_STATE_SCHEMA_VERSION
 from virosync.output_contract import coordinate_contract_metadata
 
 CHECKER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "check_coordinate_outputs.py"
@@ -66,11 +67,11 @@ def test_checker_accepts_current_completion_only_for_early_exit(
     assert check_coordinate_output_roots([tmp_path]) == []
 
 
-def test_checker_accepts_authoritative_schema3_terminal_zero(tmp_path: Path) -> None:
+def test_checker_accepts_authoritative_current_terminal_zero(tmp_path: Path) -> None:
     _write_metadata(
         tmp_path / "virosync_run_state.json",
         {
-            "schema_version": 3,
+            "schema_version": RUN_STATE_SCHEMA_VERSION,
             "status": "success",
             "identities": coordinate_contract_metadata(),
             "result": {"terminal_phase": 1, "canonical_rows": 0},
@@ -80,11 +81,11 @@ def test_checker_accepts_authoritative_schema3_terminal_zero(tmp_path: Path) -> 
     assert check_coordinate_output_roots([tmp_path]) == []
 
 
-def test_checker_rejects_non_success_schema3_state(tmp_path: Path) -> None:
+def test_checker_rejects_non_success_current_state(tmp_path: Path) -> None:
     _write_metadata(
         tmp_path / "virosync_run_state.json",
         {
-            "schema_version": 3,
+            "schema_version": RUN_STATE_SCHEMA_VERSION,
             "status": "failed",
             "identities": coordinate_contract_metadata(),
         },
@@ -92,7 +93,7 @@ def test_checker_rejects_non_success_schema3_state(tmp_path: Path) -> None:
 
     errors = check_coordinate_output_roots([tmp_path])
 
-    assert any("not schema-v3 success" in error for error in errors)
+    assert any(f"not schema-v{RUN_STATE_SCHEMA_VERSION} success" in error for error in errors)
 
 
 @pytest.mark.parametrize(

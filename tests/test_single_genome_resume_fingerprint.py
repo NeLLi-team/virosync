@@ -129,6 +129,7 @@ def _run_identity(
             "sha256": config_sha256 or digest,
             "ablation_id": "A0",
             "ablation_contract_sha256": ABLATION_CONTRACT_SHA256,
+            "generate_plots": True,
         },
         "code": {"version": "test", "source_sha256": digest},
         "environment": environment,

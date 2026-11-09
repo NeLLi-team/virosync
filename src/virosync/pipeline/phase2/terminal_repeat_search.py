@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -16,6 +18,17 @@ _DNA_BASES = frozenset("ACGT")
 GENOMETOOLS_TIMEOUT_SECONDS = 1800
 # Set only inside an isolated spawned planning worker, never in the parent.
 _OWNED_WORKER_GROUP = False
+_WORK_DIRECTORY: str | None = None
+
+
+def _bind_parent_lifetime(expected_parent: int) -> None:
+    """Bind this Linux process to its creator and close the startup race."""
+    if sys.platform == "linux":
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGKILL, 0, 0, 0):
+            raise OSError(ctypes.get_errno(), "could not bind parent lifetime")
+        if os.getppid() != expected_parent:
+            os.kill(os.getpid(), signal.SIGKILL)
 
 
 def resolve_genometools_executable() -> Path:
@@ -46,7 +59,7 @@ def find_seed_positions(
         raise ValueError(f"seed_length must be >= 1, got {seed_length}")
     executable = resolve_genometools_executable()
     native_sequence = _normalize_sequence(sequence)
-    with tempfile.TemporaryDirectory(prefix="virosync-repfind-") as directory:
+    with tempfile.TemporaryDirectory(prefix="virosync-repfind-", dir=_WORK_DIRECTORY) as directory:
         work_dir = Path(directory)
         input_path = work_dir / "input.fna"
         query_path = work_dir / "queries.fna"
@@ -124,8 +137,21 @@ def _run_repfind(
 
 def _run_genometools(command: list[str], *, stdout: object) -> None:
     """Bound each command; keep worker descendants in the parent's owned group."""
+    native_command = command
+    if sys.platform == "linux":
+        # A fresh interpreter avoids preexec_fn in a threaded orchestration process.
+        # PDEATHSIG is cleared by fork, so the native child must install its own.
+        wrapper = (
+            "import ctypes,os,signal,sys; "
+            "libc=ctypes.CDLL(None,use_errno=True); "
+            "result=libc.prctl(1,signal.SIGKILL,0,0,0); "
+            "result == 0 or sys.exit(125); "
+            "os.getppid() == int(sys.argv[1]) or os.kill(os.getpid(),signal.SIGKILL); "
+            "os.execvp(sys.argv[2],sys.argv[2:])"
+        )
+        native_command = [sys.executable, "-I", "-S", "-c", wrapper, str(os.getpid()), *command]
     with subprocess.Popen(
-        command,
+        native_command,
         stdout=stdout,
         stderr=subprocess.PIPE,
         text=True,

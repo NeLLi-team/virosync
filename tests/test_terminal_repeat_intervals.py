@@ -129,9 +129,9 @@ def test_region_deduplicates_only_exact_marker_intervals(
     pairs = _pairs((0, 0), (0, 100), (0, 200), (0, 300))
     allowed = np.ones((3, 1), dtype=np.bool_)
     groups = [
-        repeats._MarkerGroup("first", 600, 1_400, frozenset()),
-        repeats._MarkerGroup("duplicate", 600, 1_400, frozenset()),
-        repeats._MarkerGroup("wider", 700, 1_300, frozenset()),
+        repeats._MarkerGroup("first", 600, 1_400, classification_markers=tuple((name, "") for name in frozenset())),
+        repeats._MarkerGroup("duplicate", 600, 1_400, classification_markers=tuple((name, "") for name in frozenset())),
+        repeats._MarkerGroup("wider", 700, 1_300, classification_markers=tuple((name, "") for name in frozenset())),
     ]
     monkeypatch.setattr(repeats, "_informative_seeds", lambda: ("ACGTACG",))
     monkeypatch.setattr(repeats, "find_seed_positions", lambda *_args: {})

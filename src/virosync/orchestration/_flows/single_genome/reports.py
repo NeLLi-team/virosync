@@ -1,4 +1,4 @@
-"""Required per-genome report generation (Jupyter notebook)."""
+"""Optional per-genome report generation (Jupyter notebook)."""
 
 from pathlib import Path
 
@@ -9,8 +9,13 @@ def _generate_required_reports(
     taxonomy_labels_file: Path | None,
     logger,
     host_credit_threshold: float,
+    generate_plots: bool,
 ) -> dict[str, str]:
-    """Generate the required per-genome Jupyter EVE analysis notebook."""
+    """Render the per-genome notebook only when plotting is enabled."""
+    if not generate_plots:
+        logger.info("Plotting disabled; scientific exports and audits remain enabled")
+        return {}
+
     from virosync.report.generate import generate_eve_report
 
     report_paths = generate_eve_report(

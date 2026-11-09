@@ -71,8 +71,9 @@
     ],
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "68bee2b80affc7546a03e811ded6b0c312cc8aa27e9c4298932fc28c743815c2",
+  "effective_config_sha256": "54a145da797901974e2f75db7d30b1b5556946a45b8105f0a29b0663a45aaf40",
   "execution": {
+    "generate_plots": false,
     "masking": {
       "backend": "off",
       "failure_policy": "strict",
@@ -160,7 +161,7 @@
     "rebuild_db": false
   },
   "phase2": {
-    "diamond_chunk_size": 10000,
+    "diamond_chunk_size": 100000,
     "diamond_control_min_distance": 30,
     "diamond_control_sample_size": 100,
     "diamond_flank_genes": 40,

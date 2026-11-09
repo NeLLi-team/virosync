@@ -84,6 +84,7 @@ def test_phase2_a4_bypasses_three_gene_stop_and_records_counterfactual(
         config=config,
         genome_start_time=0,
         logger=logging.getLogger(__name__),
+        metadata_families={},
     )
 
     assert isinstance(result, phase2.Phase2Result)

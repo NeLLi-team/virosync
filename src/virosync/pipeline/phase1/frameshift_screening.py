@@ -17,6 +17,7 @@ import pyhmmer
 from Bio import SeqIO
 from Bio.Seq import Seq
 
+from virosync.pipeline.phase1.marker_roles import passes_capsid_score_floor
 from virosync.pipeline.phase1.native_frameshift import (
     CodonAlignment,
     FrameshiftEvent,
@@ -289,7 +290,7 @@ def select_confirmed_frameshift_markers(
     for marker in markers:
         base_id = str(marker.query_porf).split("|aa", 1)[0]
         hit = hits_by_protein_id.get(base_id)
-        if hit is None or marker.validation_status != "validated":
+        if hit is None or marker.validation_status != "validated" or not passes_capsid_score_floor(marker):
             continue
         model_coverage = (hit.hmm_to - hit.hmm_from + 1) / hit.hmm_len
         if model_coverage < min_model_coverage:

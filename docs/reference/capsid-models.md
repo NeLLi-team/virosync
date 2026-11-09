@@ -1,5 +1,21 @@
 # Structure-derived candidate profiles
 
+## Reported capsid admission and confidence
+
+New seed and evidence admission requires a full-sequence HMM score of at least 10 bits for a
+semantic capsid, coat or Penton model. This floor also applies to validated
+EUK-pEVE-backed capsids; it does not change noncapsid thresholds. Raw reported
+hits remain provenance. Once admitted, full assigned confirmed seed identities
+and spans remain protected through trimming, merging and partitioning.
+
+An eligible reported capsid supplies a MEDIUM floor only when it has validated
+viral evidence, a score of at least 75 bits, or positive viral identity in its own
+retained marker top hits. E-value alone does not supply this floor. Other eligible
+reported capsids retain a LOW witness. A neighboring viral gene is separate
+regional evidence, not a self-gene viral hit. These admission choices can remove
+real weak capsid hits; no claim of zero biological loss is made.
+
+
 Resource bundles v1.1.0 and later contain 33 candidate profiles built from
 structure-supported protein clusters returned by a capsid search of an EVE
 catalogue. The set includes profiles with non-capsid functional evidence. The
@@ -48,7 +64,7 @@ holds the list, and a test checks it against the curation table.
 
 A hit to one of these profiles is treated as a viral capsid hit:
 
-- Phase 1 lets every reported semantic capsid hit seed a candidate region,
+- Phase 1 lets reported semantic capsid hits with score >=10 seed a candidate region,
   including hits without viral DIAMOND support. The complete gene is protected.
 - Phase 3 sets `has_capsid_evidence` on the region when `has_mcp` is true or
   any `validated` or `validated_novel` hit of the region is such a profile, even
@@ -62,8 +78,9 @@ Graduated hallmark scoring and additive spatial rescue use the exact-model
 catalogue in `virosync/data/hallmark_panels.json`. Catalogue structural anchors
 and capsids are separate roles: a penton does not automatically become an MCP.
 Only mapped core evidence with a production validation status (`validated` or
-`validated_novel`) supplies ordinary graduated marker weight. Every reported
-semantic capsid or Penton hit also supplies a separate MEDIUM witness, without
+`validated_novel`) supplies ordinary graduated marker weight. Every eligible reported
+semantic capsid or Penton hit also supplies a separate LOW or MEDIUM witness under
+the admission and confidence rule above, without
 adding ordinary core credit or automatic HIGH confidence. A witness retains its original
 validation status and full-gene coordinates. A fully retained witness can pass
 the native gate with an explicit rescue reason without changing its taxonomy.
@@ -92,7 +109,7 @@ its broad adenovirus Penton match does not establish Virophage compatibility
 at the same level. All 22 supply support-only `mCP` context in the
 Polinton-like virus and Maverick panels, matching the existing V18-19 family.
 Penton evidence can contribute one ordinary core but cannot anchor its capsid
-bonus. It independently supplies the reported-capsid MEDIUM floor. Qualified Virophages pentons can join
+bonus. An eligible hit independently supplies the reported-capsid LOW/MEDIUM floor. Qualified Virophages pentons can join
 three-core witnesses with a MEDIUM floor or partner a capsid MCP within 5 kb
 for a HIGH floor. A structural match to an adintovirus penton, including
 `0031`, does not assign an NCLDV or PLV type.
@@ -126,7 +143,7 @@ Nucleocytoviricota and Polinton-like virus panels with `capsid=false`. A validat
 hit contributes core credit, including discounted credit for weak evidence at
 E <= 0.01. The catalogue flag withholds the graduated capsid term, catalogue
 capsid-alone floor and capsid spatial witness. The reported-capsid exception
-still gives it a MEDIUM floor. Its separate MCP registration in
+still gives an eligible hit the LOW/MEDIUM floor described above. Its separate MCP registration in
 `mcp_detection.py` still governs MCP annotation, Phase 1 seed confidence,
 class-vote overrides and output keep rules. It can join ordinary three-core witnesses within 15 kb for a MEDIUM
 floor. Catalogue tests establish software behavior, not
@@ -151,10 +168,11 @@ evidence.
 
 ## EUK-pEVE references
 
-Every reported hit to a curated capsid or Penton model is retained through
-model arbitration, can seed a region and gives at least MEDIUM confidence when
-its complete gene remains in the final interval. No capsid GA, bit-score,
-E-value, coverage or viral DIAMOND cutoff applies to this exception. It does
+Reported hits remain provenance through model arbitration. A curated capsid or
+Penton hit with score >=10 can seed a region and receives the floor above when
+its complete gene remains in the final interval. Beyond the full-sequence 10-bit admission floor, no capsid GA,
+E-value or coverage cutoff applies to LOW retention. MEDIUM requires the
+validated, 75-bit or marker-hit viral-identity evidence described above. It does
 not create automatic HIGH confidence. Proteases, including profile `0001`,
 keep the ordinary marker rules. Marker validation examines 20 matches after
 reference masking, protein-twin selection and reduction per labelled genome;
@@ -185,7 +203,7 @@ ViroSync counts `EUK-pEVE` as viral and never as cellular or host:
   proteome database or both, uses the `MIXED` rule: it has the likely family
   `MIXED` and takes the mixed path of the v2 gate, whatever lineage its marker
   names or its Phase 1 region class suggest. A retained reported-capsid witness
-  independently grants MEDIUM acceptance without a length or viral-reference
+  independently grants LOW/MEDIUM retention under the rule above without a length or mandatory viral-reference
   requirement. When a lineage hit exists, the
   `EUK-pEVE` hit changes nothing: in the region vote, a gene whose viral hits are
   all `EUK-pEVE` casts no vote while any other gene votes for a lineage, apart

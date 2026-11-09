@@ -185,7 +185,7 @@ def test_a_signature_without_a_lineage_abstains(pair_inputs: dict) -> None:
         ("EUK__HOST", 2, False, False),
         ("EUK__HOST", 3, False, True),
         ("EUK__HOST", 3, True, False),
-        ("EUK__OTHER", 3, False, False),
+        ("EUK__OTHER", 3, False, True),
         ("PLASTID__HOST", 3, False, False),
     ],
 )
@@ -459,6 +459,7 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
         boundary_taxonomy_map={"a": GeneTaxonomy("a", "s", 500, 800), "b": GeneTaxonomy("b", "s", 4000, 4300)},
         proteome_index={"s": [pORF("a", "s", 500, 800), pORF("b", "s", 4000, 4300)]},
         config=config,
+        metadata_families={},
     )
     assert len(prepared) == 1
     boundary, retained_children = prepared[0]
@@ -519,6 +520,7 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
         host_signature_model_payload=None,
         precomputed_tmvec=None,
         tmvec_device="cpu",
+        marker_annotation_index={},
     )
     assert len(scored) == 1
     assert scored[0].supplementary_viral_evidence.eligible
@@ -542,6 +544,7 @@ def test_native_joint_finalization_recomputes_class_composition_and_id(tmp_path,
             boundary_taxonomy_map=taxonomy,
             proteome_index={"s": genes},
             config=config,
+            metadata_families={},
         )
         == []
     )
@@ -797,6 +800,7 @@ def test_joint_repeat_refinement_keeps_fixed_hull_with_outward_pair(tmp_path) ->
         boundary_taxonomy_map={"a": GeneTaxonomy("a", "s", 6160, 6180), "b": GeneTaxonomy("b", "s", 6310, 6330)},
         proteome_index={"s": [pORF("a", "s", 6160, 6180), pORF("b", "s", 6310, 6330)]},
         config=PipelineConfig(),
+        metadata_families={},
     )
     assert len(prepared) == 1
     joint = prepared[0][0]
@@ -849,7 +853,7 @@ def test_phase3_flow_gives_the_validated_viral_markers_to_the_joint_rescue_barri
         raise StopAfterEligibility
 
     def marker(porf: str, status: str, target: str) -> SimpleNamespace:
-        return SimpleNamespace(query_porf=porf, validation_status=status, hmm_target=target)
+        return SimpleNamespace(query_porf=porf, validation_status=status, hmm_target=target, hmm_score=50)
 
     monkeypatch.setattr(phase3, "eligible_joint_pairs", capture)
     monkeypatch.setattr(phase3, "_run_interproscan", lambda **_kwargs: {})
@@ -877,6 +881,8 @@ def test_phase3_flow_gives_the_validated_viral_markers_to_the_joint_rescue_barri
             validated_hits_tsv=tmp_path / "validated_hits.tsv",
             logger=logging.getLogger(__name__),
             raw_genome_path=tmp_path / "genome.fna",
+            metadata_families={},
+            marker_annotation_index={},
         )
 
     assert seen["viral_marker_genes"] == frozenset({"g1"})
@@ -946,6 +952,7 @@ def test_joint_finalization_uses_configured_a2_assembly_floor(tmp_path, monkeypa
         boundary_taxonomy_map={m.query_porf: GeneTaxonomy(m.query_porf, "s", m.start, m.end) for m in markers},
         proteome_index={"s": [pORF(m.query_porf, "s", m.start, m.end) for m in markers]},
         config=config,
+        metadata_families={},
     )
     assert len(prepared) == 1
     boundary, retained_children = prepared[0]
@@ -955,3 +962,41 @@ def test_joint_finalization_uses_configured_a2_assembly_floor(tmp_path, monkeypa
     assert retained_children == children
     assert bypass_marker.validation_status == "supported"
     assert not hasattr(bypass_marker, "tier1_bypassed")
+
+
+@pytest.mark.parametrize("target,blocked", [("EUK__host", True), ("BAC__foreign", False), ("EUK-pEVE__host", False)])
+def test_gap_uses_real_token_distribution_and_preserves_children(pair_inputs, monkeypatch, target, blocked):
+    """Actual scorer and rescue gate agree without editing confirmed seed spans."""
+    from virosync.pipeline import host_signatures
+
+    monkeypatch.setattr(
+        host_signatures,
+        "_TAXONOMY_LOOKUP",
+        {
+            "EUK__host": "EUK|Amoebozoa",
+            "BAC__foreign": "BAC|Other",
+            "EUK-pEVE__host": "EUK|Amoebozoa",
+        },
+    )
+    genes = [pORF(f"g{i}", "s", 1050 + i * 100, 1100 + i * 100) for i in range(3)]
+    taxonomy = {
+        g.id: GeneTaxonomy(
+            g.id,
+            "s",
+            g.start,
+            g.end,
+            top10_targets=[target],
+            top10_prefixes=[target.split("__")[0] + "__"],
+            top10_pidents=[90.0],
+        )
+        for g in genes
+    }
+    pair_inputs.update(
+        proteome_index={"s": genes},
+        taxonomy=taxonomy,
+        host_model=HostSignatureModel(token_weights={"eukaryota": 10, "amoebozoa": 10}),
+    )
+    pair_inputs["query"].all_porf_ids = list(taxonomy)
+    before = [boundary.confirmed_seeds for boundary in pair_inputs["boundaries"]]
+    assert bool(eligible_joint_pairs(**pair_inputs)) is not blocked
+    assert [boundary.confirmed_seeds for boundary in pair_inputs["boundaries"]] == before

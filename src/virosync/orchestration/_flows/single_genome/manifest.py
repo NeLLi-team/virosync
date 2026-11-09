@@ -112,9 +112,9 @@ def _write_empty_run_log(
     return run_log_path
 
 
-# --- Schema-v3 run-identity field partition ---------------------------------
+# --- Schema-v4 run-identity field partition ---------------------------------
 #
-# Schema v3 keeps scalar configuration, resources, execution environment, and
+# Schema v4 keeps scalar configuration, resources, execution environment, and
 # runtime-only controls as separate identities.  The partition is hard-coded so
 # a new PipelineConfig field fails the drift guard until it is classified.
 #
@@ -232,6 +232,7 @@ _FINGERPRINT_SCALAR_FIELDS = (
     "self_reference_keys",
     # execution
     "masking",
+    "generate_plots",
 )
 _FINGERPRINT_CONFIG_FIELDS = frozenset(_FINGERPRINT_SCALAR_FIELDS)
 _FINGERPRINT_RESOURCE_FIELDS = frozenset(
@@ -255,7 +256,7 @@ _FINGERPRINT_RUNTIME_ONLY_FIELDS = frozenset(
     }
 )
 
-# Flat locals needed to build every schema-v3 identity.  This compatibility
+# Flat locals needed to build every schema-v4 identity.  This compatibility
 # alias remains the orchestrator's explicit locals filter.
 _FINGERPRINT_INPUT_FIELDS = frozenset(
     _FINGERPRINT_CONFIG_FIELDS | _FINGERPRINT_RESOURCE_FIELDS | _FINGERPRINT_ENVIRONMENT_FIELDS
@@ -295,7 +296,7 @@ def _canonical_config_value(value):
 def _compute_config_fingerprint(flat_config: dict) -> str:
     """Return the full SHA-256 of effective scalar output configuration.
 
-    Resources and device/environment are deliberately absent: schema-v3 run
+    Resources and device/environment are deliberately absent: schema-v4 run
     identity binds those categories independently. Runtime controls such as
     thread count and resume mode never affect this digest.
     """

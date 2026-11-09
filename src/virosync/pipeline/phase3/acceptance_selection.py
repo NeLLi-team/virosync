@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from virosync.ablation import AblationID, InterventionCounts
+from virosync.pipeline.hallmark_evidence import HallmarkWitness, contained_witnesses, has_spatial_rescue
 
 from .evidence_synthesizer import VerificationResult
 from .output_generator import QualityGateDecision, evaluate_v2_quality_gate
@@ -107,6 +108,22 @@ def _is_active_rescue_branch(result: VerificationResult) -> bool:
     return "frameshift_rescue" in (result.seed_sources or []) and bool(result.frameshift_rescue_marker_ids)
 
 
+def _authenticated_witnesses(result: VerificationResult) -> set[HallmarkWitness]:
+    """Return complete spatial witnesses authenticated at the scored coordinates."""
+    if not has_spatial_rescue(result):
+        return set()
+    return set(
+        contained_witnesses(
+            result.hallmark_evidence,
+            result.hallmark_assessment.witnesses,
+            result.scaffold,
+            result.start,
+            result.end,
+            result.scoring_locus_ids,
+        )
+    )
+
+
 def select_phase3_acceptance(
     results: Sequence[VerificationResult],
     ablation_id: AblationID,
@@ -137,6 +154,7 @@ def select_phase3_acceptance(
             and "frameshift_rescue" in (result.seed_sources or [])
             and not result.frameshift_rescue_marker_ids
             and not _has_non_rescue_marker(result)
+            and not has_spatial_rescue(result)
         ):
             kept = False
             outcome = "rescue_marker_excluded"
@@ -152,18 +170,18 @@ def select_phase3_acceptance(
         rescued = [index for index in kept_indices if index not in ordinary]
     tier_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
-    def best_index(indices: list[int]) -> int:
-        return min(
-            indices,
-            key=lambda index: (
-                -tier_rank.get(results[index].confidence_tier, 0),
-                -float(results[index].final_confidence),
-                results[index].scaffold,
-                results[index].start,
-                results[index].end,
-                results[index].eve_id,
-            ),
+    def preference(index: int) -> tuple[int, float, str, int, int, str]:
+        return (
+            -tier_rank.get(results[index].confidence_tier, 0),
+            -float(results[index].final_confidence),
+            results[index].scaffold,
+            results[index].start,
+            results[index].end,
+            results[index].eve_id,
         )
+
+    def best_index(indices: list[int]) -> int:
+        return min(indices, key=preference)
 
     def overlaps(left: int, right: int) -> bool:
         return (
@@ -207,6 +225,42 @@ def select_phase3_acceptance(
     for winner in suppressors:
         if canonical_kept[winner]:
             selection_outcomes[winner] = "overlap_selected"
+
+    if suppressed_by:
+        covered_witnesses = {
+            witness
+            for index in kept_indices
+            if canonical_kept[index]
+            for witness in _authenticated_witnesses(results[index])
+        }
+        for loser in sorted(suppressed_by, key=preference):
+            witnesses = _authenticated_witnesses(results[loser])
+            if witnesses - covered_witnesses:
+                canonical_kept[loser] = True
+                selection_outcomes[loser] = "overlap_retained_unique_witness"
+                covered_witnesses.update(witnesses)
+
+        covered_cores = {
+            core
+            for index in kept_indices
+            if canonical_kept[index]
+            for core in results[index].confirmed_seeds
+            if core.scaffold == results[index].scaffold
+            and results[index].start <= core.start
+            and core.end <= results[index].end
+        }
+        for loser in sorted(suppressed_by, key=preference):
+            if canonical_kept[loser]:
+                continue
+            result = results[loser]
+            if set(result.confirmed_seeds) - covered_cores:
+                canonical_kept[loser] = True
+                selection_outcomes[loser] = "overlap_retained_confirmed_seed"
+                covered_cores.update(
+                    core
+                    for core in result.confirmed_seeds
+                    if core.scaffold == result.scaffold and result.start <= core.start and core.end <= result.end
+                )
 
     candidates: list[CandidateAcceptance] = []
     for index, result in enumerate(results):

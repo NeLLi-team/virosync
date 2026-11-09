@@ -20,6 +20,7 @@ The iterative extension captures more EVE content by discovering markers that
 weren't initially clustered but fall within the extended boundaries. This is crucial
 for degraded or fragmented EVEs where markers may be spaced further apart.
 """
+
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -27,7 +28,11 @@ from pathlib import Path
 
 from virosync.ablation import AblationID
 from virosync.pipeline.phase0.prodigal import GenePrediction, load_gene_predictions
-from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role, is_ordinary_marker_evidence
+from virosync.pipeline.phase1.marker_roles import (
+    decide_marker_hit_role,
+    is_ordinary_marker_evidence,
+    passes_capsid_score_floor,
+)
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
     is_cellular_marker_model,
@@ -123,7 +128,7 @@ class ValidatedMarkerHit:
         Validated noncellular markers can seed regions. Taxonomy-based expansion
         then assesses the surrounding evidence in Step 4.5.
 
-        Seeding rules:
+        Seeding rules (capsid/Penton full-sequence score >=10 is required first):
         1. validation_status="validated" (NCLDV/MIRUS/PLV/VP/EUK-pEVE in Diamond top-10) → CAN SEED
         2. validation_status="validated_novel" (HMM-only, no Diamond hits) → CAN SEED ONLY IF
            MCP OR CAPSID EVIDENCE (a capsid-type structure-derived profile)
@@ -139,14 +144,16 @@ class ValidatedMarkerHit:
         Returns:
             True if marker can seed an EVE region
         """
-        return can_seed_marker(self.hmm_target, self.validation_status, tier1_bypassed=self.tier1_bypassed)
+        return can_seed_marker(
+            self.hmm_target, self.validation_status, hmm_score=self.hmm_score, tier1_bypassed=self.tier1_bypassed
+        )
 
 
-def can_seed_marker(model: str, validation_status: str, *, tier1_bypassed: bool = False) -> bool:
+def can_seed_marker(model: str, validation_status: str, *, hmm_score: float, tier1_bypassed: bool = False) -> bool:
     """Use the same ordinary seed eligibility for assembly and core membership."""
     from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
-    if is_cellular_marker_model(model):
+    if is_cellular_marker_model(model) or not passes_capsid_score_floor({"hmm_target": model, "hmm_score": hmm_score}):
         return False
     if is_capsid_evidence_gene(model) or tier1_bypassed or validation_status == "validated":
         return True

@@ -50,10 +50,20 @@ Relative paths in a list file start at the current working directory.
 | `-o PATH`, `--output PATH` | Required output root. ViroSync creates one subdirectory per genome. |
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
 | `--clean-run` | Start again without reusing completed output. Otherwise, resume when the input, settings and saved outputs still match. |
+| `--plots`, `--no-plots` | Enable or disable notebook and figure rendering. Default: `execution.generate_plots: false`. Scientific tables, sequence exports, evidence and audits remain required in either mode. |
 | `-w N`, `--workers N` | Run up to N genomes at once. Minimum: 1. The shipped config sets 6. |
 | `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. ViroSync lowers the value to `compute.max_threads` (48 in the shipped config) divided by the genome limit and prints a warning. |
 | `--max-concurrent-genomes N` | Set the same genome limit as `--workers`. Minimum: 1. Both values must agree if you supply both. |
 | `-v`, `--verbose` | Show the effective config and diagnostic logs instead of the progress display. |
+
+Plot-enabled runs require a valid notebook before completion. Changing `--plots`
+changes the run fingerprint and can rerun scientific stages. To add plots to a
+completed output without rerunning the pipeline, call
+`virosync.report.generate.generate_eve_report(output_dir=Path("results/GENOME"),
+genome_id="GENOME", tax_labels_path=Path("taxonomy_labels.tsv"),
+host_credit_threshold=0.35)` from Python. Supply the taxonomy labels and host
+threshold used for that run. This standalone renderer adds the notebook and
+figures; it does not change the recorded pipeline plot mode.
 
 Without `--clean-run`, reuse requires matching run identities and validated
 checkpoints and outputs, including the repeat-candidate table. See

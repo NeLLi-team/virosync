@@ -215,6 +215,7 @@ def _marker(
     """One boundary hallmark_hits entry, shaped as build_boundary_evidence packs it."""
     return {
         "hallmark_gene": gene,
+        "hmm_score": 100.0,
         "porf_id": porf_id,
         "top10_prefixes": prefixes,
         "top10_pidents": pidents,

@@ -721,6 +721,7 @@ def _run_verification(
     tmvec_device: str,
     config: PipelineConfig,
     reference_mask: ReferenceMask = ReferenceMask(),
+    marker_annotation_index: dict,
 ) -> list:
     """Run the shared batched verification path for candidate boundaries."""
     from virosync.orchestration.tasks import verify_eve_candidates_batched_task
@@ -741,6 +742,7 @@ def _run_verification(
             ]
     return call_task(
         verify_eve_candidates_batched_task,
+        marker_annotation_index=marker_annotation_index,
         boundaries=boundaries,
         genome_path=masked_path,
         work_dir=output_dir / "phase3",
@@ -810,6 +812,7 @@ def _verify_native_boundaries(
     tmvec_device: str,
     interproscan_path: Path | None = None,
     reference_mask: ReferenceMask = ReferenceMask(),
+    marker_annotation_index: dict,
 ) -> list[VerificationResult]:
     """Rebuild coordinate evidence, annotations and scores for one native batch."""
     # ==================================================
@@ -893,6 +896,7 @@ def _verify_native_boundaries(
         tmvec_device=tmvec_device,
         config=config,
         reference_mask=reference_mask,
+        marker_annotation_index=marker_annotation_index,
     )
 
 
@@ -916,6 +920,9 @@ def _run_phase3_subflow(
     resume_authorized: bool = False,
     raw_genome_path: Path | None = None,
     reference_mask: ReferenceMask = ReferenceMask(),
+    *,
+    metadata_families: dict,
+    marker_annotation_index: dict,
 ) -> Phase3Result:
     """Phase 3: Evidence synthesis and verification.
 
@@ -1036,7 +1043,9 @@ def _run_phase3_subflow(
         tmvec_device=tmvec_device,
         reference_mask=reference_mask,
     )
-    verification_results = _verify_native_boundaries(refined_boundaries, **verification_context)
+    verification_results = _verify_native_boundaries(
+        refined_boundaries, **verification_context, marker_annotation_index=marker_annotation_index
+    )
     if raw_genome_path is not None:
         accepted_ids = frozenset(
             r.eve_id for r in select_phase3_acceptance(verification_results, ablation_id).canonical_results
@@ -1064,6 +1073,7 @@ def _run_phase3_subflow(
             proteome_index=proteome_index,
             config=config,
             accepted_ids=accepted_ids,
+            metadata_families=metadata_families,
         )
         if joints:
             joint_output = output_dir / "phase3" / "joint_seed_rescue"
@@ -1095,6 +1105,7 @@ def _run_phase3_subflow(
                     "tmvec_device": joint_device,
                     "interproscan_path": joint_output / "phase3" / "interproscan" / "interproscan_batch.tsv",
                 },
+                marker_annotation_index=marker_annotation_index,
             )
             verification_results = _replace_accepted_joints(
                 verification_results, joint_results, joints, ablation_id=ablation_id, accepted_ids=accepted_ids
@@ -1386,6 +1397,7 @@ def _prepare_joint_boundaries(
     proteome_index: dict,
     config: PipelineConfig,
     accepted_ids: frozenset[str] = frozenset(),
+    metadata_families: dict,
 ) -> list[tuple[RefinedBoundary, tuple[RefinedBoundary, RefinedBoundary]]]:
     """Finalize fixed joint hulls through the existing coordinate evidence path."""
     if not pairs or not raw_genome_path.is_file() or not config.phase2.terminal_repeat_enabled:
@@ -1425,6 +1437,7 @@ def _prepare_joint_boundaries(
                 boundary_taxonomy_map=boundary_taxonomy_map,
                 proteome_index=proteome_index,
                 extension_bp=config.phase1.extension_kb * 1000,
+                metadata_families=metadata_families,
             )
         except (OSError, RuntimeError) as error:
             logging.getLogger(__name__).warning("Joint repeat finalization unavailable: %s", error)
@@ -1440,6 +1453,7 @@ def _prepare_joint_boundaries(
             validated_markers,
             ablation_id=config.ablation.id,
             single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+            metadata_families=metadata_families,
         )
         _recalculate_boundary_composition(finalized, masked_path=masked_path)
         finalized = assign_boundary_candidate_ids(finalized)

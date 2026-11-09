@@ -418,6 +418,8 @@ def _run_phase2_subflow(
     threads: int | None = None,
     raw_genome_path: Path | None = None,
     reference_mask: ReferenceMask = ReferenceMask(),
+    *,
+    metadata_families: dict,
 ) -> Phase2Result | Phase2Terminal:
     """Search bounded gene context and extend complete confirmed seeds outward.
 
@@ -484,6 +486,7 @@ def _run_phase2_subflow(
             validated_markers,
             ablation_id=ablation_id,
             single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+            metadata_families=metadata_families,
         )
         _recalculate_boundary_composition(
             refined_boundaries,
@@ -564,6 +567,7 @@ def _run_phase2_subflow(
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
                 host_credit_threshold=config.phase2.host_trim_score_threshold,
+                generate_plots=config.execution.generate_plots,
             ),
         }
         _write_empty_run_log(
@@ -758,6 +762,7 @@ def _run_phase2_subflow(
             proteome_index=proteome_index,
             extension_bp=config.phase1.extension_kb * 1000,
             workers=min(threads, compute.effective_threads()),
+            metadata_families=metadata_families,
         )
         n_tir_overrides = sum(boundary.tir_boundary_override for boundary in refined_boundaries)
         n_tir_present = sum(boundary.tir_present for boundary in refined_boundaries)
@@ -773,6 +778,7 @@ def _run_phase2_subflow(
         validated_markers,
         ablation_id=ablation_id,
         single_marker_min_score=get_assembly_mode(config.phase1.assembly_mode.value).single_marker_min_score,
+        metadata_families=metadata_families,
     )
     _recalculate_boundary_composition(
         refined_boundaries,
@@ -857,6 +863,7 @@ def _run_phase2_subflow(
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
                 host_credit_threshold=config.phase2.host_trim_score_threshold,
+                generate_plots=config.execution.generate_plots,
             ),
         }
         _write_empty_run_log(

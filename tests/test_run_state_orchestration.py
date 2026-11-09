@@ -180,6 +180,7 @@ class _MockPipeline:
                 "sha256": "2" * 64,
                 "ablation_id": "A0",
                 "ablation_contract_sha256": ABLATION_CONTRACT_SHA256,
+                "generate_plots": True,
             },
             "code": {"version": "test", "source_sha256": "3" * 64},
             "environment": {
@@ -560,6 +561,110 @@ def mocked_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> _MockPipeline:
     return _MockPipeline(tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize("plots", [False, True])
+@pytest.mark.parametrize("terminal_phase", [None, 1, 2, "A1"])
+def test_plot_mode_preserves_scientific_completion_and_resume(
+    mocked_pipeline: _MockPipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    plots: bool,
+    terminal_phase: int | str | None,
+) -> None:
+    from virosync.orchestration._flows.single_genome.reports import _generate_required_reports
+    from virosync.report import generate
+
+    pipeline = mocked_pipeline
+    pipeline.terminal_phase = terminal_phase if isinstance(terminal_phase, int) else None
+    pipeline.identity["config"]["ablation_id"] = "A1" if terminal_phase == "A1" else "A0"
+    pipeline.identity["config"]["generate_plots"] = plots
+    pipeline.fingerprint = compute_run_fingerprint(pipeline.identity)
+    rendered = []
+
+    def render(**kwargs):
+        rendered.append(kwargs["genome_id"])
+        notebook = Path(kwargs["output_dir"]) / "notebooks/jupyter/eve_analysis.ipynb"
+        notebook.parent.mkdir(parents=True, exist_ok=True)
+        notebook.write_text('{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}')
+        return generate.EveReportPaths(jupyter=notebook)
+
+    def reports(**kwargs):
+        return _generate_required_reports(
+            output_dir=kwargs["output_dir"],
+            genome_id="demo",
+            taxonomy_labels_file=None,
+            logger=generate.logger,
+            host_credit_threshold=0.35,
+            generate_plots=kwargs.get("generate_plots", plots),
+        )
+
+    monkeypatch.setattr(generate, "generate_eve_report", render)
+    monkeypatch.setattr(orchestrator, "_generate_required_reports", reports)
+    monkeypatch.setattr(pipeline, "_generate_required_reports", reports)
+
+    def run():
+        return orchestrator.single_genome_flow(
+            genome_path=pipeline.genome,
+            output_dir=pipeline.output_dir,
+            genome_id="demo",
+            device="cpu",
+            ablation_id=pipeline.identity["config"]["ablation_id"],
+            **({"generate_plots": True} if plots else {}),
+        )
+
+    result = run()
+    state = load_run_state(pipeline.output_dir)
+    assert result["success"] is True
+    assert state.result["canonical_rows"] == (0 if isinstance(terminal_phase, int) else 1)
+    assert rendered == (["demo"] if plots else [])
+    paths = {artifact.relative_path for artifact in state.artifacts}
+    assert ("notebooks/jupyter/eve_analysis.ipynb" in paths) is plots
+    assert {
+        "virosync_predictions_detailed.tsv",
+        "virosync_repeat_candidates.tsv",
+        "virosync_tsv_invariant_report.tsv",
+        "ablation_events.json",
+    } <= paths
+    science = {
+        path: (pipeline.output_dir / path).read_bytes()
+        for path in paths
+        if path.endswith((".tsv", ".bed", ".gff3", ".fna"))
+    }
+    calls = pipeline.calls.copy()
+    resumed = run()
+    assert resumed["success"] is True
+    assert pipeline.calls == calls
+    assert rendered == (["demo"] if plots else [])
+    assert all((pipeline.output_dir / path).read_bytes() == data for path, data in science.items())
+
+    # Disabling plots must not weaken the scientific artifact checks.
+    (pipeline.output_dir / "virosync_predictions_detailed.tsv").unlink()
+    assert not plan_resume(pipeline.output_dir, expected_run_fingerprint=pipeline.fingerprint).completed
+
+
+@pytest.mark.parametrize("terminal_phase", [None, 1, 2])
+def test_plot_enabled_missing_notebook_cannot_publish_terminal_marker(
+    mocked_pipeline: _MockPipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_phase: int | None,
+) -> None:
+    pipeline = mocked_pipeline
+    pipeline.terminal_phase = terminal_phase
+    monkeypatch.setattr(orchestrator, "_generate_required_reports", lambda **kwargs: {})
+    monkeypatch.setattr(pipeline, "_generate_required_reports", lambda **kwargs: {})
+
+    with pytest.raises(ValueError, match="final artifact set is incomplete.*eve_analysis.ipynb"):
+        pipeline.run()
+    final_phase = 3 if terminal_phase is None else terminal_phase
+    assert not (pipeline.output_dir / PHASE_MARKER_FILENAMES[final_phase]).exists()
+    assert load_run_state(pipeline.output_dir).status == "failed"
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "true"])
+def test_run_identity_requires_boolean_plot_mode(mocked_pipeline: _MockPipeline, value: object) -> None:
+    mocked_pipeline.identity["config"]["generate_plots"] = value
+    with pytest.raises(ValueError, match="generate_plots must be a boolean"):
+        compute_run_fingerprint(mocked_pipeline.identity)
 
 
 def test_a1_publishes_nonzero_phase1_terminal_and_resumes_without_phase2_or_3(
@@ -2089,3 +2194,49 @@ def test_frameshift_host_evidence_cannot_be_omitted_from_authenticated_phase1(mo
         run_state_module._validate_phase_checkpoint(
             mocked_pipeline.output_dir, record, load_run_state(mocked_pipeline.output_dir).identities
         )
+
+
+@pytest.mark.parametrize("annotation_present", [True, False])
+def test_runtime_family_annotations_use_fingerprinted_hmm_target(
+    mocked_pipeline, tmp_path, monkeypatch, caplog, annotation_present
+):
+    caplog.set_level("WARNING", logger=orchestrator.__name__)
+    target = tmp_path / "bound-resource"
+    alias = tmp_path / "alias-resource"
+    target.mkdir()
+    alias.mkdir()
+    hmm = target / "models.hmm"
+    hmm.write_text("bound HMM bytes\n")
+    linked = alias / "models.hmm"
+    linked.symlink_to(hmm)
+    annotation_name = "model_annotations_with_interpro.tsv"
+    header = "model_name\tsource\tdescription\n"
+    if annotation_present:
+        (target / annotation_name).write_text(header + "VS000492\tbound\tNCLDV associated model\n")
+    before = orchestrator._enabled_resource_identities({"hmm_database": str(linked)})
+    (alias / annotation_name).write_text(header + "VS000492\tunbound\tMirus associated decoy\n")
+    assert orchestrator._enabled_resource_identities({"hmm_database": str(linked)}) == before
+    observed = []
+
+    def phase1(**kwargs):
+        observed.append(kwargs["metadata_families"])
+        return mocked_pipeline._phase1(**kwargs)
+
+    monkeypatch.setattr(orchestrator, "_run_phase1_subflow", phase1)
+    result = orchestrator.single_genome_flow(
+        genome_path=mocked_pipeline.genome,
+        output_dir=mocked_pipeline.output_dir,
+        genome_id="demo",
+        device="cpu",
+        hmm_database=linked,
+    )
+    assert result["success"] is True
+    assert observed == ([{"vs000492": "NCLDV"}] if annotation_present else [{}])
+    warnings = [
+        record.getMessage() for record in caplog.records if "Marker annotation file absent" in record.getMessage()
+    ]
+    assert warnings == (
+        []
+        if annotation_present
+        else [f"Marker annotation file absent; metadata family support unavailable: {target / annotation_name}"]
+    )

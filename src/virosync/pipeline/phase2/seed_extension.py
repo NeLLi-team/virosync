@@ -162,7 +162,7 @@ def _walk(
         for start, end, support, host, covered, reset_host_run in ordered:
             if host:
                 run = [*run, start]
-            elif support or reset_host_run:
+            elif reset_host_run:
                 run = []
             if len(run) == 3:
                 barrier = max(edge, run[0])
@@ -311,6 +311,7 @@ def refresh_boundary_classification(
     *,
     ablation_id: AblationID = AblationID.A0,
     single_marker_min_score: float = DEFAULT_A2_SINGLE_MARKER_MIN_SCORE,
+    metadata_families: dict,
 ) -> None:
     """Recompute ordinary family evidence using the configured marker roles."""
     from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
@@ -344,7 +345,7 @@ def refresh_boundary_classification(
             for marker in by_scaffold.get(boundary.scaffold, [])
             if marker.start < boundary.end and marker.end > boundary.start
         ]
-        summary = classify_marker_hits(retained)
+        summary = classify_marker_hits(retained, metadata_families=metadata_families)
         # Compact CRESS classification has its own Phase1 identity-qualified
         # marker policy and is not assigned by the generic family classifier.
         if boundary.predicted_family != "CRESS":

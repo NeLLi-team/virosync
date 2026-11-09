@@ -26,9 +26,9 @@ def _completed_run_artifacts(
 ) -> dict[str, Path] | None:
     """Return the exact artifact set for a safe full-resume short-circuit.
 
-    Schema-v3 run state is authoritative. Schema-v1/v2 completion manifests are
+    Schema-v4 run state is authoritative. Schema-v1/v2 completion manifests are
     considered only under the explicit legacy opt-in; they are never promoted to
-    schema-v3 state or benchmark eligibility.
+    schema-v4 state or benchmark eligibility.
     """
     output_dir = Path(output_dir)
     state_path = output_dir / RUN_STATE_FILENAME

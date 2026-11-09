@@ -261,3 +261,62 @@ def test_override_does_not_erase_eligible_viral_support_on_same_gene():
     selected = replace(override, hmm_target="GVOGm0054", pfam_override="")
     assert viral_marker_gene_ids([override]) == frozenset()
     assert viral_marker_gene_ids([override, selected]) == frozenset({"scaffold_1_1"})
+
+
+@pytest.mark.parametrize("status", ["validated", "validated_novel", "unvalidated"])
+@pytest.mark.parametrize("score,retained", [(9.999, False), (10.0, True)])
+def test_capsid_score_floor_precedes_validation(status, score, retained):
+    from types import SimpleNamespace
+
+    marker = SimpleNamespace(hmm_target="VP_Penton_1", hmm_score=score, hmm_evalue=1e-20, validation_status=status)
+    assert decide_marker_hit_role(marker, ablation_id=AblationID.A0).is_retained_evidence is retained
+
+
+def test_ineligible_capsid_cannot_hide_ordinary_hit_on_same_protein():
+    from types import SimpleNamespace
+
+    from virosync.pipeline.phase1.seed_merger import best_marker_hits
+
+    weak = SimpleNamespace(
+        query_porf="p|aa1-20", hmm_target="VP_Penton_1", hmm_score=9.9, validation_status="validated"
+    )
+    ordinary = SimpleNamespace(
+        query_porf="p|aa1-20", hmm_target="GVOGm0760", hmm_score=9.0, validation_status="validated"
+    )
+    assert best_marker_hits([weak, ordinary]) == [ordinary]
+
+
+@pytest.mark.parametrize("sequence_score,domain_score,eligible", [(9.9, 100, False), (10, -5, True)])
+def test_capsid_floor_uses_full_sequence_score(sequence_score, domain_score, eligible):
+    from virosync.pipeline.phase1.hhg_seeding import HMMHit
+    from virosync.pipeline.phase1.marker_roles import passes_capsid_score_floor
+
+    raw = HMMHit("p", "VP_Penton_1", sequence_score, 1e-30, domain_score, 1, 20)
+    assert passes_capsid_score_floor(raw) is eligible
+
+
+@pytest.mark.parametrize("score,eligible", [(9.999, False), (10, True)])
+def test_direct_region_assembly_capsid_admission_obeys_floor(score, eligible):
+    fields = _complete_marker_fields()
+    fields.update(hmm_target="VP_Penton_1", hmm_score=score, validation_status="validated", tier1_bypassed=True)
+    assert RegionMarkerHit(**fields).is_valid_seed_marker is eligible
+
+
+@pytest.mark.parametrize(
+    "score,eligible",
+    [
+        ("9.999", False),
+        ("10", True),
+        ("75.0", True),
+        ("bad", False),
+        ("nan", False),
+        ("inf", False),
+        ("", False),
+        (None, False),
+        (True, False),
+    ],
+)
+def test_serialized_capsid_scores_preserve_eligibility(score, eligible):
+    from virosync.pipeline.phase1.marker_roles import passes_capsid_score_floor
+
+    assert passes_capsid_score_floor({"hmm_target": "GVOGm0003", "hmm_score": score}) is eligible

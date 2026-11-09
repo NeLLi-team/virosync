@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import pickle
 import random
+import signal
 import subprocess
 import sys
 import tempfile
@@ -38,13 +40,53 @@ from virosync.pipeline.phase2.terminal_repeats import (
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
 
 
+def _run_fixture_pool(tasks, n_boundaries, workers):
+    """Exercise worker lifecycle directly, independent of production admission."""
+    from virosync.pipeline.host_signatures import get_taxonomy_lookup
+
+    with tempfile.TemporaryDirectory(prefix="virosync-test-pool-") as directory:
+        root = Path(directory)
+        with (root / "taxonomy.pkl").open("wb") as stream:
+            pickle.dump(get_taxonomy_lookup(), stream)
+        count = 0
+        for count, task in enumerate(tasks, 1):
+            with (root / f"task-{count - 1}.pkl").open("wb") as stream:
+                pickle.dump(task, stream)
+        return terminal_repeats._dispatch_scaffold_files(root, count, n_boundaries, workers)
+
+
+def _fixture_wait(path):
+    """Bound setup separately from the short worker-failure assertion."""
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if path.exists() and (text := path.read_text()):
+            return text
+        time.sleep(0.01)
+    raise RuntimeError("fixture setup deadline")
+
+
 def _runtime_fixture(task):
     """Exercise real spawned-worker lifecycle without biological work."""
     kind, path = task
+    if kind in {"stall", "error"} and path:
+        root = Path(path)
+        (root / f"{kind}.pid").write_text(str(os.getpid()))
+        _fixture_wait(root / ("stall.pid" if kind == "error" else "error.pid"))
+        if kind == "error":
+            _fixture_wait(root / "stall.started")
+            (root / "error.at").write_text(str(time.monotonic()))
+    if kind == "search-kill":
+        from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
+
+        find_seed_positions("ACGTACGTACGT", 4, ("ACGT",))
     if kind == "error":
         raise RuntimeError("fixture planning failed")
     if kind == "stall":
+        if path:
+            (Path(path) / "stall.started").write_text("ready")
         time.sleep(10)
+        if path:
+            (Path(path) / "stall.completed").touch()
         return []
     if kind == "kill":
         from virosync.pipeline.phase2.terminal_repeat_search import _run_genometools
@@ -60,19 +102,31 @@ def _runtime_fixture(task):
     return [(0, [get_taxonomy_lookup(), os.environ.get("VIROSYNC_HOST_LINEAGE")])]
 
 
-def test_pool_failure_cancels_stalled_peer(monkeypatch):
-    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
-    started = time.monotonic()
-    with pytest.raises(RuntimeError, match="fixture planning failed"):
-        terminal_repeats._plan_scaffolds_in_workers([("stall", ""), ("error", "")], 0, 2)
-    assert time.monotonic() - started < 8
+def test_pool_failure_cancels_stalled_peer(tmp_path, monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture)
+
+    def deadline(signum, frame):
+        raise RuntimeError("test supervisor deadline")
+
+    previous = signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(45)
+    try:
+        with pytest.raises(RuntimeError, match="fixture planning failed"):
+            _run_fixture_pool([("stall", str(tmp_path)), ("error", str(tmp_path))], 0, 2)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert time.monotonic() - float((tmp_path / "error.at").read_text()) < 8
+    assert not (tmp_path / "stall.completed").exists()
+    for kind in ("stall", "error"):
+        assert not Path(f"/proc/{int((tmp_path / f'{kind}.pid').read_text())}").exists()
 
 
 def test_pool_worker_death_kills_genometools_child(tmp_path, monkeypatch):
-    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture)
     child_file = tmp_path / "child.pid"
     with pytest.raises(RuntimeError, match="worker"):
-        terminal_repeats._plan_scaffolds_in_workers([("kill", str(child_file))], 0, 1)
+        _run_fixture_pool([("kill", str(child_file))], 0, 1)
     status = Path(f"/proc/{int(child_file.read_text())}/status")
 
     def child_is_live():
@@ -90,12 +144,501 @@ def test_pool_worker_death_kills_genometools_child(tmp_path, monkeypatch):
 def test_pool_receives_explicit_taxonomy_and_host_context(monkeypatch):
     from virosync.pipeline import host_signatures
 
-    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture, raising=False)
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture)
     monkeypatch.setattr(host_signatures, "_TAXONOMY_LOOKUP", {"fixture": "taxon"})
     monkeypatch.setenv("VIROSYNC_HOST_LINEAGE", "fixture lineage")
-    assert terminal_repeats._plan_scaffolds_in_workers([("context", "")], 1, 1) == [
-        [{"fixture": "taxon"}, "fixture lineage"]
-    ]
+    assert _run_fixture_pool([("context", "")], 1, 1) == [[{"fixture": "taxon"}, "fixture lineage"]]
+
+
+def _pid_plan(task):
+    """Record real execution without running repeat searches."""
+    pids = Path(os.environ["VIROSYNC_TEST_PIDS"])
+    (pids / str(os.getpid())).touch()
+    deadline = time.monotonic() + 8
+    while len(list(pids.iterdir())) < 2:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("fixture did not receive two distinct worker PIDs")
+        time.sleep(0.02)
+    return [(index, [boundary]) for index, boundary, _ in task.boundaries]
+
+
+def _skewed_planning_worker(connection, *args):
+    marker = Path(os.environ["VIROSYNC_TEST_PIDS"]).parent / "first-worker"
+    try:
+        descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        time.sleep(3)
+    else:
+        os.close(descriptor)
+    terminal_repeats._planning_worker(connection, *args)
+
+
+@pytest.mark.parametrize("startup_skew", [False, True])
+def test_public_pool_uses_two_processes_without_parent_record_cache(tmp_path, monkeypatch, startup_skew):
+    fixture = _taxonomy_fixture(tmp_path)
+    pids = tmp_path / "pids"
+    pids.mkdir()
+    monkeypatch.setenv("VIROSYNC_TEST_PIDS", str(pids))
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _pid_plan)
+    if startup_skew:
+        monkeypatch.setattr(terminal_repeats, "_planning_worker", _skewed_planning_worker)
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: (2, 4 * 1024**3))
+    original_index = SeqIO.index
+
+    class RawOnlyIndex:
+        def __init__(self, *args):
+            self.index = original_index(*args)
+
+        def keys(self):
+            return self.index.keys()
+
+        def get_raw(self, key):
+            return self.index.get_raw(key)
+
+        def close(self):
+            self.index.close()
+
+        def __getitem__(self, key):
+            raise AssertionError("parent materialized a cached BioPython record")
+
+        def __contains__(self, key):
+            raise AssertionError("membership materialized a BioPython record")
+
+    monkeypatch.setattr(SeqIO, "index", RawOnlyIndex)
+    fixture.refine(workers=2)
+    assert len(list(pids.iterdir())) == 2
+    assert not (pids / str(os.getpid())).exists()
+
+
+def test_public_admission_rejects_pair_heavy_context_before_spawn(tmp_path, monkeypatch):
+    length = 512020
+    names = [f"pair-heavy-{index}" for index in range(4)]
+    genome = tmp_path / "raw.fna"
+    genome.write_text("".join(f">{name}\n" + "A" * length + "\n" for name in names))
+    boundaries = [_boundary(name, name, 0, length, (256000, 256100)) for name in names]
+    markers = [_Marker(name, 256000, 256100, f"{name}-mcp") for name in names]
+    mappings = {name: _mapping(name, name, 256000, 256100, length) for name in names}
+    fixture = _Fixture(
+        genome, boundaries, [(0, length)] * 4, markers, GenomeDiamondQuery(seed_gene_mappings=mappings), {}, {}
+    )
+    admitted = []
+
+    def dispatch(root, count, n_boundaries, workers):
+        admitted.append(workers)
+        return [[boundary] for boundary in boundaries]
+
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: (4, 2 * 1024**3))
+    monkeypatch.setattr(terminal_repeats, "_dispatch_scaffold_files", dispatch)
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", lambda boundary, **kwargs: [boundary])
+    assert fixture.refine(workers=4) == boundaries
+    assert admitted == [], "pair-heavy 512 kb contexts must select serial before worker creation"
+
+
+def test_marker_pair_union_exceeds_single_rectangle_cap_but_fits_metadata_bound():
+    seed = "ACGTGCA"
+    reverse = _reverse_complement(seed)
+    length = 1000
+    index = {seed: tuple(range(80)), reverse: tuple(length - 7 - i for i in reversed(range(80)))}
+    limits = [(70, 70), (86, 56)]
+    pairs, allowed = terminal_repeats._eligible_region_seed_pairs(index, length, limits)
+    assert len(pairs) == 4896 > terminal_repeats._MAX_SEED_PAIRINGS
+    assert allowed[:, 0].all()
+    marker_bounds = [min((left - 6) * (right - 6), 4**7 * 4096, 32 * (left + right - 12)) for left, right in limits]
+    assert sum(marker_bounds) == 8096
+    bound, intervals, marker_pairs, chunks = terminal_repeats._seed_pair_cardinality_bounds(length, limits)
+    assert bound == intervals == 8096
+    assert marker_pairs == 4096
+    assert len(pairs) <= bound
+    assert terminal_repeats._pair_allocation_bytes(bound, intervals, marker_pairs, chunks, 2) == (
+        max(96 * bound, 32 * bound + 160 * marker_pairs + 24 * intervals, 24 * bound + 808 * intervals)
+        + 256 * chunks
+        + 2 * 4**7
+    )
+
+
+def _error_storage_failure_plan(task):
+    original_write = Path.write_text
+
+    def fail_error_file(path, *args, **kwargs):
+        if path.name.startswith("error-"):
+            raise OSError(errno.ENOSPC, "fixture error storage exhausted")
+        return original_write(path, *args, **kwargs)
+
+    Path.write_text = fail_error_file
+    raise ValueError("original distinctive planning error " + "🙂" * 10000)
+
+
+def test_worker_error_survives_unwritable_error_storage(monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _error_storage_failure_plan)
+    with pytest.raises(RuntimeError, match="original distinctive planning error") as error:
+        _run_fixture_pool([("error", "")], 0, 1)
+    assert len(pickle.dumps(("error", str(error.value)))) <= 1024
+
+
+@pytest.mark.parametrize("resources", [(1, 4 * 1024**3), (8, 128 * 1024**2)])
+def test_resource_limited_public_pool_uses_in_process_reference(tmp_path, monkeypatch, resources):
+    fixture = _taxonomy_fixture(tmp_path)
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: resources)
+    processes = []
+
+    def reference(boundary, **kwargs):
+        processes.append(os.getpid())
+        return [boundary]
+
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", reference)
+    monkeypatch.setattr(
+        terminal_repeats, "_dispatch_scaffold_files", lambda *args: pytest.fail("spawned under serial cap")
+    )
+    fixture.refine(workers=8)
+    assert processes and set(processes) == {os.getpid()}
+
+
+def test_worker_sequence_file_is_exact_and_never_indexed(tmp_path, monkeypatch):
+    fixture = _taxonomy_fixture(tmp_path)
+    task = next(
+        iter(
+            terminal_repeats._build_scaffold_tasks(
+                fixture.boundaries,
+                fixture.allowed_intervals,
+                fixture.genome_path,
+                validated_markers=fixture.markers,
+                boundary_diamond_query=fixture.query,
+                boundary_taxonomy_map=fixture.taxonomy_map,
+                proteome_index=fixture.proteome_index,
+                extension_bp=500,
+                metadata_families={},
+            )
+        )
+    )
+    wrapped = tmp_path / "wrapped.fna"
+    wrapped.write_text(f">{task.scaffold}\nacgT\nNn\n")
+    task = replace(task, raw_genome_path=str(wrapped))
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    terminal_repeats._prepare_worker_files([task], spool)
+    terminal_repeats._write_worker_sequences(spool, 1)
+    with (spool / "task-0.pkl").open("rb") as stream:
+        task = pickle.load(stream)
+    assert Path(task.sequence_path).read_bytes() == b"ACGTNN"
+    sequence = " ACGTN\n"
+    path = tmp_path / "sequence.txt"
+    path.write_bytes(sequence.encode("ascii"))
+    task = replace(task, sequence_path=str(path))
+    monkeypatch.setattr(SeqIO, "index", lambda *args: pytest.fail("worker indexed FASTA"))
+    seen = []
+
+    def capture(boundary, **kwargs):
+        seen.append(kwargs["sequence"])
+        return [boundary]
+
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", capture)
+    terminal_repeats._plan_scaffold_task(task)
+    assert seen and all(value == sequence for value in seen)
+
+
+def test_forced_worker_failure_removes_actual_repfind_files(tmp_path, monkeypatch):
+    receipt = tmp_path / "workdir"
+    executable = tmp_path / "gt"
+    executable.write_text(
+        "#!" + sys.executable + "\nimport os,pathlib,signal,sys,time\n"
+        "work=pathlib.Path(sys.argv[sys.argv.index('-db')+1]).parent\n"
+        "pathlib.Path(" + repr(str(receipt)) + ").write_text(str(work))\n"
+        "os.kill(os.getppid(),signal.SIGKILL)\ntime.sleep(60)\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(terminal_repeats, "_plan_scaffold_task", _runtime_fixture)
+    with pytest.raises(RuntimeError, match="worker"):
+        _run_fixture_pool([("search-kill", "")], 0, 1)
+    work = Path(receipt.read_text())
+    assert not work.exists()
+    assert not work.parent.exists()
+
+
+def test_resource_limits_include_finite_cgroup_ancestors(tmp_path, monkeypatch):
+    parent = tmp_path / "parent"
+    leaf = parent / "leaf"
+    leaf.mkdir(parents=True)
+    (leaf / "cpu.max").write_text("max 100000")
+    (leaf / "memory.max").write_text("max")
+    (parent / "cpu.max").write_text("250000 100000")
+    (parent / "memory.max").write_text("1000000")
+    (parent / "memory.current").write_text("400000")
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [leaf, parent])
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(8)))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "4")
+    assert terminal_repeats._available_pool_resources() == (2, 600000)
+    (parent / "cpu.max").write_text("50000 100000")
+    assert terminal_repeats._available_pool_resources()[0] == 1
+
+
+def test_cgroup_reclaims_only_clean_inactive_file_cache(tmp_path, monkeypatch):
+    (tmp_path / "memory.max").write_text("1000000")
+    (tmp_path / "memory.current").write_text("900000")
+    (tmp_path / "memory.stat").write_text(
+        "inactive_file 700000\nfile_dirty 100000\nfile_writeback 50000\nfile 850000\nshmem 150000\n"
+    )
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [tmp_path])
+    monkeypatch.setattr(terminal_repeats.psutil, "virtual_memory", lambda: SimpleNamespace(available=2000000))
+    assert terminal_repeats._available_pool_resources()[1] == 650000
+    (tmp_path / "memory.stat").write_text("inactive_file 0\nfile 850000\nshmem 850000\n")
+    assert terminal_repeats._available_pool_resources()[1] == 100000
+
+
+def test_known_finite_cgroup_without_usage_does_not_use_host_budget(tmp_path, monkeypatch):
+    for key in ("SLURM_JOB_ID", "SLURM_JOBID", "SLURM_CPUS_PER_TASK"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(terminal_repeats.psutil, "virtual_memory", lambda: SimpleNamespace(available=16 * 1024**3))
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [tmp_path])
+    (tmp_path / "memory.max").write_text(str(128 * 1024**2))
+    assert terminal_repeats._available_pool_resources()[1] is None
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [])
+    assert terminal_repeats._available_pool_resources()[1] == 16 * 1024**3
+
+
+def test_unknown_slurm_memory_budget_uses_logged_serial(tmp_path, monkeypatch, caplog):
+    fixture = _taxonomy_fixture(tmp_path)
+    monkeypatch.setenv("SLURM_JOB_ID", "fixture-job")
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [])
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {2, 3})
+    monkeypatch.setattr(
+        terminal_repeats, "_prepare_worker_files", lambda *args: pytest.fail("spooled without Slurm budget")
+    )
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", lambda boundary, **kwargs: [boundary])
+    with caplog.at_level(logging.INFO, logger=terminal_repeats.__name__):
+        fixture.refine(workers=2)
+    assert "Slurm" in caplog.text and "serial" in caplog.text
+
+
+@pytest.mark.parametrize("per_cpu", [False, True])
+def test_slurm_tighter_job_budget_rejects_looser_v2_ancestor(tmp_path, monkeypatch, per_cpu):
+    monkeypatch.setenv("SLURM_JOB_ID", "fixture-job")
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    monkeypatch.delenv("SLURM_MEM_PER_NODE", raising=False)
+    monkeypatch.delenv("SLURM_MEM_PER_CPU", raising=False)
+    monkeypatch.setenv("SLURM_MEM_PER_CPU" if per_cpu else "SLURM_MEM_PER_NODE", "8" if per_cpu else "16")
+    monkeypatch.setattr(terminal_repeats, "_cgroup_directories", lambda: [tmp_path])
+    (tmp_path / "memory.max").write_text(str(64 * 1024**2))
+    (tmp_path / "memory.current").write_text("0")
+    assert terminal_repeats._available_pool_resources()[1] is None
+    (tmp_path / "memory.max").write_text(str(16 * 1024**2))
+    assert terminal_repeats._available_pool_resources()[1] == 16 * 1024**2
+
+
+@pytest.mark.parametrize("shortage", ["memory", "disk"])
+def test_spool_preflight_precedes_metadata_or_sequence_reads(tmp_path, monkeypatch, shortage, caplog):
+    fixture = _taxonomy_fixture(tmp_path)
+    monkeypatch.setattr(
+        terminal_repeats, "_available_pool_resources", lambda: (2, 1 if shortage == "memory" else 4 * 1024**3)
+    )
+    monkeypatch.setattr(
+        terminal_repeats, "_prepare_worker_files", lambda *args: pytest.fail("spooled before preflight")
+    )
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", lambda boundary, **kwargs: [boundary])
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda path: SimpleNamespace(free=0 if shortage == "disk" else 4 * 1024**3)
+    )
+    with caplog.at_level(logging.INFO, logger=terminal_repeats.__name__):
+        fixture.refine(workers=2)
+    assert "serial" in caplog.text
+
+
+@pytest.mark.parametrize("error_number", [errno.ENOSPC, errno.EDQUOT])
+@pytest.mark.parametrize("stage", ["metadata", "sequences"])
+def test_production_spool_storage_failure_cleans_up_before_serial(tmp_path, monkeypatch, error_number, stage, caplog):
+    fixture = _taxonomy_fixture(tmp_path)
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: (2, 4 * 1024**3))
+    roots = []
+
+    def exhaust(tasks, root):
+        roots.append(root)
+        (root / "partial-sequence").write_bytes(b"ACGT")
+        raise OSError(error_number, "fixture storage exhausted")
+
+    def serial(boundary, **kwargs):
+        assert roots and not roots[0].exists()
+        return [boundary]
+
+    if stage == "metadata":
+        monkeypatch.setattr(terminal_repeats, "_prepare_worker_files", exhaust)
+    else:
+        monkeypatch.setattr(terminal_repeats, "_write_worker_sequences", lambda root, count: exhaust(None, root))
+    monkeypatch.setattr(terminal_repeats, "_plan_boundary_partition", serial)
+    with caplog.at_level(logging.INFO, logger=terminal_repeats.__name__):
+        fixture.refine(workers=2)
+    assert "serial" in caplog.text and "storage" in caplog.text
+
+
+def test_native_lifetime_wrapper_ignores_python_path_shadowing(tmp_path, monkeypatch):
+    from virosync.pipeline.phase2.terminal_repeat_search import _run_genometools
+
+    (tmp_path / "ctypes.py").write_text("raise RuntimeError('shadowed ctypes')\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    _run_genometools(["/bin/true"], stdout=subprocess.PIPE)
+
+
+def test_pool_memory_cap_accounts_for_context_and_files(monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: (8, 2 * 1024**3))
+    limit = terminal_repeats._pool_worker_limit
+    small = limit(
+        8, sequence_bytes=1000, scan_bytes=1000, task_bytes=100, context_bytes=100, file_bytes=1000, pair_bytes=0
+    )
+    context = limit(
+        8,
+        sequence_bytes=1000,
+        scan_bytes=1000,
+        task_bytes=100,
+        context_bytes=256 * 1024**2,
+        file_bytes=1000,
+        pair_bytes=0,
+    )
+    files = limit(
+        8, sequence_bytes=1000, scan_bytes=1000, task_bytes=100, context_bytes=100, file_bytes=1024**3, pair_bytes=0
+    )
+    assert small > context == 1
+    assert small > files
+
+
+def test_pool_cpu_limit_is_independent_of_memory(monkeypatch):
+    monkeypatch.setattr(terminal_repeats, "_available_pool_resources", lambda: (1, 128 * 1024**3))
+    assert (
+        terminal_repeats._pool_worker_limit(
+            16, sequence_bytes=1000, scan_bytes=1000, task_bytes=100, context_bytes=100, file_bytes=1000, pair_bytes=0
+        )
+        == 1
+    )
+
+
+def _nonreceiving_worker(connection, *args):
+    """Advertise readiness, then leave the parent's task unread."""
+    os.setsid()
+    marker = Path(os.environ["VIROSYNC_TEST_FIRST_WORKER"])
+    try:
+        descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        marker.with_suffix(".peer.pid").write_text(str(os.getpid()))
+        _fixture_wait(marker.with_suffix(".ready"))
+        time.sleep(0.5)
+        marker.with_suffix(".error.at").write_text(str(time.monotonic()))
+        connection.send(("error", "fixture peer error"))
+        time.sleep(10)
+    else:
+        os.write(descriptor, str(os.getpid()).encode())
+        os.close(descriptor)
+        _fixture_wait(marker.with_suffix(".peer.pid"))
+        marker.with_suffix(".ready").write_text(str(time.monotonic()))
+        connection.send(("ready", None))
+        time.sleep(10)
+        marker.with_suffix(".completed").touch()
+
+
+def test_nonreceiving_worker_does_not_hide_peer_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIROSYNC_TEST_FIRST_WORKER", str(tmp_path / "first"))
+    monkeypatch.setattr(terminal_repeats, "_planning_worker", _nonreceiving_worker)
+
+    def deadline(signum, frame):
+        raise RuntimeError("test supervisor deadline")
+
+    previous = signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(45)
+    try:
+        with pytest.raises(RuntimeError, match="fixture peer error"):
+            _run_fixture_pool([("x" * 1024**2, ""), ("other", "")], 0, 2)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    marker = tmp_path / "first"
+    assert time.monotonic() - float(marker.with_suffix(".ready").read_text()) < 5
+    assert time.monotonic() - float(marker.with_suffix(".error.at").read_text()) < 5
+    assert not marker.with_suffix(".completed").exists()
+    for path in (marker, marker.with_suffix(".peer.pid")):
+        assert not Path(f"/proc/{int(path.read_text())}").exists()
+
+
+def _parent_death_plan(task):
+    from virosync.pipeline.phase2.terminal_repeat_search import _run_genometools
+
+    code = (
+        "import os,pathlib,time; pathlib.Path("
+        + repr(task[1])
+        + ").write_text(str(os.getpid())+' '+str(os.getppid())); time.sleep(60)"
+    )
+    ready = Path(task[1]).with_suffix(".ready")
+    pending = ready.with_suffix(".pending")
+    pending.write_text(f"{os.getpid()} {os.getppid()}")
+    pending.replace(ready)
+    _run_genometools([sys.executable, "-c", code], stdout=subprocess.PIPE)
+
+
+def _parent_death_probe(path, serial):
+    if serial:
+        _parent_death_plan(("", path))
+    else:
+        terminal_repeats._plan_scaffold_task = _parent_death_plan
+        _run_fixture_pool([("", path)], 0, 1)
+
+
+@pytest.mark.parametrize("serial", [False, True])
+def test_parent_death_terminates_native_child(tmp_path, serial):
+    receipt = tmp_path / "native.pid"
+    ready = receipt.with_suffix(".ready")
+    code = (
+        "from test_terminal_repeats import _parent_death_probe; _parent_death_probe("
+        + repr(str(receipt))
+        + ", "
+        + repr(serial)
+        + ")"
+    )
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join(["tests", "src"]))
+    parent = subprocess.Popen([sys.executable, "-c", code], env=environment)
+    child_ids = []
+    try:
+        # Imports/taxonomy/spawn took ~9s; bound setup apart from native lifetime checks.
+        deadline = time.monotonic() + 45
+        while not ready.exists() and parent.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert parent.poll() is None
+        assert ready.exists()
+        launcher_pid, launcher_parent = map(int, ready.read_text().split())
+        if serial:
+            assert launcher_pid == parent.pid
+            assert launcher_parent == os.getpid()
+        else:
+            assert launcher_pid != parent.pid
+            assert launcher_parent == parent.pid
+            child_ids = [launcher_pid]
+        deadline = time.monotonic() + 8
+        while not receipt.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert receipt.exists()
+        child_ids = [int(value) for value in receipt.read_text().split()]
+        assert (child_ids[1] == parent.pid) is serial
+        assert child_ids[1] == launcher_pid
+        parent.kill()
+        parent.wait(timeout=2)
+
+        def live(pid):
+            try:
+                return "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                return False
+
+        deadline = time.monotonic() + 2
+        while any(live(pid) for pid in child_ids) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not any(live(pid) for pid in child_ids)
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait()
+        for pid in child_ids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +649,7 @@ class _Marker:
     query_porf: str
     validation_status: str = "validated"
     hmm_target: str = "ncldv_mcp"
+    hmm_score: float = 100.0
 
 
 def _random_dna(length: int, rng: random.Random) -> str:
@@ -392,13 +936,13 @@ def test_marker_anchors_deduplicate_same_outer_pair_by_longest_evidence() -> Non
             protein_id="arm-marker",
             start=250,
             end=270,
-            marker_names=frozenset({"marker-a"}),
+            classification_markers=tuple((name, "") for name in frozenset({"marker-a"})),
         ),
         terminal_repeats._MarkerGroup(
             protein_id="core-marker",
             start=795,
             end=815,
-            marker_names=frozenset({"marker-b"}),
+            classification_markers=tuple((name, "") for name in frozenset({"marker-b"})),
         ),
     ]
 
@@ -522,6 +1066,7 @@ def test_unique_repeat_changes_only_reachable_noncore_flanks(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )[0]
 
     assert (refined.start, refined.end) == expected_bounds
@@ -556,6 +1101,7 @@ def test_coverage_veto_retains_candidate_without_changing_boundary(tmp_path: Pat
         boundary_taxonomy_map={},
         proteome_index={"contig": [pORF(id="unclassified", scaffold="contig", start=110, end=130, strand="+")]},
         extension_bp=500,
+        metadata_families={},
     )[0]
 
     assert (refined.start, refined.end) == (120, 400)
@@ -588,6 +1134,7 @@ def test_no_marker_anchor_is_explicit_and_coordinate_neutral(tmp_path: Path) -> 
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )[0]
 
     assert (refined.start, refined.end) == (120, 400)
@@ -643,6 +1190,7 @@ def test_disjoint_tir_pairs_partition_parent_and_keep_marker_neighbor(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in refined] == [
@@ -659,7 +1207,8 @@ def test_disjoint_tir_pairs_partition_parent_and_keep_marker_neighbor(
         "PPV",
         "MIRUS",
     ]
-    assert [boundary.region_classification_ncldv_markers for boundary in refined] == [2, 0, 0]
+    # One best HMM model per protein, not all alternative names, contributes family credit.
+    assert [boundary.region_classification_ncldv_markers for boundary in refined] == [1, 0, 0]
     assert [(boundary.original_start, boundary.original_end) for boundary in refined] == [
         (200, 260),
         (620, 680),
@@ -717,6 +1266,7 @@ def test_partition_cannot_split_whole_seed_for_viral_taxonomy_neighbor(tmp_path:
         boundary_taxonomy_map={viral_gene.id: taxonomy},
         proteome_index={"contig": [viral_gene]},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert len(refined) == 1
@@ -756,6 +1306,7 @@ def test_partition_retains_parent_when_marker_neighbor_has_no_confirmed_seed(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert len(refined) == 1
@@ -807,6 +1358,7 @@ def test_partition_cannot_emit_unseeded_call_beyond_parent(tmp_path: Path) -> No
         boundary_taxonomy_map={viral_gene.id: taxonomy},
         proteome_index={"contig": [viral_gene]},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert len(refined) == 1
@@ -843,6 +1395,7 @@ def test_identical_tir_cross_pair_keeps_parent_ambiguous(tmp_path: Path) -> None
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert len(refined) == 1
@@ -917,6 +1470,7 @@ def test_crossing_porf_does_not_override_tir_partition(tmp_path: Path) -> None:
         },
         proteome_index={"contig": [crossing_gene, viral_neighbor]},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in refined] == [
@@ -961,6 +1515,7 @@ def test_partition_vetoes_complete_marker_group_crossing_child_boundary(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert len(refined) == 1
@@ -1017,6 +1572,7 @@ def test_shared_pair_does_not_collapse_distinct_boundaries(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in refined] == [(180, 245), (260, 340)]
@@ -1072,6 +1628,7 @@ def test_outward_tir_proposal_does_not_replace_existing_candidate(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
     assert [(boundary.start, boundary.end) for boundary in refined] == [
@@ -1274,6 +1831,7 @@ def test_phase2_applies_tir_after_merge_before_downstream_evidence(
         genome_start_time=0.0,
         logger=logging.getLogger(__name__),
         raw_genome_path=raw_path,
+        metadata_families={},
     )
 
     assert [(name, value) for name, value in events] == [
@@ -1327,6 +1885,7 @@ def test_outward_tir_respects_walked_interval_and_stop(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
     phase2._annotate_boundary_repeats(result, raw_genome_path=genome, boundary_diamond_query=query, extension_bp=500)
     state = tmp_path / "refined.json"
@@ -1379,6 +1938,7 @@ def test_flank_marker_veto_applies_only_to_new_outward_endpoints(
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
     assert (result[0].start, result[0].end, result[0].tir_status) == expected
 
@@ -1535,6 +2095,7 @@ def test_phase2_real_tir_uses_walked_authority_and_final_evidence(
         config=config,
         genome_start_time=0.0,
         logger=logging.getLogger(__name__),
+        metadata_families={},
     )
     final = result.refined_boundaries[0]
     assert (final.start, final.end) == expected_bounds
@@ -1570,6 +2131,7 @@ def test_outward_tir_missing_taxonomy_in_added_flank_vetoes_change(tmp_path: Pat
         boundary_taxonomy_map={},
         proteome_index={"contig": [pORF("missing", "contig", 405, 415)]},
         extension_bp=500,
+        metadata_families={},
     )
     assert (result[0].start, result[0].end, result[0].tir_status) == (120, 400, "taxonomy_incomplete")
 
@@ -1630,6 +2192,7 @@ class _Fixture:
             proteome_index=self.proteome_index,
             extension_bp=500,
             workers=workers,
+            metadata_families={},
         )
 
 

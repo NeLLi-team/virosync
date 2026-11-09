@@ -388,6 +388,17 @@ def is_cellular_marker_model(model_name: str) -> bool:
     return is_seed_blocked_model(model_name) or is_host_marker(model_name)
 
 
+def metadata_marker_families(annotation_index: Mapping[str, dict]) -> dict[str, str]:
+    """Select resource family associations eligible for new classification credit."""
+    return {
+        name.lower(): annotation["family"]
+        for name, annotation in annotation_index.items()
+        if annotation.get("family") in {"NCLDV", "PPV", "MIRUS"}
+        and not is_cellular_marker_model(name)
+        and not is_cellular_marker_model(name.upper())
+    }
+
+
 def viral_marker_gene_ids(markers: "Iterable[ValidatedMarkerHit]") -> frozenset[str]:
     """Return the IDs of genes whose Phase 1 marker hit is a validated viral marker.
 
@@ -414,12 +425,8 @@ PLV_MARKER_PREFIXES = {"plv_"}
 MIRUS_MARKER_PREFIXES = {"mirus_"}
 
 
-def _marker_family(marker: str, class_by_marker: Mapping[str, str]) -> str:
-    """Return NCLDV, VP, PLV or MIRUS for one lower-case marker name, or ``""``.
-
-    The name decides first. A marker with no family in its name takes the class in
-    ``class_by_marker``: PPV counts as PLV, and CRESS and PHAGE name no region family.
-    """
+def resolve_marker_family(marker: str, fallback_family: str = "") -> str:
+    """Resolve a lower-case model name before its qualified profile/metadata family."""
     if marker in NCLDV_MARKER_EXACT or any(marker.startswith(prefix) for prefix in NCLDV_MARKER_PREFIXES):
         return "NCLDV"
     if any(marker.startswith(prefix) for prefix in VP_MARKER_PREFIXES):
@@ -428,7 +435,15 @@ def _marker_family(marker: str, class_by_marker: Mapping[str, str]) -> str:
         return "PLV"
     if any(marker.startswith(prefix) for prefix in MIRUS_MARKER_PREFIXES):
         return "MIRUS"
-    return {"NCLDV": "NCLDV", "PPV": "PLV", "MIRUS": "MIRUS"}.get(class_by_marker.get(marker, ""), "")
+    return {"NCLDV": "NCLDV", "PPV": "PLV", "MIRUS": "MIRUS", "CRESS": "CRESS", "PHAGE": "PHAGE"}.get(
+        fallback_family, ""
+    )
+
+
+def _marker_family(marker: str, class_by_marker: Mapping[str, str]) -> str:
+    """Project the shared association onto the existing seed-family buckets."""
+    family = resolve_marker_family(marker, class_by_marker.get(marker, ""))
+    return family if family in {"NCLDV", "VP", "PLV", "MIRUS"} else ""
 
 
 def classify_region_by_markers(
@@ -445,9 +460,8 @@ def classify_region_by_markers(
     Args:
         marker_names: Set of HMM marker target names found in the region
         seed_marker_allowlist: List of high-purity seed markers from config
-        class_by_marker: Lower-case marker name to the class of a structure-derived
-            profile whose hit has only EUK-pEVE references; it counts as a marker
-            of that class's family
+        class_by_marker: Lower-case model to eligible metadata family, overridden
+            by its qualified structure-profile class. CRESS/PHAGE do not vote.
 
     Returns:
         Classification string: "NCLDV", "VP", "PLV", "MIRUS", "MIXED", or "UNKNOWN"

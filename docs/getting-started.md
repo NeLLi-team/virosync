@@ -46,7 +46,9 @@ native runtime or the other Pixi dependencies.
 ## Environments
 
 The default environment includes the CPU pipeline, frameshift screening, and
-executed notebook reports with their figures. Select an environment with
+tools for notebook reports and their figures. Plotting is off by default;
+use `--plots` to render the notebook during a run. Scientific exports and audits
+are produced in either mode. Select an environment with
 `pixi install --locked -e NAME` and `pixi run -e NAME COMMAND`.
 
 | Environment | Purpose |

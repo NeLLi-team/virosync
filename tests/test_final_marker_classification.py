@@ -35,7 +35,7 @@ def test_seed_counts_one_protein_across_domain_queries():
     seed = MergedSeed(
         "s", 1000, 2000, anchors=[anchor("gene|aa1-90", "GVOGm0001", 100), anchor("gene|aa100-200", "vp_polb", 50)]
     )
-    seed.compute_classification()
+    seed.compute_classification(metadata_families={})
     assert seed.predicted_family == "NCLDV"
     assert seed.region_classification_vp_plv_markers == 0
 
@@ -44,7 +44,7 @@ def test_seed_keeps_higher_scoring_non_mcp_classification():
     seed = MergedSeed(
         "s", 1000, 2000, anchors=[anchor("gene|aa1-90", "GVOGm0001", 100), anchor("gene|aa100-200", "vp_mcp", 50)]
     )
-    seed.compute_classification()
+    seed.compute_classification(metadata_families={})
     assert seed.predicted_family == "NCLDV"
     assert seed.region_classification_vp_plv_markers == 0
 
@@ -76,7 +76,7 @@ def test_final_merged_class_and_counts_use_retained_unique_markers():
         marker("large2", "GVOGm0002", 3600, 3800),
         marker("outside", "mirus_mcp", 4500, 4600),
     ]
-    refresh_boundary_classification(boundaries, markers)
+    refresh_boundary_classification(boundaries, markers, metadata_families={})
     assert len(boundaries) == 1
     assert boundaries[0].predicted_family == "NCLDV"
     assert boundaries[0].region_classification_ncldv_markers == 2
@@ -88,7 +88,7 @@ def test_final_classification_keeps_compact_cress_policy():
     from virosync.pipeline.phase2.seed_extension import refresh_boundary_classification
 
     boundary = RefinedBoundary("s", 1000, 2000, predicted_family="CRESS")
-    refresh_boundary_classification([boundary], [marker("rep", "cress_rep", 1100, 1300)])
+    refresh_boundary_classification([boundary], [marker("rep", "cress_rep", 1100, 1300)], metadata_families={})
     assert boundary.predicted_family == "CRESS"
 
 
@@ -123,7 +123,7 @@ def test_tir_child_keeps_compact_cress_classification():
     from virosync.pipeline.phase2.terminal_repeats import _child_boundary
 
     parent = RefinedBoundary("s", 1000, 3000, predicted_family="CRESS")
-    child = _child_boundary(parent, start=1200, end=2800, groups=[], scan_start=0, scan_end=4000)
+    child = _child_boundary(parent, start=1200, end=2800, groups=[], scan_start=0, scan_end=4000, metadata_families={})
     assert child.predicted_family == "CRESS"
 
 
@@ -134,7 +134,7 @@ def test_final_classification_reuses_peve_profile_family():
     hit = marker("peve", "EVE_CAPSID_NOVEL_0008", 1100, 1200)
     hit.top10_prefixes = "EUK-pEVE__"
     hit.top10_pidents = "80"
-    refresh_boundary_classification([boundary], [hit])
+    refresh_boundary_classification([boundary], [hit], metadata_families={})
     assert boundary.predicted_family == "PPV"
     assert boundary.region_classification_vp_plv_markers == 1
     assert boundary.region_classification_ncldv_markers == 0
@@ -190,9 +190,11 @@ def test_final_phase2_classification_uses_phase3_marker_role_policy(tmp_path, mo
         genome_start_time=0,
         logger=logging.getLogger(__name__),
     )
-    result = phase2._run_phase2_subflow(config=config, **arguments)
+    result = phase2._run_phase2_subflow(config=config, **arguments, metadata_families={})
     if ablation == "A3":
-        reference = phase2._run_phase2_subflow(config=config.with_overrides(ablation_id=AblationID.A0), **arguments)
+        reference = phase2._run_phase2_subflow(
+            config=config.with_overrides(ablation_id=AblationID.A0), **arguments, metadata_families={}
+        )
         selected = result.refined_boundaries[0]
         ordinary = reference.refined_boundaries[0]
         assert (

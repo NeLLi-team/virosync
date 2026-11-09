@@ -527,6 +527,7 @@ def test_authenticated_phase2_resume_supplies_exact_checkpoint_inputs(
         genome_start_time=0.0,
         logger=logging.getLogger(__name__),
         resume_authorized=True,
+        metadata_families={},
     )
 
     resumed = Phase2ResumeState(

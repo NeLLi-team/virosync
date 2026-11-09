@@ -77,7 +77,9 @@ class MergedSeed:
         all_anchors = self.anchors + self.hhg_anchors
         return any(is_ordinary_marker_evidence(a) and is_mcp_gene(a.hallmark_gene) for a in all_anchors)
 
-    def compute_classification(self, seed_marker_allowlist: list[str] | None = None) -> None:
+    def compute_classification(
+        self, seed_marker_allowlist: list[str] | None = None, *, metadata_families: dict[str, str]
+    ) -> None:
         """Compute region classification based on hallmark genes.
 
         Sets predicted_family and marker count fields based on
@@ -92,7 +94,9 @@ class MergedSeed:
         Args:
             seed_marker_allowlist: List of high-purity seed markers from config
         """
-        summary = classify_marker_hits(self.anchors + self.hhg_anchors, seed_marker_allowlist)
+        summary = classify_marker_hits(
+            self.anchors + self.hhg_anchors, seed_marker_allowlist, metadata_families=metadata_families
+        )
 
         self.predicted_family = summary["classification"]
         self.region_classification_ncldv_markers = summary["ncldv_markers"]
@@ -115,10 +119,9 @@ def validate_confirmed_seed_containment(
             raise ValueError(f"candidate does not contain complete confirmed seed {seed.seed_id!r}")
 
 
-def classify_marker_hits(hits: Sequence[object], seed_marker_allowlist: list[str] | None = None) -> dict:
-    """Apply existing family rules to the highest-scoring hit per base protein."""
-    from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_region_classification_summary
-    from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
+def best_marker_hits(hits: Sequence[object]) -> list[object]:
+    """Select ordinary hits before comparing HMM scores; ties keep the first hit."""
+    from virosync.pipeline.phase1.viral_markers import base_marker_gene_id
 
     best_by_gene: dict[str, tuple[float, object]] = {}
     for hit in hits:
@@ -130,12 +133,27 @@ def classify_marker_hits(hits: Sequence[object], seed_marker_allowlist: list[str
         current = best_by_gene.get(gene)
         if current is None or score > current[0]:
             best_by_gene[gene] = (score, hit)
-    selected = [hit for _score, hit in best_by_gene.values()]
+    return [hit for _score, hit in best_by_gene.values()]
+
+
+def classify_marker_hits(
+    hits: Sequence[object], seed_marker_allowlist: list[str] | None = None, *, metadata_families: dict[str, str]
+) -> dict:
+    """Count distinct selected models using name, qualified profile, then metadata."""
+    from virosync.pipeline.phase1.viral_markers import get_region_classification_summary
+    from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
+
+    selected = best_marker_hits(hits)
     names_and_hits = [
         (str(getattr(hit, "hallmark_gene", "") or getattr(hit, "hmm_target", "")), hit) for hit in selected
     ]
     class_by_marker = {
-        name.lower(): profile_class for name, hit in names_and_hits if (profile_class := peve_profile_class(name, hit))
+        **metadata_families,
+        **{
+            name.lower(): profile_class
+            for name, hit in names_and_hits
+            if (profile_class := peve_profile_class(name, hit))
+        },
     }
     return get_region_classification_summary(
         {name for name, _hit in names_and_hits}, seed_marker_allowlist, class_by_marker=class_by_marker

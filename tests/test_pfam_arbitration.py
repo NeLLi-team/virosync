@@ -31,7 +31,7 @@ def _annotation(
 
 
 def test_reported_penton_survives_stronger_non_capsid_domain_assignment():
-    capsid = _hit("EVE_CAPSID_NOVEL_0002", -5)
+    capsid = _hit("EVE_CAPSID_NOVEL_0002", 10)
     noncapsid = _hit("model-a", 200)
     retained, records = arbitrate_hits(
         [noncapsid, capsid],
@@ -180,3 +180,13 @@ def test_overridden_capsid_keeps_only_reported_floor_and_selected_non_capsid(
     )
     witnesses = find_spatial_witnesses([*evidence, partner])
     assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}
+
+
+def test_subten_capsid_cannot_win_arbitration_over_eligible_ordinary_model():
+    weak = _hit("EVE_CAPSID_NOVEL_0002", 9.9)
+    ordinary = _hit("model-a", 9)
+    other = _hit("model-b", 8)
+    retained, records = arbitrate_hits([weak, ordinary, other], {}, {})
+    assert retained == [weak, ordinary]
+    assert records[0].final_model == "model-a"
+    assert weak.score == 9.9

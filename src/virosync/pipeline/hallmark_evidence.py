@@ -7,14 +7,18 @@ import json
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import accumulate, combinations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
-from virosync.pipeline.phase1.marker_roles import PRODUCTION_VALIDATION_STATUSES, is_ordinary_marker_evidence
+from virosync.pipeline.phase1.marker_roles import (
+    PRODUCTION_VALIDATION_STATUSES,
+    is_ordinary_marker_evidence,
+    passes_capsid_score_floor,
+)
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 
@@ -26,6 +30,17 @@ STRONG_EVALUE = 1e-5
 WEAK_EVALUE = 0.01
 VIRAL_PREFIXES = ("NCLDV__", "MIRUS__", "PLV__", "VP__", "PPV__", "CRESS__", "EUK-pEVE")
 EXCLUDED_FAMILIES = {"SF1/SF3_fusion", "PrimPol/SF3"}
+SCORING_POOLS = {
+    "PPV": {"Virophages", "Polinton_like_viruses", "Maverick_Polintons"},
+    "NCLDV_Mirus": {"Nucleocytoviricota", "Mirusviricota"},
+}
+RNAP_SUBUNITS = {
+    "GVOGm0023": "RNAPL",
+    "VS000307": "RNAPL",
+    "VS000367": "RNAPL",
+    "GVOGm0022": "RNAPS",
+    "VS000362": "RNAPS",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +72,7 @@ class HallmarkEvidence:
     @property
     def model_roles(self) -> list[dict]:
         """Return the canonical panel roles without qualifying or validating the hit."""
-        fields = ("panel", "marker", "module", "role", "capsid", "structural_anchor", "excluded_from_scoring")
-        return [{name: link[name] for name in fields} for link in _catalogue().get(("phase1_marker", self.model), ())]
+        return get_model_roles(self.model)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +164,8 @@ def collect_hallmark_evidence(
     catalogue = _catalogue()
     evidence = []
     for marker in markers:
+        if not passes_capsid_score_floor(marker):
+            continue
         if ("phase1_marker", marker.hmm_target) not in catalogue and not is_capsid_evidence_gene(marker.hmm_target):
             continue
         gene = marker.query_porf.split("|aa", 1)[0]
@@ -196,9 +212,16 @@ def find_spatial_witnesses(evidence: Sequence[HallmarkEvidence]) -> list[Hallmar
                 ordinary_capsids.add(hit.evidence_id)
     witnesses = {}
     for hit in evidence:
+        if not passes_capsid_score_floor(hit):
+            continue
         if is_capsid_evidence_gene(hit.model) and hit.evidence_id not in ordinary_capsids:
+            tier = (
+                "MEDIUM"
+                if (hit.validation_status == "validated" or hit.score >= 75 or hit.viral_top10_max_pident > 0)
+                else "LOW"
+            )
             witness = HallmarkWitness(
-                hit.scaffold, "Capsid", "reported_capsid", "MEDIUM", hit.start, hit.end, (hit.evidence_id,)
+                hit.scaffold, "Capsid", "reported_capsid", tier, hit.start, hit.end, (hit.evidence_id,)
             )
             witnesses[witness.witness_id] = witness
 
@@ -316,13 +339,26 @@ def contained_witnesses(
 
 def has_spatial_rescue(result: VerificationResult) -> bool:
     """Return whether a scored candidate retains an authenticated spatial floor."""
-    if result.confidence_tier not in {"MEDIUM", "HIGH"}:
+    if result.confidence_tier not in {"LOW", "MEDIUM", "HIGH"}:
         return False
     assessment = getattr(result, "hallmark_assessment", None)
     if not assessment or not assessment.witnesses:
         return False
     if (assessment.scaffold, assessment.start, assessment.end) != (result.scaffold, result.start, result.end):
         return False
+    if result.confidence_tier == "LOW":
+        if assessment.summary.floor_tier in {"MEDIUM", "HIGH"} or any(
+            w.rule != "reported_capsid" or w.tier != "LOW" for w in assessment.witnesses
+        ):
+            return False
+        authenticated = contained_witnesses(
+            result.hallmark_evidence, assessment.witnesses, result.scaffold, result.start, result.end
+        )
+        return (
+            tuple(authenticated) == assessment.witnesses
+            and result.score_components.get("hallmark_floor") == 0.0
+            and result.final_confidence >= 0.0
+        )
     if any(w.tier == "HIGH" for w in assessment.witnesses) and result.confidence_tier != "HIGH":
         return False
     floor = result.score_components.get("hallmark_floor")
@@ -334,7 +370,7 @@ def summarize_hallmarks(
     support: Sequence[HallmarkSupport] = (),
     scoring_locus_ids: dict[str, str] | None = None,
 ) -> HallmarkSummary:
-    """Select one compatible panel, then apply the approved graduated weights."""
+    """Select numerical evidence while preserving original-panel automatic floors."""
     loci = scoring_locus_ids or {}
     core, context = defaultdict(list), defaultdict(list)
     for hit, link in _linked(evidence):
@@ -349,8 +385,14 @@ def summarize_hallmarks(
         for link in _catalogue().get((hit.stage, hit.model), ()):
             if not link["excluded_from_scoring"] and link["marker"] not in EXCLUDED_FAMILIES:
                 context[link["panel"]].append((hit, link))
+    for pool, panels in SCORING_POOLS.items():
+        for panel in panels:
+            core[pool].extend((hit, _scoring_role(hit.model, link, pool)) for hit, link in core.get(panel, ()))
+            context[pool].extend((hit, _scoring_role(hit.model, link, pool)) for hit, link in context.get(panel, ()))
     choices = []
     for panel, hits in core.items():
+        if not hits:
+            continue
         total = len(_assignment(hits, loci))
         strong = len(_assignment([(h, link) for h, link in hits if h.evalue <= STRONG_EVALUE], loci))
         any_capsid = any(link["capsid"] for _, link in hits)
@@ -389,11 +431,57 @@ def summarize_hallmarks(
                 tuple(sorted({h.evidence_id for h, _ in hits})),
             )
         )
-    return max(
-        choices,
-        key=lambda c: (c.core_count, c.strong_count, bool(c.capsid_fraction), c.compatible_count, c.panel),
-        default=HallmarkSummary(),
+
+    def rank(summary: HallmarkSummary) -> tuple:
+        return (
+            summary.core_count,
+            summary.strong_count,
+            bool(summary.capsid_fraction),
+            summary.compatible_count,
+            summary.panel not in SCORING_POOLS,
+            summary.panel,
+        )
+
+    original = max((c for c in choices if c.panel not in SCORING_POOLS), key=rank, default=HallmarkSummary())
+    selected = max(
+        (c for c in choices if original.panel in SCORING_POOLS.get(c.panel, {c.panel})),
+        key=rank,
+        default=original,
     )
+    if selected.panel not in SCORING_POOLS:
+        return selected
+    return replace(
+        selected,
+        floor_tier=original.floor_tier,
+        coherence_bonus=max(original.coherence_bonus, selected.coherence_bonus),
+    )
+
+
+def get_model_roles(model: str) -> list[dict]:
+    """Read raw curated marker roles without qualification or scoring aliases."""
+    fields = ("panel", "marker", "module", "role", "capsid", "structural_anchor", "excluded_from_scoring")
+    return [{name: link[name] for name in fields} for link in _catalogue().get(("phase1_marker", model), ())]
+
+
+def scoring_roles(hit: HallmarkEvidence, panel: str) -> list[dict]:
+    """Return scoring family roles without changing the retained catalogue provenance."""
+    panels = SCORING_POOLS.get(panel, {panel})
+    return [
+        _scoring_role(hit.model, role, panel) if panel in SCORING_POOLS else role
+        for role in hit.model_roles
+        if role["panel"] in panels and not role["excluded_from_scoring"] and role["marker"] not in EXCLUDED_FAMILIES
+    ]
+
+
+def _scoring_role(model: str, role: dict, pool: str) -> dict:
+    family = role["marker"]
+    if pool == "NCLDV_Mirus":
+        family = RNAP_SUBUNITS.get(model, family)
+        if family == "MCP":
+            family = f"{role['panel']}_MCP"
+    elif pool == "PPV" and family == "mCP":
+        family = "Penton"
+    return {**role, "marker": family}
 
 
 @lru_cache(maxsize=1)

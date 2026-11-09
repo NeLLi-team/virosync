@@ -45,6 +45,44 @@ def _payload(value: str) -> dict[str, object]:
     return {"schema_version": 3, "value": value}
 
 
+@pytest.mark.parametrize("mutation", [None, "grow", "shrink"])
+def test_checkpoint_read_is_bounded_and_rejects_changes(tmp_path, monkeypatch, mutation) -> None:
+    checkpoint = tmp_path / "checkpoint.json"
+    original = b'{"value": "initial"}'
+    checkpoint.write_bytes(original)
+    real_fdopen = os.fdopen
+    read_sizes = []
+
+    class ChangingReader:
+        def __init__(self, descriptor, *args, **kwargs):
+            self.handle = real_fdopen(descriptor, *args, **kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            if mutation == "grow":
+                checkpoint.write_bytes(original + b" " * 100)
+            elif mutation == "shrink":
+                checkpoint.write_bytes(b"{}")
+            return self.handle.read(size)
+
+        def fileno(self):
+            return self.handle.fileno()
+
+    monkeypatch.setattr(os, "fdopen", ChangingReader)
+    if mutation is None:
+        assert run_state._read_artifact_json(tmp_path, "checkpoint.json") == {"value": "initial"}
+    else:
+        with pytest.raises(ValueError, match="artifact changed while reading"):
+            run_state._read_artifact_json(tmp_path, "checkpoint.json")
+    assert read_sizes == [len(original) + 1]
+
+
 @pytest.mark.parametrize("preexisting", [False, True])
 def test_atomic_json_replace_failure_leaves_old_valid_or_absent(
     tmp_path: Path,

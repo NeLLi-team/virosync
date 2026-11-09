@@ -44,8 +44,12 @@ def _hit_rank(hit: HMMHit) -> tuple[float, str]:
 
 
 def _best_candidate_hits(hits: list[HMMHit]) -> dict[str, dict[str, HMMHit]]:
+    from virosync.pipeline.phase1.marker_roles import passes_capsid_score_floor
+
     best_by_protein: dict[str, dict[str, HMMHit]] = {}
     for hit in hits:
+        if not passes_capsid_score_floor(hit):
+            continue
         best_by_protein.setdefault(hit.query_name, {})[hit.target_name] = hit
     return best_by_protein
 

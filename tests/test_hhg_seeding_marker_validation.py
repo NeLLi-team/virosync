@@ -97,7 +97,7 @@ def test_competing_segment_retains_unvalidated_capsid_and_full_gene(tmp_path):
     diamond.write_text("scaffold_1\tEUK__host|p1\t1e-30\t100\t90\t100\n")
     hits = [
         HMMHit("scaffold_1", "VS000087", 200, 1e-30, 200, 10, 50),
-        HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0002", -5, 1000, -5, 10, 50),
+        HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0002", 10, 1000, -5, 10, 50),
     ]
     markers = filter_validated_markers(hits, diamond, proteome)
     assert {marker.hmm_target for marker in markers} == {"VS000087", "EVE_CAPSID_NOVEL_0002"}
@@ -528,7 +528,7 @@ def test_marker_wrapper_preserves_qualifying_viral_member_of_selected_genome(tmp
     assert len(markers) == 1
     assert markers[0].validation_status == "validated"
     assert "qualifying" in markers[0].top10_targets
-    assert can_seed_marker(markers[0].hmm_target, markers[0].validation_status)
+    assert can_seed_marker(markers[0].hmm_target, markers[0].validation_status, hmm_score=markers[0].hmm_score)
 
 
 def test_marker_preference_keeps_mask_twins_and_first20_genome_slots(tmp_path, monkeypatch):
@@ -601,3 +601,26 @@ def test_marker_representative_restores_nearby_three_core_rescue(tmp_path, monke
     witnesses = find_spatial_witnesses(collect_hallmark_evidence(markers, hits))
     assert [(w.rule, w.start, w.end) for w in witnesses] == [("three_core_15kb", 1000, 3300)]
     assert [(seed.start, seed.end) for seed in add_rescue_seeds([], witnesses)] == [(1000, 3300)]
+
+
+@pytest.mark.parametrize("prefix", ["EUK-pEVE__reference", "NCLDV__reference"])
+def test_subten_validated_capsid_provenance_cannot_hide_eligible_ordinary_hit(tmp_path, prefix):
+    from virosync.ablation import AblationID
+    from virosync.pipeline.hallmark_evidence import collect_hallmark_evidence
+    from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role
+
+    proteome = tmp_path / "proteome.faa"
+    proteome.write_text(">scaffold_1 # 101 # 400 # 1 # ID=1_1\n" + "M" * 100 + "\n")
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(f"scaffold_1\t{prefix}|p1\t1e-30\t100\t90\t100\n")
+    raw = [
+        HMMHit("scaffold_1", "EVE_CAPSID_NOVEL_0002", 9.9, 1e-30, 100, 10, 50),
+        HMMHit("scaffold_1", "VS000185", 9, 1e-30, 9, 10, 50),
+    ]
+    markers = filter_validated_markers(raw, diamond, proteome)
+    assert {m.hmm_target for m in markers} == {"EVE_CAPSID_NOVEL_0002", "VS000185"}
+    assert all(m.validation_status == "validated" for m in markers)
+    admitted = [m for m in markers if decide_marker_hit_role(m, ablation_id=AblationID.A0).is_retained_evidence]
+    assert [m.hmm_target for m in admitted] == ["VS000185"]
+    assert all(h.model != "EVE_CAPSID_NOVEL_0002" for h in collect_hallmark_evidence(markers, raw))
+    assert raw[0].score == 9.9 and raw[0].domain_score == 100

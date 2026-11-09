@@ -333,7 +333,7 @@ def test_viral_hit_depth_reaches_the_flow_and_changes_the_run_fingerprint() -> N
 
 
 def _marker(porf: str, *, status: str = "validated", target: str = "GVOGm0003") -> SimpleNamespace:
-    return SimpleNamespace(query_porf=porf, validation_status=status, hmm_target=target)
+    return SimpleNamespace(query_porf=porf, validation_status=status, hmm_target=target, hmm_score=50)
 
 
 def test_viral_marker_genes_are_the_validated_markers_by_base_gene_id() -> None:
@@ -417,5 +417,6 @@ def test_phase3_preserves_serialized_marker_flag_without_fabricating_other_gene_
         host_signature_model_payload=None,
         precomputed_tmvec=None,
         tmvec_device="cpu",
+        marker_annotation_index={},
     )
     assert [row["phase1_validated_viral_marker"] for row in result["b"][0]] == [True, False]

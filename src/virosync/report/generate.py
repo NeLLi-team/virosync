@@ -36,8 +36,8 @@ def generate_eve_report(
     """Render the per-genome EVE analysis notebook.
 
     The jupytext source is converted to a notebook, parameterized for this
-    genome, and executed with papermill. The executed notebook is a required run
-    artifact, so failures are raised rather than swallowed.
+    genome, and executed with papermill. When plotting is enabled, the executed
+    notebook is required, so failures are raised rather than swallowed.
     """
     output_dir = Path(output_dir).resolve()
     if not _SOURCE.exists():

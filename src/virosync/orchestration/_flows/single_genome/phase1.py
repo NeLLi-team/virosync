@@ -26,7 +26,11 @@ from virosync.pipeline.hallmark_evidence import (
     find_spatial_witnesses,
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
-from virosync.pipeline.phase1.marker_roles import decide_marker_hit_role, is_ordinary_marker_evidence
+from virosync.pipeline.phase1.marker_roles import (
+    decide_marker_hit_role,
+    is_ordinary_marker_evidence,
+    passes_capsid_score_floor,
+)
 from virosync.pipeline.phase1.pfam_arbitration import ambiguous_proteins
 from virosync.pipeline.phase1.region_assembly import can_seed_marker
 from virosync.pipeline.phase1.viral_markers import base_marker_gene_id, get_assembly_mode
@@ -107,11 +111,15 @@ def _candidate_regions_to_seeds(
         members = [
             marker
             for marker in region.markers
-            if cress
-            or can_seed_marker(
-                marker.hmm_target,
-                marker.validation_status,
-                tier1_bypassed=getattr(marker, "tier1_bypassed", False),
+            if passes_capsid_score_floor(marker)
+            and (
+                cress
+                or can_seed_marker(
+                    marker.hmm_target,
+                    marker.validation_status,
+                    hmm_score=marker.hmm_score,
+                    tier1_bypassed=getattr(marker, "tier1_bypassed", False),
+                )
             )
         ]
         if not members:
@@ -204,6 +212,8 @@ def _run_phase1_subflow(
     resume_authorized: bool = False,
     threads: int | None = None,
     reference_mask: ReferenceMask = ReferenceMask(),
+    *,
+    metadata_families: dict,
 ) -> Phase1Result | Phase1Terminal:
     """Phase 1: Seeding (HMM scan -> marker validation -> region assembly).
 
@@ -529,6 +539,7 @@ def _run_phase1_subflow(
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
                 host_credit_threshold=config.phase2.host_trim_score_threshold,
+                generate_plots=config.execution.generate_plots,
             ),
         }
         _write_empty_run_log(
@@ -881,6 +892,7 @@ def _run_phase1_subflow(
                 taxonomy_labels_file=taxonomy_labels_file,
                 logger=logger,
                 host_credit_threshold=config.phase2.host_trim_score_threshold,
+                generate_plots=config.execution.generate_plots,
             ),
         }
         _write_empty_run_log(
@@ -977,7 +989,7 @@ def _run_phase1_subflow(
     # Compute region classification for each seed based on marker types
     for seed in merged_seeds:
         if seed.predicted_family != "CRESS":
-            seed.compute_classification(None)
+            seed.compute_classification(None, metadata_families=metadata_families)
     phase1_ablation_counts = InterventionCounts(
         opportunities=phase1_ablation_counts.opportunities,
         interventions=phase1_ablation_counts.interventions,

@@ -84,7 +84,7 @@ def valid_example(monkeypatch, tmp_path: Path):
     run_dir.mkdir(parents=True)
     _write_batch(output_root)
     _write_predictions(run_dir)
-    state_bytes = b'{"schema_version":3}\n'
+    state_bytes = json.dumps({"schema_version": validate_example_run.RUN_STATE_SCHEMA_VERSION}).encode() + b"\n"
     (run_dir / validate_example_run.RUN_STATE_FILENAME).write_bytes(state_bytes)
     result = {
         "accepted_bp": 42,
@@ -111,7 +111,7 @@ def valid_example(monkeypatch, tmp_path: Path):
         row_count=2,
     )
     state = SimpleNamespace(
-        schema_version=3,
+        schema_version=validate_example_run.RUN_STATE_SCHEMA_VERSION,
         status="success",
         run_fingerprint="a" * 64,
         attempt=1,

@@ -31,7 +31,6 @@ from virosync.pipeline.phase3.evidence_synthesizer import (
     is_validated_marker,
     summarize_marker_hits,
     validated_capsid_gene_ids,
-    with_profile_class_families,
 )
 from virosync.pipeline.phase3.gene_taxonomy import has_only_peve_viral_hits, peve_profile_class
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
@@ -124,11 +123,17 @@ def _profile_vote_class(validated_anchors: Sequence[Anchor]) -> str | None:
     return consensus_taxonomy_class(validated_anchors, taxonomy_lookup=get_taxonomy_lookup())
 
 
-def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
+def _seed_to_result(
+    seed: MergedSeed,
+    *,
+    eve_id: str,
+    metadata_families: dict,
+    marker_annotation_index: dict,
+) -> VerificationResult:
     overlapping_anchors = _overlapping_anchors(seed)
     seed = replace(seed, anchors=list(overlapping_anchors), hhg_anchors=[])
     if seed.predicted_family != "CRESS":
-        seed.compute_classification()
+        seed.compute_classification(metadata_families=metadata_families)
     eligible_anchors = _eligible_anchors(overlapping_anchors)
     hallmark_genes = [anchor.hallmark_gene for _, anchor in eligible_anchors]
     validated_anchors = [
@@ -136,9 +141,11 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     ]
     # The class family comes from the profile that wins each protein in the Phase 3
     # vote, so family and class never disagree on a tie.
-    marker_summary = with_profile_class_families(
-        summarize_marker_hits(hallmark_genes),
-        deduplicate_preferring_mcp(validated_anchors),
+    profile_winners = {_base_gene_id(anchor): anchor for anchor in deduplicate_preferring_mcp(validated_anchors)}
+    marker_summary = summarize_marker_hits(
+        hallmark_genes,
+        annotation_index=marker_annotation_index,
+        hallmark_hits=[profile_winners.get(gene_id, anchor) for gene_id, anchor in eligible_anchors],
     )
     mcp_gene_ids = [gene_id for gene_id, anchor in eligible_anchors if is_mcp_gene(anchor.hallmark_gene)]
     region_classification = canonical_family(seed.predicted_family)
@@ -183,7 +190,18 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
         region_classification_ncldv_markers=seed.region_classification_ncldv_markers,
         region_classification_vp_plv_markers=seed.region_classification_vp_plv_markers,
         region_classification_mirus_markers=seed.region_classification_mirus_markers,
-        ppv_subtype=infer_ppv_subtype(hallmark_genes),
+        ppv_subtype=infer_ppv_subtype(
+            [anchor.hallmark_gene for anchor in validated_anchors],
+            [
+                {
+                    "top10_prefixes": anchor.top10_prefixes,
+                    "top10_pidents": anchor.top10_pidents,
+                    "top10_targets": getattr(anchor, "top10_targets", ""),
+                }
+                for anchor in validated_anchors
+            ],
+            get_taxonomy_lookup(),
+        ),
         likely_family=likely_family,
         # The seed marker family is the published class, unless the EUK-pEVE rules below decide.
         taxonomy_class=normalize_effective_eve_class(likely_family),
@@ -205,7 +223,12 @@ def _seed_to_result(seed: MergedSeed, *, eve_id: str) -> VerificationResult:
     return result
 
 
-def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
+def build_phase1_seed_surface(
+    seeds: Sequence[MergedSeed],
+    *,
+    metadata_families: dict,
+    marker_annotation_index: dict,
+) -> Phase1SeedSurface:
     """Adapt Tier-1-vetted Phase-1 seeds without running Phase 2 or Phase 3."""
     seeds = [confirmed_seed_core(seed) for seed in seeds]
     boundaries = assign_boundary_candidate_ids(
@@ -221,7 +244,12 @@ def build_phase1_seed_surface(seeds: Sequence[MergedSeed]) -> Phase1SeedSurface:
         ]
     )
     results = tuple(
-        _seed_to_result(seed, eve_id=boundary_candidate_id(boundary))
+        _seed_to_result(
+            seed,
+            eve_id=boundary_candidate_id(boundary),
+            metadata_families=metadata_families,
+            marker_annotation_index=marker_annotation_index,
+        )
         for seed, boundary in zip(seeds, boundaries, strict=True)
     )
     exported = len(results)

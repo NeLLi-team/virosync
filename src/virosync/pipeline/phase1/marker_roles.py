@@ -14,6 +14,7 @@ from typing import Final, Protocol
 
 from virosync.ablation import AblationID
 
+MIN_CAPSID_BITSCORE: Final = 10.0
 DEFAULT_A2_SINGLE_MARKER_MIN_SCORE: Final = 50.0
 A2_MAX_HMM_EVALUE: Final = 1e-5
 
@@ -154,11 +155,39 @@ def is_arbitration_selected_marker(hit: object) -> bool:
     return not override
 
 
+def passes_capsid_score_floor(hit: object) -> bool:
+    """Require ten bits only for semantic capsid/Penton admission and evidence."""
+    from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+    fields = (
+        hit
+        if isinstance(hit, dict)
+        else {
+            key: getattr(hit, key)
+            for key in ("hmm_target", "hallmark_gene", "model", "target_name", "hmm_score", "score")
+            if hasattr(hit, key)
+        }
+    )
+    model = next(
+        (fields.get(key) for key in ("hmm_target", "hallmark_gene", "model", "target_name") if fields.get(key)), ""
+    )
+    if not is_capsid_evidence_gene(model):
+        return True
+    score = fields.get("hmm_score", fields.get("score", 0.0))
+    if isinstance(score, bool) or not isinstance(score, (int, float, str)):
+        return False
+    try:
+        score = float(score)
+    except ValueError:
+        return False
+    return math.isfinite(score) and score >= MIN_CAPSID_BITSCORE
+
+
 def is_ordinary_marker_evidence(hit: object) -> bool:
     """Allow production validation or an explicit noncapsid A2 bypass for ordinary credit."""
     from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
-    if not is_arbitration_selected_marker(hit):
+    if not passes_capsid_score_floor(hit) or not is_arbitration_selected_marker(hit):
         return False
     if isinstance(hit, dict):
         status = hit.get("validation_status", "")
@@ -181,6 +210,9 @@ def decide_marker_hit_role(
 ) -> MarkerRoleDecision:
     """Assign a role from either existing ``ValidatedMarkerHit`` shape."""
     from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
+
+    if not passes_capsid_score_floor(hit):
+        return MarkerRoleDecision(MarkerRole.REJECTED, hit.validation_status)
 
     decision = decide_marker_role(
         ablation_id=ablation_id,

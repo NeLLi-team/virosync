@@ -24,8 +24,9 @@
     "seed_marker_allowlist": null,
     "taxonomy_labels_file": null
   },
-  "effective_config_sha256": "ff74052ab8a99b229a18f08ee7976267a4a2696e9e88ab0265823f8830780706",
+  "effective_config_sha256": "1db0f8a1d1c842a007739908943c376c0bbea8c46935683a32f3cd167cddf1c1",
   "execution": {
+    "generate_plots": false,
     "masking": {
       "backend": "off",
       "failure_policy": "strict",
@@ -115,7 +116,7 @@
     "rebuild_db": false
   },
   "phase2": {
-    "diamond_chunk_size": 10000,
+    "diamond_chunk_size": 100000,
     "diamond_control_min_distance": 30,
     "diamond_control_sample_size": 100,
     "diamond_flank_genes": 40,

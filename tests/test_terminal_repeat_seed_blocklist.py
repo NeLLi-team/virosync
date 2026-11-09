@@ -33,6 +33,7 @@ def _partition(tmp_path: Path, markers: list[_Marker], cores: tuple[ConfirmedSee
         boundary_taxonomy_map={},
         proteome_index={"contig": []},
         extension_bp=500,
+        metadata_families={},
     )
 
 

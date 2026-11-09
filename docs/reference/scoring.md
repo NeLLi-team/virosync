@@ -1,5 +1,23 @@
 # Scoring and acceptance
 
+## Reported capsid admission and confidence
+
+New seed and evidence admission requires a full-sequence HMM score of at least 10 bits for a
+semantic capsid, coat or Penton model. This floor also applies to validated
+EUK-pEVE-backed capsids; it does not change noncapsid thresholds. Raw reported
+hits remain provenance. Numeric scores read from TSV retain the same eligibility
+as in-memory scores; missing, malformed or nonfinite scores do not qualify.
+Once admitted, full assigned confirmed seed identities
+and spans remain protected through trimming, merging and partitioning.
+
+An eligible reported capsid supplies a MEDIUM floor only when it has validated
+viral evidence, a score of at least 75 bits, or positive viral identity in its own
+retained marker top hits. E-value alone does not supply this floor. Other eligible
+reported capsids retain a LOW witness. A neighboring viral gene is separate
+regional evidence, not a self-gene viral hit. These admission choices can remove
+real weak capsid hits; no claim of zero biological loss is made.
+
+
 ViroSync scores each candidate with fixed rules and then applies a separate
 acceptance gate. `final_confidence` is a rule-based score, not a calibrated
 probability. A confidence tier and acceptance are different decisions: a LOW
@@ -61,8 +79,29 @@ Each family counts once in a panel, and each protein supplies one family. Maximu
 family-to-protein matching enforces both limits. Repeated profiles of one family,
 or several families on one protein, do not add cores.
 
-The panel with the most cores wins. Ties go to more strong cores, then capsid
-presence, then more compatible families, then the panel name that sorts last.
+Numerical scoring also considers two pools: `PPV` combines Virophages,
+Polinton_like_viruses and Maverick_Polintons; `NCLDV_Mirus` combines
+Nucleocytoviricota and Mirusviricota. These pools affect marker score, coherence
+and the independent-core cap only. Spatial witnesses and automatic floors still
+require evidence within an original panel. No new discovery seeds follow from a pool.
+
+Each pool uses maximum family-to-locus matching. Equivalent MCPs within PPV,
+Penton/mCP and shared PolB models count once. Mirus RPB1 models map to RNAPL;
+RPB2 models map to RNAPS. NCLDV and Mirus capsid architectures remain distinct,
+as do A32 and Mirus Terminase. Each model keeps its core or support-only role.
+
+The original panel with the most cores wins. Ties go to more strong cores, then
+capsid presence, then more compatible families, then the panel name that sorts
+last. Only the pool containing this winning panel can enrich its numerical
+evidence. An unrelated pool cannot displace it. The original panel wins an equal
+evidence tie with its pool. Pool enrichment retains at least the original panel's
+coherence bonus, so a new weak core cannot dilute established strong context.
+
+For PPV subtype composition, a PLV-prefixed MCP model adds a PLV vote only when
+its catalogue core roles belong solely to Polinton_like_viruses. Models shared
+with Maverick_Polintons, or assigned only to Nucleocytoviricota, add no PLV vote
+from their names. Qualified raw reference hits and resolved subtype-specific
+taxonomy can still resolve the subtype.
 
 | Quantity | Rule |
 | --- | --- |
@@ -76,10 +115,10 @@ presence, then more compatible families, then the panel name that sorts last.
 Ordinary support-only credit needs E ≤ 1e-5 and a qualifying core in the same
 panel. It never adds a core or a HIGH floor. The capsid exception below is separate.
 
-The capsid exception is separate from catalogue core scoring. Every reported
+The capsid exception is separate from catalogue core scoring. Every eligible reported
 hit to a curated capsid, minor capsid, coat or Penton model protects its complete
-gene span and supplies a MEDIUM witness, with no HMM score, E-value, coverage or
-DIAMOND requirement. This includes semantic capsid models whose catalogue role
+gene span. A score below 10 bars new admission; eligible hits supply LOW or
+MEDIUM under the reported-capsid rule above, without an E-value-only promotion. This includes semantic capsid models whose catalogue role
 is support-only. Raw catalogue roles and validation remain in the evidence.
 The exception alone never supplies a HIGH floor or an extra qualifying core.
 The retained complete gene is sufficient for canonical acceptance, with no
@@ -92,7 +131,7 @@ A witness needs complete genes on one scaffold, in one panel:
 
 | Rule | Evidence | Floor |
 | --- | --- | --- |
-| `reported_capsid` | One complete reported semantic capsid or Penton gene, without a score, E-value or viral-reference cutoff | MEDIUM |
+| `reported_capsid` | Complete semantic capsid/Penton with score >=10; validated viral, score >=75 or own viral hit gives MEDIUM | LOW or MEDIUM |
 | `capsid` | One capsid core | MEDIUM |
 | `three_core_15kb` | Three independent core families on three proteins, in a full-gene span of at most 15,000 bp | MEDIUM |
 | `capsid_partner_5kb` | A capsid core and a different core family on a different protein, at most 5,000 bp apart edge to edge | HIGH |
@@ -185,7 +224,7 @@ Floors then raise the score:
 
 | Evidence | Floor |
 | --- | --- |
-| Capsid core and a second core in the selected panel, at any distance | HIGH, 0.7 |
+| Capsid core and a second core in one original panel, at any distance | HIGH, 0.7 |
 | Capsid core alone | MEDIUM, 0.2 |
 | Contained spatial witness | The witness tier |
 
@@ -297,3 +336,42 @@ gives the full rules.
 | Final selection outcome | `canonical_selection_outcome` in the detailed table |
 | Joint rescue | `joint_seed_provenance` in the detailed table |
 | Components, weights, floor, witnesses and supplementary module | `score_components` and `supplementary_viral_evidence` in `evidence_profiles.json` |
+
+### Resource-associated marker families
+
+Marker family association uses recognized model names first, then a qualified
+structure-profile class, then the bound resource annotation. A structure-source
+model cannot inherit its training family from annotation text when its reference
+hits do not qualify. Family provenance does not create a capsid or core-hallmark
+role. Cellular and seed-blocked models retain their internal evidence and reported
+association, but gain no new metadata-derived family-count credit.
+
+Family support selects the highest-scoring ordinary, Pfam-selected hit per base
+protein, with the first hit retained on score ties, then counts distinct model
+names. An optional seed allowlist applies after that selection. Repeat children
+use the same selected-model projection; their geometry and seed eligibility still
+use all original eligible marker spans. This also corrects earlier repeat-child
+counts that included multiple alternative models from one protein. Reporting
+retains its per-locus count unit and resolves each hit's family once.
+
+The annotation TSV is read beside the strictly resolved HMM resource, matching
+resource fingerprinting. A TSV beside a symlink alias does not supply family
+support. A missing optional TSV retains name/profile-only behavior and emits one
+warning at the native run boundary.
+
+## Confirmed cores during overlap selection
+
+The required preservation contract applies after the normal acceptance gate and
+existing unique-witness rescue. An overlap-suppressed candidate that passed those
+checks must remain canonical when one of its assigned confirmed cores is absent
+from the surviving candidates. Coverage requires the exact `ConfirmedSeed` tuple
+(`seed_id`, scaffold, start and end), fully contained in one surviving candidate.
+Coordinate overlap, a different seed identity at the same coordinates, or coverage
+split across candidates does not satisfy this contract.
+
+Restoring a candidate preserves its own coordinates, confidence, tier and assigned
+cores. It does not transfer cores to another candidate, merge intervals, promote a
+normal-gate reject or restore a branch whose rescued marker was excluded. The A6
+gate bypass is unchanged. The selection outcome is `overlap_retained_confirmed_seed`. Candidates are
+reconsidered once in the existing preference order; restored candidates add their
+fully contained core identities to coverage. No subsequent pruning occurs.

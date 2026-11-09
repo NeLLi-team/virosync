@@ -153,6 +153,7 @@ def test_authenticated_resume_rejects_lost_or_changed_source_set(tmp_path, monke
             genome_start_time=0,
             logger=logging.getLogger(__name__),
             resume_authorized=True,
+            metadata_families={},
         )
 
 
@@ -318,6 +319,7 @@ def test_successful_ml_support_uses_shared_controller_and_host_stop(tmp_path, mo
         config=PipelineConfig().with_overrides(resume=False, boundary_taxonomy_ml_enabled=True, threads=1),
         genome_start_time=0,
         logger=logging.getLogger(__name__),
+        metadata_families={},
     )
     assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (1000, 2200)
     assert result.refined_boundaries[0].right_stop == 2300

@@ -347,6 +347,7 @@ def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
         ],
         config=config,
         **arguments,
+        metadata_families={},
     )
     failed = phase2._run_phase2_subflow(
         merged_seeds=[
@@ -361,6 +362,7 @@ def test_phase2_searched_envelope_preserves_core_with_ml_off_or_failed(
         ],
         config=config.with_overrides(boundary_taxonomy_ml_enabled=True),
         **arguments,
+        metadata_families={},
     )
     assert off.refined_boundaries == failed.refined_boundaries
     assert (off.refined_boundaries[0].start, off.refined_boundaries[0].end) == (1300, expected_end)
@@ -742,3 +744,55 @@ def test_empty_top10_independent_evidence_resets_host_run_without_growth(directi
     assert (boundary.start, boundary.end) == (start, end)
     assert boundary.confirmed_seeds == seed.confirmed_seeds
     assert boundary.host_stop_available is True
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+@pytest.mark.parametrize("support_kind", ["foreign", "ml"])
+def test_nonviral_growth_support_does_not_reset_host_count(direction, support_kind):
+    genes = [gene(f"h{i}", 2100 + i * 200, 2200 + i * 200, host=True) for i in range(4)]
+    middle = genes[2]
+    middle.host = False
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    start, end = (1000, 2000) if direction == 1 else (8000, 9000)
+    seed = MergedSeed(
+        "s", start, end, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", start, end),)
+    )
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
+    support = frozenset({middle.id}) if support_kind == "ml" else frozenset()
+    with patch(
+        "virosync.pipeline.phase2.seed_extension.host_lineage_share",
+        side_effect=lambda record, model: 1.0 if record.host else (0.0 if support_kind == "foreign" else 0.2),
+    ):
+        unblocked = extend_confirmed_seed(
+            seed, [middle], {middle.id: middle}, (0, 10000), model, 0.35, ml_support=support
+        )
+        blocked = extend_confirmed_seed(
+            seed, genes, {item.id: item for item in genes}, (0, 10000), model, 0.35, ml_support=support
+        )
+
+    assert (unblocked.start, unblocked.end) == ((1000, 2600) if direction == 1 else (7400, 9000))
+    assert (blocked.right_stop if direction == 1 else blocked.left_stop) == (2100 if direction == 1 else 7900)
+    assert (blocked.right_stop_reason if direction == 1 else blocked.left_stop_reason) == "host_stop"
+    assert (blocked.start, blocked.end) == (start, end)
+    assert blocked.confirmed_seeds == seed.confirmed_seeds
+
+
+def test_nonviral_foreign_support_does_not_reset_joint_host_count():
+    from virosync.pipeline.phase3.joint_seed_rescue import _gap_has_host_barrier
+
+    genes = [
+        gene("h1", 2100, 2200, host=True),
+        gene("h2", 2300, 2400, host=True),
+        gene("foreign", 2500, 2600),
+        gene("h3", 2700, 2800, host=True),
+    ]
+    children = (SimpleNamespace(end=2000), SimpleNamespace(start=3000))
+    with patch(
+        "virosync.pipeline.phase3.joint_seed_rescue.host_lineage_share",
+        side_effect=lambda record, model: 1.0 if record.host else 0.0,
+    ):
+        blocked = _gap_has_host_barrier(children, genes, {g.id: g for g in genes}, None, 0.35, frozenset())
+
+    assert blocked is True

@@ -14,6 +14,7 @@ SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from virosync.orchestration._flows.single_genome.run_state import RUN_STATE_SCHEMA_VERSION
 from virosync.output_contract import coordinate_contract_metadata
 
 METADATA_FILENAMES = (
@@ -66,8 +67,10 @@ def _metadata_errors(path: Path) -> list[str]:
     errors = []
     contract_payload = payload
     if path.name == "virosync_run_state.json":
-        if payload.get("schema_version") != 3 or payload.get("status") != "success":
-            errors.append(f"{path}: authoritative run state is not schema-v3 success. {CLEAN_RUN_GUIDANCE}")
+        if payload.get("schema_version") != RUN_STATE_SCHEMA_VERSION or payload.get("status") != "success":
+            errors.append(
+                f"{path}: authoritative run state is not schema-v{RUN_STATE_SCHEMA_VERSION} success. {CLEAN_RUN_GUIDANCE}"
+            )
         identities = payload.get("identities")
         contract_payload = identities if isinstance(identities, dict) else {}
     for field, expected in coordinate_contract_metadata().items():

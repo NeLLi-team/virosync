@@ -1,7 +1,7 @@
 """Host signature modeling for EUK-like marker hits.
 
 Builds a weighted token model from eligible marker records using their first ten
-DIAMOND matches. Each projected domain contributes separately. The caller excludes
+DIAMOND matches. Each full-protein query contributes once. The caller excludes
 proteins with viral marker-search evidence or reported capsids before host search.
 Used for host-like scoring and outward extension stopping.
 """
@@ -15,38 +15,28 @@ from math import log
 from pathlib import Path
 
 from virosync.pipeline.taxonomy_utils import (
-    EUK_PEVE_LABEL,
     EUK_PEVE_PREFIX,
     TaxonomyFingerprint,
-    aggregate_taxonomy_substrings,
     compute_hit_weight,
     is_assigned_level,
-    iter_taxonomy_tokens,
     resolve_org_id,
 )
 
 _TAXONOMY_LOOKUP: TaxonomyLabelLookup | None = None
+HOST_TOKEN_CACHE_ATTRIBUTE = "_token_cache"
 
 # Process-level cache so the large taxonomy-label TSV (≈168k rows) is parsed
 # once per (path, size, mtime) instead of on every phase/task that needs it.
 _LABEL_CACHE: dict = {}
 
-# Domain-level tokens too generic for host signature comparison.
-# Every eukaryotic gene shares "euk", so it dominates the model
-# without providing discriminative signal between host and viral.
-# Viral roots (ncldv, mirus, phage) are excluded to avoid
-# artificially inflating overlap between host and viral genes. So is the EUK-pEVE
-# root: it is viral-like and never part of a host's own lineage.
-_PEVE_ROOT = EUK_PEVE_LABEL.lower()
-DOMAIN_TOKENS = {"euk", "bac", "arc", "vir", "ncldv", "mirus", "phage", _PEVE_ROOT}
-# Only these domains can root a host lineage. MITO and PLASTID carry no ranks of
-# their own, so a pooled organellar label must never compete with named clades.
-_CELLULAR_ROOTS = ("euk", "bac", "arc")
-_MAJORITY_SHARE = 0.5
-_CREDIT_DIGITS = 12
-# A pEVE lineage carries this suffix on every named rank, even under an EUK root.
-_PEVE_RANK_SUFFIX = "-peve"
-# Label fillers. Taxonomy tokens keep them, but they name no clade.
+_CELLULAR_DOMAINS = {
+    "euk": "eukaryota",
+    "eukaryota": "eukaryota",
+    "bac": "bacteria",
+    "bacteria": "bacteria",
+    "arc": "archaea",
+    "archaea": "archaea",
+}
 _RANK_FILLERS = frozenset({"na", "singleton"})
 
 
@@ -102,8 +92,7 @@ class HostSignatureModel:
     min_token_length: int = 3
     host_prefixes: list[str] = field(default_factory=list)
     weight_mode: str = "rank"
-    # Hit weight per full lineage. Tokens lose their parents, so only this tree
-    # can show which clade holds a majority at each rank.
+    # Full labels and hit weights retained as model-construction provenance.
     lineage_weights: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -126,8 +115,6 @@ class HostSignatureModel:
     def from_dict(cls, payload: dict | None) -> HostSignatureModel:
         if not payload:
             return cls()
-        if payload.get("token_weights") and not isinstance(payload.get("lineage_weights"), dict):
-            raise ValueError("host signature model has no lineage_weights; rerun Phase 1")
         return cls(
             token_weights=dict(payload.get("token_weights") or {}),
             token_counts=dict(payload.get("token_counts") or {}),
@@ -138,28 +125,6 @@ class HostSignatureModel:
             host_prefixes=list(payload.get("host_prefixes") or []),
             weight_mode=str(payload.get("weight_mode") or "rank"),
         )
-
-
-@dataclass(frozen=True, slots=True)
-class HostRank:
-    """One rank of the host signature.
-
-    ``credits`` gives each clade its weight relative to ``leader``, and
-    ``support`` is the leader's share of the named weight at this rank.
-    """
-
-    position: int
-    leader: str
-    credits: dict[str, float]
-    support: float
-
-
-@dataclass(frozen=True, slots=True)
-class HostLineage:
-    """The host's domain and the ranks of its signature, top down."""
-
-    root: str
-    ranks: tuple[HostRank, ...]
 
 
 def is_host_marker(hmm_target: str) -> bool:
@@ -193,7 +158,7 @@ def _parse_float_list(values: list[str]) -> list[float]:
 def _parse_top10_hits(hit) -> list[tuple[str, float, float, float]]:
     if isinstance(hit, dict):
         targets = _split_csv_field(hit.get("top10_targets"))
-        bits = _parse_float_list(_split_csv_field(hit.get("top10_bitscores")))
+        bits = _parse_float_list(_split_csv_field(hit.get("top10_bits", hit.get("top10_bitscores"))))
         pidents = _parse_float_list(_split_csv_field(hit.get("top10_pidents")))
         evalues = _parse_float_list(_split_csv_field(hit.get("top10_evalues")))
         best_target = hit.get("best_hit_target", "")
@@ -226,41 +191,35 @@ def _parse_top10_prefixes(hit) -> list[str]:
     return prefixes
 
 
-def _tokens_for_target(
-    target: str,
-    taxonomy_lookup: dict | None,
-    min_token_length: int,
-) -> list[str]:
-    if not target or not taxonomy_lookup:
+def _lineage_tokens(lineage: str, min_token_length: int) -> list[str]:
+    levels = [level.strip().lower() for level in lineage.split("|")]
+    domains = {_CELLULAR_DOMAINS[level] for level in levels if level in _CELLULAR_DOMAINS}
+    if len(domains) != 1 or any(level.endswith("-peve") for level in levels):
         return []
-    org_id = resolve_org_id(target, taxonomy_lookup)
-    taxonomy_string = taxonomy_lookup.get(org_id, "")
-    tokens = iter_taxonomy_tokens(taxonomy_string, min_token_length)
-    if tokens:
-        return [t.lower() for t in tokens]
-    if "__" in org_id:
-        prefix = org_id.split("__", 1)[0]
-        if len(prefix) >= min_token_length:
-            return [prefix.lower()]
-    return []
+    if any(
+        level in {"mito", "plastid", "vir", "ncldv", "mirus", "phage", "ppv", "plv", "vp", "cress"} for level in levels
+    ):
+        return []
+    # Eukaryota validates cellular origin but contributes no host signature token.
+    return [
+        *(domain for domain in domains if domain != "eukaryota"),
+        *(
+            level
+            for level in levels
+            if level not in _CELLULAR_DOMAINS
+            and is_assigned_level(level, min_token_length)
+            and level not in _RANK_FILLERS
+        ),
+    ]
 
 
-def _target_has_prefix(target: str, prefixes: set[str] | None) -> bool:
-    if not prefixes:
-        return True
-    if not target:
-        return False
-    org_id = target.split("|", 1)[0]
-    return any(org_id.startswith(prefix) for prefix in prefixes)
-
-
-def _filter_hits_by_prefix(
-    top10_hits: list[tuple[str, float, float, float]],
-    prefixes: set[str] | None,
-) -> list[tuple[str, float, float, float]]:
-    if not prefixes:
-        return top10_hits
-    return [hit for hit in top10_hits if _target_has_prefix(hit[0], prefixes)]
+def _tokens_for_target(target: str, taxonomy_lookup: dict | None, min_token_length: int) -> list[str]:
+    # Both identities are required: a bad label must not turn a viral target into host.
+    namespace = target.split("__", 1)[0].lower()
+    if namespace not in _CELLULAR_DOMAINS or not taxonomy_lookup:
+        return []
+    lineage = taxonomy_lookup.get(resolve_org_id(target, taxonomy_lookup), "")
+    return _lineage_tokens(lineage, min_token_length)
 
 
 def _append_weights(
@@ -312,6 +271,7 @@ def build_host_signature_model(
     token_counts: dict[str, int] = {}
     token_bits: dict[str, list[float]] = {}
     lineage_weights: dict[str, float] = {}
+    seen_queries: set[tuple[str, str]] = set()
 
     for hit in marker_hits:
         top10_prefixes = _parse_top10_prefixes(hit)[:10]
@@ -321,42 +281,24 @@ def build_host_signature_model(
             continue
         if host_prefixes and not any(p in host_prefixes for p in top10_prefixes):
             continue
-        top10_hits = _parse_top10_hits(hit)[:10]
-        top10_hits = _filter_hits_by_prefix(top10_hits, host_prefixes)
-        if not top10_hits or not taxonomy_lookup:
+        query = str(_get_record_attr(hit, "query_porf", "")).split("|aa", 1)[0]
+        query_key = (str(_get_record_attr(hit, "scaffold", "")), query)
+        if query and query_key in seen_queries:
             continue
-
-        fingerprint = aggregate_taxonomy_substrings(
-            top10_hits,
-            taxonomy_lookup,
-            min_token_length=min_token_length,
-            weight_mode=weight_mode,
-        )
-        for token, weight in fingerprint.weighted_tokens.items():
-            if token in DOMAIN_TOKENS:
-                continue
-            token_weights[token] = token_weights.get(token, 0.0) + weight
-        for token, count in fingerprint.raw_tokens.items():
-            if token in DOMAIN_TOKENS:
-                continue
-            token_counts[token] = token_counts.get(token, 0) + count
-
-        for rank, (target, bits, _, _) in enumerate(top10_hits):
+        if query:
+            seen_queries.add(query_key)
+        # Eligibility belongs to the record; do not drop cellular noise or rerank hits.
+        for rank, (target, bits, _, _) in enumerate(_parse_top10_hits(hit)[:10]):
             weight = compute_hit_weight(rank, bits, weight_mode)
-            if weight <= 0:
+            tokens = _tokens_for_target(str(target), taxonomy_lookup, min_token_length)
+            if weight <= 0 or not tokens:
                 continue
-            lineage = taxonomy_lookup.get(resolve_org_id(str(target), taxonomy_lookup), "")
-            if lineage:
-                key = lineage_key(lineage, min_token_length)
-                lineage_weights[key] = lineage_weights.get(key, 0.0) + weight
-            tokens = _tokens_for_target(
-                str(target),
-                taxonomy_lookup,
-                min_token_length,
-            )
+            lineage = taxonomy_lookup[resolve_org_id(str(target), taxonomy_lookup)]
+            key = lineage_key(lineage, min_token_length)
+            lineage_weights[key] = lineage_weights.get(key, 0.0) + weight
             for token in tokens:
-                if token in DOMAIN_TOKENS:
-                    continue
+                token_weights[token] = token_weights.get(token, 0.0) + weight
+                token_counts[token] = token_counts.get(token, 0) + 1
                 _append_weights(token_bits, token, weight, max_bits_per_token)
 
     max_weight = max(token_weights.values()) if token_weights else 0.0
@@ -379,204 +321,85 @@ def _get_record_attr(record, name: str, default=None):
     return getattr(record, name, default)
 
 
-def _normalize_weights(weights: Mapping[str, float]) -> dict[str, float]:
-    total = sum(weights.values())
-    if total <= 0:
-        return {}
-    return {k: v / total for k, v in weights.items()}
+def score_host_signature(fingerprint: TaxonomyFingerprint, model: HostSignatureModel) -> float:
+    """Average learned host-token prevalence over filtered cellular tokens.
 
-
-def _weighted_jaccard(
-    gene_weights: Mapping[str, float],
-    host_weights: Mapping[str, float],
-) -> float:
-    gene_norm = _normalize_weights(gene_weights)
-    host_norm = _normalize_weights(host_weights)
-    if not gene_norm or not host_norm:
-        return 0.0
-    all_tokens = set(gene_norm.keys()) | set(host_norm.keys())
-    overlap = 0.0
-    union = 0.0
-    for token in all_tokens:
-        g = gene_norm.get(token, 0.0)
-        h = host_norm.get(token, 0.0)
-        overlap += min(g, h)
-        union += max(g, h)
-    return overlap / union if union > 0 else 0.0
-
-
-def score_host_signature(
-    fingerprint: TaxonomyFingerprint,
-    model: HostSignatureModel,
-) -> float:
-    """Score a gene fingerprint against the host signature distribution.
-
-    Domain-level tokens (euk, bac, etc.) are excluded from both sides
-    before comparison because they are too generic to separate host from viral.
+    Call host_lineage_share for records: a generic fingerprint cannot recover
+    namespace exclusions or the retained-hit denominator.
     """
-    if not fingerprint or not model or not model.token_weights:
-        return 0.0
-    gene_weights = {k: v for k, v in fingerprint.weighted_tokens.items() if k not in DOMAIN_TOKENS}
-    host_weights = {k: v for k, v in model.token_weights.items() if k not in DOMAIN_TOKENS}
-    return _weighted_jaccard(gene_weights, host_weights)
-
-
-def _fingerprint_from_record(
-    record,
-    model: HostSignatureModel,
-) -> TaxonomyFingerprint | None:
-    if not record or not model:
-        return None
-    fp = _get_record_attr(record, "taxonomy_fingerprint", None)
-    if isinstance(fp, TaxonomyFingerprint):
-        return fp
-    if isinstance(fp, dict) and "weighted_tokens" in fp:
-        return TaxonomyFingerprint(
-            weighted_tokens=fp.get("weighted_tokens", {}),
-            raw_tokens=fp.get("raw_tokens", {}),
-        )
-    top10_hits = _parse_top10_hits(record)
-    taxonomy_lookup = _TAXONOMY_LOOKUP
-    if not taxonomy_lookup or not top10_hits:
-        return None
-    return aggregate_taxonomy_substrings(
-        top10_hits,
-        taxonomy_lookup,
-        min_token_length=model.min_token_length,
-        weight_mode=model.weight_mode,
-    )
+    gene = {
+        token: weight
+        for token, weight in fingerprint.weighted_tokens.items()
+        if _CELLULAR_DOMAINS.get(token.strip().lower()) != "eukaryota"
+    }
+    host, host_max = _host_distribution(model)
+    norm = sum(gene.values()) * host_max
+    return sum(weight * host.get(token, 0.0) for token, weight in gene.items()) / norm if norm else 0.0
 
 
 def lineage_key(lineage: str, min_token_length: int) -> str:
-    """Write a lineage with its rank positions kept and unassigned ranks left empty."""
-    root, *ranks = [level.strip() for level in str(lineage).split("|")]
-    return "|".join([root.lower(), *(_rank_name(rank, min_token_length) for rank in ranks)])
+    """Record the retained cellular taxonomy names for construction provenance."""
+    return "|".join(_lineage_tokens(lineage, min_token_length))
 
 
-def _rank_name(rank: str, min_token_length: int) -> str:
-    name = rank.lower()
-    if not is_assigned_level(rank, min_token_length):
-        return ""
-    return "" if name in _RANK_FILLERS or name.endswith(_PEVE_RANK_SUFFIX) else name
+def host_token_weights(model: HostSignatureModel) -> dict[str, float]:
+    """Return learned tokens, or configured tokens when no cellular model exists."""
+    return _host_distribution(model)[0]
 
 
-def dominant_lineage_tokens(model: HostSignatureModel) -> frozenset[str]:
-    """The clades that hold a majority at their rank. Empty without a host signature."""
-    return frozenset(rank.leader for rank in host_lineage(model).ranks if rank.support > _MAJORITY_SHARE)
+def _host_distribution(model: HostSignatureModel) -> tuple[dict[str, float], float]:
+    configured = os.environ.get("VIROSYNC_HOST_LINEAGE", "")
+    fallback_key = (configured, model.min_token_length) if configured else ("", 0)
+    cache = getattr(model, HOST_TOKEN_CACHE_ATTRIBUTE, None)
+    # Snapshot equality catches in-place edits without rebuilding the vector and
+    # its maximum in Python for every boundary gene. The model is fixed during a run.
+    if cache is not None and cache[0] == model.token_weights and cache[1] == fallback_key:
+        return cache[2], cache[3]
+    weights: dict[str, float] = {}
+    for token, weight in model.token_weights.items():
+        token = token.strip().lower()
+        if weight <= 0 or token in _RANK_FILLERS or token in {"mito", "plastid"} or token.endswith("-peve"):
+            continue
+        if token not in _CELLULAR_DOMAINS and not is_assigned_level(token, 0):
+            continue
+        token = _CELLULAR_DOMAINS.get(token, token)
+        if token == "eukaryota":
+            continue
+        weights[token] = weights.get(token, 0.0) + weight
+    if not weights and configured:
+        weights = dict.fromkeys(_lineage_tokens(configured, model.min_token_length), 1.0)
+    norm = max(weights.values(), default=0.0)
+    setattr(model, HOST_TOKEN_CACHE_ATTRIBUTE, (dict(model.token_weights), fallback_key, weights, norm))
+    return weights, norm
 
 
 def host_stop_available(model: HostSignatureModel | None) -> bool:
-    """Whether the signature names any cellular clade that a host stop can act on."""
-    return model is not None and bool(host_lineage(model).ranks)
-
-
-def host_lineage(model: HostSignatureModel) -> HostLineage:
-    """Read the host signature top down: the domain, then one rank at a time."""
-    paths = [
-        (levels, weight)
-        for key, weight in model.lineage_weights.items()
-        if weight > 0 and (levels := key.split("|"))[0] in _CELLULAR_ROOTS
-    ]
-    root_weights = dict.fromkeys(_CELLULAR_ROOTS, 0.0)
-    for levels, weight in paths:
-        root_weights[levels[0]] += weight
-    root = max(_CELLULAR_ROOTS, key=lambda name: root_weights[name])
-    if not root_weights[root]:
-        configured = os.environ.get("VIROSYNC_HOST_LINEAGE")
-        if configured:
-            levels = lineage_key(configured, model.min_token_length).split("|")
-            return HostLineage(levels[0], _signature_ranks([(levels, 1.0)]))
-        return HostLineage("", ())
-    return HostLineage(root, _signature_ranks([path for path in paths if path[0][0] == root]))
-
-
-def _signature_ranks(paths: list[tuple[list[str], float]]) -> tuple[HostRank, ...]:
-    """Follow the signature down while one clade holds a majority of its siblings.
-
-    Every clade at a rank keeps credit in proportion to its weight. The walk
-    stops below the first rank without a majority, which stays in the signature.
-    An unassigned level neither votes nor contradicts. Where the unassigned weight
-    that names something below exceeds the largest named clade, the rank says
-    nothing, so it is skipped and every branch stays in contention.
-    """
-    ranks: list[HostRank] = []
-    for position in range(1, max(len(levels) for levels, _ in paths)):
-        clades: dict[str, float] = {}
-        unassigned = 0.0
-        for levels, weight in paths:
-            clade = levels[position] if position < len(levels) else ""
-            if clade:
-                clades[clade] = clades.get(clade, 0.0) + weight
-            elif any(levels[position + 1 :]):
-                unassigned += weight
-        if not clades or unassigned > max(clades.values()):
-            continue
-        leader = max(clades, key=lambda clade: (clades[clade], clade))
-        credits = {clade: weight / clades[leader] for clade, weight in clades.items()}
-        ranks.append(HostRank(position, leader, credits, round(clades[leader] / sum(clades.values()), _CREDIT_DIGITS)))
-        if ranks[-1].support <= _MAJORITY_SHARE:
-            break
-        paths = [path for path in paths if position >= len(path[0]) or path[0][position] in ("", leader)]
-    return tuple(ranks)
-
-
-def host_rank_credit(lineage: str, host: HostLineage, min_token_length: int) -> float:
-    """Return how far a lineage follows the host signature, from 0 to 1.
-
-    Each rank adds the credit of the lineage's clade, weighted by how strongly
-    the signature supports that rank. Credit ends below the first clade that is
-    not the leader of its rank, and an unassigned level adds nothing.
-    """
-    levels = lineage_key(lineage, min_token_length).split("|")
-    if levels[0] != host.root or not host.ranks:
-        return 0.0
-    earned = 0.0
-    for rank in host.ranks:
-        level = levels[rank.position] if rank.position < len(levels) else ""
-        if not level:
-            continue
-        earned += rank.support * rank.credits.get(level, 0.0)
-        if level != rank.leader:
-            break
-    # Rounded so that a credit of exactly a threshold does not fall below it.
-    return round(earned / sum(rank.support for rank in host.ranks), _CREDIT_DIGITS)
+    """Whether learned or configured cellular tokens can support a host stop."""
+    return model is not None and bool(host_token_weights(model))
 
 
 def host_lineage_share(record, model: HostSignatureModel) -> float:
-    """Rank-weighted share of a gene's ten hits that sit in the host lineage.
+    """Return mean host-token prevalence scaled by retained cellular hit mass.
 
-    Each hit contributes how far its lineage follows the host signature, so a
-    hit on the host's own lineage counts fully, a relative or a clade the
-    signature shares counts partly, and a viral or foreign hit counts nothing.
-    This replaces the weighted Jaccard against the aggregate model, which
-    rejected host genes wherever the host clade is densely sequenced.
-
-    An EUK-pEVE hit is viral-like and never host. It counts in the total and
-    adds no share.
+    Keep original hit ranks, including viral, pEVE, organelle and unknown weight
+    in the denominator. This score is a similarity, not a host probability.
     """
-    host = getattr(model, "_dominant_cache", None)
-    if host is None:
-        host = host_lineage(model)
-        object.__setattr__(model, "_dominant_cache", host)
-    if not host.ranks:
-        return 0.0
-    hits = _parse_top10_hits(record)
-    lookup = _TAXONOMY_LOOKUP
-    if not hits or not lookup:
-        return 0.0
-    total = weighted = 0.0
-    for rank, (target, bits, _pident, _evalue) in enumerate(hits):
+    weights: dict[str, float] = {}
+    total = assigned = 0.0
+    for rank, (target, bits, _, _) in enumerate(_parse_top10_hits(record)[:10]):
         weight = compute_hit_weight(rank, bits, model.weight_mode)
         if weight <= 0:
             continue
         total += weight
-        lineage = lookup.get(resolve_org_id(str(target), lookup), "")
-        if str(target).startswith(EUK_PEVE_PREFIX):
-            # Viral-like, never host: counts in the denominator and adds no share,
-            # whatever rank names its lineage carries.
+        tokens = _tokens_for_target(str(target), _TAXONOMY_LOOKUP, model.min_token_length)
+        if not tokens:
             continue
-        weighted += weight * host_rank_credit(lineage, host, model.min_token_length)
-    return round(weighted / total, _CREDIT_DIGITS) if total else 0.0
+        assigned += weight
+        for token in tokens:
+            weights[token] = weights.get(token, 0.0) + weight
+    if not total or not assigned:
+        return 0.0
+    return score_host_signature(TaxonomyFingerprint(weighted_tokens=weights), model) * assigned / total
 
 
 def host_signature_density_evalue_weighted(
@@ -593,12 +416,7 @@ def host_signature_density_evalue_weighted(
     host_prefix_set = set(host_prefixes or [])
 
     for record in gene_records:
-        fingerprint = _fingerprint_from_record(record, model)
-        if not fingerprint:
-            scores.append(0.0)
-            continue
-
-        score = score_host_signature(fingerprint, model)
+        score = host_lineage_share(record, model)
         scores.append(score)
         has_host_prefix = True
         if host_prefix_set:

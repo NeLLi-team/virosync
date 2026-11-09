@@ -1,10 +1,11 @@
 """Coreless LOW acceptance uses final-interval, species-masked gene evidence."""
 
+from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks, find_spatial_witnesses
 from virosync.pipeline.phase3.evidence_synthesizer import VerificationResult
 from virosync.pipeline.phase3.output_generator import evaluate_v2_quality_gate
 
@@ -258,7 +259,7 @@ def test_missing_scaffold_is_unavailable_instead_of_silently_outside():
 def test_only_scored_qualifying_core_exempts_low():
     result = candidate(end=6000)
     result.hallmark_assessment = SimpleNamespace(
-        summary=SimpleNamespace(qualifying_evidence_ids=("core",), panel="NCLDV")
+        summary=SimpleNamespace(qualifying_evidence_ids=("core",), panel="NCLDV"), witnesses=()
     )
     result.hallmark_evidence = [
         SimpleNamespace(
@@ -279,9 +280,40 @@ def test_extra_low_rule_does_not_touch_higher_tiers(tier):
     assert evaluate_v2_quality_gate(candidate(end=6000, confidence_tier=tier)).kept
 
 
-def test_spatial_rescue_does_not_bypass_coreless_low_requirement():
-    with patch("virosync.pipeline.phase3.output_generator.has_spatial_rescue", return_value=True):
-        assert evaluate_v2_quality_gate(candidate(end=6000)).reason == "low_gene_evidence_unavailable"
+@pytest.mark.parametrize("mutation", ["unrelated", "stale"])
+def test_spatial_rescue_does_not_bypass_coreless_low_requirement(mutation):
+    result = candidate(end=6000)
+    evidence = HallmarkEvidence(
+        query_porf="capsid|aa1-20",
+        gene="capsid",
+        scaffold="s",
+        start=100,
+        end=300,
+        model="VP_Penton_1",
+        evalue=1,
+        score=10,
+        domain_score=None,
+        query_start=1,
+        query_end=20,
+        validation_status="unvalidated",
+        viral_top10_max_pident=0,
+        source="retained_hmm",
+    )
+    result.hallmark_evidence = [evidence]
+    result.hallmark_witnesses = find_spatial_witnesses([evidence])
+    result.hallmark_assessment = assess_hallmarks(result)
+    result.score_components = {"hallmark_floor": 0.0}
+    assert evaluate_v2_quality_gate(result).reason == "reported_capsid_low_retention_pass"
+    if mutation == "unrelated":
+        result.hallmark_assessment = replace(
+            result.hallmark_assessment,
+            witnesses=(replace(result.hallmark_assessment.witnesses[0], rule="unrelated"),),
+        )
+    else:
+        result.hallmark_evidence = [replace(evidence, score=75)]
+    assert evaluate_v2_quality_gate(result).reason == "low_gene_evidence_unavailable"
+    result.gene_taxonomy_records = [gene("a"), gene("b", start=500, end=700)]
+    assert evaluate_v2_quality_gate(result).kept
 
 
 def test_cress_route_does_not_bypass_coreless_low_requirement():

@@ -580,6 +580,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
     application = ApplicationConfig.from_dict(
         {
             "schema_version": 1,
+            "execution": {"generate_plots": not enable},
             "compute": {"device": "cuda" if not enable else "cpu"},
             "phase1": {
                 "rebuild_db": not enable,
@@ -598,6 +599,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
         flags = [
             "--rebuild-db",
             "--frameshift-screening",
+            "--plots",
             "--enable-phylogenetic",
             "--tmvec",
             "--tmvec-gpu",
@@ -607,6 +609,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
         flags = [
             "--no-rebuild-db",
             "--no-frameshift-screening",
+            "--no-plots",
             "--disable-phylogenetic",
             "--no-tmvec",
             "--no-tmvec-gpu",
@@ -627,6 +630,7 @@ def test_paired_boolean_flags_cross_the_real_cli_boundary(
 
     assert result.exit_code == 0, result.output
     config = received["config"]
+    assert config.execution.generate_plots is enable
     assert config.phase1.rebuild_db is enable
     assert config.phase1.frameshift_screening_enabled is enable
     assert config.phase3.enable_phylogenetic is enable
@@ -897,9 +901,11 @@ def test_unused_marker_build_inputs_are_not_broadly_existence_checked(
     _validate_runtime_config(config)
 
 
-def test_runtime_config_rejects_graphviz_render_failure(
+@pytest.mark.parametrize("plots", [False, True])
+def test_runtime_config_checks_graphviz_only_for_plots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    plots: bool,
 ) -> None:
     hmm = tmp_path / "markers.hmm"
     marker = tmp_path / "marker.dmnd"
@@ -920,7 +926,11 @@ def test_runtime_config_rejects_graphviz_render_failure(
         lambda: "Graphviz cannot render the required sfdp PNG report",
     )
 
-    with pytest.raises(click.ClickException, match="Graphviz cannot render"):
+    config = config.with_overrides(generate_plots=plots)
+    if plots:
+        with pytest.raises(click.ClickException, match="Graphviz cannot render"):
+            _validate_runtime_config(config)
+    else:
         _validate_runtime_config(config)
 
 
@@ -1130,6 +1140,7 @@ def test_shipped_yaml_reaches_real_cli_runner_boundary(
 # different regions with no warning. The defaults were aligned to the YAML; this
 # test fails if they drift apart again.
 RESULT_AFFECTING_DEFAULTS = (
+    ("execution", "generate_plots"),
     ("phase1", "initial_window_bp"),
     ("phase1", "initial_window_genes"),
     ("phase1", "merge_distance"),
@@ -1165,6 +1176,7 @@ def test_result_affecting_defaults_match_the_shipped_config():
 # exported Python API on the old values. Flow argument names differ from the config
 # field names, hence the explicit mapping.
 FLOW_ARG_FOR_FIELD = {
+    ("execution", "generate_plots"): "generate_plots",
     ("phase1", "initial_window_bp"): "initial_window_bp",
     ("phase1", "initial_window_genes"): "initial_window_genes",
     ("phase1", "merge_distance"): "merge_distance",
@@ -1215,3 +1227,22 @@ def test_v9g_defaults_reach_native_runner(preset: str | None, tmp_path: Path, mo
         genome_id="test",
         config=config,
     ) == (20000, 10, 0, 40)
+
+
+@pytest.mark.parametrize("overrides, expected", [({}, 100000), ({"boundary_diamond_chunk_size": 12345}, 12345)])
+def test_configless_boundary_chunk_reaches_native_runner(
+    overrides: dict, expected: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public flow materializes the shared default and preserves explicit values."""
+    from virosync.orchestration._flows.single_genome import orchestrator
+
+    def capture_config(*, config: PipelineConfig, **kwargs: object) -> int:
+        return config.phase2.diamond_chunk_size
+
+    monkeypatch.setattr(orchestrator, "_single_genome_flow_impl", capture_config)
+    assert (
+        orchestrator.single_genome_flow(
+            genome_path=tmp_path / "genome.fna", output_dir=tmp_path, genome_id="test", config=None, **overrides
+        )
+        == expected
+    )

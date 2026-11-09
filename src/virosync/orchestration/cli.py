@@ -398,6 +398,7 @@ def _build_pipeline_config(
     phase1_extension_kb: int | None = None,
     phase1_merge_distance: int | None = None,
     frameshift_screening_enabled: bool | None = None,
+    generate_plots: bool | None = None,
     enable_phylogenetic: bool | None = None,
     skip_masking: bool | None = None,
     skip_structural: bool | None = None,
@@ -441,6 +442,7 @@ def _build_pipeline_config(
         "extension_kb": phase1_extension_kb,
         "merge_distance": phase1_merge_distance,
         "frameshift_screening_enabled": frameshift_screening_enabled,
+        "generate_plots": generate_plots,
         "skip_masking": skip_masking,
         "skip_structural": skip_structural,
         "high_tier_threshold": high_tier_threshold,
@@ -531,9 +533,10 @@ def _validate_runtime_config(config: PipelineConfig) -> None:
     """Fail with all resource/config errors after explicit resolution."""
     errors = config.validate()
     errors.extend(config.validate_database_paths(check_files=True))
-    graphviz_error = graphviz_runtime_error()
-    if graphviz_error is not None:
-        errors.append(graphviz_error)
+    if config.execution.generate_plots:
+        graphviz_error = graphviz_runtime_error()
+        if graphviz_error is not None:
+            errors.append(graphviz_error)
     if config.phase3.run_gvclass:
         if config.phase3.gvclass_path is None:
             errors.append("phase3.run_gvclass requires phase3.gvclass_path")
@@ -1325,6 +1328,12 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     help="Phase 1: max gap to merge overlapping regions (bp, default: config value or 0)",
 )
 @click.option(
+    "--plots/--no-plots",
+    "generate_plots",
+    default=None,
+    help="Render the EVE notebook and figures (off by default; scientific exports are always produced)",
+)
+@click.option(
     "--frameshift-screening/--no-frameshift-screening",
     "frameshift_screening_enabled",
     default=None,
@@ -1442,6 +1451,7 @@ def run(
     phase1_extension_kb: int | None,
     phase1_merge_distance: int | None,
     frameshift_screening_enabled: bool | None,
+    generate_plots: bool | None,
     device: str | None,
     search_backend: str | None,
     gpu_id: int | None,
@@ -1508,6 +1518,7 @@ def run(
         phase1_extension_kb=explicit("phase1_extension_kb", phase1_extension_kb),
         phase1_merge_distance=explicit("phase1_merge_distance", phase1_merge_distance),
         frameshift_screening_enabled=explicit("frameshift_screening_enabled", frameshift_screening_enabled),
+        generate_plots=explicit("generate_plots", generate_plots),
         enable_phylogenetic=explicit("enable_phylogenetic", enable_phylogenetic),
         skip_masking=explicit("skip_masking", skip_masking),
         skip_structural=explicit("skip_structural", skip_structural),

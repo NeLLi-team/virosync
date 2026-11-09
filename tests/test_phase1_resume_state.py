@@ -25,7 +25,7 @@ from virosync.orchestration._flows.single_genome.phase1_state import (
     write_phase1_state,
 )
 from virosync.pipeline.hallmark_evidence import collect_hallmark_evidence, find_spatial_witnesses, summarize_hallmarks
-from virosync.pipeline.host_signatures import HostSignatureModel
+from virosync.pipeline.host_signatures import HostSignatureModel, host_token_weights, score_host_signature
 from virosync.pipeline.phase1.frameshift_screening import (
     ANNOTATION_CLASS,
     FrameshiftHit,
@@ -35,6 +35,7 @@ from virosync.pipeline.phase1.hhg_seeding import Anchor, HMMHit
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.reference_mask import ReferenceMask
+from virosync.pipeline.taxonomy_utils import TaxonomyFingerprint
 
 
 def _complete_marker() -> ValidatedMarkerHit:
@@ -256,7 +257,7 @@ def test_reported_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeyp
     monkeypatch.setattr(phase1_module, "call_task", fake_call)
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kw: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kw: None)
-    fresh = _run_phase1_subflow(**kwargs)
+    fresh = _run_phase1_subflow(**kwargs, metadata_families={})
     if not expected_seed:
         assert _terminal_payload(fresh)["predictions"] == 0
         return
@@ -270,12 +271,12 @@ def test_reported_capsid_creates_exact_native_seed_and_resumes(tmp_path, monkeyp
     if status == "unvalidated":
         assert fresh.validated_markers[0].has_viral == 0
         assert {witness.rule for witness in fresh.hallmark_witnesses} == {"reported_capsid"}
-        assert {witness.tier for witness in fresh.hallmark_witnesses} == {"MEDIUM"}
+        assert {witness.tier for witness in fresh.hallmark_witnesses} == {"LOW"}
         assert {(witness.start, witness.end) for witness in fresh.hallmark_witnesses} == {(101, 999)}
         assert summarize_hallmarks(fresh.hallmark_evidence).core_count == 0
     config.execution.resume = True
     kwargs["resume_authorized"] = True
-    resumed = _run_phase1_subflow(**kwargs)
+    resumed = _run_phase1_subflow(**kwargs, metadata_families={})
     assert resumed.hallmark_evidence == fresh.hallmark_evidence
     assert resumed.hallmark_witnesses == fresh.hallmark_witnesses
     assert resumed.merged_seeds == fresh.merged_seeds
@@ -307,6 +308,59 @@ def test_phase1_state_file_round_trip_preserves_every_consumed_field(
     assert payload["merged_seeds"][0]["anchors"][0]["top10_pidents"] == "80.123456789,45.5"
     assert payload["merged_seeds"][0]["anchors"][0]["top10_targets"] == "EUK-pEVE__a|p,NCLDV__b|q"
     assert payload["merged_seeds"][0]["hhg_anchors"][0]["top10_prefixes"] == ""
+
+
+def test_phase1_state_host_cache_preserves_document_and_resumed_score(tmp_path: Path) -> None:
+    model = _complete_host_model()
+    state = {
+        "hallmark_evidence": [],
+        "hallmark_witnesses": [],
+        "validated_markers": [_complete_marker()],
+        "merged_seeds": [_complete_seed()],
+        "host_signature_model": model,
+        "host_signatures": {"Amoebozoa", "Eukaryota"},
+        "host_deviation_summary": _complete_deviation_summary(),
+    }
+    document = phase1_state_to_document(**state)
+    fingerprint = TaxonomyFingerprint(weighted_tokens={"amoebozoa": 3.0, "eukaryota": 2.0})
+
+    assert host_token_weights(model) == {"amoebozoa": 7.123456789012345}
+    score = score_host_signature(fingerprint, model)
+    assert phase1_state_to_document(**state) == document
+    path = tmp_path / PHASE1_STATE_FILENAME
+    write_phase1_state(path, **state)
+    assert json.loads(path.read_text(encoding="utf-8")) == document
+    loaded = load_phase1_state(path)
+
+    assert loaded.host_signature_model == model
+    assert score_host_signature(fingerprint, loaded.host_signature_model) == score
+
+
+def test_phase1_state_host_cache_does_not_allow_unknown_object_fields() -> None:
+    model = _complete_host_model()
+    host_token_weights(model)
+    model.unexpected = True
+
+    with pytest.raises(Phase1StateError, match="host_signature_model contains unsupported dynamic fields"):
+        phase1_state_to_document(
+            hallmark_evidence=[],
+            hallmark_witnesses=[],
+            validated_markers=[],
+            merged_seeds=[],
+            host_signature_model=model,
+            host_signatures=set(),
+            host_deviation_summary=None,
+        )
+
+
+def test_phase1_state_rejects_host_cache_in_document(tmp_path: Path) -> None:
+    path = tmp_path / PHASE1_STATE_FILENAME
+    _write_complete_state(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["host_signature_model"]["_token_cache"] = None
+
+    with pytest.raises(Phase1StateError, match="extra=.*_token_cache"):
+        phase1_state_from_document(document)
 
 
 def test_phase1_state_rejects_schema_drift_and_lossy_values() -> None:
@@ -433,7 +487,7 @@ def test_authenticated_phase1_resume_loads_only_exact_state(
     state_path = output_dir / "phase1" / PHASE1_STATE_FILENAME
     _write_complete_state(state_path)
 
-    result = _run_phase1_subflow(**_phase1_kwargs(tmp_path, output_dir))
+    result = _run_phase1_subflow(**_phase1_kwargs(tmp_path, output_dir), metadata_families={})
 
     assert result.validated_markers == [_complete_marker()]
     assert result.merged_seeds == [_complete_seed()]
@@ -454,13 +508,13 @@ def test_enabled_phase1_resume_requires_confirmed_frameshift_faa(
     kwargs["config"].phase1.frameshift_screening_enabled = True
 
     with pytest.raises(ValueError, match="confirmed frameshift protein FAA"):
-        _run_phase1_subflow(**kwargs)
+        _run_phase1_subflow(**kwargs, metadata_families={})
 
     confirmed_faa = output_dir / "phase1" / "frameshift_screening" / "confirmed_frameshift_proteins.faa"
     confirmed_faa.parent.mkdir(parents=True)
     confirmed_faa.write_text("")
     with pytest.raises(ValueError, match="confirmed frameshift marker table"):
-        _run_phase1_subflow(**kwargs)
+        _run_phase1_subflow(**kwargs, metadata_families={})
 
 
 @pytest.mark.parametrize(
@@ -511,7 +565,7 @@ def test_frameshift_screening_runs_before_zero_hmm_hit_return_only_when_enabled(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _terminal_payload(_run_phase1_subflow(**kwargs))
+    result = _terminal_payload(_run_phase1_subflow(**kwargs, metadata_families={}))
 
     assert result["success"] is True
     assert events[: len(expected_prefix)] == expected_prefix
@@ -571,7 +625,7 @@ def test_phase1_selects_prebuilt_or_run_local_marker_database(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _terminal_payload(_run_phase1_subflow(**kwargs))
+    result = _terminal_payload(_run_phase1_subflow(**kwargs, metadata_families={}))
 
     assert result["success"] is True
     assert builder_calls == ([] if use_prebuilt else ["marker", "combined"])
@@ -619,7 +673,7 @@ def test_pfam_contradiction_stops_before_marker_validation(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _terminal_payload(_run_phase1_subflow(**kwargs))
+    result = _terminal_payload(_run_phase1_subflow(**kwargs, metadata_families={}))
 
     assert result["success"] is True
     assert events == ["hmm", "pfam", "outputs"]
@@ -665,7 +719,7 @@ def test_missing_pfam_resource_skips_arbitration_and_preserves_marker_validation
     monkeypatch.setattr(phase1_module, "_generate_required_reports", lambda **kwargs: {})
     monkeypatch.setattr(phase1_module, "_write_empty_run_log", lambda **kwargs: None)
 
-    result = _terminal_payload(_run_phase1_subflow(**kwargs))
+    result = _terminal_payload(_run_phase1_subflow(**kwargs, metadata_families={}))
 
     assert result["success"] is True
     assert events == ["hmm", "marker", "outputs"]
@@ -774,7 +828,7 @@ def test_confirmed_frameshift_marker_can_seed_without_a_protein_hmm_hit(
 
     monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _run_phase1_subflow(**kwargs, metadata_families={})
 
     assert masks_seen == {"hhg_seeding": [masked_genomes], "marker_validation": [masked_genomes, masked_genomes]}
     assert result.validated_markers == [marker]
@@ -834,7 +888,7 @@ def test_fresh_phase1_writes_exact_state_after_classification(
 
     monkeypatch.setattr(phase1_module, "call_task", fake_call_task)
 
-    result = _run_phase1_subflow(**kwargs)
+    result = _run_phase1_subflow(**kwargs, metadata_families={})
     state_path = output_dir / "phase1" / PHASE1_STATE_FILENAME
     loaded = load_phase1_state(state_path)
 
@@ -892,7 +946,7 @@ def test_a2_counterfactual_uses_current_a0_eligibility(tmp_path, monkeypatch, mo
         raise AssertionError(task)
 
     monkeypatch.setattr(phase1_module, "call_task", fake_call)
-    result = _run_phase1_subflow(**kwargs)
+    result = _run_phase1_subflow(**kwargs, metadata_families={})
     assert [(seed.start, seed.end) for seed in result.merged_seeds] == [(101, 999)]
     assert result.ablation_counts.changed == expected_changed
     actual_a0 = assemble_candidate_regions(
@@ -1015,6 +1069,8 @@ def test_phase3_resume_uses_exact_phase1_host_state_not_marker_report(tmp_path, 
             validated_hits_tsv=report,
             logger=logging.getLogger("host-resume"),
             resume_authorized=True,
+            metadata_families={},
+            marker_annotation_index={},
         )
 
 
@@ -1027,6 +1083,6 @@ def test_missing_taxonomy_labels_cannot_reuse_another_genomes_lookup(tmp_path, m
     kwargs = _phase1_kwargs(tmp_path, output)
     kwargs["config"].databases.taxonomy_labels_file = None
     monkeypatch.setattr(host_signatures, "_TAXONOMY_LOOKUP", {"EUK__stale": "EUK|OldHost"})
-    result = _run_phase1_subflow(**kwargs)
+    result = _run_phase1_subflow(**kwargs, metadata_families={})
     assert result.host_signature_model == _complete_host_model()
     assert host_signatures.get_taxonomy_lookup() is None

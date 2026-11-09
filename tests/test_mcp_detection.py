@@ -296,6 +296,7 @@ def test_non_mcp_structure_candidates_keep_annotated_functions(
 def test_structure_supported_mcp_votes_only_with_sequence_taxonomy(model) -> None:
     hit = {
         "hallmark_gene": model,
+        "hmm_score": 100.0,
         "porf_id": "protein_1",
         "top10_prefixes": "",
         "top10_pidents": "",

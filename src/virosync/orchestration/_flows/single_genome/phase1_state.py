@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from virosync.pipeline.hallmark_evidence import HallmarkEvidence, HallmarkWitness
-from virosync.pipeline.host_signatures import HostSignatureModel
+from virosync.pipeline.host_signatures import HOST_TOKEN_CACHE_ATTRIBUTE, HostSignatureModel
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed, validate_confirmed_seed_containment
@@ -480,7 +480,8 @@ def _host_model_to_document(model: object) -> dict[str, object]:
     context = "host_signature_model"
     if type(model) is not HostSignatureModel:
         raise Phase1StateError(f"{context} must be HostSignatureModel")
-    if set(vars(model)) != _HOST_MODEL_FIELDS:
+    # Scoring adds a runtime cache; only the scientific fields belong on disk.
+    if set(vars(model)) - {HOST_TOKEN_CACHE_ATTRIBUTE} != _HOST_MODEL_FIELDS:
         raise Phase1StateError(f"{context} contains unsupported dynamic fields")
     token_bits: dict[str, list[float]] = {}
     if not isinstance(model.token_bits, dict):

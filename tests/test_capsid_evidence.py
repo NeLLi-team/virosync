@@ -243,9 +243,15 @@ def _anchor(gene: str, porf_id: str = "gene-a", score: float = 50.0, status: str
 
 
 def test_a1_seed_surface_marks_capsid_evidence_without_an_mcp() -> None:
-    capsid = build_phase1_seed_surface([_seed(_anchor(CAPSID_MODEL))]).results[0]
-    mcp = build_phase1_seed_surface([_seed(_anchor("EVE_CAPSID_NOVEL_0029"))]).results[0]
-    other = build_phase1_seed_surface([_seed(_anchor(NON_CAPSID_MODEL))]).results[0]
+    capsid = build_phase1_seed_surface(
+        [_seed(_anchor(CAPSID_MODEL))], metadata_families={}, marker_annotation_index={}
+    ).results[0]
+    mcp = build_phase1_seed_surface(
+        [_seed(_anchor("EVE_CAPSID_NOVEL_0029"))], metadata_families={}, marker_annotation_index={}
+    ).results[0]
+    other = build_phase1_seed_surface(
+        [_seed(_anchor(NON_CAPSID_MODEL))], metadata_families={}, marker_annotation_index={}
+    ).results[0]
 
     assert (capsid.has_capsid_evidence, capsid.has_mcp, capsid.mcp_gene_ids) == (True, False, [])
     assert (mcp.has_capsid_evidence, mcp.has_mcp, mcp.mcp_gene_ids) == (True, True, ["gene-a"])
@@ -261,7 +267,7 @@ def test_a1_public_mcp_annotation_survives_a_stronger_non_mcp_profile(status: st
         _anchor(NON_CAPSID_MODEL, score=90.0),
         _anchor("EVE_CAPSID_NOVEL_0029", score=40.0, status=status),
     )
-    result = build_phase1_seed_surface([seed]).results[0]
+    result = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={}).results[0]
 
     assert result.to_dict()["mcp_gene_ids"] == ["gene-a"]
     assert result.has_mcp is False
@@ -274,7 +280,7 @@ def test_a1_public_mcp_annotation_survives_a_stronger_non_mcp_profile(status: st
 def test_a1_stronger_non_capsid_profile_on_one_gene_does_not_hide_capsid_evidence(status: str) -> None:
     seed = _seed(_anchor(NON_CAPSID_MODEL, score=90.0), _anchor(CAPSID_MODEL, score=50.0, status=status))
 
-    result = build_phase1_seed_surface([seed]).results[0]
+    result = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={}).results[0]
 
     assert result.hallmark_genes == [NON_CAPSID_MODEL]
     assert result.has_capsid_evidence is True
@@ -288,7 +294,7 @@ def test_a1_unvalidated_capsid_anchor_gives_no_capsid_evidence(status: str, caps
     capsid = _anchor(CAPSID_MODEL, score=capsid_score or 100.0, status=status)
     anchors = [capsid] if capsid_score is None else [_anchor(NON_CAPSID_MODEL, score=90.0), capsid]
 
-    result = build_phase1_seed_surface([_seed(*anchors)]).results[0]
+    result = build_phase1_seed_surface([_seed(*anchors)], metadata_families={}, marker_annotation_index={}).results[0]
 
     assert result.has_capsid_evidence is False
     assert result.has_mcp is False
@@ -307,7 +313,9 @@ def test_a1_capsid_anchor_outside_the_seed_gives_no_capsid_evidence() -> None:
         validation_status="validated",
     )
 
-    result = build_phase1_seed_surface([_seed(_anchor(NON_CAPSID_MODEL), outside)]).results[0]
+    result = build_phase1_seed_surface(
+        [_seed(_anchor(NON_CAPSID_MODEL), outside)], metadata_families={}, marker_annotation_index={}
+    ).results[0]
 
     assert result.has_capsid_evidence is False
 

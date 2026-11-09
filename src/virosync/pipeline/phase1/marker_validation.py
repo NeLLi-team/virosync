@@ -507,6 +507,7 @@ def filter_validated_markers(
                     diamond_hits[query] = []
                 diamond_hits[query].append((target, bits_val, pident_val, evalue_val))
 
+    from virosync.pipeline.phase1.marker_roles import passes_capsid_score_floor
     from virosync.pipeline.phase3.mcp_detection import is_capsid_evidence_gene
 
     # Preserve the arbitration-selected best model per segment, then add capsid alternatives.
@@ -518,7 +519,11 @@ def filter_validated_markers(
         query_id = f"{hit.query_name}|aa{hit.query_start}-{hit.query_end}"
         key = (query_id, "")
         measured = (hit.target_name, hit.score, hit.evalue, hit.query_start, hit.query_end, hit.pfam_override)
-        if is_arbitration_selected_marker(hit) and (key not in hmm_hit_lookup or hit.score > hmm_hit_lookup[key][1]):
+        if (
+            passes_capsid_score_floor(hit)
+            and is_arbitration_selected_marker(hit)
+            and (key not in hmm_hit_lookup or hit.score > hmm_hit_lookup[key][1])
+        ):
             hmm_hit_lookup[key] = measured
         if is_capsid_evidence_gene(hit.target_name):
             capsid_key = (query_id, hit.target_name)
@@ -854,7 +859,7 @@ def filter_validated_markers(
             for vm in validated_markers:
                 f.write(
                     f"{vm.query_porf}\t{vm.scaffold}\t{vm.start}\t{vm.end}\t{vm.strand}\t"
-                    f"{vm.hmm_target}\t{vm.hmm_score:.3f}\t{vm.validation_status}\t"
+                    f"{vm.hmm_target}\t{vm.hmm_score!r}\t{vm.validation_status}\t"
                     f"{vm.top10_prefixes}\t{vm.best_hit_pident:.1f}\t{vm.best_hit_target}\t"
                     f"{vm.best_hit_bits:.1f}\t{vm.has_ncldv}\t{vm.has_mirus}\t{vm.has_viral}\t"
                     f"{vm.top10_targets}\t{vm.top10_pidents}\t{vm.top10_bitscores}\t"

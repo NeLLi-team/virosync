@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from Bio import SeqIO
 
 from virosync.config import get_config
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 from virosync.utils.path_safety import safe_filename_component
 
@@ -262,9 +263,9 @@ def estimate_full_protein_length(porf_id: str, domain_sequence_length: int) -> i
     return domain_sequence_length
 
 
-def load_marker_hits(marker_hits_path: Path, mcp_only: bool = True) -> dict[str, tuple[str, str]]:
-    """Load marker hits from validated_marker_hits.tsv."""
-    hits: dict[str, tuple[str, str]] = {}
+def load_marker_hits(marker_hits_path: Path, mcp_only: bool = True) -> dict[str, list[tuple[str, str, str, str]]]:
+    """Retain all models, raw statuses, full scores and arbitration overrides per query."""
+    hits: dict[str, list[tuple[str, str, str, str]]] = {}
 
     with marker_hits_path.open() as f:
         reader = csv.DictReader(f, delimiter="\t")
@@ -279,12 +280,14 @@ def load_marker_hits(marker_hits_path: Path, mcp_only: bool = True) -> dict[str,
             if mcp_only and not is_mcp_marker(marker):
                 continue
 
-            hits[porf_id] = (marker, status)
+            hits.setdefault(porf_id, []).append(
+                (marker, status, row.get("hmm_score") or "", row.get("pfam_override") or "")
+            )
 
     return hits
 
 
-def count_hmm_domains_per_protein(marker_hits: dict[str, tuple[str, str]]) -> dict[str, int]:
+def count_hmm_domains_per_protein(marker_hits: dict[str, list[tuple[str, str, str, str]]]) -> dict[str, int]:
     """Count non-overlapping HMM domain hits per base protein.
 
     Multiple HMM hits to the same protein with non-overlapping coordinates
@@ -525,7 +528,7 @@ def load_sequences(sequences_path: Path, porf_ids: set[str] | None = None) -> di
 
 
 def classify_proteins(
-    marker_hits: dict[str, tuple[str, str]],
+    marker_hits: dict[str, list[tuple[str, str, str, str]]],
     sequences: dict[str, str],
     interproscan_domains: dict[str, int] | None = None,
     hmm_domain_counts: dict[str, int] | None = None,
@@ -559,21 +562,31 @@ def classify_proteins(
 
     validation_by_base: dict[str, str] = {}
     validated_mcp_base_ids: set[str] = set()
-    hk97_validated_base_ids: set[str] = set()
-    for hit_id, (hit_marker, hit_status) in marker_hits.items():
+    hk97_markers_by_base: dict[str, str] = {}
+    for hit_id, records in marker_hits.items():
         hit_base_id = extract_base_porf_id(hit_id)
-        if hit_status.lower() in {"validated", "validated_novel"} and is_mcp_marker(hit_marker):
-            validated_mcp_base_ids.add(hit_base_id)
-        if hit_status.lower() in {"validated", "validated_novel"} and is_hk97_marker(hit_marker):
-            hk97_validated_base_ids.add(hit_base_id)
-        prior_status = validation_by_base.get(hit_base_id, "")
-        if not prior_status or (
-            hit_status.lower() in {"validated", "validated_novel"}
-            and prior_status.lower() not in {"validated", "validated_novel"}
-        ):
-            validation_by_base[hit_base_id] = hit_status
+        for hit_marker, hit_status, hit_score, override in records:
+            eligible_sequence = is_ordinary_marker_evidence(
+                {
+                    "hmm_target": hit_marker,
+                    "validation_status": hit_status.lower(),
+                    "hmm_score": hit_score,
+                    "pfam_override": override,
+                }
+            )
+            if eligible_sequence and is_mcp_marker(hit_marker):
+                validated_mcp_base_ids.add(hit_base_id)
+            if eligible_sequence and is_hk97_marker(hit_marker):
+                hk97_markers_by_base.setdefault(hit_base_id, hit_marker)
+            prior_status = validation_by_base.get(hit_base_id, "")
+            if not prior_status or (
+                hit_status.lower() in {"validated", "validated_novel"}
+                and prior_status.lower() not in {"validated", "validated_novel"}
+            ):
+                validation_by_base[hit_base_id] = hit_status
 
-    for porf_id, (marker, status) in marker_hits.items():
+    for porf_id, records in marker_hits.items():
+        marker, status, _score, _override = records[0]
         base_id = extract_base_porf_id(porf_id)
         if base_id in processed_ids:
             continue
@@ -640,8 +653,8 @@ def classify_proteins(
         # needs a validated hit from that family. Keep the first query ID and marker in output.
         jelly_roll_type, confidence, evidence = classify_with_signals(
             signals,
-            marker,
-            base_id in hk97_validated_base_ids,
+            hk97_markers_by_base.get(base_id, marker),
+            base_id in hk97_markers_by_base,
         )
 
         classifications.append(

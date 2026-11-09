@@ -1807,10 +1807,6 @@ PEVE_TOKENS = {
     "cavenderia-peve",
     "cavenderia fasciculata-peve",
 }
-SPLIT_GENERA = {
-    lineage_key(f"EUK|Amorphea|Amoebozoa|Evosea|Eumycetozoa|{genus}|{genus} one", 3): weight
-    for genus, weight in (("Dictyostelium", 40.0), ("Cavenderia", 35.0), ("Heterostelium", 25.0))
-}
 FIVE_GENES_30_BP_APART = "".join(
     f">contig_{index} # {start} # {start + 29} # 1 # ID=contig_{index};partial=00\nM\n"
     for index, start in enumerate(range(1, 151, 30), start=1)
@@ -1953,31 +1949,17 @@ def test_notebook_never_labels_a_gene_with_a_deep_viral_hit_as_host(deep_viral_r
     assert genes["contig_1"]["best_hit_origin"] == "EUK"
 
 
-SHARED_NAME_GENERA = {
-    lineage_key(f"EUK|Amorphea|Amoebozoa|Evosea|Dictyostelium|{genus}|{genus} one", 3): weight
-    for genus, weight in (("Dictyostelium", 40.0), ("Cavenderia", 35.0), ("Heterostelium", 25.0))
-}
+def test_notebook_displays_tokens_without_inventing_ranks(euk_peve_report: dict[str, object]) -> None:
+    assert "amoebozoa" in euk_peve_report["HOST_TAXA"]
+    assert "HOST_GENUS" not in euk_peve_report
+    assert "HOST_LINEAGE" not in euk_peve_report
 
 
-@pytest.mark.parametrize("euk_peve_report", [SHARED_NAME_GENERA], indirect=True)
-def test_notebook_names_no_host_genus_without_a_genus_majority(euk_peve_report: dict[str, object]) -> None:
-    assert "dictyostelium" in euk_peve_report["HOST_TAXA"]
-    assert euk_peve_report["HOST_GENUS"] == ""
-
-
-@pytest.mark.parametrize("euk_peve_report", [SPLIT_GENERA], indirect=True)
-def test_notebook_host_lineage_stops_where_the_detector_stops(euk_peve_report: dict[str, object]) -> None:
-    assert euk_peve_report["HOST_TAXA"] == {"amorphea", "amoebozoa", "evosea", "eumycetozoa"}
-    assert euk_peve_report["HOST_GENUS"] == ""
-
-
-def test_notebook_host_lineage_drops_euk_peve_ranks(euk_peve_report: dict[str, object]) -> None:
+def test_notebook_scores_full_retained_hits(euk_peve_report: dict[str, object]) -> None:
     is_host_gene = euk_peve_report["is_host_gene"]
-
-    assert euk_peve_report["HOST_TAXA"] == HOST_TOKENS
-    assert euk_peve_report["HOST_GENUS"] == "dictyostelium"
-    assert is_host_gene(PEVE_TARGET) is False
-    assert is_host_gene("EUK__EP00001|XP_10") is True
+    assert is_host_gene({"top10_targets": [PEVE_TARGET]}) is False
+    assert is_host_gene({"top10_targets": ["EUK__EP00001|XP_10"]}) is True
+    assert is_host_gene({"top10_targets": ["EUK__EP00001|XP_10"] + [PEVE_TARGET] * 9}) is False
 
 
 def test_notebook_gives_euk_peve_a_color_no_other_category_uses(euk_peve_report: dict[str, object]) -> None:
@@ -2074,7 +2056,7 @@ def test_required_report_forwards_host_credit_threshold(monkeypatch, tmp_path: P
         return SimpleNamespace(jupyter=tmp_path / "eve_analysis.ipynb")
 
     monkeypatch.setattr(report_generate, "generate_eve_report", generate)
-    _generate_required_reports(tmp_path, "demo", None, report_generate.logger, 0.8)
+    _generate_required_reports(tmp_path, "demo", None, report_generate.logger, 0.8, generate_plots=True)
     assert captured["host_credit_threshold"] == 0.8
 
 
@@ -2093,3 +2075,36 @@ def test_actual_gene_map_uses_same_gene_phase1_marker_veto(phase1_marker_report)
     assert genes["contig_1"]["host_lineage_match"] is False
     assert genes["contig_1"]["best_hit_origin"] == "EUK"
     assert genes["contig_5"]["category"] == "EUK"
+
+
+@pytest.mark.parametrize(
+    "prefix,identity,viral_veto,category",
+    [
+        ("MITO", 90.0, False, "HOST"),
+        ("MITO", 90.0, True, "UNKNOWN"),
+        ("NCLDV", 24.9, False, "HOST"),
+        ("NCLDV", 25.0, True, "NCLDV"),
+    ],
+)
+def test_notebook_uses_full_profile_before_best_hit_fallbacks(
+    euk_peve_report, monkeypatch, prefix, identity, viral_veto, category
+):
+    """The display and host-match flag use the same retained-hit evidence."""
+    from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share
+
+    host_model = HostSignatureModel(token_weights=dict.fromkeys(HOST_TOKENS | {"eukaryota"}, 10.0))
+    monkeypatch.setitem(euk_peve_report, "HOST_SIGNATURE", host_model)
+    record = {
+        "top1_target": f"{prefix}__reference|p",
+        "top1_prefix": f"{prefix}__",
+        "top10_targets": [f"{prefix}__reference|p"] + ["EUK__EP00001|XP_10"] * 9,
+        "top10_prefixes": [f"{prefix}__"] + ["EUK__"] * 9,
+        "top10_pidents": [identity] + [90.0] * 9,
+        "phase1_validated_viral_marker": False,
+        "viral_hit_within_depth": viral_veto,
+    }
+    monkeypatch.setitem(euk_peve_report["BOUNDARY_TAXONOMY"], "contig_1", record)
+    assert host_lineage_share(record, host_model) == pytest.approx(45 / 55)
+    gene = euk_peve_report["_make_gene_record"]({"porf_id": "contig_1", "start": 1, "end": 30, "strand": "+"}, "eve")
+    assert gene["host_lineage_match"] is not viral_veto
+    assert gene["category"] == category

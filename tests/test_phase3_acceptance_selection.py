@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from itertools import permutations
+
 import pytest
 
 from virosync.ablation import AblationID, InterventionCounts
-from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks, find_spatial_witnesses
 from virosync.pipeline.phase3 import acceptance_selection as selection_module
 from virosync.pipeline.phase3.acceptance_selection import select_phase3_acceptance
 from virosync.pipeline.phase3.evidence_synthesizer import (
@@ -439,3 +442,218 @@ def test_rescued_protein_id_reaches_verification_result() -> None:
     )
 
     assert result.frameshift_rescue_marker_ids == ["scaffold_VSR0123456789abcdef"]
+
+
+def _add_weak_capsid(result: VerificationResult) -> None:
+    result.hallmark_evidence = [
+        HallmarkEvidence(
+            "capsid|aa1-20",
+            "capsid",
+            "scaffold",
+            6_000,
+            6_300,
+            "VP_Penton_1",
+            1.0,
+            10.0,
+            10.0,
+            1,
+            20,
+            "unvalidated",
+            0.0,
+            "retained_hmm",
+        )
+    ]
+    result.hallmark_witnesses = find_spatial_witnesses(result.hallmark_evidence)
+    result.hallmark_assessment = assess_hallmarks(result)
+    result.score_components["hallmark_floor"] = 0.0
+
+
+@pytest.mark.parametrize("order", list(permutations(range(3))))
+def test_overlap_retains_unique_capsid_once_in_rank_order(order: tuple[int, ...]) -> None:
+    ordinary = _rescue_candidate(
+        "ordinary",
+        start=7_000,
+        end=15_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=False,
+    )
+    rescue = _rescue_candidate(
+        "rescue",
+        start=1_000,
+        end=9_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=True,
+    )
+    alternative = _rescue_candidate(
+        "alternative",
+        start=2_000,
+        end=9_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=True,
+    )
+    _add_weak_capsid(rescue)
+    _add_weak_capsid(alternative)
+    candidates = [ordinary, rescue, alternative]
+
+    selection = select_phase3_acceptance([candidates[index] for index in order], AblationID.A0)
+
+    assert {result.eve_id for result in selection.canonical_results} == {"ordinary", "rescue"}
+    assert rescue.canonical_selection_outcome == "overlap_retained_unique_witness"
+    assert alternative.canonical_selection_outcome == "overlap_suppressed_by:ordinary"
+    assert selection.candidate_count == 3
+    assert (rescue.start, rescue.end, rescue.confidence_tier, rescue.final_confidence) == (1_000, 9_000, "MEDIUM", 0.2)
+    assert rescue.normal_quality_gate_reason == "hallmark_spatial_rescue_pass"
+
+
+@pytest.mark.parametrize("winner_has_evidence", [False, True])
+def test_overlap_coverage_requires_authenticated_witness_members(winner_has_evidence: bool) -> None:
+    ordinary = _rescue_candidate(
+        "ordinary",
+        start=0,
+        end=15_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=False,
+    )
+    rescue = _rescue_candidate(
+        "rescue",
+        start=1_000,
+        end=9_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=True,
+    )
+    _add_weak_capsid(ordinary)
+    _add_weak_capsid(rescue)
+    if not winner_has_evidence:
+        ordinary.hallmark_evidence = []
+
+    selection = select_phase3_acceptance([ordinary, rescue], AblationID.A0)
+
+    assert selection.candidates[1].canonical_kept is (not winner_has_evidence)
+    assert selection.candidates[0].canonical_kept
+
+
+def test_overlap_retains_ordinary_loser_with_shared_and_distinct_capsids() -> None:
+    ordinary = _rescue_candidate(
+        "ordinary",
+        start=0,
+        end=15_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=False,
+    )
+    rescue = _rescue_candidate(
+        "rescue",
+        start=1_000,
+        end=9_000,
+        confidence_tier="HIGH",
+        final_confidence=0.3,
+        rescued=True,
+    )
+    _add_weak_capsid(ordinary)
+    _add_weak_capsid(rescue)
+    ordinary.hallmark_evidence.append(
+        replace(ordinary.hallmark_evidence[0], query_porf="distinct|aa1-20", gene="distinct", start=10_000, end=10_300)
+    )
+    ordinary.hallmark_witnesses = find_spatial_witnesses(ordinary.hallmark_evidence)
+    ordinary.hallmark_assessment = assess_hallmarks(ordinary)
+
+    selection = select_phase3_acceptance([ordinary, rescue], AblationID.A0)
+
+    assert selection.canonical_results == (ordinary, rescue)
+    assert ordinary.canonical_selection_outcome == "overlap_retained_unique_witness"
+    assert rescue.canonical_selection_outcome == "overlap_selected"
+
+
+@pytest.mark.parametrize("mutation", ["missing", "stale", "partial", "forged"])
+def test_overlap_does_not_restore_unauthenticated_witness(mutation: str) -> None:
+    ordinary = _rescue_candidate(
+        "ordinary",
+        start=7_000,
+        end=15_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=False,
+    )
+    rescue = _rescue_candidate(
+        "rescue",
+        start=1_000,
+        end=9_000,
+        confidence_tier="MEDIUM",
+        final_confidence=0.2,
+        rescued=True,
+    )
+    _add_weak_capsid(rescue)
+    if mutation == "missing":
+        rescue.hallmark_evidence = []
+    elif mutation == "stale":
+        rescue.hallmark_assessment = replace(rescue.hallmark_assessment, end=10_000)
+    elif mutation == "partial":
+        rescue.hallmark_evidence = [replace(rescue.hallmark_evidence[0], end=10_000)]
+    else:
+        rescue.hallmark_assessment = replace(
+            rescue.hallmark_assessment,
+            witnesses=(replace(rescue.hallmark_assessment.witnesses[0], rule="forged"),),
+        )
+
+    selection = select_phase3_acceptance([rescue, ordinary], AblationID.A0)
+
+    assert selection.canonical_results == (ordinary,)
+    assert selection.detailed_results == (rescue, ordinary)
+    assert selection.candidates[0].normal_gate_decision.kept is True
+    assert rescue.canonical_selection_outcome == "overlap_suppressed_by:ordinary"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("coverage", ["outside", "different_identity", "one_of_two", "complete", "exact_edge"])
+def test_overlap_preserves_assigned_confirmed_core_identity_and_span(coverage: str, reverse: bool) -> None:
+    """Only a fully retained identical core permits an overlap loser to disappear."""
+    from virosync.pipeline.phase1.seed_merger import ConfirmedSeed
+
+    ordinary = _rescue_candidate(
+        "ordinary", start=100, end=15_000, confidence_tier="HIGH", final_confidence=0.8, rescued=False
+    )
+    rescue = _rescue_candidate(
+        "rescue", start=7_000, end=20_000, confidence_tier="HIGH", final_confidence=0.9, rescued=True
+    )
+    core = ConfirmedSeed("original", "scaffold", 8_000, 8_500)
+    ordinary.confirmed_seeds = (core,)
+    if coverage == "outside":
+        ordinary.confirmed_seeds = (replace(core, start=500, end=1_000),)
+    elif coverage == "different_identity":
+        rescue.confirmed_seeds = (replace(core, seed_id="other"),)
+    elif coverage == "one_of_two":
+        ordinary.confirmed_seeds = (core, replace(core, seed_id="second", start=500, end=1_000))
+        rescue.confirmed_seeds = (core,)
+    elif coverage == "exact_edge":
+        core = replace(core, start=rescue.start, end=ordinary.end)
+        ordinary.confirmed_seeds = rescue.confirmed_seeds = (core,)
+    else:
+        rescue.confirmed_seeds = (core,)
+    original = (
+        ordinary.start,
+        ordinary.end,
+        ordinary.confidence_tier,
+        ordinary.final_confidence,
+        ordinary.confirmed_seeds,
+    )
+    candidates = [ordinary, rescue]
+    if reverse:
+        candidates.reverse()
+    selection = select_phase3_acceptance(candidates, AblationID.A0)
+    assert all(decision.kept for decision in selection.normal_gate_decisions)
+    assert rescue in selection.canonical_results
+    assert (ordinary in selection.canonical_results) is (coverage not in {"complete", "exact_edge"})
+    if coverage not in {"complete", "exact_edge"}:
+        assert ordinary.canonical_selection_outcome == "overlap_retained_confirmed_seed"
+    assert (
+        ordinary.start,
+        ordinary.end,
+        ordinary.confidence_tier,
+        ordinary.final_confidence,
+        ordinary.confirmed_seeds,
+    ) == original

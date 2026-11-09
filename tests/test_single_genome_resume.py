@@ -105,6 +105,7 @@ def _closed_schema3_identity(
             "sha256": canonical_sha256({"fixture": identity_seed, "kind": "config"}),
             "ablation_id": "A0",
             "ablation_contract_sha256": ABLATION_CONTRACT_SHA256,
+            "generate_plots": True,
         },
         "code": {
             "version": "test",

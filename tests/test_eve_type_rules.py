@@ -121,6 +121,7 @@ class Marker:
     query_porf: str
     hmm_target: str
     validation_status: str = "validated"
+    hmm_score: float = 100.0
 
 
 def marker(gene: str, start: int, family: str) -> Marker:

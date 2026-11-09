@@ -70,3 +70,16 @@ def test_default_config_has_no_dead_phase1_hhg_block() -> None:
     data = yaml.safe_load(DEFAULT_CONFIG.read_text())
     assert "hhg_seeding" not in data.get("phase1", {})
     assert "host_trim" not in data.get("phase2", {})
+
+
+@pytest.mark.parametrize("name", ["orchestration.yaml", "orchestration_archaeal.yaml"])
+def test_boundary_chunk_default_reaches_flow_config(name: str) -> None:
+    """Both shipped configs expose the larger boundary batch to orchestration."""
+    config = PipelineConfig.from_yaml(REPO_ROOT / "config" / name)
+    assert config.phase2.diamond_chunk_size == 100000
+    assert config.to_flow_kwargs()["boundary_diamond_chunk_size"] == 100000
+
+
+def test_pipeline_boundary_chunk_default() -> None:
+    """Programmatic construction uses the same boundary batch as shipped YAML."""
+    assert PipelineConfig().phase2.diamond_chunk_size == 100000

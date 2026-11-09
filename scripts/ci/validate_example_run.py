@@ -194,9 +194,13 @@ def build_snapshot(
         try:
             state = load_run_state(run_dir)
         except (OSError, TypeError, ValueError) as exc:
-            raise ExampleValidationError(f"{genome_id}: invalid schema-v3 run state: {exc}") from exc
+            raise ExampleValidationError(
+                f"{genome_id}: invalid schema-v{RUN_STATE_SCHEMA_VERSION} run state: {exc}"
+            ) from exc
         if state.schema_version != RUN_STATE_SCHEMA_VERSION or state.status != "success":
-            raise ExampleValidationError(f"{genome_id}: authoritative run state is not schema-v3 success")
+            raise ExampleValidationError(
+                f"{genome_id}: authoritative run state is not schema-v{RUN_STATE_SCHEMA_VERSION} success"
+            )
         if re.fullmatch(r"[0-9a-f]{64}", state.run_fingerprint) is None:
             raise ExampleValidationError(f"{genome_id}: run fingerprint is not a SHA-256 digest")
         plan = plan_resume(
@@ -346,7 +350,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         len(run["artifacts"])
         for run in current["runs"].values()  # type: ignore[union-attr,index]
     )
-    print(f"Validated {len(current['runs'])} schema-v3 run(s) and {artifact_count} authenticated artifact(s).")
+    print(
+        f"Validated {len(current['runs'])} schema-v{RUN_STATE_SCHEMA_VERSION} run(s) and {artifact_count} authenticated artifact(s)."
+    )
     return 0
 
 

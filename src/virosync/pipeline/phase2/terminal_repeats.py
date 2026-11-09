@@ -10,21 +10,28 @@ meet the identity threshold. ``tir_alignment_length`` and
 
 from __future__ import annotations
 
+import errno
+import io
+import logging
 import math
 import multiprocessing
 import os
+import pickle
+import shutil
 import signal
+import tempfile
 import time
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from itertools import product
+from itertools import chain, product
 from multiprocessing.connection import wait
 from pathlib import Path
 
 import numpy as np
+import psutil
 from Bio import SeqIO
 from numpy.typing import NDArray
 
@@ -45,7 +52,6 @@ from virosync.pipeline.phase2.boundary_diamond import (
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.phase2.seed_extension import accept_seed_partition
 from virosync.pipeline.phase2.terminal_repeat_search import find_seed_positions
-from virosync.pipeline.phase3.evidence_synthesizer import deduplicate_preferring_mcp
 from virosync.pipeline.phase3.gene_taxonomy import peve_profile_class
 from virosync.pipeline.phase3.mcp_detection import is_mcp_gene
 
@@ -56,6 +62,7 @@ MIN_TIR_IDENTITY = 0.90
 _DNA_BASES = frozenset("ACGT")
 _KMER_BP = 7
 _MAX_SEED_PAIRINGS = 4096
+_MAX_SEED_UNION_PER_TYPE = sum(_MAX_SEED_PAIRINGS // i for i in range(1, _MAX_SEED_PAIRINGS + 1))
 _LOW_COMPLEXITY_ENTROPY = 1.2
 _MAX_LOW_COMPLEXITY_PERIOD = 12
 _TANDEM_IDENTITY = 0.8
@@ -99,11 +106,8 @@ class _MarkerGroup:
     protein_id: str
     start: int
     end: int
-    marker_names: frozenset[str]
+    classification_markers: tuple[tuple[str, str], ...]
     is_seed_eligible: bool = True
-    # (lower-case marker name, class) of structure-derived profiles whose hit has
-    # only EUK-pEVE references.
-    profile_classes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,25 +631,10 @@ def _base_protein_id(query_porf: str) -> str:
     return query_porf.split("|aa", 1)[0]
 
 
-def _profile_classes(protein_hits: list[object]) -> tuple[tuple[str, str], ...]:
-    """Return (lower-case profile name, class) for the one profile that counts for a protein.
-
-    The hits of one protein are deduplicated as the Phase 3 vote does, so a losing
-    profile of the same protein adds no class.
-    """
-    return tuple(
-        sorted(
-            {
-                (marker.hmm_target.lower(), profile_class)
-                for marker in deduplicate_preferring_mcp(protein_hits)
-                if (profile_class := peve_profile_class(marker.hmm_target, marker))
-            }
-        )
-    )
-
-
 def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_MarkerGroup]:
     """Group validated hits from the current and original parent span."""
+    from virosync.pipeline.phase1.seed_merger import best_marker_hits
+
     grouped: dict[str, list[object]] = defaultdict(list)
     parent_start = min(boundary.start, boundary.original_start)
     parent_end = max(boundary.end, boundary.original_end)
@@ -664,11 +653,13 @@ def _marker_groups(boundary: RefinedBoundary, markers: list[object]) -> list[_Ma
                 protein_id=protein_id,
                 start=min(marker.start for marker in hits),
                 end=max(marker.end for marker in hits),
-                marker_names=frozenset(marker.hmm_target for marker in hits if getattr(marker, "hmm_target", "")),
+                classification_markers=tuple(
+                    (marker.hmm_target.lower(), peve_profile_class(marker.hmm_target, marker))
+                    for marker in best_marker_hits(hits)
+                ),
                 is_seed_eligible=any(
                     not is_cellular_marker_model(getattr(marker, "hmm_target", "")) for marker in hits
                 ),
-                profile_classes=_profile_classes(hits),
             )
             for protein_id, hits in grouped.items()
         ),
@@ -1003,10 +994,14 @@ def _child_boundary(
     groups: list[_MarkerGroup],
     scan_start: int,
     scan_end: int,
+    metadata_families: dict,
 ) -> RefinedBoundary:
     """Create a coordinate-local child without inherited aggregate evidence."""
-    marker_names = set().union(*(group.marker_names for group in groups)) if groups else set()
-    class_by_marker = dict(item for group in groups for item in group.profile_classes)
+    marker_names = {name for group in groups for name, _ in group.classification_markers}
+    class_by_marker = {
+        **metadata_families,
+        **{name: family for group in groups for name, family in group.classification_markers if family},
+    }
     classification = get_region_classification_summary(marker_names, None, class_by_marker=class_by_marker)
     seed_sources = sorted(set(parent.seed_sources or []) & {"hhg", "marker_validation"}) if groups else []
     if "frameshift_rescue" in (parent.seed_sources or []):
@@ -1139,6 +1134,7 @@ def _build_partition(
     scan_end: int,
     taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
+    metadata_families: dict,
 ) -> list[RefinedBoundary] | None:
     """Build TIR children and evidence-bearing residuals for one parent."""
     children: list[RefinedBoundary] = []
@@ -1155,6 +1151,7 @@ def _build_partition(
             groups=child_groups,
             scan_start=scan_start,
             scan_end=scan_end,
+            metadata_families=metadata_families,
         )
         children.append(
             replace(
@@ -1192,6 +1189,7 @@ def _build_partition(
                 groups=_groups_within(groups, start, end),
                 scan_start=scan_start,
                 scan_end=scan_end,
+                metadata_families=metadata_families,
             )
         )
 
@@ -1255,6 +1253,7 @@ def _plan_boundary_partition(
     boundary_taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
     extension_bp: int,
+    metadata_families: dict,
 ) -> list[RefinedBoundary]:
     """Return one unchanged parent or its independent child boundaries."""
     mappings = _relevant_seed_mappings(boundary, boundary_diamond_query)
@@ -1375,6 +1374,7 @@ def _plan_boundary_partition(
         scan_end=scan_end,
         taxonomy_map=boundary_taxonomy_map,
         proteome_index=proteome_index,
+        metadata_families=metadata_families,
     )
     if partition is not None and _cuts_flank_marker(partition, validated_markers, boundary):
         partition = None
@@ -1407,15 +1407,17 @@ def refine_boundaries_with_terminal_repeats(
     proteome_index: dict[str, list[pORF]],
     extension_bp: int,
     workers: int = 1,
+    metadata_families: dict,
 ) -> list[RefinedBoundary]:
     """Partition boundaries around independent, taxonomy-covered TIR pairs."""
     scaffold_index = SeqIO.index(str(raw_genome_path), "fasta")
     try:
+        scaffold_names = set(scaffold_index.keys())
         if workers > 1 and len({boundary.scaffold for boundary in boundaries}) > 1:
             for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
                 if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
                     raise ValueError("allowed interval must contain parent")
-                if boundary.scaffold not in scaffold_index:
+                if boundary.scaffold not in scaffold_names:
                     raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
             tasks = _build_scaffold_tasks(
                 boundaries,
@@ -1426,16 +1428,20 @@ def refine_boundaries_with_terminal_repeats(
                 boundary_taxonomy_map=boundary_taxonomy_map,
                 proteome_index=proteome_index,
                 extension_bp=extension_bp,
+                metadata_families=metadata_families,
             )
             plans = _plan_scaffolds_in_workers(
-                tasks, len(boundaries), min(workers, len({boundary.scaffold for boundary in boundaries}))
+                tasks,
+                len(boundaries),
+                min(workers, len({boundary.scaffold for boundary in boundaries})),
             )
-            return _resolve_partition_conflicts(boundaries, plans)
+            if plans is not None:
+                return _resolve_partition_conflicts(boundaries, plans)
         plans: list[list[RefinedBoundary]] = []
         for boundary, allowed_interval in zip(boundaries, allowed_intervals, strict=True):
             if not allowed_interval[0] <= boundary.start < boundary.end <= allowed_interval[1]:
                 raise ValueError("allowed interval must contain parent")
-            if boundary.scaffold not in scaffold_index:
+            if boundary.scaffold not in scaffold_names:
                 raise ValueError(f"boundary scaffold absent from raw genome: {boundary.scaffold}")
             sequence = str(scaffold_index[boundary.scaffold].seq).upper()
             plans.append(
@@ -1448,6 +1454,7 @@ def refine_boundaries_with_terminal_repeats(
                     boundary_taxonomy_map=boundary_taxonomy_map,
                     proteome_index=proteome_index,
                     extension_bp=extension_bp,
+                    metadata_families=metadata_families,
                 )
             )
         return _resolve_partition_conflicts(boundaries, plans)
@@ -1472,6 +1479,8 @@ class _ScaffoldPlanningTask:
     boundary_taxonomy_map: dict[str, GeneTaxonomy]
     proteome_index: dict[str, list[pORF]]
     extension_bp: int
+    metadata_families: dict[str, str]
+    sequence_path: str = ""
 
 
 def _build_scaffold_tasks(
@@ -1484,6 +1493,7 @@ def _build_scaffold_tasks(
     boundary_taxonomy_map: dict[str, GeneTaxonomy],
     proteome_index: dict[str, list[pORF]],
     extension_bp: int,
+    metadata_families: dict,
 ) -> Iterable[_ScaffoldPlanningTask]:
     """Split the planning inputs per scaffold, in original scaffold order.
 
@@ -1519,27 +1529,43 @@ def _build_scaffold_tasks(
             boundary_taxonomy_map=taxonomy,
             proteome_index={} if scaffold_genes is None else {scaffold: scaffold_genes},
             extension_bp=extension_bp,
+            metadata_families=metadata_families,
         )
 
 
-def _planning_worker(connection, planner, taxonomy_lookup, host_lineage):
+def _planning_worker(connection, planner, directory, host_lineage, expected_parent):
     """Own one process group and receive one scaffold at a time."""
     from virosync.pipeline.phase2 import terminal_repeat_search
 
+    terminal_repeat_search._bind_parent_lifetime(expected_parent)
     os.setsid()
     terminal_repeat_search._OWNED_WORKER_GROUP = True
-    set_taxonomy_lookup(taxonomy_lookup)
+    terminal_repeat_search._WORK_DIRECTORY = directory
+    root = Path(directory)
+    with (root / "taxonomy.pkl").open("rb") as stream:
+        set_taxonomy_lookup(pickle.load(stream))
     if host_lineage is None:
         os.environ.pop("VIROSYNC_HOST_LINEAGE", None)
     else:
         os.environ["VIROSYNC_HOST_LINEAGE"] = host_lineage
     try:
         connection.send(("ready", None))
-        while (task := connection.recv()) is not None:
+        while (task_id := connection.recv()) is not None:
             try:
-                connection.send(("result", planner(task)))
+                with (root / f"task-{task_id}.pkl").open("rb") as stream:
+                    task = pickle.load(stream)
+                result = planner(task)
+                with (root / f"result-{task_id}.pkl").open("wb") as stream:
+                    pickle.dump(result, stream, protocol=pickle.HIGHEST_PROTOCOL)
+                del task, result
+                connection.send(("result", task_id))
             except BaseException as error:
-                connection.send(("error", f"{type(error).__name__}: {error}"))
+                # Leave room for the tuple/pickle framing within a 1 KiB control
+                # message. UTF-8 replacement adds at most two bytes at the cut.
+                message = f"{type(error).__name__}: {error}".encode(errors="replace")[:900].decode(
+                    "utf-8", errors="replace"
+                )
+                connection.send(("error", message))
                 return
     finally:
         connection.close()
@@ -1567,13 +1593,288 @@ def _stop_planning_workers(processes):
         process.close()
 
 
-def _plan_scaffolds_in_workers(tasks, n_boundaries: int, workers: int):
-    """Dispatch bounded payloads and fail promptly on any worker error or death."""
+def _cgroup_directories() -> list[Path]:
+    """Locate this process's cgroup v2 and its visible ancestors."""
+    try:
+        membership = next(
+            line[3:] for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::")
+        )
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            if " - cgroup2 " not in line:
+                continue
+            fields = line.split()
+            mount_root, mountpoint = Path(fields[3]), Path(fields[4])
+            try:
+                relative = Path(membership).relative_to(mount_root)
+            except ValueError:
+                continue
+            current = mountpoint / relative
+            return [
+                current,
+                *[parent for parent in current.parents if parent == mountpoint or mountpoint in parent.parents],
+            ]
+    except (OSError, StopIteration):
+        pass
+    return []
+
+
+def _available_pool_resources() -> tuple[int, int | None]:
+    """Respect affinity, Slurm and every finite visible cgroup ancestor."""
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    try:
+        slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", "0"))
+        if slurm_cpus > 0:
+            cpus = min(cpus, slurm_cpus)
+    except ValueError:
+        pass
+    available = psutil.virtual_memory().available
+    finite_memory_limit = None
+    for directory in _cgroup_directories():
+        try:
+            quota, period = (directory / "cpu.max").read_text().split()
+            if quota != "max":
+                cpus = min(cpus, max(1, int(quota) // int(period)))
+        except (OSError, ValueError, ZeroDivisionError):
+            pass
+        try:
+            maximum = (directory / "memory.max").read_text().strip()
+            if maximum != "max":
+                limit = int(maximum)
+                if limit <= 0:
+                    continue
+                try:
+                    used = int((directory / "memory.current").read_text())
+                except (OSError, ValueError):
+                    return max(1, cpus), None
+                if used < 0:
+                    return max(1, cpus), None
+                finite_memory_limit = limit if finite_memory_limit is None else min(finite_memory_limit, limit)
+                reclaimable = 0
+                try:
+                    statistics = dict(line.split() for line in (directory / "memory.stat").read_text().splitlines())
+                    reclaimable = max(
+                        0,
+                        int(statistics.get("inactive_file", 0))
+                        - int(statistics.get("file_dirty", 0))
+                        - int(statistics.get("file_writeback", 0)),
+                    )
+                except (OSError, ValueError):
+                    pass
+                available = min(available, max(0, limit - used + min(used, reclaimable)))
+        except (OSError, ValueError):
+            pass
+    if any(os.environ.get(key) for key in ("SLURM_JOB_ID", "SLURM_JOBID", "SLURM_CPUS_PER_TASK")):
+        declared_limit = 0
+        try:
+            per_node = int(os.environ.get("SLURM_MEM_PER_NODE", "0"))
+            per_cpu = int(os.environ.get("SLURM_MEM_PER_CPU", "0"))
+            allocated_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", "0"))
+            if per_node > 0:
+                declared_limit = per_node * 1024**2
+            elif per_cpu > 0:
+                if allocated_cpus <= 0:
+                    return max(1, cpus), None
+                declared_limit = per_cpu * allocated_cpus * 1024**2
+        except ValueError:
+            pass
+        if finite_memory_limit is None or (declared_limit and finite_memory_limit > declared_limit):
+            return max(1, cpus), None
+    return max(1, cpus), available
+
+
+def _pool_worker_limit(
+    requested: int,
+    *,
+    sequence_bytes: int,
+    scan_bytes: int,
+    task_bytes: int,
+    context_bytes: int,
+    file_bytes: int,
+    pair_bytes: int,
+    resources: tuple[int, int | None] | None = None,
+) -> int:
+    """Conservative one-time concurrency estimate, not an OOM guarantee."""
+    cpus, available = _available_pool_resources() if resources is None else resources
+    if available is None:
+        return 1
+    # Two Python seed indexes plus list/map temporaries dominate long scans.
+    # Include full context expansion and native buffers; count files even on disk
+    # because TMPDIR may be tmpfs. Coefficients require large-input calibration.
+    per_worker = _worker_memory_bytes(sequence_bytes, scan_bytes, task_bytes, context_bytes, pair_bytes)
+    budget = max(0, available * 3 // 4 - file_bytes)
+    return max(1, min(requested, cpus, budget // per_worker))
+
+
+def _worker_memory_bytes(
+    sequence_bytes: int, scan_bytes: int, task_bytes: int, context_bytes: int, pair_bytes: int
+) -> int:
+    """Predict one worker's allocation, keeping the component ledger explicit."""
+    return 256 * 1024**2 + 8 * context_bytes + 8 * task_bytes + 8 * sequence_bytes + 192 * scan_bytes + pair_bytes
+
+
+def _seed_pair_cardinality_bounds(
+    sequence_length: int, marker_limits: list[tuple[int, int]]
+) -> tuple[int, int, int, int]:
+    """Bound union pairs, accumulated intervals, one marker and staircase chunks."""
+    seed_types = 4**_KMER_BP
+    marker_bounds = []
+    for left, right in marker_limits:
+        a, b = max(0, left - _KMER_BP + 1), max(0, right - _KMER_BP + 1)
+        # xy<=4096 implies xy<=32(x+y); each occurrence belongs to one seed.
+        marker_bounds.append(min(a * b, seed_types * _MAX_SEED_PAIRINGS, 32 * (a + b)))
+    intervals = sum(marker_bounds)
+    # Every hyperbola pair has i<=64 or j<=64. Across both orientations,
+    # occurrence totals are <=2N, hence at most 128N union pairs.
+    pairs = min(intervals, 128 * sequence_length, seed_types * _MAX_SEED_UNION_PER_TYPE)
+    return pairs, intervals, max(marker_bounds, default=0), min(pairs, len(marker_limits) * seed_types)
+
+
+def _pair_allocation_bytes(pairs: int, intervals: int, marker_pairs: int, chunks: int, markers: int) -> int:
+    """Predict phased NumPy and Python-container allocations, not a RSS ceiling."""
+    phases = (96 * pairs, 32 * pairs + 160 * marker_pairs + 24 * intervals, 24 * pairs + 808 * intervals)
+    return max(phases) + 256 * chunks + markers * 4**_KMER_BP
+
+
+def _prepare_worker_files(
+    tasks: Iterable[_ScaffoldPlanningTask],
+    root: Path,
+) -> tuple[int, int, int, int, int, dict[str, int]]:
+    """Stage metadata only; bound sequence sizes without reading full records."""
+    sequence_bytes = scan_bytes = task_bytes = count = 0
+    pair_bytes = 0
+    maxima = dict(pairs=0, intervals=0, marker_pairs=0, chunks=0, markers=0)
+    for index, task in enumerate(tasks):
+        count = index + 1
+        if index == 0:
+            sequence_bytes = Path(task.raw_genome_path).stat().st_size
+        for _, boundary, _ in task.boundaries:
+            bounds = _scan_bounds(
+                boundary,
+                _relevant_seed_mappings(boundary, task.boundary_diamond_query),
+                sequence_length=sequence_bytes,
+                extension_bp=task.extension_bp,
+            )
+            if bounds is not None:
+                scan_bytes = max(scan_bytes, bounds[1] - bounds[0])
+                groups = _marker_groups(boundary, task.validated_markers)
+                limits = [
+                    (group.start - bounds[0], bounds[1] - group.end)
+                    for group in groups
+                    if min(group.start - bounds[0], bounds[1] - group.end) >= MIN_TIR_ARM_BP
+                ]
+                cardinalities = _seed_pair_cardinality_bounds(bounds[1] - bounds[0], limits)
+                pair_bytes = max(pair_bytes, _pair_allocation_bytes(*cardinalities, len(limits)))
+                for name, value in zip(maxima, (*cardinalities, len(limits)), strict=True):
+                    maxima[name] = max(maxima[name], value)
+        task = replace(task, sequence_path=str(root / f"sequence-{index}.txt"))
+        task_path = root / f"task-{index}.pkl"
+        with task_path.open("wb") as stream:
+            pickle.dump(task, stream, protocol=pickle.HIGHEST_PROTOCOL)
+        task_bytes = max(task_bytes, task_path.stat().st_size)
+    return count, sequence_bytes, scan_bytes, task_bytes, pair_bytes, maxima
+
+
+def _write_worker_sequences(root: Path, count: int) -> None:
+    """Materialize exact uppercase sequences only after pool admission."""
+    scaffold_index = None
+    try:
+        for index in range(count):
+            with (root / f"task-{index}.pkl").open("rb") as stream:
+                task = pickle.load(stream)
+            if scaffold_index is None:
+                scaffold_index = SeqIO.index(task.raw_genome_path, "fasta")
+            raw = scaffold_index.get_raw(task.scaffold)
+            record = SeqIO.read(io.StringIO(raw.decode()), "fasta")
+            del raw
+            sequence = str(record.seq).upper()
+            del record
+            Path(task.sequence_path).write_bytes(sequence.encode("ascii"))
+            del sequence
+    finally:
+        if scaffold_index is not None:
+            scaffold_index.close()
+
+
+def _plan_scaffolds_in_workers(
+    tasks: Iterable[_ScaffoldPlanningTask],
+    n_boundaries: int,
+    workers: int,
+) -> list[list[RefinedBoundary]] | None:
+    """Own all files until workers have stopped, including forced failures."""
+    logger = logging.getLogger(__name__)
+    resources = _available_pool_resources()
+    if resources[1] is None:
+        logger.info("Terminal-repeat planning: serial; unknown cgroup memory usage or unusable Slurm v2 budget")
+        return None
+    if resources[0] == 1:
+        logger.info("Terminal-repeat planning: serial; CPU budget is one")
+        return None
+    pending = iter(tasks)
+    first = next(pending, None)
+    if first is None:
+        return None
+    sequence_bound = Path(first.raw_genome_path).stat().st_size
+    # Parent RSS is a deliberately coarse metadata allowance. Eight raw-file
+    # copies cover record decoding/normalization transients before workers exist.
+    metadata_bound = psutil.Process().memory_info().rss
+    spool_bound = sequence_bound + metadata_bound
+    if 8 * sequence_bound + 2 * metadata_bound + spool_bound > resources[1] * 3 // 4:
+        logger.info("Terminal-repeat planning: serial; preparation memory reserve does not fit")
+        return None
+    preparation_complete = False
+    try:
+        if shutil.disk_usage(tempfile.gettempdir()).free < spool_bound:
+            logger.info("Terminal-repeat planning: serial; temporary storage reserve does not fit")
+            return None
+        with tempfile.TemporaryDirectory(prefix="virosync-repeat-pool-") as directory:
+            root = Path(directory)
+            with (root / "taxonomy.pkl").open("wb") as stream:
+                pickle.dump(get_taxonomy_lookup(), stream, protocol=pickle.HIGHEST_PROTOCOL)
+            count, sequence_bytes, scan_bytes, task_bytes, pair_bytes, maxima = _prepare_worker_files(
+                chain((first,), pending), root
+            )
+            context_bytes = (root / "taxonomy.pkl").stat().st_size
+            workers = _pool_worker_limit(
+                min(workers, count),
+                sequence_bytes=sequence_bytes,
+                scan_bytes=scan_bytes,
+                task_bytes=task_bytes,
+                context_bytes=context_bytes,
+                pair_bytes=pair_bytes,
+                file_bytes=sequence_bytes + sum(path.stat().st_size for path in root.iterdir()),
+                resources=resources,
+            )
+            if workers == 1:
+                logger.info(
+                    "Terminal-repeat planning: serial; worker memory estimate does not fit two workers; predicted_worker_bytes=%s pair_bytes=%s cardinalities=%s",
+                    _worker_memory_bytes(sequence_bytes, scan_bytes, task_bytes, context_bytes, pair_bytes),
+                    pair_bytes,
+                    maxima,
+                )
+                return None
+            _write_worker_sequences(root, count)
+            preparation_complete = True
+            logger.info(
+                "Terminal-repeat planning: %s workers; CPU/memory admission; predicted_worker_bytes=%s pair_bytes=%s cardinalities=%s",
+                workers,
+                _worker_memory_bytes(sequence_bytes, scan_bytes, task_bytes, context_bytes, pair_bytes),
+                pair_bytes,
+                maxima,
+            )
+            return _dispatch_scaffold_files(root, count, n_boundaries, workers)
+    except OSError as error:
+        if preparation_complete or error.errno not in (errno.ENOSPC, errno.EDQUOT):
+            raise
+        logger.info("Terminal-repeat planning: serial; temporary storage exhausted (%s)", error.strerror)
+        return None
+
+
+def _dispatch_scaffold_files(root: Path, count: int, n_boundaries: int, workers: int) -> list[list[RefinedBoundary]]:
+    """Exchange one tiny message per direction; bulk data never enters a pipe."""
     context = multiprocessing.get_context("spawn")
-    taxonomy_lookup = get_taxonomy_lookup()
     host_lineage = os.environ.get("VIROSYNC_HOST_LINEAGE")
     plans = [[] for _ in range(n_boundaries)]
-    pending = iter(tasks)
+    pending = iter(range(count))
     processes = []
     connections = []
     active = {}
@@ -1582,7 +1883,7 @@ def _plan_scaffolds_in_workers(tasks, n_boundaries: int, workers: int):
             parent, child = context.Pipe()
             process = context.Process(
                 target=_planning_worker,
-                args=(child, _plan_scaffold_task, taxonomy_lookup, host_lineage),
+                args=(child, _plan_scaffold_task, str(root), host_lineage, os.getpid()),
             )
             process.start()
             child.close()
@@ -1601,8 +1902,13 @@ def _plan_scaffolds_in_workers(tasks, n_boundaries: int, workers: int):
                     if kind == "error":
                         raise RuntimeError(f"terminal-repeat worker failed: {value}")
                     if kind == "result":
-                        for index, plan in value:
+                        with (root / f"result-{value}.pkl").open("rb") as stream:
+                            result = pickle.load(stream)
+                        for index, plan in result:
                             plans[index] = plan
+                        (root / f"result-{value}.pkl").unlink()
+                        (root / f"task-{value}.pkl").unlink()
+                        (root / f"sequence-{value}.txt").unlink(missing_ok=True)
                     task = next(pending, None)
                     connection.send(task)
                     if task is None:
@@ -1621,25 +1927,22 @@ def _plan_scaffolds_in_workers(tasks, n_boundaries: int, workers: int):
 
 
 def _plan_scaffold_task(task: _ScaffoldPlanningTask):
-    """Read one scaffold once and release its index after planning."""
-    scaffold_index = SeqIO.index(task.raw_genome_path, "fasta")
-    try:
-        sequence = str(scaffold_index[task.scaffold].seq).upper()
-        return [
-            (
-                index,
-                _plan_boundary_partition(
-                    boundary,
-                    allowed_interval=allowed_interval,
-                    sequence=sequence,
-                    validated_markers=task.validated_markers,
-                    boundary_diamond_query=task.boundary_diamond_query,
-                    boundary_taxonomy_map=task.boundary_taxonomy_map,
-                    proteome_index=task.proteome_index,
-                    extension_bp=task.extension_bp,
-                ),
-            )
-            for index, boundary, allowed_interval in task.boundaries
-        ]
-    finally:
-        scaffold_index.close()
+    """Read the exact uppercase sequence without caching a BioPython record."""
+    sequence = Path(task.sequence_path).read_bytes().decode("ascii")
+    return [
+        (
+            index,
+            _plan_boundary_partition(
+                boundary,
+                allowed_interval=allowed_interval,
+                sequence=sequence,
+                validated_markers=task.validated_markers,
+                boundary_diamond_query=task.boundary_diamond_query,
+                boundary_taxonomy_map=task.boundary_taxonomy_map,
+                proteome_index=task.proteome_index,
+                extension_bp=task.extension_bp,
+                metadata_families=task.metadata_families,
+            ),
+        )
+        for index, boundary, allowed_interval in task.boundaries
+    ]

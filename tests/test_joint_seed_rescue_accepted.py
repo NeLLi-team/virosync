@@ -265,6 +265,7 @@ def test_prepared_joint_records_only_accepted_child_ambiguity(
         proteome_index=repeat_inputs["proteome_index"],
         config=config,
         accepted_ids=accepted_ids,
+        metadata_families={},
     )
 
     assert bool(prepared) is expected

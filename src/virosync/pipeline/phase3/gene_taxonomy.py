@@ -218,19 +218,20 @@ def _viral_namespace(prefix: object) -> str:
     return EUK_PEVE_LABEL if namespace == _PEVE_UPPERCASE else namespace
 
 
-def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
+def qualified_viral_hits(record: dict, *, preserve_subtype: bool = False) -> list[tuple[str, str]]:
     """Return ``(prefix, target)`` for identity-qualified viral top-10 hits.
 
     One place canonicalizes a top-10 hit list into viral reference namespaces:
     VP and PLV fold onto PPV, and a hit below ``MIN_VIRAL_HIT_PIDENT`` does not
-    qualify. EUK-pEVE qualifies as a viral namespace under its own spelling. It
+    qualify. ``preserve_subtype`` keeps raw VP/PLV namespaces for subtype votes.
+    EUK-pEVE qualifies as a viral namespace under its own spelling. It
     names no lineage, so :func:`viral_hit_categories` keeps it out of every
     class vote. ``record`` needs ``top10_prefixes`` and ``top10_pidents``;
     ``top10_targets`` is optional and yields ``""`` when absent.
     """
-    prefixes = [
-        _viral_namespace(prefix) for prefix in _split_top10_field(record.get("top10_prefixes")) if str(prefix).strip()
-    ]
+    prefix_field = record.get("top10_raw_prefixes") or record.get("top10_prefixes")
+    raw_prefixes = [str(prefix).strip().rstrip("_") for prefix in _split_top10_field(prefix_field)]
+    prefixes = [_viral_namespace(prefix) for prefix in raw_prefixes]
     pidents: list[float] = []
     for value in _split_top10_field(record.get("top10_pidents")):
         try:
@@ -244,6 +245,8 @@ def qualified_viral_hits(record: dict) -> list[tuple[str, str]]:
             continue
         if pident < MIN_VIRAL_HIT_PIDENT:
             continue
+        if preserve_subtype and raw_prefixes[index] in {"VP", "PLV"}:
+            prefix = raw_prefixes[index]
         hits.append((prefix, targets[index] if index < len(targets) else ""))
     return hits
 

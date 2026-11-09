@@ -33,18 +33,20 @@ from virosync.pipeline.hallmark_evidence import (
     HallmarkSupport,
     HallmarkWitness,
     assess_hallmarks,
+    get_model_roles,
 )
 from virosync.pipeline.host_signatures import (
     HostSignatureModel,
     get_taxonomy_lookup,
     host_signature_density_evalue_weighted,
 )
-from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
+from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence, passes_capsid_score_floor
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, validate_confirmed_seed_containment
 from virosync.pipeline.phase1.viral_markers import (
     base_marker_gene_id,
     is_cress_specific_top1_marker,
     is_identity_qualified_cress_marker,
+    resolve_marker_family,
 )
 from virosync.pipeline.phase2.boundary_refiner import (
     RefinedBoundary,
@@ -53,10 +55,11 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.pipeline.phase3.gene_taxonomy import (
     has_only_peve_viral_hits,
     peve_profile_class,
+    qualified_viral_hits,
     viral_hit_categories,
 )
 from virosync.pipeline.phase3.low_support import assess_competitive_viral_support
-from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL
+from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL, resolve_org_id
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
 
 from .evidence_graph import (
@@ -225,7 +228,11 @@ def load_marker_annotation_index(annotation_path: Path | None) -> dict[str, dict
                 text_fields.insert(0, model_name)
             text = " ".join(text_fields)
             categories = _categorize_text(text)
-            family = _infer_family_from_model(model_name, source, description)
+            family = (
+                "UNKNOWN"
+                if source == "EVE_structure_20260811"
+                else _infer_family_from_model(model_name, source, description)
+            )
             # capscan MCP markers carry their Bellas group in the description
             # ("capscan <group> Major Capsid Protein"); surface it for likely_group.
             capscan_group = ""
@@ -244,33 +251,28 @@ def load_marker_annotation_index(annotation_path: Path | None) -> dict[str, dict
 def summarize_marker_hits(
     hallmark_genes: list[str],
     annotation_index: dict[str, dict] | None = None,
+    *,
+    hallmark_hits: Iterable[object] | None = None,
 ) -> dict:
     annotation_index = annotation_index or {}
     categories: set[str] = set()
     families: Counter[str] = Counter()
     has_mcp = False
 
-    for gene in hallmark_genes:
+    hits = list(hallmark_hits) if hallmark_hits is not None else [None] * len(hallmark_genes)
+    for gene, hit in zip(hallmark_genes, hits, strict=True):
         gene_key = gene.lower()
         has_mcp = has_mcp or is_mcp_gene(gene_key)
         annotation = annotation_index.get(gene_key)
         if annotation:
             categories.update(annotation.get("categories", set()))
-            family = annotation.get("family", "UNKNOWN")
-            if family != "UNKNOWN":
-                families[family] += 1
-            continue
-
-        # Fallback: infer from gene name only
-        categories.update(_categorize_text(gene))
-        if gene_key.startswith(("vp_", "plv_")):
-            # vp_ and plv_ markers are both Preplasmiviricota; the subgroup is
-            # kept separately in ppv_subtype.
-            families["PPV"] += 1
-        elif gene_key.startswith("mirus_"):
-            families["MIRUS"] += 1
-        elif gene_key.startswith(("gvogm", "gamadvirus")) or gene_key in {"og1352", "og484"}:
-            families["NCLDV"] += 1
+        else:
+            categories.update(_categorize_text(gene))
+        profile_family = peve_profile_class(_hit_model_name(hit), hit) if hit is not None else ""
+        metadata_family = annotation.get("family", "UNKNOWN") if annotation else _infer_family_from_model(gene, "", "")
+        family = resolve_marker_family(gene_key, profile_family or metadata_family)
+        if family:
+            families["PPV" if family in {"VP", "PLV"} else family] += 1
 
     group_hits = 0
     for group, group_categories in MARKER_CATEGORY_GROUPS.items():
@@ -452,25 +454,40 @@ def compute_marker_completeness(
     }
 
 
-def infer_ppv_subtype(hallmark_genes: list[str]) -> str:
-    """Return VP or PLV only for unambiguous subtype-specific marker evidence."""
-    has_vp = False
-    has_plv = False
+def infer_ppv_subtype(
+    hallmark_genes: list[str],
+    taxonomy_records: Iterable[dict] = (),
+    taxonomy_lookup: dict | None = None,
+) -> str:
+    """Combine informative composition and qualified references; conflicts stay unresolved."""
+    votes = set()
     for gene in hallmark_genes:
         key = gene.lower()
-        for label, prefixes in VP_CORE_MARKER_PREFIXES.items():
-            if label != "atpase" and key.startswith(prefixes):
-                has_vp = True
-        if key.startswith(PLV_CORE_MARKER_PREFIXES["mcp"]):
-            has_plv = True
-
-    if has_vp == has_plv:
-        return ""
-    if has_vp:
-        return "VP"
-    if has_plv:
-        return "PLV"
-    return ""
+        if any(key.startswith(prefixes) for label, prefixes in VP_CORE_MARKER_PREFIXES.items() if label != "atpase"):
+            votes.add("VP")
+        mcp_panels = {
+            role["panel"]
+            for role in get_model_roles(gene)
+            if role["marker"] == "MCP" and role["role"] == "core_marker" and not role["excluded_from_scoring"]
+        }
+        if key.startswith(PLV_CORE_MARKER_PREFIXES["mcp"]) and mcp_panels == {"Polinton_like_viruses"}:
+            votes.add("PLV")
+    lookup = taxonomy_lookup or {}
+    for record in taxonomy_records:
+        for prefix, target in qualified_viral_hits(record, preserve_subtype=True):
+            if prefix == EUK_PEVE_LABEL:
+                continue
+            if prefix in {"VP", "PLV"}:
+                votes.add(prefix)
+            lineage = str(lookup.get(resolve_org_id(target, lookup)) or "").lower()
+            if any(token in lineage for token in ("virophag", "virophaviricetes", "maveriviricetes")):
+                votes.add("VP")
+            if any(
+                token in lineage
+                for token in ("polinton-like", "polinton_like", "aquintoviricetes", "phypoliviridae", "archintovirales")
+            ):
+                votes.add("PLV")
+    return next(iter(votes)) if len(votes) == 1 else ""
 
 
 _VALIDATED_MARKER_STATUSES = frozenset({"validated", "validated_novel"})
@@ -503,33 +520,9 @@ def _hit_model_name(hit: object) -> str:
 def _top10_record(hit: object) -> dict:
     """The top-10 taxonomy fields of a hit, as the gene-taxonomy helpers read them."""
     return {
-        "top10_prefixes": _hit_field(hit, "top10_prefixes"),
+        "top10_prefixes": _hit_field(hit, "top10_raw_prefixes") or _hit_field(hit, "top10_prefixes"),
         "top10_pidents": _hit_field(hit, "top10_pidents"),
         "top10_targets": _hit_field(hit, "top10_targets"),
-    }
-
-
-def with_profile_class_families(marker_summary: dict, hits: Iterable[object]) -> dict:
-    """Add the class of each profile hit with only EUK-pEVE references as a marker family.
-
-    ``marker_summary`` comes from :func:`summarize_marker_hits`. A structure-derived
-    profile has no family in its annotation, so by name it adds none. Its training
-    EVEs give it a class (``STRUCTURE_PROFILE_CLASSES``), and that class becomes
-    the marker family when every qualified viral reference of the hit is EUK-pEVE.
-    A hit with a lineage reference gets no family from its profile. ``hits`` are
-    dicts or objects with ``hallmark_gene``, ``top10_prefixes`` and ``top10_pidents``.
-    """
-    classes = [profile_class for hit in hits if (profile_class := peve_profile_class(_hit_model_name(hit), hit))]
-    if not classes:
-        return marker_summary
-    counts = Counter(marker_summary["family_counts"]) + Counter(classes)
-    dominant_family, dominant_count = counts.most_common(1)[0]
-    return {
-        **marker_summary,
-        "families": sorted(counts),
-        "family_counts": dict(counts),
-        "dominant_family": dominant_family,
-        "dominant_fraction": dominant_count / sum(counts.values()),
     }
 
 
@@ -784,7 +777,7 @@ def has_validated_capsid_hit(hits: list) -> bool:
     ``validation_status``.
     """
     capsid_hits = [hit for hit in hits if is_capsid_evidence_gene(str(_hit_field(hit, "hallmark_gene") or ""))]
-    return any(is_validated_marker(hit) for hit in capsid_hits)
+    return any(passes_capsid_score_floor(hit) and is_validated_marker(hit) for hit in capsid_hits)
 
 
 def validated_capsid_gene_ids(hits: Iterable[object]) -> list[str]:
@@ -2340,6 +2333,8 @@ class EvidenceSynthesizer:
         viral_structure_db: Path | None = None,
         genome_path: Path | None = None,
         work_dir: Path | None = None,
+        *,
+        marker_annotation_index: dict[str, dict] | None = None,
     ):
         """Initialize evidence synthesizer.
 
@@ -2358,7 +2353,7 @@ class EvidenceSynthesizer:
         self._boltz_analyzer = None
         self._phylogenetic_validator = None
         self._tmvec_searcher = None
-        self._marker_annotation_index = None
+        self._marker_annotation_index = marker_annotation_index
 
         self._phase1_host_signature_host_prefixes = "."
         self._phase1_host_signature_top_tokens = "."
@@ -2624,9 +2619,8 @@ class EvidenceSynthesizer:
                 and is_rescued_protein_id(gene)
             }
         )
-        marker_summary = with_profile_class_families(
-            summarize_marker_hits(hallmark_genes, annotation_index=self.marker_annotation_index),
-            deduped_hits,
+        marker_summary = summarize_marker_hits(
+            hallmark_genes, annotation_index=self.marker_annotation_index, hallmark_hits=deduped_hits
         )
         (
             identity_qualified_cress_genes,
@@ -2663,7 +2657,9 @@ class EvidenceSynthesizer:
         result.ncldv_completeness_ratio = completeness["ncldv_completeness_ratio"]
         result.mirus_completeness = completeness["mirus_completeness"]
         result.mirus_completeness_ratio = completeness["mirus_completeness_ratio"]
-        result.ppv_subtype = infer_ppv_subtype(hallmark_genes)
+        result.ppv_subtype = infer_ppv_subtype(
+            hallmark_genes, [_top10_record(hit) for hit in deduped_hits], get_taxonomy_lookup()
+        )
         # taxonomy_class is assigned by _assign_taxonomy_class, after the gene
         # taxonomy is processed: the weighted vote needs both searches.
         if result.region_classification in {"VP", "PLV", "PPV", "UNKNOWN", ""}:
@@ -2698,6 +2694,15 @@ class EvidenceSynthesizer:
         # MCP markers disagree the weighted vote settles it, and a class the
         # weights chose is not one a capsid decided.
         result.taxonomy_class_from_mcp = len(mcp_vote_classes(hallmark_hits, taxonomy_lookup)) == 1
+        subtype_records = [
+            _top10_record(hit)
+            for hit in hallmark_hits or []
+            if is_validated_marker(hit) and is_ordinary_marker_evidence(hit)
+        ]
+        subtype_records.extend(
+            _top10_record(record) for record in gene_taxonomy_records or [] if not _hit_field(record, "is_flanking")
+        )
+        result.ppv_subtype = infer_ppv_subtype(result.hallmark_genes, subtype_records, taxonomy_lookup)
 
     def _process_gene_taxonomy(
         self,

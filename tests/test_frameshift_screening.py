@@ -606,3 +606,29 @@ def test_frameshift_runtime_has_no_bath_identity_and_tracks_native_artifacts(
     schemas = {identity.relative_path: identity.schema for identity in identities}
     assert schemas["phase1/frameshift_screening/frameshift_hits.tsv"] == "frameshift-hits-v2"
     assert schemas["phase1/frameshift_screening/frameshift_events.tsv"] == "frameshift-events-v1"
+
+
+@pytest.mark.parametrize("capsid_score", [9.9996, 10.0])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_capsid_floor_precedes_frameshift_overlap_arbitration(tmp_path, capsid_score, reverse):
+    capsid = replace(_hit(hit_id="capsid", score=capsid_score), query_name="PLV_MCP")
+    noncapsid = replace(_hit(hit_id="noncapsid", score=9.5), query_name="VP_ATPase_1")
+    hits = [capsid, noncapsid]
+    if reverse:
+        hits.reverse()
+    markers = [_validated_marker(hit) for hit in hits]
+    diamond = tmp_path / "diamond.tsv"
+    diamond.write_text(
+        "".join(f"{frameshift_screening.rescued_protein_id(hit)}\tNCLDV__ref\t1e-20\t80\t35\t75\n" for hit in hits)
+    )
+    selected = frameshift_screening.select_confirmed_frameshift_markers(
+        markers,
+        {frameshift_screening.rescued_protein_id(hit): hit for hit in hits},
+        diamond,
+        validated_prefixes={"NCLDV__"},
+        min_pident=25.0,
+    )
+    assert [marker.hmm_target for marker in selected] == ["PLV_MCP" if capsid_score >= 10 else "VP_ATPase_1"]
+    assert [marker.hmm_score for marker in selected] == [capsid_score if capsid_score >= 10 else 9.5]
+    assert len(markers) == 2
+    assert all(marker.validation_status == "validated" for marker in markers)

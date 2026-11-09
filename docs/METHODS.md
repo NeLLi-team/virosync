@@ -1,5 +1,21 @@
 # Outputs and interpretation
 
+## Reported capsid admission and confidence
+
+New seed and evidence admission requires a full-sequence HMM score of at least 10 bits for a
+semantic capsid, coat or Penton model. This floor also applies to validated
+EUK-pEVE-backed capsids; it does not change noncapsid thresholds. Raw reported
+hits remain provenance. Once admitted, full assigned confirmed seed identities
+and spans remain protected through trimming, merging and partitioning.
+
+An eligible reported capsid supplies a MEDIUM floor only when it has validated
+viral evidence, a score of at least 75 bits, or positive viral identity in its own
+retained marker top hits. E-value alone does not supply this floor. Other eligible
+reported capsids retain a LOW witness. A neighboring viral gene is separate
+regional evidence, not a self-gene viral hit. These admission choices can remove
+real weak capsid hits; no claim of zero biological loss is made.
+
+
 Use the accepted-prediction table for counts and later analyses. Use the
 detailed table to check why ViroSync accepted or rejected a candidate.
 
@@ -24,7 +40,7 @@ The main per-genome files are:
 | `phase3_synthesis/gene_taxonomy/` | Per-candidate gene taxonomy tables. Written when at least one EVE is accepted. |
 | `phase3_synthesis/gene_functions.tsv` | Function labels of core genes in the accepted EVEs. Columns: `eve_id`, `porf_id`, `label`, `module`, `evidence`, `evalue`; one row per labelled gene. Written when at least one EVE is accepted and the resource bundle is v1.2.0 or later. See [gene-function labels](#gene-function-labels). |
 | `phase3_synthesis/gene_function_length_exclusions.tsv` | Core proteins excluded from the gene-function profile search by its length limit, one row per EVE/protein pair. Columns: `eve_id`, `porf_id`, `status`, `reason`, `length_aa`, `limit_aa`. Written with `gene_functions.tsv`; a header-only table records no length exclusions. |
-| `notebooks/jupyter/eve_analysis.ipynb` | Per-genome report, including repeat-assessment summaries for accepted EVEs. Use the detailed table and repeat sidecar for rejected candidates. |
+| `notebooks/jupyter/eve_analysis.ipynb` | Optional per-genome report, enabled with `--plots`, including repeat-assessment summaries for accepted EVEs. Use the detailed table and repeat sidecar for rejected candidates. |
 | `eve_gene_map.syntviz.json` | Report figure: the shown EVEs with their flanks, gene categories, gene functions and DIAMOND protein hits between EVE cores, as a [Syntviz](https://pypi.org/project/syntviz/) session. `syntviz view` opens it in the interactive viewer. Written when the report shows at least one EVE. |
 | `eve_gene_map_syntviz.png`, `eve_gene_map_syntviz.svg` | The same figure as images. Written only when Node.js is available. |
 
@@ -152,6 +168,7 @@ artifact versions:
 | --- | --- |
 | Public output schema | 16 |
 | Coordinate schema | 2: 0-based, half-open TSV and BED coordinates |
+| Run state and phase markers | 4; run identity binds `execution.generate_plots` |
 | Phase-1 checkpoint, `phase1/resume_state.json` | `virosync.phase1.resume_state/v5` |
 | Full Phase-2 checkpoint, `phase2/resume_state.json` | `virosync.phase2.resume_state/v10` |
 | Refined-boundary checkpoint, `phase2/refined_state.json` | `virosync.phase2.refined_boundaries/v8` |
@@ -166,10 +183,15 @@ Incompatible checkpoint schemas cannot be reused. A changed run fingerprint
 starts a new run; otherwise only the validated sequence of completed phases
 can be reused.
 
+Checkpoint JSON reads accept files up to 2 GiB. Each read is bounded by the
+observed file size plus one byte and rejects changes during the read. This is
+a file-size limit, not a memory estimate: decoding and typed validation can
+require several times the serialized size.
+
 The run identity records `VIROSYNC_HOST_LINEAGE` as `environment.host_lineage`
 and includes its exact value in the run fingerprint. An unset or empty value is
 recorded as an empty string. Changing the value changes the run fingerprint and
-starts a new run. The value remains a fallback for an empty learned host lineage;
+starts a new run. The value remains a token-signature fallback for an empty learned host model;
 recording it does not change how the detector uses it.
 `provenance.json` repeats this captured value as `configuration.host_lineage`.
 
@@ -185,9 +207,9 @@ of ten genes; the HHG anchor-merging distance is a separate setting.
 The extension walk and joint rescue count three host-signature matches without
 intervening qualifying viral support. Neutral and searched no-hit genes neither
 increment nor reset that count. Qualifying viral support, including deep-hit
-vetoes and confirmed markers, resets it. Existing non-host positive support,
-including foreign and ML evidence, also resets the count; joint assessment uses
-the support available there.
+vetoes and confirmed markers, resets it. Nonviral foreign and ML evidence does
+not reset the host count. Such evidence can still support growth before a host
+barrier; joint rescue applies the same viral-only reset rule.
 Searched no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped in the five-gene lookahead; they never extend the hull
 on their own. Any nonempty hit namespace with host share below 0.10 still supplies foreign support, including
 bacterial hits; this separate positive-support rule is unchanged.
@@ -234,7 +256,13 @@ Treat `eve_id` as an opaque identifier: read coordinates from the `scaffold`,
 `canonical_selection_outcome` records direct retention, gate rejection, loss
 of a frameshift-rescued marker, overlap selection or suppression, or lack of
 viral evidence. Both `kept` and `overlap_selected` can identify accepted
-candidates. Use the accepted-prediction table to determine which candidates
+candidates. An overlap loser is retained as `overlap_retained_unique_witness`
+when it carries an authenticated, fully contained spatial witness absent from
+the selected candidates. Witness coverage requires the same complete evidence
+membership, not interval overlap alone. Losers are reconsidered in tier, score
+and coordinate order, with candidate ID breaking ties; each retained loser adds
+its witnesses to coverage. Retention preserves its full coordinates, tier and
+seed ownership. Use the accepted-prediction table to determine which candidates
 ViroSync accepted.
 
 `normal_quality_gate_reason` records the decision already computed during
@@ -260,8 +288,17 @@ writes `.` rather than recomputing or inferring a reason.
 | `VIRAL_UNKNOWN` | Viral evidence is present, but no single lineage wins |
 | `UNKNOWN` | No published lineage class is resolved |
 
-`ppv_subtype` is `VP` or `PLV` only when subtype-specific marker evidence
-supports that label. A dot means unresolved or not applicable. An accepted
+`ppv_subtype` uses identity-qualified raw VP/PLV reference hits, resolved
+subtype-specific taxonomy and informative marker composition. Contradictory
+support leaves the subtype unresolved. Generic PPV or Preplasmiviricota,
+EUK-pEVE and a Maverick profile name alone do not establish VP or PLV.
+Virophaviricetes and its older name Maveriviricetes support VP; Aquintoviricetes,
+Phypoliviridae and Archintovirales support PLV, following the
+[2025 ICTV ratification](https://pmc.ncbi.nlm.nih.gov/articles/PMC12451622/).
+Lavidaviridae alone remains unresolved because
+[historical assignments include PLV references](https://pmc.ncbi.nlm.nih.gov/articles/PMC9952930/).
+Polintoviricetes, Eupolintoviridae and Adintoviridae alone do not settle this
+subtype. A dot means unresolved or not applicable. An accepted
 `UNKNOWN` region requires a contained spatial witness or support from an ANI
 cluster with a marker-bearing EVE; this support alone does not prove viral origin.
 
@@ -339,15 +376,19 @@ spatial rescue use the separate exact-model catalogue described under
 [Confidence and limitations](#confidence-and-limitations). A catalogue structural
 anchor is distinct from a catalogue capsid assignment. Neither the flag nor
 a model-name substring adds an unlisted model to that catalogue.
-The reported-capsid MEDIUM witness is separate from this annotation flag:
-curated capsid and Penton hits can receive that floor without viral DIAMOND support.
+The reported-capsid witness is separate from this annotation flag. It is MEDIUM
+when validation status is `validated`, score is at least 75, E-value is at most
+0.01, or viral identity among the retained marker top20 is positive; otherwise it is LOW.
+The legacy field `viral_top10_max_pident` stores this configured marker-search
+depth (currently 20), not the separate raw host top-10 search.
 
 A region whose viral hits are all `EUK-pEVE`, in the marker
 database, the proteome database or both, and whose markers supply no profile
 class, has the likely family `MIXED`. This holds whatever lineage the marker names
 or the Phase 1 region class suggest, and the gate reads a likely family of `MIXED`
-before the region class. A retained reported-capsid witness independently grants
-MEDIUM acceptance without a minimum length or viral-reference requirement.
+before the region class. An authenticated, fully contained reported-capsid witness
+retains the region in canonical output at its assessed tier, including LOW,
+without a minimum length or viral-reference requirement.
 Without that witness, the region passes the gate through the same rule as a
 `VIRAL_UNKNOWN` region of mixed markers: a length above 2,000 bp, and capsid
 evidence or two hallmarks with one non-ATPase hallmark. A region with any lineage
@@ -529,7 +570,7 @@ marker class votes use all retained matches. Host training first excludes protei
 with any viral or supporting prefix in these retained marker matches, including
 PHAGE and GVMAG. Any reported semantic capsid or Penton hit also excludes its
 whole protein from host training, even without viral DIAMOND support or with a
-Pfam override. Its reported-capsid seed and MEDIUM floor remain unchanged; this
+Pfam override. Its reported-capsid seed remains protected and its LOW/MEDIUM rule still applies; this
 does not grant automatic HIGH confidence.
 
 The remaining current arbitration-selected noncapsid cohort receives a separate
@@ -537,9 +578,10 @@ ten-hit host search. It applies the same reference mask, retains reference order
 and duplicate genomes, and does not apply twin or per-genome selection. Its
 candidate limit remains ten without a mask or100 before masking, followed by at
 most ten unmasked matches. Host exclusion, presence and weighting use these ten
-matches. Each projected HMM segment contributes its original rank or bitscore
-weights; different segments of one protein can contribute separately. This does
-not restore historical HMM eligibility thresholds.
+matches. Each full-protein query contributes its original rank or bitscore
+weights once; several HMM projections of that same query do not multiply its
+contribution. Independent proteins remain separate observations. This does not
+restore historical HMM eligibility thresholds.
 
 Both searches use the same sensitivity flags. The separate
 `host_hmm_hit_porfs.faa` and `host_diamond_top10.tsv` files are authenticated
@@ -605,23 +647,65 @@ full-proteome prototype use one process with the same eight-thread cap.
 Timeout retries cannot exceed the original process's thread count. Results
 merge in input chunk order; any failed chunk fails the search.
 
-Boundary searches use DIAMOND's automatic algorithm selection in both
-single-call and chunked paths, with a default of 10,000 proteins per chunk.
-Changes to algorithm selection or query partitioning require scientific
-validation; argument checks do not establish equivalent search results.
-Automatic selection can choose different algorithms for full and final short
-chunks, so changing chunk boundaries may change the returned hits.
-The full-proteome prototype remains an unchunked search. The watchdog waits for
+Boundary searches pin DIAMOND's query-indexed algorithm (`--algo 1`) in both
+single-call and chunked paths, with a default of 100,000 proteins per chunk
+in both pipeline configuration and direct boundary calls.
+The shared search serves top-ten taxonomy and deeper viral-veto evidence at
+the larger configured hit depth. The explicit algorithm keeps this choice
+independent of query size; it does not establish identical returned hits when
+chunk boundaries change. Scientific output parity and runtime require measured
+validation. The full-proteome prototype remains an unchunked search with
+DIAMOND's automatic algorithm selection. The watchdog waits for
 child exit between activity checks, so a completed search need not wait for the
 next poll.
 
-Terminal-repeat planning groups work by scaffold within the effective CPU budget.
-Spawned workers receive explicit taxonomy and host-lineage context, hold one
-scaffold payload at a time, and reuse its sequence for that scaffold's plans.
+Terminal-repeat planning groups work by scaffold. Its worker count is capped by
+the configured budget, CPU affinity, Slurm allocation and finite ancestor cgroup
+CPU limits. Before spawning, a memory estimate reserves 25% of
+available host/cgroup headroom and accounts for the largest scaffold, both Python
+seed-index orientations, native buffers, expanded task/taxonomy context and
+temporary file bytes (including RAM-backed storage). This is a concurrency
+estimate, not a peak-memory guarantee; large-input calibration remains required.
+Admission also estimates seed-pair and marker-interval allocations per boundary
+search context. The 4,096 pairing cap applies to each marker/seed rectangle,
+not to the union. Metadata bounds cover the union's concatenation and sort,
+marker-specific interval arrays, and the retained Python lists, sets and tuples.
+The estimate uses the largest phased allocation, without changing pair selection.
+For union pairs P, accumulated marker intervals I, largest marker pair count Q,
+staircase chunks H, markers M and seed types K, the added byte allowance is
+max(96P, 32P + 160Q + 24I, 24P + 808I) + 256H + MK.
+The final interval component is 80 + 216 + 512 = 808 bytes per row; these byte
+allowances remain predictive and require calibration, unlike the cardinality bounds.
+It predicts one pool's memory use; independently admitted genome pools can spend
+the same sampled headroom. The prepared campaign runs one genome per task at a time.
+Supported memory accounting uses cgroup v2. Headroom credits only inactive file
+cache after subtracting dirty/writeback bytes, never the file or shared-memory
+totals. A Slurm job without a readable finite v2 memory budget runs serially;
+the v2 cap must also cover any tighter valid declared Slurm memory allocation.
+Before spooling, memory and temporary-storage checks use raw FASTA file size as
+an upper bound on sequence bytes and reserve parent materialization space. This
+can select fewer workers on fragmented genomes. Metadata is staged first; worker
+admission then occurs once, before sequence writes or process creation. Files
+are charged once against the initial headroom, including RAM-backed storage.
+Insufficient resources or storage exhaustion during preparation remove the spool
+and select the original in-process serial path. One log records the selected
+worker count or fallback reason. Completed task/result/sequence files are removed.
+Spawned workers load full taxonomy context from one shared file and receive
+explicit host-lineage context. Task/results use files and fixed control messages;
+each worker reads one uppercase scaffold sequence without a second BioPython copy.
 The parent restores original boundary order before conflict resolution. One
 worker uses the serial reference path. Errors abort the pool and terminate its
-owned process groups, including GenomeTools descendants. Each GenomeTools
+owned process groups, including GenomeTools descendants. Linux parent-death
+signals independently bind workers and native commands to their creator, with
+expected-parent race checks; native exec preserves this binding but fork does not.
+Spawn-time imports precede the worker binding, and forked native descendants do
+not inherit it. External whole-job cgroups and walltime enforcement remain
+responsible for these residual cases and for stalled Python planning or file I/O.
+Each GenomeTools
 command has a 30-minute deadline; quiet output alone does not signal a stall.
+The parent removes its temporary root after stopping and joining workers;
+fatal termination of the parent can leave files. Bound workers and direct native
+commands terminate; the pre-binding and fork exceptions above still apply.
 Temporary-directory settings are never changed globally. Worker-count parity
 requires validation on the same source and inputs; speed alone is not evidence
 of equivalent scientific output.
@@ -723,11 +807,12 @@ the region that contains it. Only catalogue-qualified evidence contributes to
 the graduated hallmark score.
 
 Ordinary catalogue rescue examines retained Phase 1 marker records with status
-`validated` or `validated_novel`, at E <= 0.01. Separately, every reported semantic
-capsid or Penton hit survives model arbitration and protects its complete gene
-span. It supplies a MEDIUM witness without a score, E-value, coverage or viral
-DIAMOND requirement, while keeping its original validation status and catalogue
-annotation. This exception does not add ordinary core credit or force HIGH.
+`validated` or `validated_novel`, at E <= 0.01. Separately, raw semantic capsid
+or Penton hits remain provenance. Hits with score >=10 are eligible for new
+admission and protect their complete assigned gene spans. Their reported witness
+is MEDIUM if status is `validated`, score >=75, or viral identity among the
+retained marker top20 >0; otherwise it is LOW. E-value alone does not promote it.
+Original validation status and catalogue annotation remain unchanged. This exception does not add ordinary core credit or force HIGH.
 Pfam-overridden capsids retain the recorded arbitration outcome and receive only
 this reported-capsid role and floor; they cannot replace the arbitration-selected
 noncapsid model, supply HMM-only novelty cluster support, or contribute to
@@ -824,7 +909,7 @@ provide it regardless of host share. Neutral and searched no-hit genes neither
 increment nor reset the host count. Qualifying viral support, including a
 deeper-hit veto or confirmed marker, resets it.
 Cellular-versus-viral score competition does not override this veto.
-A single eukaryotic best hit does not establish this stop. A missing model, a model without a host lineage or
+A single eukaryotic best hit does not establish this stop. A missing model, a model without cellular host tokens or
 missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
@@ -841,27 +926,30 @@ stop and split a merge that a shorter envelope had allowed.
 Phase 3 reports the retained coordinates directly. It does not export a second
 candidate interval or reduction fields. Integration-gene scans use the retained
 interval plus the configured Phase 1 extension flank.
-Host-lineage share measures the hit weight within the host's lineage; it does
-not compare a gene's hit composition with the pooled model by weighted Jaccard.
-The host signature is read top down from the host-signature model, which keeps
-the hit weight of each full lineage. The domain (EUK, BAC or ARC) with the most
-hit weight is the host domain, each hit counted once, so MITO, PLASTID, viral
-and other-domain lineages never enter. Each rank below it keeps every clade
-with credit in proportion to its weight, relative to the largest clade, and the
-walk continues under that largest clade only while it holds more than half of
-the named weight. The first rank without such a majority stays in the
-signature, and the walk stops below it, so a lineage reaches species only where
-the signature supports one. An unassigned level neither votes nor contradicts,
-and a rank is skipped where the unassigned weight that names a lower rank
-exceeds the largest named clade. A hit earns, at each rank, the credit of its
-clade weighted by the share of the largest clade at that rank, and the sum is
-divided by the total of those shares; credit ends below the first clade that is
-not the largest of its rank. Without any named cellular rank, for example with
-organelle-only hits, a signature has no host lineage, and the host stop and
-joint rescue are unavailable.
+The host signature pools taxonomy tokens across eligible marker genes and
+their first ten retained hits. Each whole lineage field is a token; its formal
+rank and position do not affect comparison. Under rank weighting, every token
+in hit 1 receives weight 10, hit 2 receives 9, through hit 10 receiving 1.
+Repeated tokens add across hits and marker genes. Filtering a hit does not
+change the ranks of later hits. Eukaryota, Bacteria and Archaea retain their
+weights; namespace aliases map to the same domain token. Empty fields and
+placeholders add no token. Pooling several marker profiles retains repeated
+host signal and noisy cellular matches without choosing a single best-hit
+lineage or forcing a majority at each named rank.
+
+Host scoring compares the gene and learned host token vectors by cosine
+similarity, then multiplies by the gene's assigned ordinary-cellular hit
+weight divided by all retained hit weight. Viral, pEVE, organelle and unknown
+hits add no host tokens but keep their weight in that denominator. Both the
+target namespace and its taxonomy label must identify ordinary cellular
+evidence. A broad shared clade, including Eukaryota alone, can support host
+origin; differences across the full distribution can distinguish other
+eukaryotes. This is a similarity score, not a probability or a literal fraction
+of host hits. A missing cellular model leaves host stopping unavailable unless
+a configured host lineage is set.
 Standalone checkpoint audits must load the configured taxonomy labels before
 scoring; normal fresh and resumed Phase 1 runs initialize this lookup.
-The configured taxonomy weighting applies to these hit shares, including the
+The configured taxonomy weighting applies to these token profiles, including the
 stored per-hit bitscores when `taxonomy_weight_mode` is `bitscore`.
 
 The existing `phase2.host_trim_enabled` and `host_trim_score_threshold`
@@ -913,7 +1001,14 @@ taxonomy evidence, so they are not independent observations.
 The packaged `hallmark_panels.json` records exact model aliases, core and
 support roles, structural anchors, capsids and excluded profiles for established
 and unresolved panels. Panels group evidence; they do not assign taxonomy. The
-catalogue is part of the run's resource fingerprint. Exact retained HMM scores,
+catalogue is part of the run's resource fingerprint. Numerical scoring can combine
+Virophages, Polinton_like_viruses and Maverick_Polintons in a PPV pool, or
+Nucleocytoviricota and Mirusviricota in an NCLDV/Mirus pool. The original winning
+panel is selected first; only its own pool can enrich its numerical evidence.
+An unrelated pool cannot displace that panel. Independent families
+and loci count once; per-model RNAPL/RNAPS aliases preserve separate subunits.
+Support-only roles remain support-only. Original panels alone determine spatial
+witnesses and automatic floors. Exact retained HMM scores,
 E-values, query envelopes and measured domain scores are carried through Phase 1
 resume state. Unmeasured diagnostics are absent, including those unavailable
 from frameshift evidence. HMM envelopes do not define genomic seed bounds.
@@ -929,7 +1024,7 @@ roles and panel assignments unchanged.
 
 All 33 `EVE_CAPSID_NOVEL_*` models resolve by exact ID. Penton models share
 the `Penton` family and cannot anchor an ordinary catalogue capsid bonus or floor.
-They receive the separate reported-capsid MEDIUM witness.
+They receive the separate reported-capsid witness under the LOW/MEDIUM rule above.
 Virophages pentons can join three-core witnesses for a MEDIUM floor or partner
 a capsid MCP within 5 kb for a HIGH floor. Profiles
 without an established panel assignment use one-family unresolved panels,
@@ -959,7 +1054,7 @@ independent family. The putative MCP `EVE_CAPSID_NOVEL_0029` belongs to the
 existing `MCP` family in Nucleocytoviricota and Polinton-like virus panels.
 It contributes core credit with `capsid=false`, which withholds the graduated
 capsid term, catalogue capsid-alone floor and capsid spatial witness. The separate
-reported-capsid exception still supplies a MEDIUM floor. Its
+reported-capsid exception still supplies its LOW/MEDIUM witness. Its
 MCP registration in `mcp_detection.py` still governs MCP annotation, Phase 1 seed
 confidence, class-vote overrides and output keep rules. It can join ordinary three-core
 witnesses within 15 kb for a MEDIUM floor. Catalogue tests alone do not validate
@@ -970,15 +1065,15 @@ An ordinary validated marker must have a viral reference hit among the retained
 marker matches (default 20) at >=25%
 identity; the existing `validated_novel` criteria remain separate. Supported
 or unvalidated hits remain diagnostic records and cannot supply qualifying
-ordinary cores or HIGH floors. Reported semantic capsid hits can still seed and
-supply their separate MEDIUM witness. Other structural-anchor models keep the
+ordinary cores or HIGH floors. Eligible semantic capsid hits with score >=10 can still seed and
+supply their separate LOW/MEDIUM witness. Other structural-anchor models keep the
 ordinary restrictions.
 Maximum family-to-protein matching prevents repeated profiles,
 families or one protein from counting twice. Strong evidence has E <= 1e-5.
 Support-only links require this strong threshold in both Phase 1 and Phase 3.
 They add coherence only within a panel with a qualifying core and cannot add
 cores or catalogue floors. Semantic capsid models with support-only annotations
-still supply their separate MEDIUM witness. Coherence can raise a single-core
+still supply their eligible LOW/MEDIUM witness. Coherence can raise a single-core
 score, but the fewer-than-two-core cap still prevents a HIGH score.
 Three or more independent core groups receive weight 1 each. A pair receives
 weight 1 per strong group and 0.5 per weak group, using the valid assignment
@@ -1031,9 +1126,12 @@ capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
 group supplies a HIGH floor without a distance restriction. The spatial rules
 add their floors only when all witness genes remain fully contained. Floors
 use the configured tier thresholds, whose defaults are 0.2 and 0.7.
-The reported-capsid witness supplies at least MEDIUM after these caps, even with
-no qualifying ordinary core. Its complete retained gene is sufficient for
-acceptance without a minimum region length. It does not create an automatic
+A reported-capsid hit must first pass the 10-bit admission floor. Its witness
+supplies MEDIUM after these caps only when status is
+`validated`, score >= 75, or viral identity among the retained marker top20 > 0;
+otherwise it remains LOW. Its authenticated complete retained gene is sufficient
+for canonical and ANI retention without a minimum region length. An independent
+stronger contained witness can lift the regional tier. It does not create an automatic
 HIGH floor; independently qualifying ordinary evidence can still support HIGH.
 
 A retained spatial witness can pass acceptance with an explicit rescue reason,
@@ -1406,7 +1504,7 @@ tier. Mixed pairs are excluded. Rejected pairs require overlapping stored
 `flank_start_bp`/`flank_end_bp` taxonomy-search envelopes. Accepted pairs may
 cross an exterior gap of at most 5,000 bp without envelope overlap. Every overlapping ORF
 in the joint hull must have been queried, and all original confirmed seed
-objects remain intact. A missing host model or a host model without a host lineage
+objects remain intact. A missing host model or a host model without cellular host tokens
 prevents rescue. Rejected pairs also require resolved ACGT sequence throughout the
 inter-core gap. For two already accepted children, only the newly added exterior
 gap must be fully resolved; ambiguous bases inside their original intervals are
@@ -1467,6 +1565,12 @@ annotation, and verification again. Children are replaced only when the
 joint result passes the per-candidate active native acceptance selection, including
 rescue-marker containment, and the joint child-contribution check. Third-candidate
 overlap exclusion and noncompeting fixed hulls prevent arbitration conflicts.
+An authenticated, fully retained spatial witness preserves its normal acceptance
+when frameshift-rescue provenance remains but no rescue marker remains in the
+final interval. This includes LOW and MEDIUM reported capsids, whether their
+protein came from ordinary translation or frameshift rescue. Provenance alone
+does not override that evidence; candidates without such evidence still require
+a retained rescue or ordinary marker.
 A rejected joint leaves its ordinary children intact. Proposals use only the
 original boundaries, and successful unions are not paired again. Two independent
 neighbors with complementary evidence and no detected separating feature can
@@ -1514,3 +1618,29 @@ Phase3 summary records carry `broad_host_counted` to identify actual raw-count
 contributors under the configured host label. Legacy per-region records use
 their existing `is_high_pident_euk` membership. Missing membership does not
 authorize subtraction; unsearched and flanking records are not contributors.
+
+## Shared resource family association
+
+Phase 1 seeds, retained Phase 2 boundaries, repeat children, accepted joints and
+the Phase 1-only export use the same family resolver as marker reporting.
+Recognized names take precedence over qualified structure-profile classes, which
+take precedence over bound annotation provenance. Structure-source annotations
+carry no fallback family. No new metadata-derived score credit is given to
+cellular or seed-blocked models; their existing internal evidence is retained.
+This changes family association/counting, not hallmark roles or score thresholds.
+
+Classification selects one highest-scoring ordinary, Pfam-selected hit per base
+protein before applying any seed allowlist, and counts distinct selected models.
+Ties retain the first hit. Repeat-child classification now uses that same
+projection instead of counting all alternative HMM names; repeat geometry, seed
+eligibility, confirmed seed identity/spans and profile qualification are unchanged.
+The annotation index is loaded once at the native run boundary and shared by
+classification and reporting, including worker and resumed paths.
+
+### Jelly-roll sequence-support score provenance
+
+A validated capsid hit supplies jelly-roll sequence support only when its full-sequence HMM score passes the same 10-bit capsid floor. The validated-marker TSV retains the round-trip score rather than rounding it across that boundary. Weak and malformed-score rows remain candidates with their original validation status. Independent quality-qualified Foldseek evidence can still provide structural support. An eligible alternate hit on the same base protein can provide sequence support; the first output identifier remains unchanged.
+
+Jelly-roll intake retains every alternate model for each exact query ID, including its exported Pfam override. Only ordinary eligible records supply sequence support or HK97 marker inference. Repeated rows do not create extra HMM domains. The first output query and model remain diagnostic provenance; a qualifying HK97 alternative can supply the family inference. Raw validation status remains unchanged, and blocked or weak rows can still receive independently qualified structural support.
+
+Frameshift-marker overlap arbitration applies the capsid score floor before selecting the highest-scoring eligible locus. A sub-10 capsid cannot suppress an overlapping eligible noncapsid marker; raw candidate exports remain unchanged.

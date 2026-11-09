@@ -143,9 +143,9 @@ phase2:
   diamond_control_sample_size: 100
   diamond_control_min_distance: 30
   diamond_top_k: 10
-  diamond_chunk_size: 10000
+  diamond_chunk_size: 100000
   diamond_random_seed: 42
-  # Independent veto-search depth when >10; original top10 search stays unchanged.
+  # Shared search depth is max(diamond_top_k, viral_hit_depth); positive evidence uses at most the first 10 hits.
   # A qualifying hit (>=25% identity) vetoes host status. At least 10.
   viral_hit_depth: 50
 
@@ -203,3 +203,4 @@ execution:
     repeatmasker_species: null
     repeatmasker_library: null
   resume: true
+  generate_plots: false

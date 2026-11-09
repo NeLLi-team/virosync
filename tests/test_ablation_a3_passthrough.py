@@ -66,6 +66,7 @@ def _run_a3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> phase2.Phase2Res
         ),
         genome_start_time=0.0,
         logger=logging.getLogger(__name__),
+        metadata_families={},
     )
 
 

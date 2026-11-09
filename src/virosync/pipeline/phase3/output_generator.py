@@ -37,7 +37,7 @@ from virosync.output_contract import (
     normalize_effective_eve_class,
     resolve_effective_eve_class,
 )
-from virosync.pipeline.hallmark_evidence import EXCLUDED_FAMILIES, has_spatial_rescue
+from virosync.pipeline.hallmark_evidence import has_spatial_rescue, scoring_roles
 from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.utils.atomic_write import atomic_write_context
 from virosync.utils.path_safety import require_strict_child, safe_filename_components
@@ -471,13 +471,8 @@ def _qualifying_hallmark_genes(result: VerificationResult) -> str:
     for hit in result.hallmark_evidence:
         if hit.evidence_id not in qualifying_ids:
             continue
-        for role in hit.model_roles:
-            if (
-                role["panel"] == assessment.summary.panel
-                and role["role"] == "core_marker"
-                and not role["excluded_from_scoring"]
-                and role["marker"] not in EXCLUDED_FAMILIES
-            ):
+        for role in scoring_roles(hit, assessment.summary.panel):
+            if role["role"] == "core_marker":
                 names.add(role["marker"])
     return "|".join(sorted(names)) or "."
 
@@ -498,7 +493,12 @@ def _is_atpase_marker(name: str) -> bool:
 def evaluate_v2_quality_gate(result: VerificationResult) -> QualityGateDecision:
     """Evaluate one result against the canonical v2 quality gate."""
     decision = _evaluate_class_quality_gate(result)
-    if not decision.kept or result.confidence_tier.upper() != "LOW" or _qualifying_hallmark_genes(result) != ".":
+    if (
+        not decision.kept
+        or result.confidence_tier.upper() != "LOW"
+        or _qualifying_hallmark_genes(result) != "."
+        or decision.reason == "reported_capsid_low_retention_pass"
+    ):
         return decision
     support = assess_competitive_viral_support(result)
     if len(support.supporting_gene_ids) < 2:
@@ -535,7 +535,8 @@ def _evaluate_class_quality_gate(result: VerificationResult) -> QualityGateDecis
     module_support = supplementary is not None and supplementary.eligible and supplementary.group == eve_class
 
     if has_spatial_rescue(result):
-        return QualityGateDecision(True, eve_class, "hallmark_spatial_rescue_pass")
+        reason = "reported_capsid_low_retention_pass" if tier == "LOW" else "hallmark_spatial_rescue_pass"
+        return QualityGateDecision(True, eve_class, reason)
 
     if tier in ("HIGH", "MEDIUM"):
         if eve_class == "MIXED":

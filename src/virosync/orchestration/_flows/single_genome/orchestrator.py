@@ -537,6 +537,7 @@ def _build_run_identity(
                 sha256=_compute_config_fingerprint(flat_config),
                 ablation_id=ablation_id.value,
                 ablation_contract_sha256=ABLATION_CONTRACT_SHA256,
+                generate_plots=flat_config["generate_plots"],
             )
         ),
         "code": asdict(
@@ -815,11 +816,11 @@ def _run_benchmark_eligible(output_dir: Path) -> bool:
 
 
 def _authenticated_output_files(output_dir: Path) -> dict[str, object]:
-    """Return the canonical public mapping from a published schema-v3 success."""
+    """Return the canonical public mapping from a published schema-v4 success."""
     output_dir = Path(output_dir)
     state = load_run_state(output_dir)
     if state.status != "success":
-        raise ValueError("output files require a published schema-v3 success state")
+        raise ValueError("output files require a published schema-v4 success state")
     return {
         "run_state": str(output_dir / RUN_STATE_FILENAME),
         "artifacts": {
@@ -1004,11 +1005,14 @@ def _publish_a1_seed_surface(
     proteome_path: Path,
     taxonomy_labels_file: Path | None,
     host_credit_threshold: float,
+    generate_plots: bool,
     seed_marker_allowlist: list[str] | None,
     extended_output: bool,
     export_all_eve_sequences: bool,
     logger,
     current_counters: AblationCounters,
+    metadata_families: dict,
+    marker_annotation_index: dict,
 ) -> dict:
     """Publish A1's nonzero Phase-1 seed surface without Phase 2 or 3."""
     from virosync.pipeline.hallmark_evidence import assess_hallmarks
@@ -1016,7 +1020,9 @@ def _publish_a1_seed_surface(
         build_phase1_seed_surface,
     )
 
-    surface = build_phase1_seed_surface(merged_seeds)
+    surface = build_phase1_seed_surface(
+        merged_seeds, metadata_families=metadata_families, marker_annotation_index=marker_annotation_index
+    )
     for result in surface.results:
         result.hallmark_evidence = [
             h
@@ -1075,6 +1081,7 @@ def _publish_a1_seed_surface(
             taxonomy_labels_file=taxonomy_labels_file,
             logger=logger,
             host_credit_threshold=host_credit_threshold,
+            generate_plots=generate_plots,
         )
     )
     persisted_summary = _summarize_prediction_outputs(
@@ -1286,7 +1293,7 @@ def _run_phase0_subflow(
     cached_genes = phase0_dir / "genes.gff"
     if resume and cached_proteome.exists() and cached_genes.exists():
         logger.info(
-            "Phase 0 partial-cache reuse is disabled until schema-v3 run state; recomputing masking and proteome"
+            "Phase 0 partial-cache reuse is disabled until schema-v4 run state; recomputing masking and proteome"
         )
 
     masking = masking or MaskingConfig()
@@ -1445,7 +1452,7 @@ def _single_genome_flow_impl(
         device=device,
     )
     # Retain the compatibility field name in schema-v2 reports, but bind it to
-    # the complete schema-v3 identity rather than the old 16-character config hash.
+    # the complete schema-v4 identity rather than the old 16-character config hash.
     config_fingerprint = run_fingerprint
 
     completed_artifacts = None
@@ -1494,7 +1501,7 @@ def _single_genome_flow_impl(
             invalidate_from_phase(output_dir, from_phase=0)
             completed_artifacts = None
         if completed_artifacts is not None:
-            logger.info("Resume: completed schema-3 outputs validated")
+            logger.info("Resume: completed schema-4 outputs validated")
             report_progress(100, "complete")
             return {
                 "genome_id": genome_id,
@@ -1646,6 +1653,25 @@ def _single_genome_flow_impl(
         list(reference_mask.taxa) or "none",
     )
 
+    from virosync.pipeline.phase1.viral_markers import metadata_marker_families
+    from virosync.pipeline.phase3.evidence_synthesizer import load_marker_annotation_index
+
+    annotation_path = (
+        Path(config.databases.hmm_database).resolve(strict=True).parent / "model_annotations_with_interpro.tsv"
+        if config.databases.hmm_database
+        else None
+    )
+    marker_annotation_index = load_marker_annotation_index(annotation_path)
+    metadata_families = metadata_marker_families(marker_annotation_index)
+    if annotation_path is not None and not annotation_path.is_file():
+        logger.warning("Marker annotation file absent; metadata family support unavailable: %s", annotation_path)
+    else:
+        logger.info(
+            "Loaded %d marker annotations; %d metadata family models eligible for classification",
+            len(marker_annotation_index),
+            len(metadata_families),
+        )
+
     # === PHASE 1: Seeding ===
     phase1_result = _run_phase1_subflow(
         masked_path=masked_path,
@@ -1660,6 +1686,7 @@ def _single_genome_flow_impl(
         config_fingerprint=config_fingerprint,
         resume_authorized=1 in reusable_phases,
         reference_mask=reference_mask,
+        metadata_families=metadata_families,
     )
     report_progress(45, "phase 1 complete")
 
@@ -1717,11 +1744,14 @@ def _single_genome_flow_impl(
             proteome_path=proteome_path,
             taxonomy_labels_file=databases.taxonomy_labels_file,
             host_credit_threshold=config.phase2.host_trim_score_threshold,
+            generate_plots=config.execution.generate_plots,
             seed_marker_allowlist=databases.seed_marker_allowlist,
             extended_output=phase3.extended_output,
             export_all_eve_sequences=phase3.export_all_eve_sequences,
             logger=logger,
             current_counters=ablation_counters,
+            metadata_families=metadata_families,
+            marker_annotation_index=marker_annotation_index,
         )
     if 1 not in reusable_phases:
         _write_ablation_events(
@@ -1765,6 +1795,7 @@ def _single_genome_flow_impl(
             config_fingerprint=config_fingerprint,
             resume_authorized=2 in reusable_phases,
             reference_mask=reference_mask,
+            metadata_families=metadata_families,
         )
     report_progress(75, "phase 2 complete")
 
@@ -1847,6 +1878,8 @@ def _single_genome_flow_impl(
         logger=logger,
         resume_authorized=False,
         reference_mask=reference_mask,
+        metadata_families=metadata_families,
+        marker_annotation_index=marker_annotation_index,
     )
     report_progress(90, "phase 3 complete")
 
@@ -2065,6 +2098,7 @@ def _single_genome_flow_impl(
             taxonomy_labels_file=databases.taxonomy_labels_file,
             logger=logger,
             host_credit_threshold=config.phase2.host_trim_score_threshold,
+            generate_plots=config.execution.generate_plots,
         )
     )
 
@@ -2245,7 +2279,7 @@ def _single_genome_flow_impl(
         ),
     )
     output_files = _authenticated_output_files(output_dir)
-    logger.info("Schema-v3 run state written: %s", output_files["run_state"])
+    logger.info("Schema-v4 run state written: %s", output_files["run_state"])
 
     # Final summary
     logger.info("=" * 60)
@@ -2374,10 +2408,11 @@ def single_genome_flow(
     boundary_diamond_control_sample_size: int = 100,
     boundary_diamond_control_min_distance: int = 30,
     boundary_diamond_top_k: int = 10,
-    boundary_diamond_chunk_size: int = 10000,
+    boundary_diamond_chunk_size: int = 100000,
     boundary_diamond_random_seed: int = 42,
     boundary_diamond_superset_prototype_enabled: bool = False,
     resume: bool = True,
+    generate_plots: bool = False,
     progress_callback: Callable[[float, str, bool], None] | None = None,
 ) -> dict:
     """Process a single genome through all ViroSync phases.

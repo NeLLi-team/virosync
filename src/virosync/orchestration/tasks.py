@@ -675,6 +675,7 @@ def verify_eve_task(
     taxonomy_labels_file: Path | None = None,
     ablation_id: AblationID = AblationID.A0,
     masked_genomes: frozenset[str] = frozenset(),
+    marker_annotation_index: dict[str, dict] | None = None,
 ):
     """Verify a single EVE candidate using evidence synthesis.
 
@@ -756,6 +757,11 @@ def verify_eve_task(
         if candidate.exists():
             marker_annotations_path = candidate
 
+    if marker_annotation_index is None:
+        from virosync.pipeline.phase3.evidence_synthesizer import load_marker_annotation_index
+
+        marker_annotation_index = load_marker_annotation_index(marker_annotations_path)
+
     # Taxonomy lookup is already loaded above (cached); no need to reload here.
 
     config = EvidenceSynthesizerConfig(
@@ -801,6 +807,7 @@ def verify_eve_task(
             viral_structure_db=Path(viral_structure_db) if viral_structure_db else None,
             genome_path=Path(genome_path),
             work_dir=work_dir,
+            marker_annotation_index=marker_annotation_index,
         )
 
         # Get overlapping genes for this boundary
@@ -1007,6 +1014,7 @@ def verify_eve_candidates_batched_task(
     max_workers: int = 32,
     ablation_id: AblationID = AblationID.A0,
     masked_genomes: frozenset[str] = frozenset(),
+    marker_annotation_index: dict[str, dict] | None = None,
 ):
     """Verify ALL EVE candidates in parallel using ThreadPoolExecutor.
 
@@ -1070,6 +1078,11 @@ def verify_eve_candidates_batched_task(
             marker_annotations_path = candidate
 
     # Create shared config (read-only, thread-safe)
+    if marker_annotation_index is None:
+        from virosync.pipeline.phase3.evidence_synthesizer import load_marker_annotation_index
+
+        marker_annotation_index = load_marker_annotation_index(marker_annotations_path)
+
     config = EvidenceSynthesizerConfig(
         ablation_id=ablation_id,
         high_tier_threshold=high_tier_threshold,
@@ -1121,6 +1134,7 @@ def verify_eve_candidates_batched_task(
                 viral_structure_db=Path(viral_structure_db) if viral_structure_db else None,
                 genome_path=Path(genome_path),
                 work_dir=boundary_work_dir,
+                marker_annotation_index=marker_annotation_index,
             )
 
             # Get overlapping genes for this boundary

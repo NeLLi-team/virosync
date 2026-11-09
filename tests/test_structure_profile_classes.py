@@ -479,7 +479,7 @@ def test_seed_classification_uses_the_class_of_a_peve_only_profile(
 ) -> None:
     seed = _seed(_anchor(gene, prefixes, pidents))
 
-    seed.compute_classification(None)
+    seed.compute_classification(None, metadata_families={})
 
     assert seed.predicted_family == family
     assert seed.region_classification_vp_plv_markers == vp_plv
@@ -491,7 +491,7 @@ def test_seed_classification_mixes_a_class_marker_with_a_name_marker_of_another_
         _anchor("GVOGm0003", "NCLDV__", "80", porf_id="gene-b"),
     )
 
-    seed.compute_classification(None)
+    seed.compute_classification(None, metadata_families={})
 
     assert seed.predicted_family == "MIXED"
 
@@ -514,13 +514,16 @@ def test_terminal_repeat_children_keep_the_class_of_a_peve_only_profile(
             "query_porf": "p1",
             "validation_status": "validated",
             "hmm_target": PPV_PROFILE,
+            "hmm_score": 100.0,
             "top10_prefixes": prefixes,
             "top10_pidents": pidents,
         },
     )()
     groups = terminal_repeats._marker_groups(parent, [marker])
 
-    child = terminal_repeats._child_boundary(parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000)
+    child = terminal_repeats._child_boundary(
+        parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000, metadata_families={}
+    )
 
     assert child.predicted_family == family
 
@@ -549,7 +552,9 @@ def test_terminal_repeat_children_count_one_profile_per_protein() -> None:
     ]
     groups = terminal_repeats._marker_groups(parent, markers)
 
-    child = terminal_repeats._child_boundary(parent, start=0, end=1300, groups=groups, scan_start=0, scan_end=1300)
+    child = terminal_repeats._child_boundary(
+        parent, start=0, end=1300, groups=groups, scan_start=0, scan_end=1300, metadata_families={}
+    )
 
     assert child.predicted_family == "MIRUS"
     assert (child.region_classification_mirus_markers, child.region_classification_vp_plv_markers) == (2, 1)
@@ -563,7 +568,9 @@ def test_terminal_repeat_children_keep_the_higher_scoring_class_of_one_protein()
     ]
     groups = terminal_repeats._marker_groups(parent, markers)
 
-    child = terminal_repeats._child_boundary(parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000)
+    child = terminal_repeats._child_boundary(
+        parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000, metadata_families={}
+    )
 
     assert child.predicted_family == "PPV"
 
@@ -572,7 +579,9 @@ def test_terminal_repeat_children_keep_the_higher_scoring_class_of_one_protein()
 
 
 def _a1_result(*anchors: Anchor, predicted_family: str = "") -> VerificationResult:
-    return build_phase1_seed_surface([_seed(*anchors, predicted_family=predicted_family)]).results[0]
+    return build_phase1_seed_surface(
+        [_seed(*anchors, predicted_family=predicted_family)], metadata_families={}, marker_annotation_index={}
+    ).results[0]
 
 
 @pytest.mark.parametrize(
@@ -668,8 +677,10 @@ def test_cress_and_phage_profile_classes_apply_from_phase_3_on_not_in_phase_1(
     )()
     groups = terminal_repeats._marker_groups(parent, [marker])
 
-    seed.compute_classification(None)
-    child = terminal_repeats._child_boundary(parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000)
+    seed.compute_classification(None, metadata_families={})
+    child = terminal_repeats._child_boundary(
+        parent, start=0, end=1000, groups=groups, scan_start=0, scan_end=1000, metadata_families={}
+    )
     phase3 = _verify_one_marker_region(monkeypatch, gene=gene, end=3000)
 
     assert seed.predicted_family == "UNKNOWN"

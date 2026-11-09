@@ -74,7 +74,7 @@ def test_a1_exports_exact_phase1_coordinates_and_unscored_provenance() -> None:
         confirmed_seeds=(ConfirmedSeed("order-dependent-seed-id", "ctg", 0, 100),),
     )
 
-    surface = build_phase1_seed_surface([seed])
+    surface = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={})
     result = surface.results[0]
 
     assert surface.detailed_results is surface.results
@@ -143,8 +143,8 @@ def test_a1_identity_and_hallmarks_are_stable_across_input_order() -> None:
         confirmed_seeds=(ConfirmedSeed("seed_99_ctg_5", "ctg", 5, 100),),
     )
 
-    result_a = build_phase1_seed_surface([seed_a]).results[0]
-    result_b = build_phase1_seed_surface([seed_b]).results[0]
+    result_a = build_phase1_seed_surface([seed_a], metadata_families={}, marker_annotation_index={}).results[0]
+    result_b = build_phase1_seed_surface([seed_b], metadata_families={}, marker_annotation_index={}).results[0]
 
     assert result_a.eve_id == result_b.eve_id == "EVE_ctg_5-100"
     assert (
@@ -170,10 +170,10 @@ def test_a1_classification_excludes_markers_in_removed_search_padding() -> None:
         anchors=[inside, outside],
         confirmed_seeds=(ConfirmedSeed("seed", "ctg", 4000, 5000),),
     )
-    seed.compute_classification()
+    seed.compute_classification(metadata_families={})
     assert seed.predicted_family == "MIXED"
 
-    (result,) = build_phase1_seed_surface([seed]).results
+    (result,) = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={}).results
 
     assert (result.start, result.end) == (4000, 5000)
     assert result.hallmark_genes == ["GVOGm0003"]
@@ -205,8 +205,8 @@ def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> Non
         confirmed_seeds=(ConfirmedSeed("rescue-seed", "ctg", 5, 100),),
     )
 
-    forward = build_phase1_seed_surface([ordinary, rescue]).results
-    reverse = build_phase1_seed_surface([rescue, ordinary]).results
+    forward = build_phase1_seed_surface([ordinary, rescue], metadata_families={}, marker_annotation_index={}).results
+    reverse = build_phase1_seed_surface([rescue, ordinary], metadata_families={}, marker_annotation_index={}).results
     forward_by_source = {tuple(result.seed_sources): result for result in forward}
     reverse_by_source = {tuple(result.seed_sources): result for result in reverse}
 
@@ -221,7 +221,7 @@ def test_a1_same_coordinate_seeds_keep_distinct_stable_ids_and_evidence() -> Non
 
 
 def test_a1_empty_surface_has_zero_intervention_counts() -> None:
-    surface = build_phase1_seed_surface([])
+    surface = build_phase1_seed_surface([], metadata_families={}, marker_annotation_index={})
 
     assert surface.results == ()
     assert surface.canonical_results == ()
@@ -239,7 +239,7 @@ def test_a1_combined_fasta_is_available_before_report_generation(tmp_path) -> No
         anchors=[_anchor("gene-a", "GVOGm0004", 50.0, start=2, end=8)],
         confirmed_seeds=(ConfirmedSeed("seed_0_ctg_2", "ctg", 2, 8),),
     )
-    surface = build_phase1_seed_surface([seed])
+    surface = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={})
 
     output_path = _write_combined_eve_fasta(
         output_dir=tmp_path,
@@ -283,7 +283,7 @@ def test_combined_fasta_fails_closed_when_results_do_not_match_the_genome(
         anchors=[_anchor("gene-a", "GVOGm0004", 50.0, start=2, end=8)],
         confirmed_seeds=(ConfirmedSeed("seed_0_ctg_2", "ctg", 2, 8),),
     )
-    surface = build_phase1_seed_surface([seed])
+    surface = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={})
 
     with pytest.raises(RuntimeError, match="produced no file"):
         _write_combined_eve_fasta(
@@ -298,7 +298,7 @@ def test_a1_rejects_missing_original_seed() -> None:
     seed = MergedSeed(scaffold="ctg", start=0, end=100, seed_id="original")
 
     with pytest.raises(ValueError, match="confirmed seed"):
-        build_phase1_seed_surface([seed])
+        build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={})
 
 
 def test_a1_uses_frozen_original_core_instead_of_mutated_active_span() -> None:
@@ -312,7 +312,7 @@ def test_a1_uses_frozen_original_core_instead_of_mutated_active_span() -> None:
         anchors=[_anchor("marker", "GVOGm0004", 50.0)],
     )
 
-    result = build_phase1_seed_surface([seed]).results[0]
+    result = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={}).results[0]
 
     assert (result.start, result.end) == (0, 101)
     assert result.confirmed_seeds == (core,)
@@ -333,7 +333,7 @@ def test_a1_ordinary_winner_preserves_reported_capsid_span_and_annotation():
         seed_gene_ids=("gene-a",),
         confirmed_seeds=(ConfirmedSeed("seed-a", "ctg", 10, 40),),
     )
-    result = build_phase1_seed_surface([seed]).results[0]
+    result = build_phase1_seed_surface([seed], metadata_families={}, marker_annotation_index={}).results[0]
     assert result.hallmark_genes == ["GVOGm0054"]
     assert not result.has_mcp
     assert result.mcp_gene_ids == []

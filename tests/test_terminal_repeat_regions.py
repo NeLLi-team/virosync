@@ -24,7 +24,7 @@ def _marker_group(
         protein_id=protein_id,
         start=start,
         end=end,
-        marker_names=frozenset(),
+        classification_markers=tuple((name, "") for name in frozenset()),
     )
 
 

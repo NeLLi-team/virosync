@@ -9,14 +9,13 @@ from typing import Literal
 
 from virosync.output_contract import resolve_effective_eve_class
 from virosync.pipeline.eve_type_rules import composition, may_merge
-from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks
+from virosync.pipeline.hallmark_evidence import HallmarkEvidence, assess_hallmarks, scoring_roles
 from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
 from virosync.pipeline.phase1.marker_roles import is_ordinary_marker_evidence
 from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     GenomeDiamondQuery,
-    _listify_top10_field,
     has_viral_hit_veto,
     pORF,
 )
@@ -236,11 +235,7 @@ def _qualified_core_items(result: VerificationResult) -> list[tuple[HallmarkEvid
     for item in result.hallmark_evidence:
         if item.evidence_id not in qualified:
             continue
-        roles = [
-            role
-            for role in item.model_roles
-            if role["panel"] == summary.panel and role["role"] == "core_marker" and not role["excluded_from_scoring"]
-        ]
+        roles = [role for role in scoring_roles(item, summary.panel) if role["role"] == "core_marker"]
         if roles:
             retained.append((item, roles))
     return retained
@@ -436,10 +431,9 @@ def _gap_has_host_barrier(
         share = host_lineage_share(record, model)
         marker = gene.id in viral_marker_genes
         host = is_extension_host_gene(record, host_share_ok=share >= threshold, marker=marker)
-        foreign = share < 0.10 and any(str(p).strip() for p in _listify_top10_field(record.top10_prefixes))
         if host:
             run += 1
-        elif marker or has_viral_hit_veto(record) or foreign:
+        elif marker or has_viral_hit_veto(record):
             run = 0
         if run == 3:
             return True

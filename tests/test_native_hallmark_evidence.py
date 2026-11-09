@@ -17,6 +17,7 @@ from virosync.pipeline.hallmark_evidence import (
     assess_hallmarks,
     collect_hallmark_evidence,
     find_spatial_witnesses,
+    has_spatial_rescue,
     summarize_hallmarks,
 )
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
@@ -58,9 +59,9 @@ def hit(gene, model, start=100, end=1000, *, evalue=0.001, status="validated", i
 
 
 @pytest.mark.parametrize("model", ["VP_MCP_6", "VP_Penton_1", "EVE_CAPSID_NOVEL_0002", "EVE_CAPSID_NOVEL_0012"])
-def test_reported_capsid_keeps_full_gene_and_medium_without_taxonomy(tmp_path, model):
+def test_reported_weak_capsid_keeps_full_gene_and_low_without_taxonomy(tmp_path, model):
     evidence = [
-        replace(hit("capsid", model, start=100, end=190, evalue=1000, status="unvalidated", identity=0), score=-5)
+        replace(hit("capsid", model, start=100, end=190, evalue=1000, status="unvalidated", identity=0), score=10)
     ]
     witnesses = find_spatial_witnesses(evidence)
     (seed,) = add_rescue_seeds([], witnesses)
@@ -71,20 +72,182 @@ def test_reported_capsid_keeps_full_gene_and_medium_without_taxonomy(tmp_path, m
     )
     result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
     assert (result.start, result.end) == (100, 190)
-    assert result.confidence_tier == "MEDIUM"
+    assert result.confidence_tier == "LOW"
+    assert result.confirmed_seeds == seed.confirmed_seeds
     assert result.hallmark_assessment.summary.core_count == 0
     assert select_phase3_acceptance([result], AblationID.A0).canonical_results == (result,)
+    assert (
+        select_phase3_acceptance([result], AblationID.A0).normal_gate_decisions[0].reason
+        == "reported_capsid_low_retention_pass"
+    )
+    assert unsupported_eve_ids([result]) == set()
+    generator = OutputGenerator(tmp_path / "export")
+    canonical = generator.write_predictions_tsv([result])
+    with canonical.open() as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    assert len(rows) == 1 and rows[0]["confidence_tier"] == "LOW"
     assert evidence[0].validation_status == "unvalidated"
+
+
+@pytest.mark.parametrize(
+    "change,expected",
+    [
+        ({}, "LOW"),
+        ({"validation_status": "validated"}, "MEDIUM"),
+        ({"validation_status": "validated_novel"}, "LOW"),
+        ({"score": 75}, "MEDIUM"),
+        ({"score": 74.999}, "LOW"),
+        ({"evalue": 0.01}, "LOW"),
+        ({"evalue": 0.010001}, "LOW"),
+        ({"viral_top10_max_pident": 0.001}, "MEDIUM"),
+    ],
+)
+def test_reported_capsid_criterion_boundaries(change, expected):
+    base = replace(hit("capsid", "VP_Penton_1", evalue=1, status="unvalidated", identity=0), score=10)
+    evidence = replace(base, **change)
+    assert {(w.rule, w.tier) for w in find_spatial_witnesses([evidence])} == {("reported_capsid", expected)}
+
+
+@pytest.mark.parametrize("additional,expected", [("weak", "LOW"), ("capsid", "MEDIUM"), ("partner", "HIGH")])
+def test_weak_capsid_region_uses_independent_stronger_witness(tmp_path, additional, expected):
+    evidence = [
+        replace(hit("weak", "VP_Penton_1", 100, 190, evalue=1, status="unvalidated", identity=0), score=10),
+        hit("strong", "GVOGm0003", 300, 500),
+    ]
+    if additional == "weak":
+        evidence[1] = replace(
+            hit("weak2", "VP_Penton_1", 300, 500, evalue=1, status="unvalidated", identity=0), score=10
+        )
+    if additional == "partner":
+        evidence.append(hit("partner", "GVOGm0760", 600, 800))
+    witnesses = find_spatial_witnesses(evidence)
+    seeds = add_rescue_seeds([], witnesses)
+    seed = MergedSeed(
+        "s", 100, 800, seed_id="region", confirmed_seeds=tuple(core for item in seeds for core in item.confirmed_seeds)
+    )
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    assert result.confidence_tier == expected
+    assert result.confirmed_seeds == seed.confirmed_seeds
+    assert any(w.tier == "LOW" for w in result.hallmark_assessment.witnesses)
+    assert select_phase3_acceptance([result], AblationID.A0).canonical_results == (result,)
+    assert unsupported_eve_ids([result]) == set()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "partial", "stale", "stronger", "wrong_scaffold"])
+def test_low_reported_capsid_rescue_reauthenticates_members(tmp_path, mutation):
+    evidence = [replace(hit("weak", "VP_Penton_1", 100, 190, evalue=1, status="unvalidated", identity=0), score=10)]
+    witnesses = find_spatial_witnesses(evidence)
+    (seed,) = add_rescue_seeds([], witnesses)
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    assert has_spatial_rescue(result)
+    if mutation == "missing":
+        result.hallmark_evidence = []
+    elif mutation == "partial":
+        result.hallmark_evidence = [replace(evidence[0], end=200)]
+    elif mutation == "stale":
+        result.hallmark_evidence = [replace(evidence[0], score=75)]
+    elif mutation == "wrong_scaffold":
+        result.hallmark_assessment = replace(
+            result.hallmark_assessment, witnesses=(replace(witnesses[0], scaffold="other"),)
+        )
+    else:
+        result.hallmark_assessment = replace(
+            result.hallmark_assessment, witnesses=(replace(witnesses[0], tier="HIGH"),)
+        )
+    assert not has_spatial_rescue(result)
+    assert select_phase3_acceptance([result], AblationID.A0).canonical_results == ()
+    assert unsupported_eve_ids([result]) == {result.eve_id}
 
 
 def test_unvalidated_protease_does_not_get_capsid_exception():
     assert find_spatial_witnesses([hit("protease", "EVE_CAPSID_NOVEL_0001", status="unvalidated")]) == []
 
 
+@pytest.mark.parametrize(
+    "arm", [AblationID.A0, AblationID.A1, AblationID.A2, AblationID.A3, AblationID.A4, AblationID.A5]
+)
+@pytest.mark.parametrize("tier,score", [("LOW", 10), ("MEDIUM", 75)])
+@pytest.mark.parametrize("gene_id", ["ordinary_capsid", "s_VSR0123456789abcdef"])
+def test_authenticated_capsid_survives_expired_frameshift_provenance(tmp_path, arm, tier, score, gene_id):
+    evidence = [
+        replace(
+            hit(gene_id, "EVE_CAPSID_NOVEL_0021", 100, 190, evalue=1, status="unvalidated", identity=0), score=score
+        )
+    ]
+    witnesses = find_spatial_witnesses(evidence)
+    (seed,) = add_rescue_seeds([], witnesses)
+    seed.sources = ["frameshift_rescue", "hhg", "marker_validation"]
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    assert result.confidence_tier == tier
+    assert result.seed_sources == ["frameshift_rescue", "hhg", "marker_validation"]
+    assert result.frameshift_rescue_marker_ids == result.hallmark_genes == []
+    assert has_spatial_rescue(result)
+    selection = select_phase3_acceptance([result], arm)
+    assert selection.normal_gate_decisions[0].kept
+    expected_reason = "reported_capsid_low_retention_pass" if tier == "LOW" else "hallmark_spatial_rescue_pass"
+    assert selection.normal_gate_decisions[0].reason == expected_reason
+    assert selection.canonical_results == (result,)
+    assert result.canonical_selection_outcome == "kept"
+    assert (result.start, result.end) == (100, 190)
+    assert result.confirmed_seeds == seed.confirmed_seeds
+
+
+@pytest.mark.parametrize("invalid", ["stale", "outside"])
+def test_invalid_capsid_assessment_does_not_override_lost_frameshift_marker(tmp_path, invalid):
+    evidence = [
+        replace(hit("capsid", "EVE_CAPSID_NOVEL_0021", 100, 190, evalue=1, status="unvalidated", identity=0), score=75)
+    ]
+    witnesses = find_spatial_witnesses(evidence)
+    assert witnesses[0].tier == "MEDIUM"
+    (seed,) = add_rescue_seeds([], witnesses)
+    seed.sources = ["frameshift_rescue", "hhg", "marker_validation"]
+    boundary = extend_confirmed_seed(seed, [], {}, (0, 5000), None, 0.35)
+    if invalid == "outside":
+        evidence = [replace(evidence[0], end=191)]
+    synthesizer = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    )
+    result = synthesizer.verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=witnesses)
+    if invalid == "stale":
+        assert result.confidence_tier == "MEDIUM"
+        assert result.hallmark_assessment.witnesses
+        result.end = 191
+        assert result.confirmed_seeds == seed.confirmed_seeds
+        assert not has_spatial_rescue(result)
+        with pytest.raises(ValueError, match="supplementary.*interval"):
+            select_phase3_acceptance([result], AblationID.A0)
+        return
+    assert result.hallmark_assessment.witnesses == ()
+    assert not has_spatial_rescue(result)
+    selection = select_phase3_acceptance([result], AblationID.A0)
+    assert selection.canonical_results == ()
+    assert result.canonical_selection_outcome == "rescue_marker_excluded"
+    assert (result.start, result.end) == (100, 190)
+    assert result.confirmed_seeds == seed.confirmed_seeds
+
+
 @pytest.mark.parametrize("model", ["VP_MCP_6", "VS000792", "VS000652", "VS000745", "VS000783", "VS000788", "VS000791"])
 @pytest.mark.parametrize("evalue", [0.0021, 1e-8])
-@pytest.mark.parametrize("status,identity", [("unvalidated", 0), ("supported", 20), ("unvalidated", 30)])
-def test_unvalidated_capsid_gets_medium_witness_without_core_credit(model, evalue, status, identity):
+@pytest.mark.parametrize(
+    "status,identity,tier", [("unvalidated", 0, "LOW"), ("supported", 20, "MEDIUM"), ("unvalidated", 30, "MEDIUM")]
+)
+def test_unvalidated_capsid_floor_without_core_credit(model, evalue, status, identity, tier):
     evidence = [hit("capsid", model, evalue=evalue, status=status, identity=identity)]
     original = evidence[0]
 
@@ -94,7 +257,7 @@ def test_unvalidated_capsid_gets_medium_witness_without_core_credit(model, evalu
     assert summary.core_count == 0
     assert summary.qualifying_evidence_ids == ()
     assert summary.floor_tier == ""
-    assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", "MEDIUM")}
+    assert {(w.rule, w.tier) for w in witnesses} == {("reported_capsid", tier)}
     assert len(add_rescue_seeds([], witnesses)) == 1
     assert evidence == [original]
 
@@ -137,7 +300,10 @@ def test_validated_frameshift_twin_supplies_core_without_unvalidated_ordinary_co
     assert summary.core_count == summary.strong_count == 1
     assert summary.qualifying_evidence_ids == (rescued.evidence_id,)
     assert {w.evidence_ids for w in witnesses} == {(raw.evidence_id,), (rescued.evidence_id,)}
-    assert {w.tier for w in witnesses} == {"MEDIUM"}
+    assert {(w.evidence_ids, w.tier) for w in witnesses} == {
+        ((raw.evidence_id,), "LOW"),
+        ((rescued.evidence_id,), "MEDIUM"),
+    }
 
 
 @pytest.mark.parametrize("extended", [False, True])
@@ -607,6 +773,7 @@ def test_batched_verification_routes_contained_evidence_and_witnesses_in_input_o
         precomputed_tmvec=None,
         tmvec_device="cpu",
         config=PipelineConfig(),
+        marker_annotation_index={},
     )
     first, second = map(boundary_candidate_id, boundaries)
     assert captured["hallmark_evidence_map"] == {first: [inside_later, inside_earlier], second: []}
@@ -1422,3 +1589,166 @@ def test_pfam_override_survives_phase3_without_ordinary_credit(tmp_path, with_se
     path = OutputGenerator(tmp_path).write_evidence_profiles([result])
     profile = json.loads(path.read_text())[result.eve_id]
     assert next(h for h in profile["hallmark_evidence"] if h["model"] == "GVOGm0003")["pfam_override"] == override
+
+
+def test_compatible_ppv_numerical_gain_keeps_original_floor_and_witnesses(tmp_path):
+    evidence = [hit("mcp", "PLV_MCP_1", 100, 900, evalue=1e-8), hit("atpase", "VP_ATPase_1", 1100, 1800, evalue=1e-8)]
+    baseline = summarize_hallmarks(evidence[:1])
+    summary = summarize_hallmarks(evidence)
+    assert summary.panel == "PPV"
+    assert summary.core_count == 2
+    assert summary.marker_score > baseline.marker_score
+    assert summary.coherence_bonus > baseline.coherence_bonus
+    assert summary.floor_tier == "MEDIUM"
+    assert find_spatial_witnesses(evidence) == find_spatial_witnesses(evidence[:1])
+    result = VerificationResult("eve", "s", 0, 3000, gene_count=5, hallmark_evidence=evidence)
+    singleton = replace(result, hallmark_evidence=evidence[:1])
+    assert calculate_eve_confidence(result, 0) > calculate_eve_confidence(singleton, 0)
+    assert result.final_confidence < 0.7
+    assert result.score_components["hallmark_floor"] == pytest.approx(0.2)
+    path = OutputGenerator(tmp_path).write_predictions_tsv([result])
+    with path.open() as stream:
+        assert next(csv.DictReader(stream, delimiter="\t"))["qualifying_hallmark_genes"] == "ATPase|MCP"
+
+
+@pytest.mark.parametrize(
+    "models,cores",
+    [
+        (["GVOGm0760", "Mirus_Portal"], 2),
+        (["GVOGm0023", "VS000307", "Mirus_Portal"], 2),
+        (["GVOGm0023", "GVOGm0022", "Mirus_Portal"], 3),
+        (["GVOGm0054", "VS000180", "Mirus_Portal"], 2),
+        (["GVOGm0760", "Mirus_Terminase_ATPase"], 2),
+        (["GVOGm0003", "Mirus_MCP"], 2),
+        (["PLV_MCP_1", "VP_MCP_6"], 1),
+        (["VP_Penton_1", "EVE_CAPSID_NOVEL_0002", "PLV_MCP_1"], 2),
+    ],
+)
+def test_compatible_pool_counts_independent_families(models, cores):
+    evidence = [hit(f"g{i}", model, i * 1100, i * 1100 + 1000, evalue=1e-8) for i, model in enumerate(models)]
+    assert summarize_hallmarks(evidence).core_count == cores
+
+
+@pytest.mark.parametrize("loci", [{"b": "a"}, {"a": "overlap", "b": "overlap"}])
+def test_compatible_pool_respects_scoring_locus(loci):
+    evidence = [hit("a", "PLV_MCP_1", evalue=1e-8), hit("b", "VP_ATPase_1", evalue=1e-8)]
+    assert summarize_hallmarks(evidence, scoring_locus_ids=loci).core_count == 1
+
+
+def test_pool_support_only_does_not_become_core_or_floor():
+    evidence = [
+        hit("mcp", "PLV_MCP_1", 100, 900, evalue=1e-8),
+        hit("minor", "EVE_CAPSID_NOVEL_0002", 1100, 1800, evalue=1e-8),
+    ]
+    summary = summarize_hallmarks(evidence)
+    assert summary.core_count == 1
+    assert summary.compatible_count == 2
+    assert summary.floor_tier == "MEDIUM"
+    assert summary.qualifying_evidence_ids == (evidence[0].evidence_id,)
+
+
+def test_joint_seed_reader_retains_pool_roles():
+    from virosync.pipeline.phase3.joint_seed_rescue import _qualified_core_items
+
+    evidence = [hit("a32", "GVOGm0760", 100, 900, evalue=1e-8), hit("portal", "Mirus_Portal", 1100, 1800, evalue=1e-8)]
+    result = VerificationResult("eve", "s", 0, 3000, hallmark_evidence=evidence)
+    items = _qualified_core_items(result)
+    assert {item.gene for item, roles in items} == {"a32", "portal"}
+    assert {role["marker"] for item, roles in items for role in roles} == {"A32", "Portal"}
+
+
+def test_unrelated_pool_cannot_displace_original_capsid_summary():
+    evidence = [
+        hit("mcp", "PLV_MCP_1", 100, 900, evalue=1e-8),
+        hit("a32", "GVOGm0760", 1100, 1800, evalue=1e-8),
+    ]
+    original = summarize_hallmarks(evidence)
+    enriched = summarize_hallmarks([*evidence, hit("portal", "Mirus_Portal", 2100, 2800, evalue=1e-8)])
+
+    assert original.panel == "Polinton_like_viruses"
+    assert original.marker_score == pytest.approx(0.6)
+    assert enriched == original
+
+
+def test_unrelated_pool_cannot_lower_original_full_confidence():
+    evidence = [
+        hit("mcp", "PLV_MCP_1", 100, 900, evalue=1e-8),
+        hit("a32", "GVOGm0760", 1100, 1800, evalue=1e-8),
+    ]
+    baseline = VerificationResult("eve", "s", 0, 3000, gene_count=5, hallmark_evidence=evidence)
+    enriched = replace(baseline, hallmark_evidence=[*evidence, hit("portal", "Mirus_Portal", 2100, 2800, evalue=1e-8)])
+
+    original_score = calculate_eve_confidence(baseline, 0)
+    enriched_score = calculate_eve_confidence(enriched, 0)
+
+    assert enriched_score == pytest.approx(original_score)
+    assert enriched.score_components["hallmark_floor"] == baseline.score_components["hallmark_floor"]
+    assert find_spatial_witnesses(enriched.hallmark_evidence) == find_spatial_witnesses(evidence)
+
+
+def test_related_weak_core_preserves_strong_context_and_increases_full_confidence():
+    evidence = [hit("mcp", "PLV_MCP_1", 100, 900, evalue=1e-8)]
+    support = [
+        HallmarkSupport("protease", "Peptidase_C5", 1e-8, "phase3_function"),
+        HallmarkSupport("polb", "DNA_pol_B_2", 1e-8, "phase3_function"),
+        HallmarkSupport("integrase", "Phage_integrase", 1e-8, "phase3_function"),
+    ]
+    baseline = VerificationResult(
+        "eve", "s", 0, 5000, gene_count=5, hallmark_evidence=evidence, hallmark_support=support
+    )
+    enriched = replace(baseline, hallmark_evidence=[*evidence, hit("atpase", "VP_ATPase_1", 1100, 1800, evalue=1e-3)])
+    original_score = calculate_eve_confidence(baseline, 0)
+    enriched_score = calculate_eve_confidence(enriched, 0)
+    original = baseline.hallmark_assessment.summary
+    pooled = enriched.hallmark_assessment.summary
+
+    assert original.marker_score == pytest.approx(0.6)
+    assert pooled.marker_score == pytest.approx(0.7)
+    assert pooled.capsid_fraction == original.capsid_fraction == 1
+    assert pooled.coherence_bonus == original.coherence_bonus == pytest.approx(0.15)
+    assert enriched_score > original_score
+    assert pooled.floor_tier == original.floor_tier == "MEDIUM"
+
+
+def test_pool_assignment_cannot_hide_retained_strong_capsid():
+    strong = hit("strong_mcp", "PLV_MCP_1", 100, 900, evalue=1e-8)
+    evidence = [
+        strong,
+        hit("weak_mcp", "PLV_MCP_2", 1100, 1800, evalue=1e-3),
+        hit("weak_atpase", "VP_ATPase_1", 100, 900, evalue=1e-3),
+    ]
+    original = summarize_hallmarks([strong])
+    pooled = summarize_hallmarks(evidence, scoring_locus_ids={"weak_atpase": "strong_mcp"})
+
+    # A two-family assignment must use the weak MCP: the ATPase shares the
+    # strong MCP's locus. Capsid strength still reads the retained strong hit.
+    assert pooled.panel == "PPV"
+    assert pooled.core_count == 2
+    assert pooled.weighted_core_count == 1
+    assert pooled.capsid_fraction == original.capsid_fraction == 1
+    assert pooled.marker_score == original.marker_score == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize("model", ["VP_MCP_6", "VP_Penton_1", "EVE_CAPSID_NOVEL_0002"])
+@pytest.mark.parametrize("status,identity", [("unvalidated", 0), ("validated", 40)])
+@pytest.mark.parametrize("score", [-5, 0, 9.999])
+def test_subten_capsid_has_no_new_witness_or_core(model, status, identity, score):
+    evidence = [replace(hit("capsid", model, evalue=1e-20, status=status, identity=identity), score=score)]
+    assert find_spatial_witnesses(evidence) == []
+    assert summarize_hallmarks(evidence, []).core_count == 0
+    assert add_rescue_seeds([], find_spatial_witnesses(evidence)) == []
+
+
+def test_subten_evidence_does_not_remove_already_assigned_seed(tmp_path):
+    from virosync.pipeline.phase2.seed_extension import RefinedBoundary
+
+    seed = ConfirmedSeed("already-admitted", "s", 100, 190)
+    boundary = RefinedBoundary("s", 100, 190, confirmed_seeds=(seed,))
+    evidence = [replace(hit("capsid", "VP_Penton_1", 100, 190), score=9.999)]
+    result = EvidenceSynthesizer(
+        config=EvidenceSynthesizerConfig(use_boltz=False, use_phylogenetic_validation=False, use_tmvec_database=False),
+        work_dir=tmp_path,
+    ).verify_eve(boundary, [], hallmark_evidence=evidence, hallmark_witnesses=[])
+    assert result.confirmed_seeds == (seed,)
+    assert (result.start, result.end) == (100, 190)
+    assert not result.hallmark_assessment.witnesses

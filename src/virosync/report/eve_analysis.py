@@ -59,11 +59,11 @@ from IPython.display import display
 if VIROSYNC_SRC:
     sys.path.insert(0, VIROSYNC_SRC)
 from virosync.pipeline.host_signatures import (
-    HostLineage,
     HostSignatureModel,
-    dominant_lineage_tokens,
-    host_lineage,
-    host_rank_credit,
+    TaxonomyLabelLookup,
+    host_lineage_share,
+    host_token_weights,
+    set_taxonomy_lookup,
 )
 
 _ipython = get_ipython()
@@ -88,7 +88,6 @@ from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
 _REPORT_MIN_VIRAL_HIT_PIDENT = 25.0
-_GENUS_RANK = 5
 # Viral-like proteins of eukaryotic genome assemblies: viral, never host, and of no viral lineage.
 _REPORT_EUK_PEVE = "EUK-pEVE"
 _REPORT_PREDICTION_COLOR = "#E3B341"
@@ -342,7 +341,7 @@ if TAX_LABELS_PATH is not None and TAX_LABELS_PATH.is_file():
 else:
     print("Taxonomy labels were not configured -- host detection will be limited")
 
-# --- Resolve taxonomy and infer the dominant host lineage for display ---
+# --- Resolve taxonomy and load the host token signature for display ---
 _host_model_path = BASE / "phase1" / "marker_validation" / "host_signature_model.json"
 _boundary_taxonomy_path = BASE / "phase2" / "boundary_diamond" / "taxonomy_map.tsv"
 _boundary_taxonomy = (
@@ -355,28 +354,18 @@ BOUNDARY_TAXONOMY = (
 )
 
 
-def _target_lineage(target: object) -> str:
-    return _report_target_lineage(target, tax_labels)
-
-
-HOST_LINEAGE = HostLineage("", ())
-HOST_MIN_TOKEN_LENGTH = 0
-HOST_TAXA = frozenset()
+HOST_SIGNATURE = HostSignatureModel()
 if _host_model_path.exists() and tax_labels:
     with _host_model_path.open(encoding="utf-8") as _f:
-        _host_signature = HostSignatureModel.from_dict(json.load(_f))
-    HOST_LINEAGE = host_lineage(_host_signature)
-    HOST_MIN_TOKEN_LENGTH = _host_signature.min_token_length
-    HOST_TAXA = dominant_lineage_tokens(_host_signature)
-HOST_GENUS = next(
-    (rank.leader for rank in HOST_LINEAGE.ranks if rank.position == _GENUS_RANK and rank.support > 0.5), ""
-)
-print(f"Host genus: {HOST_GENUS!r}  Host lineage taxa: {sorted(HOST_TAXA)}")
+        HOST_SIGNATURE = HostSignatureModel.from_dict(json.load(_f))
+set_taxonomy_lookup(TaxonomyLabelLookup(tax_labels))
+HOST_TAXA = frozenset(host_token_weights(HOST_SIGNATURE))
+print(f"Host signature tokens: {sorted(HOST_TAXA)}")
 
 
-def is_host_gene(target: object) -> bool:
-    """Return whether a best-hit lineage shares a clade of the run's host lineage."""
-    return host_rank_credit(_target_lineage(target), HOST_LINEAGE, HOST_MIN_TOKEN_LENGTH) >= HOST_CREDIT_THRESHOLD
+def is_host_gene(taxonomy_record: Mapping[str, object] | None) -> bool:
+    """Compare the complete retained-hit distribution with the learned signature."""
+    return bool(taxonomy_record) and host_lineage_share(taxonomy_record, HOST_SIGNATURE) >= HOST_CREDIT_THRESHOLD
 
 
 def _canonical_viral_category(prefix: object, target: object) -> str | None:
@@ -577,16 +566,15 @@ print(f"Predictions: {len(predictions)}")
 # %% [markdown]
 # ## Host Signature Model
 #
-# ViroSync builds a host signature model from **COG** and **BUSCO** marker genes found in the genome's predicted proteome. These are universal cellular genes (ribosomal proteins, metabolic enzymes) that indicate host origin. Each COG/BUSCO gene is searched against a Diamond database, and the top-10 hits' taxonomy lineages are aggregated into a weighted token model (`weight_mode=rank`: best hit = 10, rank 2 = 9, ..., rank 10 = 1; bitscores are not used).
+# ViroSync pools the top-ten taxonomy profiles of eligible HMM-hit proteins, including COG and BUSCO markers. Proteins with excluded viral marker-search evidence or reported capsids do not train the host model. Each full-protein query contributes once. Rank weighting assigns 10 to hit 1 through 1 to hit 10; the configured bitscore mode uses hit bitscores instead.
 #
-# The resulting model captures the host's taxonomic identity at every level, from domain down to species. It is used in Phase 2 boundary refinement to distinguish host genes from viral insertions. Tokens from distant taxa (e.g. SAR, Fungi) appear because COG/BUSCO genes are universal and some Diamond top-10 hits come from organisms outside the host lineage. Percent labels in the plot report each token's weight relative to the largest model weight; `n` is the number of token occurrences, not a sample percentage.
+# The model retains named taxonomy tokens, including domains and noisy cellular matches. It compares complete weighted profiles without fixed taxonomy ranks or positions. The plot shows cumulative token weights. The printed `n` counts token occurrences rather than a sample percentage.
 
 # %%
 # ---- Host Signature Model Summary ----
 
 # 1. Load the host signature model
 _model_path = BASE / "phase1" / "marker_validation" / "host_signature_model.json"
-_hits_path = BASE / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 
 if _model_path.exists():
     with _model_path.open(encoding="utf-8") as f:
@@ -594,186 +582,23 @@ if _model_path.exists():
 
     _token_weights = _host_model.get("token_weights", {})
     _token_counts = _host_model.get("token_counts", {})
-    _host_prefixes = _host_model.get("host_prefixes", [])
     _weight_mode = _host_model.get("weight_mode", "rank")
 else:
     _host_model = None
     print("Host signature model not found (phase1/marker_validation/host_signature_model.json)")
 
-# 2. Load marker hits and classify COG vs BUSCO
-if _hits_path.exists():
-    _hits_df = pd.read_csv(_hits_path, sep="\t", engine="python")
-    _is_cog = _hits_df["hmm_target"].str.startswith("COG")
-    _is_busco = _hits_df["hmm_target"].str.contains("at2759")
-    _host_hits = _hits_df[_is_cog | _is_busco].copy()
-
-    _n_cog = _is_cog.sum()
-    _n_busco = _is_busco.sum()
-    _cog_unique = _hits_df.loc[_is_cog, "hmm_target"].nunique()
-    _busco_unique = _hits_df.loc[_is_busco, "hmm_target"].nunique()
-    _total_markers = len(_hits_df)
-else:
-    _host_hits = pd.DataFrame()
-
-# 3. Assign each model token to its taxonomy level
-_LEVEL_NAMES = ["Domain", "Supergroup", "Order", "Suborder", "Family", "Genus", "Species"]
-_TOP_N = 5
-
-_level_tokens = defaultdict(list)
-if _host_model and tax_labels:
-    _token_to_levels = defaultdict(set)
-    for _key, _lineage in tax_labels.items():
-        _levels = _lineage.split("|")
-        for _i, _level in enumerate(_levels):
-            _level_lower = _level.strip().lower()
-            if _level_lower in _token_weights:
-                _token_to_levels[_level_lower].add(_i)
-
-    for _token, _levels_set in _token_to_levels.items():
-        _primary = min(_levels_set)
-        _level_tokens[_primary].append((_token, _token_weights[_token], _token_counts.get(_token, 0)))
-
-    for _i in range(len(_LEVEL_NAMES)):
-        _level_tokens[_i] = sorted(_level_tokens.get(_i, []), key=lambda x: -x[1])
-
-    # Inject EUK at Domain level. Domain tokens are excluded from scoring, but
-    # the model's host prefixes and marker count still document the source.
-    if "EUK__" in _host_prefixes and not any(t[0] == "EUK" for t in _level_tokens.get(0, [])):
-        _euk_hits = len(_host_hits)
-        _level_tokens[0].insert(0, ("EUK", _host_model.get("max_weight", 0), _euk_hits))
-
-# 4. Print summary
-if _host_model:
-    _max_w = _host_model.get("max_weight", 1.0) or 1.0
-    print("Host Signature Model")
-    print(f"  Prefixes:        {', '.join(_host_prefixes)}")
-    print(f"  Weight mode:     {_weight_mode}", end="")
-    if _weight_mode == "rank":
-        print("  (hit weights: rank1=10, rank2=9, ..., rank10=1)")
-    else:
-        print("  (hit weights: bitscore)")
-    print(f"  Tokens:          {len(_token_weights)}")
-    print()
-
-    # Per-level breakdown
-    for _i, _name in enumerate(_LEVEL_NAMES):
-        _tokens = _level_tokens.get(_i, [])[:_TOP_N]
-        if not _tokens:
-            print(f"  {_name:<12s}  --")
-            continue
-        _best = _tokens[0]
-        print(
-            f"  {_name:<12s}  {_best[0]:<30s}  "
-            f"{safe_ratio(_best[1], _max_w) * 100:>5.1f}% of max weight  "
-            f"({int(_best[2])} token occurrences)",
-            end="",
-        )
-        if len(_tokens) > 1:
-            _others = ", ".join(f"{t[0]} ({safe_ratio(t[1], _max_w) * 100:.0f}% of max)" for t in _tokens[1:3])
-            print(f"   next: {_others}", end="")
-        print()
-
-    if not _host_hits.empty:
-        print(
-            f"\n  Based on {_n_cog + _n_busco} host marker hits "
-            f"({_cog_unique} COGs, {_busco_unique} BUSCOs) "
-            f"out of {_total_markers:,} total HMM hits "
-            f"({safe_ratio(_n_cog + _n_busco, _total_markers):.1%})"
-        )
-
-# 5. Figure: per-level taxonomy breakdown + COG/BUSCO panel
-if _host_model and _level_tokens:
-    _n_levels = len(_LEVEL_NAMES)
-    _max_w = _host_model.get("max_weight", 1.0) or 1.0
-    _has_markers = not _host_hits.empty
-
-    if _has_markers:
-        fig = plt.figure(figsize=(10, _n_levels * 1.1 + 1.5))
-        gs = fig.add_gridspec(_n_levels, 2, width_ratios=[4, 1], hspace=0.55, wspace=0.35)
-    else:
-        fig = plt.figure(figsize=(8, _n_levels * 1.1 + 1.5))
-        gs = fig.add_gridspec(_n_levels, 1, hspace=0.55)
-
-    _cmap = plt.cm.YlOrRd
-
-    for _i, _name in enumerate(_LEVEL_NAMES):
-        ax = fig.add_subplot(gs[_i, 0])
-        _tokens = _level_tokens.get(_i, [])[:_TOP_N]
-        if not _tokens:
-            ax.text(
-                0.5, 0.5, "no tokens", ha="center", va="center", transform=ax.transAxes, color="#888888", fontsize=9
-            )
-            ax.set_ylabel(_name, fontsize=9, fontweight="bold", rotation=0, ha="right", va="center", labelpad=65)
-            ax.set_xlim(0, 1)
-            for sp in ax.spines.values():
-                sp.set_visible(False)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            continue
-
-        _labels = [t[0].title() for t in _tokens]
-        _weights = [t[1] for t in _tokens]
-        _counts = [t[2] for t in _tokens]
-        _colors = [_cmap(safe_ratio(w, _max_w)) for w in _weights]
-
-        y_pos = np.arange(len(_labels))
-        bars = ax.barh(y_pos, _weights, color=_colors, edgecolor="white", linewidth=0.5, height=0.7)
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(_labels, fontsize=8)
-        ax.set_xlim(0, _max_w * 1.18)
-        ax.invert_yaxis()
-
-        for bar, w, cnt in zip(bars, _weights, _counts):
-            pct = safe_ratio(w, _max_w) * 100
-            ax.text(
-                bar.get_width() + _max_w * 0.01,
-                bar.get_y() + bar.get_height() / 2,
-                f"{pct:.0f}% max; n={int(cnt)}",
-                va="center",
-                fontsize=7,
-                color="#555555",
-            )
-
-        ax.set_ylabel(_name, fontsize=9, fontweight="bold", rotation=0, ha="right", va="center", labelpad=65)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        if _i < _n_levels - 1:
-            ax.tick_params(axis="x", labelbottom=False)
-            ax.set_xticklabels([])
-
-    axes_list = [fig.axes[i] for i in range(len(fig.axes))]
-    if axes_list:
-        axes_list[-1].set_xlabel(
-            "Cumulative token weight (% labels are relative to the model maximum)",
-            fontsize=9,
-        )
-
-    # COG/BUSCO panel (right side, spanning middle rows)
-    if _has_markers:
-        ax_m = fig.add_subplot(gs[2:5, 1])
-        _categories = ["COG", "BUSCO"]
-        _hit_counts = [_n_cog, _n_busco]
-        _unique_counts = [_cog_unique, _busco_unique]
-        _bar_colors = ["#009988", "#EE7733"]
-
-        bars_m = ax_m.bar(_categories, _hit_counts, color=_bar_colors, edgecolor="white", linewidth=0.8, width=0.55)
-        for bar, total, unique in zip(bars_m, _hit_counts, _unique_counts):
-            ax_m.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + max(_hit_counts) * 0.03,
-                f"{total:,}\n({unique})",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                fontweight="bold",
-            )
-        ax_m.set_ylabel("HMM hits")
-        ax_m.set_title("Marker types", fontsize=9, fontweight="bold")
-        ax_m.set_ylim(0, max(_hit_counts) * 1.3)
-        ax_m.spines["top"].set_visible(False)
-        ax_m.spines["right"].set_visible(False)
-
-    fig.suptitle(f"{GENOME_ID} Host Signature: Taxonomy Token Weights", fontsize=13, fontweight="bold")
+# 2. Display weighted names without assigning taxonomy ranks to string positions.
+if _host_model and _token_weights:
+    _tokens = sorted(_token_weights.items(), key=lambda item: -item[1])[:20]
+    print(f"Host Signature Model: {len(_token_weights)} tokens; weight mode {_weight_mode}")
+    for _token, _weight in _tokens:
+        print(f"  {_token}: {_weight:g}; n={_token_counts.get(_token, 0)}")
+    fig, ax = plt.subplots(figsize=(9, max(3, len(_tokens) * 0.3)))
+    ax.barh([token for token, _ in _tokens], [weight for _, weight in _tokens], color="#737373")
+    ax.invert_yaxis()
+    ax.set_xlabel("Cumulative token weight")
+    finalize_axes(ax)
+    fig.tight_layout()
     plt.savefig(BASE / "host_signature_model.png", dpi=300, bbox_inches="tight")
     plt.show()
 
@@ -1188,7 +1013,7 @@ else:
 # three nearest genes on each side. Arrows follow the Prodigal strand. Gene
 # colors use the highest-ranked viral top-10 hit with at least 25% amino-acid
 # identity, or the best protein hit if none qualifies. Eukaryotic hits that
-# share the dominant Phase 1 host lineage have a separate color, unless a
+# match the weighted Phase 1 host token distribution have a separate color, unless a
 # qualifying viral hit appears within the Phase 2 search depth
 # (`phase2.viral_hit_depth`); such a gene is never colored as host lineage.
 # EUK-pEVE references are viral-like proteins of eukaryotic genome assemblies.
@@ -1223,13 +1048,15 @@ else:
         viral_category = _report_viral_category(taxonomy_record)
         if viral_category:
             return viral_category
+        if is_host_gene(taxonomy_record) and not viral_host_veto:
+            return "HOST"
         viral_category = _canonical_viral_category(origin, target)
         if viral_category:
             return viral_category
         if origin == "EUK":
-            return "HOST" if is_host_gene(target) and not viral_host_veto else "EUK"
+            return "EUK"
         if origin == "HOST_SPECIFIC":
-            return "EUK" if viral_host_veto else "HOST"
+            return "EUK"
         if origin == "BAC":
             return "BAC"
         if origin == "ARC":
@@ -1266,7 +1093,7 @@ else:
             "is_capsid": porf_id in capsid_porf_ids,
             "is_rt": porf_id in rt_gene_ids,
             "porf_id": porf_id,
-            "host_lineage_match": origin == "EUK" and not viral_host_veto and is_host_gene(target),
+            "host_lineage_match": not viral_host_veto and is_host_gene(taxonomy_record),
             "phase1_validated_viral_marker": marker_validated,
             "fold_type": mcp_info.get("type", ""),
             "fold_confidence": mcp_info.get("confidence", 0),
@@ -1598,7 +1425,7 @@ else:
         mpatches.Patch(facecolor=COLORS["EUK-pEVE"], label=EUK_PEVE_LEGEND_LABEL),
         mpatches.Patch(
             facecolor=COLORS["HOST"],
-            label=(f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
+            label="Host-signature match",
         ),
         mpatches.Patch(facecolor=COLORS["EUK"], label="Other eukaryote"),
         mpatches.Patch(facecolor=COLORS["BAC"], label="Bacteria"),
@@ -2407,7 +2234,7 @@ else:
             "CRESS": "CRESS",
             "PHAGE": "Phage",
             "EUK-pEVE": EUK_PEVE_LEGEND_LABEL,
-            "HOST": (f"Host-lineage eukaryote ({HOST_GENUS.title()})" if HOST_GENUS else "Host-lineage eukaryote"),
+            "HOST": "Host-signature match",
             "EUK": "Other eukaryote",
             "BAC": "Bacteria",
             "ARC": "Archaea",

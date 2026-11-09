@@ -19,7 +19,9 @@ the first of them unless a gene supporting extension lies between them. Other
 genes do not reset the count, so the three need not be adjacent.
 
 ViroSync runs on CPUs by default. A GPU is not required for the core workflow.
-The default environment includes the executed notebook reports and their figures.
+The default environment includes the tools for notebook reports and figures.
+Plotting is off by default; use `--plots` to render the notebook during a run.
+Scientific tables, sequences, evidence, and audit outputs are produced in either mode.
 Development tools, masking, machine-learning taxonomy, and structural analysis
 use [separate environments](docs/getting-started.md#environments).
 
