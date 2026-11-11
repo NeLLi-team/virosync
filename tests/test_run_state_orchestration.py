@@ -64,6 +64,7 @@ from virosync.pipeline.phase0.masking import (
     write_masking_status,
 )
 from virosync.pipeline.phase1.hhg_seeding import Anchor
+from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.seed_merger import ConfirmedSeed, MergedSeed
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
 from virosync.pipeline.reference_mask import ReferenceMask
@@ -114,6 +115,9 @@ class _MockPipeline:
         self.require_combined_fasta_before_report = False
         self.generate_outputs_kwargs: list[dict] = []
         self.write_gene_functions = False
+        self.masking = MaskingConfig()
+        # An ordinary validated marker in the checkpoint, and the Phase 1 files that Phase 3 reads.
+        self.search_files = False
 
         self.identity, self.fingerprint = self._run_identity()
         monkeypatch.setattr(
@@ -191,7 +195,7 @@ class _MockPipeline:
             "coordinate_convention": "0-based, half-open [start, end)",
             "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "summary_schema_version": 3,
-            "requested_masking": orchestrator._masking_request_identity(MaskingConfig()),
+            "requested_masking": orchestrator._masking_request_identity(self.masking),
             "resources": [],
         }
         return identity, compute_run_fingerprint(identity)
@@ -232,7 +236,7 @@ class _MockPipeline:
         masking_result = mask_genome_pipeline(
             self.genome,
             phase_dir / "masking",
-            config=MaskingConfig(),
+            config=self.masking,
         )
         proteome = phase_dir / "proteome.fasta"
         genes = phase_dir / "genes.gff"
@@ -277,11 +281,13 @@ class _MockPipeline:
             merged_seeds = state.merged_seeds
             host_model = state.host_signature_model
         else:
+            if self.search_files:
+                self._write_search_files(phase_dir)
             write_phase1_state(
                 state_path,
                 hallmark_evidence=[],
                 hallmark_witnesses=[],
-                validated_markers=[],
+                validated_markers=[self._ordinary_marker()] if self.search_files else [],
                 merged_seeds=merged_seeds,
                 host_signature_model=host_model,
                 host_signatures=set(),
@@ -318,6 +324,42 @@ class _MockPipeline:
             host_deviation_summary={},
             elapsed=0.0,
         )
+
+    @staticmethod
+    def _ordinary_marker() -> ValidatedMarkerHit:
+        return ValidatedMarkerHit(
+            query_porf="p1|aa1-3",
+            scaffold="scaffold",
+            start=0,
+            end=4,
+            strand="+",
+            hmm_target="GVOGm0054",
+            hmm_score=50.0,
+            hmm_evalue=1e-10,
+            validation_status="validated",
+            top10_prefixes="NCLDV__",
+            best_hit_target="NCLDV__virus|p",
+            best_hit_pident=40.0,
+            best_hit_bits=100.0,
+            has_ncldv=1,
+            has_mirus=0,
+            has_plv=0,
+            has_vp=0,
+            has_viral=1,
+        )
+
+    @staticmethod
+    def _write_search_files(phase_dir: Path) -> None:
+        """Write the Phase 1 search outputs that Phase 2 and Phase 3 read from disk."""
+        for relative, content in (
+            ("marker_validation/validated_marker_hits.tsv", "query_porf\tscaffold\n"),
+            ("marker_validation/diamond_top10_taxonomy.tsv", "query_porf\thmm_target\n"),
+            ("marker_validation/hmm_hit_porfs.faa", ">p1\nMMM\n"),
+            ("hmm/hmm_hits_validated.tsv", "query\ttarget\tscore\tevalue\tdomain_score\tquery_start\tquery_end\n"),
+        ):
+            path = phase_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
 
     def _phase2(self, **kwargs):
         self.calls["phase2"] += 1
@@ -456,6 +498,8 @@ class _MockPipeline:
                 "summary_json": output_dir / "virosync_summary.json",
             }
         if task_fn is orchestrator.create_summary_artifact_task:
+            return None
+        if task_fn.__name__ == "classify_jelly_roll_task":  # runs when the Phase 1 search files exist
             return None
         raise AssertionError(f"unexpected task in mocked run: {task_fn}")
 

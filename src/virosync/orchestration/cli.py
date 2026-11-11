@@ -1214,7 +1214,9 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     default=None,
     help=(
         "Source SHA-256 that the earlier run recorded as identities.code.source_sha256 "
-        "in virosync_run_state.json. Needs --reuse-phase1-from"
+        "in virosync_run_state.json. This is your statement that the Phase 0 and Phase 1 code of that "
+        "source is identical to the current source, except for the host signature model. "
+        "ViroSync cannot check it. Needs --reuse-phase1-from"
     ),
 )
 @click.option(

@@ -35,7 +35,7 @@ from virosync.pipeline.phase1.marker_validation import (
 from virosync.utils.atomic_write import atomic_write
 
 from .phase1 import Phase1Result, Phase1Terminal, _build_host_model, _finish_without_seeds
-from .phase1_state import load_phase1_state, write_phase1_state
+from .phase1_state import Phase1ResumeState, load_phase1_state, write_phase1_state
 from .run_state import (
     RUN_STATE_FILENAME,
     _validate_run_identity,
@@ -54,6 +54,15 @@ _CHECKPOINT = "phase1/resume_state.json"
 _HOST_FASTA = "phase1/marker_validation/host_hmm_hit_porfs.faa"
 _HOST_TSV = "phase1/marker_validation/host_diamond_top10.tsv"
 _RESCUE_HOST_FASTA = "phase1/frameshift_screening/validation/host_hmm_hit_porfs.faa"
+# Phase 1 files that Phase 2 and Phase 3 read and that no phase marker records. The protein search
+# writes all four whenever it finds a hit. Without them, jelly-roll classification, the viral
+# top-ten flags or the gene-function evidence drop out without an error.
+_SEARCH_FILES = (
+    "phase1/marker_validation/validated_marker_hits.tsv",
+    "phase1/marker_validation/diamond_top10_taxonomy.tsv",
+    "phase1/marker_validation/hmm_hit_porfs.faa",
+    "phase1/hmm/hmm_hits_validated.tsv",
+)
 # Phase 1 files that the host signature model changes. They are rebuilt, not copied.
 _PHASE1_REBUILT = (_MODEL_JSON, _MODEL_DEBUG, _CHECKPOINT)
 # An earlier import record is never copied: the new record names its source run instead.
@@ -106,6 +115,7 @@ class ReusedRun:
 
     ``markers`` holds the SHA-256 of its Phase 0 and Phase 1 markers.
     ``terminal_reason`` is the early-exit reason of a run that ended in Phase 1.
+    ``checkpoint`` is the Phase 1 checkpoint of a run that did not end there.
     """
 
     root: Path
@@ -113,6 +123,7 @@ class ReusedRun:
     code_sha256: str
     markers: Mapping[int, str]
     terminal_reason: str | None = None
+    checkpoint: Phase1ResumeState | None = None
 
 
 def _require_disjoint(old: Path, new: Path) -> None:
@@ -131,7 +142,8 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
     Reads the earlier folder only. Raises ``Phase1ReuseError`` with the reason when
     the run state, the Phase 0 and Phase 1 records, the recorded artifact hashes,
     the code SHA-256, the ablation arm or any identity component other than the
-    code and the two paths does not match.
+    code and the two paths does not match, when its masking fell back, or when it
+    lacks a Phase 1 file that Phase 2 or Phase 3 read.
     """
     root = request.old_dir(genome_id)
     try:
@@ -153,15 +165,45 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
     records, reason = validate_phase_prefix(root, expected_run_fingerprint=state.run_fingerprint, through_phase=1)
     if len(records) < 2:
         raise Phase1ReuseError(
-            f"the earlier run at {root} has no valid Phase 0 and Phase 1: {reason or 'Phase 0 ends the run'}"
+            f"the earlier run at {root} has no valid Phase 0 and Phase 1: {reason or 'Phase 0 ends the run'}. "
+            "The validators open the paths that the earlier run recorded, so its folder and its input genome "
+            f"{state.identities['input_path']} must still lie at the recorded paths"
         )
+    _require_masking_without_fallback(root)
+    terminal = records[1].outcome == "terminal_zero"
+    checkpoint = None if terminal else _load_complete_checkpoint(root)
     return ReusedRun(
         root=root,
         run_fingerprint=state.run_fingerprint,
         code_sha256=code,
         markers={phase: marker_sha256(root, phase) for phase in (0, 1)},
-        terminal_reason=_terminal_reason(root) if records[1].outcome == "terminal_zero" else None,
+        terminal_reason=_terminal_reason(root) if terminal else None,
+        checkpoint=checkpoint,
     )
+
+
+def _require_masking_without_fallback(root: Path) -> None:
+    """Refuse a run whose masking fell back: a new run could mask with the requested backend."""
+    status = json.loads((root / _MASKING_STATUS).read_text(encoding="utf-8"))
+    if status["status"] == "fallback":
+        raise Phase1ReuseError(
+            f"the earlier run's masking fell back from {status['requested_backend']} to "
+            f"{status['effective_backend']} ({status['fallback_reason']}); a new run could mask with "
+            "the requested backend and give another proteome"
+        )
+
+
+def _load_complete_checkpoint(root: Path) -> Phase1ResumeState:
+    """Load the Phase 1 checkpoint and require the search files that a run with a protein hit wrote."""
+    checkpoint = load_phase1_state(root / _CHECKPOINT)
+    if all(is_rescued_protein_id(marker.query_porf) for marker in checkpoint.validated_markers):
+        return checkpoint
+    missing = [relative for relative in _SEARCH_FILES if not (root / relative).is_file()]
+    if missing:
+        raise Phase1ReuseError(
+            f"the earlier run at {root} lacks Phase 1 files that Phase 2 or Phase 3 read: " + ", ".join(missing)
+        )
+    return checkpoint
 
 
 def _differing_components(earlier: Mapping[str, object], current: Mapping[str, object]) -> list[str]:
@@ -270,7 +312,7 @@ def import_phase1(
             elapsed_sec=0.0,
             ablation_counts=InterventionCounts(),
         )
-    state = load_phase1_state(source.root / _CHECKPOINT)
+    state = source.checkpoint or load_phase1_state(source.root / _CHECKPOINT)
     confirmed = {
         m.query_porf.split("|aa", 1)[0] for m in state.validated_markers if is_rescued_protein_id(m.query_porf)
     }

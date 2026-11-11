@@ -39,7 +39,13 @@ from virosync.orchestration._flows.single_genome.run_state import (
 from virosync.orchestration.cli import orchestrate
 from virosync.pipeline import host_signatures
 from virosync.pipeline.host_signatures import HostSignatureModel, TaxonomyLabelLookup
-from virosync.pipeline.phase0.masking import MaskingResult, load_masking_result, write_masking_status
+from virosync.pipeline.phase0 import masking as masking_module
+from virosync.pipeline.phase0.masking import (
+    MaskingBackendError,
+    MaskingResult,
+    load_masking_result,
+    write_masking_status,
+)
 from virosync.pipeline.phase1.hhg_seeding import HMMHit
 from virosync.pipeline.phase1.marker_validation import (
     NovelMarkerCriteria,
@@ -60,17 +66,42 @@ def _tree(root: Path) -> dict[str, str | None]:
     }
 
 
-@pytest.fixture
-def worlds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_MockPipeline, _MockPipeline]:
-    """An earlier finished run and a second pipeline whose code identity differs."""
+def _make_worlds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    search_files: bool = False,
+    terminal_phase: int | None = None,
+    masking: MaskingConfig | None = None,
+) -> tuple[_MockPipeline, _MockPipeline]:
+    """Finish an earlier run, then build a second pipeline whose code identity differs."""
     (tmp_path / "old").mkdir()
     (tmp_path / "new").mkdir()
     old = _MockPipeline(tmp_path / "old", monkeypatch)
+    old.search_files = search_files
+    old.terminal_phase = terminal_phase
+    if masking is not None:
+        old.masking = masking
+        old.identity["requested_masking"] = orchestrator._masking_request_identity(masking)
+        old.fingerprint = compute_run_fingerprint(old.identity)
     assert old.run()["success"] is True
     new = _MockPipeline(tmp_path / "new", monkeypatch)
+    new.identity["requested_masking"] = old.identity["requested_masking"]
     new.identity["code"]["source_sha256"] = NEW_CODE
     new.fingerprint = compute_run_fingerprint(new.identity)
     return old, new
+
+
+@pytest.fixture
+def worlds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_MockPipeline, _MockPipeline]:
+    """An earlier finished run and a second pipeline whose code identity differs."""
+    return _make_worlds(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def search_worlds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[_MockPipeline, _MockPipeline]:
+    """The same, with an ordinary marker in the old checkpoint and the Phase 1 search files on disk."""
+    return _make_worlds(tmp_path, monkeypatch, search_files=True)
 
 
 def _reuse(old: _MockPipeline, code_sha256: str = OLD_CODE) -> Phase1Reuse:
@@ -242,6 +273,102 @@ def test_an_import_that_fails_half_way_is_repeated_cleanly(
 
     assert _flow(new, _reuse(old))["success"] is True
     assert plan_resume(new.output_dir, expected_run_fingerprint=new.fingerprint).completed
+
+
+SEARCH_FILES = (
+    "phase1/marker_validation/validated_marker_hits.tsv",
+    "phase1/marker_validation/diamond_top10_taxonomy.tsv",
+    "phase1/marker_validation/hmm_hit_porfs.faa",
+    "phase1/hmm/hmm_hits_validated.tsv",
+)
+
+
+def test_an_old_run_with_its_search_files_is_reused_and_the_files_are_copied(
+    search_worlds: tuple[_MockPipeline, _MockPipeline],
+) -> None:
+    old, new = search_worlds
+
+    assert _flow(new, _reuse(old))["success"] is True
+
+    provenance = json.loads((new.output_dir / "phase1/reuse_provenance.json").read_text())
+    copied = {item["path"] for item in provenance["copied"]}
+    assert set(SEARCH_FILES) <= copied
+    for relative in SEARCH_FILES:
+        assert (new.output_dir / relative).read_bytes() == (old.output_dir / relative).read_bytes()
+
+
+@pytest.mark.parametrize("missing", SEARCH_FILES)
+def test_an_old_run_without_a_file_that_phase3_reads_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], missing: str
+) -> None:
+    old, new = search_worlds
+    (old.output_dir / missing).unlink()
+
+    with pytest.raises(Phase1ReuseError, match=missing):
+        _flow(new, _reuse(old))
+
+    assert not new.output_dir.exists()
+
+
+def test_an_old_run_without_an_ordinary_marker_needs_no_search_files(
+    worlds: tuple[_MockPipeline, _MockPipeline],
+) -> None:
+    old, new = worlds
+    assert not any((old.output_dir / relative).exists() for relative in SEARCH_FILES)
+
+    assert _flow(new, _reuse(old))["success"] is True
+
+
+def test_an_old_run_that_ended_in_phase1_needs_no_search_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True, terminal_phase=1)
+    monkeypatch.setattr(phase1_module, "call_task", new._call_task)
+    monkeypatch.setattr(phase1_module, "_generate_required_reports", new._generate_required_reports)
+    for relative in SEARCH_FILES:
+        (old.output_dir / relative).unlink()
+
+    assert _flow(new, _reuse(old))["success"] is True
+
+
+def test_an_old_run_whose_masking_fell_back_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = MaskingConfig(
+        backend=MaskingBackend.TRF,
+        failure_policy=MaskingFailurePolicy.FALLBACK,
+        fallback_backend=MaskingBackend.OFF,
+    )
+
+    def failing_backend(**kwargs):
+        raise MaskingBackendError(MaskingBackend.TRF, "injected failure")
+
+    monkeypatch.setattr(masking_module, "_run_backend_attempt", failing_backend)
+    old, new = _make_worlds(tmp_path, monkeypatch, masking=config)
+    status = json.loads((old.output_dir / "phase0/masking/masking_status.json").read_text())
+    assert status["status"] == "fallback"
+
+    with pytest.raises(Phase1ReuseError, match=r"masking fell back.*trf.*off"):
+        _flow(new, _reuse(old), masking=config)
+
+    assert not new.output_dir.exists()
+
+
+def test_a_moved_input_is_refused_with_its_recorded_path(worlds: tuple[_MockPipeline, _MockPipeline]) -> None:
+    old, new = worlds
+    recorded = str(old.genome.resolve())
+    old.genome.rename(old.genome.with_name("moved.fna"))
+
+    with pytest.raises(Phase1ReuseError, match="recorded") as refusal:
+        _flow(new, _reuse(old))
+
+    assert recorded in str(refusal.value)
+
+
+def test_the_option_help_and_the_docs_state_the_code_precondition() -> None:
+    result = CliRunner().invoke(orchestrate, ["run", "--help"])
+    help_text = " ".join(result.output.split())
+    assert "identical to the current source, except for the host signature model" in help_text
+    assert "cannot check" in help_text
+    root = Path(__file__).parents[1]
+    for document in ("docs/METHODS.md", "docs/reference/cli.md"):
+        assert "except for the host signature model" in " ".join((root / document).read_text().split())
 
 
 def test_old_run_that_ended_in_phase1_gives_the_same_terminal_result(
@@ -742,8 +869,10 @@ def _tsv(rows: list[tuple], ids: list[str]) -> str:
     return "".join("\t".join(map(str, row)) + "\n" for row in rows if row[0] in ids)
 
 
-def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real marker task writes the host search files; the import must rebuild the same model from them."""
+def _fresh_phase1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, assemble_regions: bool
+) -> tuple[dict, Phase1Result]:
+    """Run the real marker task with canned DIAMOND output; return the Phase 1 keyword arguments and result."""
     from virosync.orchestration import resource_monitor
     from virosync.orchestration.tasks import marker_validation_task, region_assembly_task
     from virosync.pipeline import phase1 as phase1_package
@@ -754,8 +883,7 @@ def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeyp
         "EUK__A\tEUK|Amoebozoa|Entamoeba\nEUK__B\tEUK|Alveolata|Ciliophora\n"
         "BAC__C\tBAC|Proteobacteria|Escherichia\nNCLDV__X\tNCLDV|Mimiviridae|Mimivirus\n"
     )
-    fresh_dir, replay_dir = tmp_path / "fresh", tmp_path / "replay"
-    kwargs = _phase1_kwargs(tmp_path, fresh_dir)
+    kwargs = _phase1_kwargs(tmp_path, tmp_path / "fresh")
     config = kwargs["config"]
     config.execution.resume = False
     config.phase1.pfam_arbitration_enabled = False
@@ -783,7 +911,7 @@ def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeyp
         if task is marker_validation_task:
             return marker_validation_task(**kw)
         if task is region_assembly_task:
-            return []
+            return region_assembly_task(**kw) if assemble_regions else []
         raise AssertionError(task)
 
     monkeypatch.setattr(resource_monitor, "ResourceMonitor", _NullResourceMonitor)
@@ -792,25 +920,37 @@ def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeyp
     monkeypatch.setattr(phase1_module, "call_task", run_task)
     fresh = _run_phase1_subflow(**kwargs, metadata_families={})
     assert isinstance(fresh, Phase1Result)
-    host_proteins = _fasta_ids(fresh_dir / "phase1/marker_validation/host_hmm_hit_porfs.faa")
-    assert host_proteins == ["s2_1", "s1_2", "s2_2", "s2_3"]
-    assert fresh.host_signature_model.token_weights  # the fixture reaches the model
+    return kwargs, fresh
 
+
+def _import_into(replay_dir: Path, kwargs: dict) -> Phase1Result:
     source = ReusedRun(
-        root=fresh_dir, run_fingerprint="1" * 64, code_sha256=OLD_CODE, markers={0: "a" * 64, 1: "b" * 64}
+        root=kwargs["output_dir"], run_fingerprint="1" * 64, code_sha256=OLD_CODE, markers={0: "a" * 64, 1: "b" * 64}
     )
     replay = import_phase1(
         source,
         output_dir=replay_dir,
         genome_id=kwargs["genome_id"],
-        config=config,
+        config=kwargs["config"],
         masked_path=kwargs["masked_path"],
         proteome_path=kwargs["proteome_path"],
         config_fingerprint=kwargs["config_fingerprint"],
         logger=logging.getLogger("test-phase1-reuse"),
     )
-
     assert isinstance(replay, Phase1Result)
+    return replay
+
+
+def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real marker task writes the host search files; the import must rebuild the same model from them."""
+    kwargs, fresh = _fresh_phase1(tmp_path, monkeypatch, assemble_regions=False)
+    fresh_dir, replay_dir = kwargs["output_dir"], tmp_path / "replay"
+    host_proteins = _fasta_ids(fresh_dir / "phase1/marker_validation/host_hmm_hit_porfs.faa")
+    assert host_proteins == ["s2_1", "s1_2", "s2_2", "s2_3"]
+    assert fresh.host_signature_model.token_weights  # the fixture reaches the model
+
+    replay = _import_into(replay_dir, kwargs)
+
     assert replay.host_signature_model == fresh.host_signature_model
     assert replay.host_signatures == fresh.host_signatures
     assert replay.validated_markers == fresh.validated_markers
@@ -822,6 +962,83 @@ def test_import_gives_the_phase1_files_of_a_fresh_search(tmp_path: Path, monkeyp
         "phase1/resume_state.json",
     ):
         assert (replay_dir / relative).read_bytes() == (fresh_dir / relative).read_bytes(), relative
+
+
+def test_an_assembled_region_of_the_imported_checkpoint_runs_through_phase2_like_the_fresh_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from virosync.orchestration._flows.single_genome import phase2
+    from virosync.pipeline.phase2.boundary_diamond import GeneTaxonomy, GenomeDiamondQuery, SeedGeneMapping, pORF
+
+    kwargs, fresh = _fresh_phase1(tmp_path, monkeypatch, assemble_regions=True)
+    replay = _import_into(tmp_path / "replay", kwargs)
+    assert fresh.merged_seeds, "the fixture must assemble one region"
+    assert replay.merged_seeds == fresh.merged_seeds
+    seed = fresh.merged_seeds[0]
+    genes = [
+        pORF(id=f"{seed.scaffold}_{index}", scaffold=seed.scaffold, start=100 * index, end=100 * index + 100)
+        for index in range(4)
+    ]
+    taxonomy = {
+        gene.id: GeneTaxonomy(
+            porf_id=gene.id,
+            scaffold=gene.scaffold,
+            start=gene.start,
+            end=gene.end,
+            has_hit=True,
+            top1_prefix="EUK__",
+            top1_target="EUK__A|p",
+            top10_prefixes=["EUK__"],
+            top10_pidents=[80.0],
+            top10_targets=["EUK__A|p"],
+            top10_bits=[100.0],
+        )
+        for gene in genes
+    }
+    query = GenomeDiamondQuery(
+        seed_gene_mappings={
+            seed.seed_id: SeedGeneMapping(
+                seed_id=seed.seed_id,
+                scaffold=seed.scaffold,
+                seed_start=seed.start,
+                seed_end=seed.end,
+                flank_start_bp=0,
+                flank_end_bp=400,
+            )
+        }
+    )
+    monkeypatch.setattr(phase2, "build_proteome_index", lambda _path: {seed.scaffold: genes})
+    monkeypatch.setattr(phase2, "_require_phase2b_gene_taxonomy_db", lambda *_args, **_kwargs: tmp_path / "db")
+    monkeypatch.setattr(
+        phase2,
+        "_run_boundary_diamond",
+        lambda **_kwargs: phase2._BoundaryEvidence(taxonomy_map=taxonomy, control_stats=None, query=query),
+    )
+    config = PipelineConfig().with_overrides(resume=False, threads=1, gene_taxonomy_threads=1)
+
+    def run_phase2(result: Phase1Result, output_dir: Path) -> phase2.Phase2Result:
+        outcome = phase2._run_phase2_subflow(
+            masked_path=kwargs["masked_path"],
+            proteome_path=kwargs["proteome_path"],
+            merged_seeds=result.merged_seeds,
+            validated_markers=result.validated_markers,
+            host_signature_model=result.host_signature_model,
+            output_dir=output_dir,
+            genome_id="genome-a",
+            config=config,
+            genome_start_time=0,
+            logger=logging.getLogger("test-phase1-reuse"),
+            metadata_families={},
+        )
+        assert isinstance(outcome, phase2.Phase2Result)
+        return outcome
+
+    fresh_boundaries = run_phase2(fresh, tmp_path / "phase2-fresh").refined_boundaries
+    replay_boundaries = run_phase2(replay, tmp_path / "phase2-replay").refined_boundaries
+
+    assert fresh_boundaries
+    assert replay_boundaries == fresh_boundaries
+    assert replay_boundaries[0].confirmed_seeds == seed.confirmed_seeds
 
 
 # --- Phase 0 ------------------------------------------------------------------------
