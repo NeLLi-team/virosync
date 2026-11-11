@@ -10,11 +10,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   a fresh folder from the Phase 0 and Phase 1 results of an earlier run of the same genome. The
   run rebuilds the host signature model with the current code and runs Phase 2 and Phase 3 in
   full. It refuses when the earlier run is invalid, when its code SHA-256 differs from `SHA`, or
-  when any identity component other than the code, the input path and the output path differs. The
-  earlier folder is never written or deleted. See "Output compatibility and resume" in
-  `docs/METHODS.md`.
-- `scripts/compare_run_outputs.py` compares the scientific tables and JSON files of two genome
-  output folders and exits with status 1 when they differ.
+  when any identity component other than the code, the input path and the output path differs, when
+  its masking fell back, or when it lacks a Phase 1 file that Phase 2 or Phase 3 read. The earlier
+  folder is never written or deleted. The option needs the operator to have shown that the Phase 0
+  and Phase 1 code of both sources is identical except for the host signature model. See "Output
+  compatibility and resume" in `docs/METHODS.md`.
+- `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
+  outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
+  also fails when a completed run lacks an output that its run state requires.
 
 ### Changed
 

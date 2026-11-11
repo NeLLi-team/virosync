@@ -213,11 +213,23 @@ pixi run virosync run -i genomes/ -o results_new --config config/orchestration.y
     results_old/GENOME/virosync_run_state.json)"
 ```
 
+The mode rests on one precondition that ViroSync cannot check. It reuses the
+markers, hallmark evidence, witnesses, seeds and early exits of the earlier run.
+A reused run therefore equals a fresh run only if the earlier source and the
+current source make the same Phase 0 and Phase 1 decisions. The run state
+records one hash over all source files, so it does not show which files differ.
+Before you use the option, show that the Phase 0 and Phase 1 code of the two
+sources is identical, except for the host signature model. The SHA-256 that you
+give is your statement of which earlier source that was. ViroSync checks only
+that the earlier run records it.
+
 | Rule | Behavior |
 | --- | --- |
 | Earlier folder | `OLD_OUT` is the `-o` value of the earlier run: the folder with one subfolder per genome. The rule is the same for one genome and for a batch. ViroSync reads `OLD_OUT/<genome_id>`. A genome without a valid earlier run fails alone, and the other genomes continue. |
 | Read-only | The earlier folder is never written or deleted, `--clean-run` included. ViroSync refuses, before it writes anything, when the new `-o` folder equals `OLD_OUT`, lies inside it or contains it. |
-| Validation | The resume validators check the earlier run with its own recorded fingerprint. Its run state, its Phase 0 and Phase 1 markers and all recorded artifact hashes must be valid. ViroSync neither reads nor hashes the later phases of the earlier run. |
+| Validation | The resume validators check the earlier run with its own recorded fingerprint. Its run state, its Phase 0 and Phase 1 markers and all recorded artifact hashes must be valid. ViroSync neither reads nor hashes the later phases of the earlier run. The validators open the absolute paths that the earlier run recorded, so the earlier folder and its input genome must still lie at those paths, although `input_path` is exempt from the identity comparison. A moved folder or input is refused, and the message names the path. |
+| Search files | Phase 2 and Phase 3 read four Phase 1 files that the earlier markers do not record: `phase1/marker_validation/validated_marker_hits.tsv`, `phase1/marker_validation/diamond_top10_taxonomy.tsv`, `phase1/marker_validation/hmm_hit_porfs.faa` and `phase1/hmm/hmm_hits_validated.tsv`. Without them, jelly-roll classification, the viral top-ten flags or the gene-function evidence silently drop out. ViroSync refuses an earlier run that lacks one of them when its checkpoint holds a marker of an ordinary protein, because then the Phase 1 search wrote the files. The provenance record hashes the copies. The files are checked for presence, not authenticated. An earlier run that ended in Phase 1 needs none of them. |
+| Masking | An earlier run whose masking fell back to another backend is refused. A new run could mask with the requested backend and give another proteome. |
 | Code | `--reuse-phase1-code-sha256` states which source produced the earlier Phase 0 and Phase 1. It must equal `identities.code.source_sha256` in the earlier `virosync_run_state.json`. The two options are required together. |
 | Identity | The new run identity must equal the earlier one in every component except `code`, `input_path` and `output_dir`: `genome_id`, `input` (size and SHA-256), `config`, `environment`, `resources`, `requested_masking`, the schema versions and the coordinate convention. ViroSync refuses and names each component that differs. The `environment` component includes the lockfile, the installed package inventory and the kernel release, so a different node image also refuses. |
 | Ablation | Only `A0` runs can be reused. |
@@ -270,13 +282,32 @@ scientific output. These fields differ by design:
 | `run.log`, `provenance.json`, `effective_config.json`, `*/resource_metrics/*.json` | timings, timestamps, paths |
 | `phase0/reuse_provenance.json`, `phase1/reuse_provenance.json` | the whole file; fresh runs have none |
 
-`scripts/compare_run_outputs.py` checks two genome output folders. It compares
-the canonical and detailed prediction tables, the repeat-candidate table, BED,
-GFF3, `virosync_summary.json`, `evidence_profiles.json`, `gene_functions.tsv`,
-`gene_function_length_exclusions.tsv`, `eve_ani_edges.tsv`, the Phase 2
-taxonomy table and boundary BED, `host_signature_model.json` and
-`phase1/resume_state.json`. It ignores only the key `generated_at` in JSON
-files, prints each difference and exits with status 1 when any exists.
+`scripts/compare_run_outputs.py` checks two genome output folders. It compares:
+
+- the canonical, detailed and repeat-candidate tables, BED, GFF3 and
+  `virosync_summary.json`;
+- `evidence_profiles.json`, in `phase3_synthesis/` or, for a run that ended
+  early, at the root, and `evidence_graph.json`;
+- `gene_functions.tsv`, `gene_function_length_exclusions.tsv` and
+  `eve_ani_edges.tsv`;
+- the combined `<genome_id>_eves.fna`;
+- the Phase 2 taxonomy table, boundary BED and `refined_state.json`;
+- `host_signature_model.json` and `phase1/resume_state.json`;
+- the directories `phase3_synthesis/gene_taxonomy`, `gvclass_input` and
+  `eve_sequences_all`, by member set and content.
+
+JSON files are compared as documents and ignore only the key `generated_at`.
+All other files must match byte for byte.
+
+The tool reads `virosync_run_state.json` in each folder. A run state other than
+`success` is a difference. A successful run must hold the outputs that its state
+requires, and a missing required output is a difference even when both folders
+lack it. Every run needs the six exports and `evidence_profiles.json`. A run that
+did not end early also needs the Phase 1 checkpoint and host model and the three
+Phase 2 files. A run with accepted EVEs also needs `<genome_id>_eves.fna`,
+`gene_taxonomy/gene_taxonomy_all.tsv` and `gvclass_input/manifest.tsv`. The tool
+prints each difference. It exits with status 1 when any exists and with status 2
+when a folder has no readable run state.
 
 ```bash
 pixi run python scripts/compare_run_outputs.py results_fresh/GENOME results_new/GENOME
