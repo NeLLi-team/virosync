@@ -382,10 +382,12 @@ def _has_literal_key(node: ast.Dict, expected: str) -> bool:
 
 
 def test_all_successful_phase1_phase2_zero_returns_use_full_summary() -> None:
-    phase1_returns = _successful_return_dicts(phase1._run_phase1_subflow)
+    # Both Phase 1 early exits, and the Phase 1 reuse, return through one helper.
+    assert not _successful_return_dicts(phase1._run_phase1_subflow)
+    phase1_returns = _successful_return_dicts(phase1._finish_without_seeds)
     phase2_returns = _successful_return_dicts(phase2._run_phase2_subflow)
 
-    assert len(phase1_returns) == 2
+    assert len(phase1_returns) == 1
     assert len(phase2_returns) == 2
     assert all(_expands_empty_summary(node) for node in phase1_returns + phase2_returns)
     assert all(_has_literal_key(node, "elapsed_sec") for node in phase1_returns + phase2_returns)

@@ -25,6 +25,7 @@ from virosync.pipeline.hallmark_evidence import (
     collect_hallmark_evidence,
     find_spatial_witnesses,
 )
+from virosync.pipeline.host_signatures import HostSignatureModel
 from virosync.pipeline.phase1.hhg_seeding import Anchor
 from virosync.pipeline.phase1.marker_roles import (
     decide_marker_hit_role,
@@ -201,6 +202,122 @@ def _candidate_regions_to_seeds(
     return merged_seeds
 
 
+def _build_host_model(
+    host_records: list,
+    *,
+    host_prefixes: list[str],
+    min_token_length: int,
+    weight_mode: str,
+    output_dir: Path,
+    logger,
+) -> tuple[set[str], HostSignatureModel]:
+    """Collect the host signatures, build the host signature model and write its report files."""
+    from virosync.pipeline.host_signatures import (
+        build_host_signature_model,
+        summarize_host_signature_bits,
+        summarize_host_signature_model,
+    )
+    from virosync.pipeline.phase1.marker_validation import collect_host_signatures
+
+    host_signatures = collect_host_signatures(
+        host_records,
+        host_prefixes=set(host_prefixes),
+    )
+    host_signature_model = build_host_signature_model(
+        host_records,
+        min_token_length=min_token_length,
+        host_prefixes=set(host_prefixes),
+        weight_mode=weight_mode,
+    )
+    if host_signature_model:
+        model_path = output_dir / "phase1" / "marker_validation" / "host_signature_model.json"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_write_context(model_path, "w") as handle:
+            json.dump(host_signature_model.to_dict(), handle, indent=2)
+    if host_signature_model and host_signature_model.token_weights:
+        logger.info(
+            "Host signature model: %d tokens (max_weight=%.2f)",
+            len(host_signature_model.token_weights),
+            host_signature_model.max_weight,
+        )
+        summary = summarize_host_signature_model(host_signature_model, top_k=20)
+        if summary:
+            logger.info(
+                "Host signature model details (top %d tokens, min_len=%d):",
+                len(summary),
+                host_signature_model.min_token_length,
+            )
+            for token, weight, count in summary:
+                logger.info("  %s\t%.4f\t%d", token, weight, count)
+        debug_summary = summarize_host_signature_bits(host_signature_model, top_k=50, max_bits=10)
+        if debug_summary:
+            debug_path = output_dir / "phase1" / "marker_validation" / "host_signature_model_debug.tsv"
+            with debug_path.open("w") as debug_handle:
+                debug_handle.write("token\tweight_sum\thit_count\ttop_weights\n")
+                for token, weight, count, bits in debug_summary:
+                    bits_str = ",".join(f"{b:.1f}" for b in bits)
+                    debug_handle.write(f"{token}\t{weight:.2f}\t{count}\t{bits_str}\n")
+            logger.info("Host signature debug summary written to %s", debug_path)
+    else:
+        logger.info("Host signature model: no tokens (skipping)")
+    return host_signatures, host_signature_model
+
+
+def _finish_without_seeds(
+    *,
+    reason: str,
+    masked_path: Path,
+    proteome_path: Path,
+    output_dir: Path,
+    genome_id: str,
+    config: PipelineConfig,
+    logger,
+    config_fingerprint: str | None,
+    elapsed_sec: float,
+    ablation_counts: InterventionCounts,
+) -> Phase1Terminal:
+    """Write the empty outputs of a run that ends in Phase 1 without seeds."""
+    output_files_empty = call_task(
+        generate_outputs_task,
+        verification_results=[],
+        output_dir=output_dir,
+        genome_path=masked_path,
+        proteome_path=proteome_path,
+        accepted_only=True,
+        extended_output=config.phase3.extended_output,
+    )
+    output_files = {
+        "accepted": output_files_empty,
+        **_generate_required_reports(
+            output_dir=output_dir,
+            genome_id=genome_id,
+            taxonomy_labels_file=config.databases.taxonomy_labels_file,
+            logger=logger,
+            host_credit_threshold=config.phase2.host_trim_score_threshold,
+            generate_plots=config.execution.generate_plots,
+        ),
+    }
+    _write_empty_run_log(
+        output_dir=output_dir,
+        genome_id=genome_id,
+        input_path=masked_path,
+        reason=reason,
+        elapsed_sec=elapsed_sec,
+        output_files=output_files,
+        fingerprint=config_fingerprint,
+    )
+    return Phase1Terminal(
+        {
+            "genome_id": genome_id,
+            "success": True,
+            **_empty_prediction_summary(),
+            "output_files": output_files,
+            "elapsed_sec": elapsed_sec,
+            "ablation_counts": ablation_counts,
+        }
+    )
+
+
 def _run_phase1_subflow(
     masked_path: Path,
     proteome_path: Path,
@@ -243,7 +360,6 @@ def _run_phase1_subflow(
     host = config.host
     phase1 = config.phase1
     phase2 = config.phase2
-    phase3 = config.phase3
     resume = config.execution.resume
     ablation_id = config.ablation.id
     threads = threads if threads is not None else compute.effective_threads()
@@ -259,7 +375,6 @@ def _run_phase1_subflow(
     host_prefixes = host.prefixes
     taxonomy_weight_mode = phase2.taxonomy_weight_mode
     boundary_host_signature_min_token_len = phase2.host_signature_min_token_len
-    extended_output = phase3.extended_output
     hmm_chunk_size = phase1.hmm_chunk_size
     frameshift_screening_enabled = phase1.frameshift_screening_enabled
     initial_window_bp = phase1.initial_window_bp
@@ -296,7 +411,6 @@ def _run_phase1_subflow(
     validated_markers = []
     host_signatures: set[str] = set()
     host_signature_model = None
-    host_signature_model_payload = None
     host_deviation_summary: dict | None = None
     merged_seeds = []
     frameshift_hits = []
@@ -521,45 +635,17 @@ def _run_phase1_subflow(
 
     if not hhg_hits and not frameshift_hits:
         logger.warning("No protein HMM or frameshift hits found - pipeline complete with 0 predictions")
-        elapsed_sec = time.time() - phase1_start
-        output_files_empty = call_task(
-            generate_outputs_task,
-            verification_results=[],
-            output_dir=output_dir,
-            genome_path=masked_path,
+        return _finish_without_seeds(
+            reason="no protein HMM or frameshift hits",
+            masked_path=masked_path,
             proteome_path=proteome_path,
-            accepted_only=True,
-            extended_output=extended_output,
-        )
-        output_files = {
-            "accepted": output_files_empty,
-            **_generate_required_reports(
-                output_dir=output_dir,
-                genome_id=genome_id,
-                taxonomy_labels_file=taxonomy_labels_file,
-                logger=logger,
-                host_credit_threshold=config.phase2.host_trim_score_threshold,
-                generate_plots=config.execution.generate_plots,
-            ),
-        }
-        _write_empty_run_log(
             output_dir=output_dir,
             genome_id=genome_id,
-            input_path=masked_path,
-            reason="no protein HMM or frameshift hits",
-            elapsed_sec=elapsed_sec,
-            output_files=output_files,
-            fingerprint=config_fingerprint,
-        )
-        return Phase1Terminal(
-            {
-                "genome_id": genome_id,
-                "success": True,
-                **_empty_prediction_summary(),
-                "output_files": output_files,
-                "elapsed_sec": elapsed_sec,
-                "ablation_counts": InterventionCounts(),
-            }
+            config=config,
+            logger=logger,
+            config_fingerprint=config_fingerprint,
+            elapsed_sec=time.time() - phase1_start,
+            ablation_counts=InterventionCounts(),
         )
 
     # Import here to avoid circular dependency
@@ -569,16 +655,12 @@ def _run_phase1_subflow(
     )
     from virosync.pipeline.host_signatures import (
         TaxonomyLabelLookup,
-        build_host_signature_model,
         set_taxonomy_lookup,
-        summarize_host_signature_bits,
-        summarize_host_signature_model,
     )
     from virosync.pipeline.phase1.marker_validation import (
         VALIDATED_PREFIXES,
         VALIDATION_MIN_PIDENT,
         NovelMarkerCriteria,
-        collect_host_signatures,
     )
 
     # Initialize taxonomy lookup for full lineage-based host signature comparison
@@ -736,48 +818,14 @@ def _run_phase1_subflow(
         interventions=len(tier1_bypassed_markers),
         changed=0,
     )
-    host_signatures = collect_host_signatures(
+    host_signatures, host_signature_model = _build_host_model(
         host_records,
-        host_prefixes=set(host_prefixes),
-    )
-    host_signature_model = build_host_signature_model(
-        host_records,
+        host_prefixes=host_prefixes,
         min_token_length=boundary_host_signature_min_token_len,
-        host_prefixes=set(host_prefixes),
         weight_mode=taxonomy_weight_mode,
+        output_dir=output_dir,
+        logger=logger,
     )
-    host_signature_model_payload = host_signature_model.to_dict() if host_signature_model else None
-    if host_signature_model:
-        model_path = output_dir / "phase1" / "marker_validation" / "host_signature_model.json"
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        with atomic_write_context(model_path, "w") as handle:
-            json.dump(host_signature_model_payload, handle, indent=2)
-    if host_signature_model and host_signature_model.token_weights:
-        logger.info(
-            "Host signature model: %d tokens (max_weight=%.2f)",
-            len(host_signature_model.token_weights),
-            host_signature_model.max_weight,
-        )
-        summary = summarize_host_signature_model(host_signature_model, top_k=20)
-        if summary:
-            logger.info(
-                "Host signature model details (top %d tokens, min_len=%d):",
-                len(summary),
-                host_signature_model.min_token_length,
-            )
-            for token, weight, count in summary:
-                logger.info("  %s\t%.4f\t%d", token, weight, count)
-        debug_summary = summarize_host_signature_bits(host_signature_model, top_k=50, max_bits=10)
-        if debug_summary:
-            debug_path = output_dir / "phase1" / "marker_validation" / "host_signature_model_debug.tsv"
-            with debug_path.open("w") as debug_handle:
-                debug_handle.write("token\tweight_sum\thit_count\ttop_weights\n")
-                for token, weight, count, bits in debug_summary:
-                    bits_str = ",".join(f"{b:.1f}" for b in bits)
-                    debug_handle.write(f"{token}\t{weight:.2f}\t{count}\t{bits_str}\n")
-            logger.info("Host signature debug summary written to %s", debug_path)
-    else:
-        logger.info("Host signature model: no tokens (skipping)")
     host_deviation_markers: list = []
     seedable_deviation_markers: list = []
     if host_taxonomy_deviation_enabled:
@@ -874,45 +922,17 @@ def _run_phase1_subflow(
         and not (host_taxonomy_deviation_allow_seeds and seedable_deviation_markers)
     ):
         logger.warning("No validated markers - pipeline complete with 0 predictions")
-        elapsed_sec = time.time() - phase1_start
-        output_files_empty = call_task(
-            generate_outputs_task,
-            verification_results=[],
-            output_dir=output_dir,
-            genome_path=masked_path,
+        return _finish_without_seeds(
+            reason="no validated markers",
+            masked_path=masked_path,
             proteome_path=proteome_path,
-            accepted_only=True,
-            extended_output=extended_output,
-        )
-        output_files = {
-            "accepted": output_files_empty,
-            **_generate_required_reports(
-                output_dir=output_dir,
-                genome_id=genome_id,
-                taxonomy_labels_file=taxonomy_labels_file,
-                logger=logger,
-                host_credit_threshold=config.phase2.host_trim_score_threshold,
-                generate_plots=config.execution.generate_plots,
-            ),
-        }
-        _write_empty_run_log(
             output_dir=output_dir,
             genome_id=genome_id,
-            input_path=masked_path,
-            reason="no validated markers",
-            elapsed_sec=elapsed_sec,
-            output_files=output_files,
-            fingerprint=config_fingerprint,
-        )
-        return Phase1Terminal(
-            {
-                "genome_id": genome_id,
-                "success": True,
-                **_empty_prediction_summary(),
-                "output_files": output_files,
-                "elapsed_sec": elapsed_sec,
-                "ablation_counts": phase1_ablation_counts,
-            }
+            config=config,
+            logger=logger,
+            config_fingerprint=config_fingerprint,
+            elapsed_sec=time.time() - phase1_start,
+            ablation_counts=phase1_ablation_counts,
         )
 
     seed_markers = validated_only
