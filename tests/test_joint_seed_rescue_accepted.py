@@ -283,6 +283,46 @@ def test_prepared_joint_records_only_accepted_child_ambiguity(
         assert assessment["gap_sides"][1]["ambiguous_bp"] == 70
 
 
+def test_prepared_joint_assesses_an_end_beyond_the_flank_mappings(
+    repeat_inputs: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase3
+
+    raw = tmp_path / "raw.fa"
+    raw.write_text(f">s\n{repeat_inputs['sequence']}\n", encoding="utf-8")
+    children = repeat_inputs["children"]
+    children[0].confirmed_seeds = (replace(children[0].confirmed_seeds[0], start=1300, end=1500),)
+    children[1].confirmed_seeds = (replace(children[1].confirmed_seeds[0], start=2800, end=3000),)
+    mappings = repeat_inputs["query"].seed_gene_mappings
+    mappings["a"].flank_end_bp = 2500
+    mappings["b"].flank_end_bp = 3400
+    config = PipelineConfig()
+    config.phase1.extension_kb = 1
+    monkeypatch.setattr(phase3, "refine_boundaries_with_terminal_repeats", lambda boundaries, **kwargs: boundaries)
+    monkeypatch.setattr(phase3, "refresh_boundary_classification", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase3, "_recalculate_boundary_composition", lambda *args, **kwargs: None)
+
+    prepared = phase3._prepare_joint_boundaries(
+        [children],
+        raw_genome_path=raw,
+        masked_path=raw,
+        validated_markers=repeat_inputs["markers"],
+        boundary_diamond_query=repeat_inputs["query"],
+        boundary_taxonomy_map=repeat_inputs["taxonomy"],
+        proteome_index=repeat_inputs["proteome_index"],
+        config=config,
+        metadata_families={},
+    )
+
+    boundary, _ = prepared[0]
+    assert boundary.end == 3500
+    assert boundary.repeat_evidence.right.status != "not_assessed"
+    assert "missing_coverage" not in boundary.repeat_evidence.right.reasons
+
+
 @pytest.mark.parametrize("arm_start,copy_start", [(960, 2200), (2300, 3700)])
 def test_accepted_child_ambiguity_keeps_both_separating_repeat_vetoes(
     repeat_inputs: dict, arm_start: int, copy_start: int

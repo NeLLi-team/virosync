@@ -210,9 +210,23 @@ increment nor reset that count. Qualifying viral support, including deep-hit
 vetoes and confirmed markers, resets it. Nonviral foreign and ML evidence does
 not reset the host count. Such evidence can still support growth before a host
 barrier; joint rescue applies the same viral-only reset rule.
-Searched no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped in the five-gene lookahead; they never extend the hull
+Only the extension walk bridges a short host run: when a run reaches three, it is
+cleared if at least two of the next five walk entries have a viral match. Foreign,
+marker-set and machine-learning support do not count. The window counts walk entries,
+as the host run and the support gap do: inside the seed's envelope a searched gene
+without hits is skipped only when it lacks marker-set membership, a qualifying viral
+veto, and ML support. Such a skipped gene uses no place in the window; outside the
+envelope it is an entry. Genes after
+the first gene without a taxonomy record do not count, because the walk cannot reach
+them. A bridge changes only where the walk may go. The run that limits the walk always
+sets a stop. A bridged run sets a stop only if the walk did not cross it. The walk
+crosses a bridged run when it accepts a supporting gene that follows the run's third host
+gene. Joint rescue has no bridge.
+Inside the seed's own search envelope, searched no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped in the five-gene lookahead; they never extend the hull
 on their own. Any nonempty hit namespace with host share below 0.10 still supplies foreign support, including
-bacterial hits; this separate positive-support rule is unchanged.
+bacterial hits; this separate positive-support rule is unchanged inside the envelope.
+Outside it, a searched no-hit gene counts toward the gap and foreign support does not
+apply (see "Seed-preserving extension" below).
 
 Every candidate retains its full assigned seed hull and identities. A host stop
 may fall inside another candidate's seed interval; that other candidate retains
@@ -222,9 +236,17 @@ blocks joining across any recorded child stop.
 
 The GC heuristic has no minimum informative-base fraction. One G and 1,999 Ns
 can therefore give GC 1.0 for a 2 kb edge window. Sparse reference windows can
-also affect the comparison; fully ambiguous references disable the trim. GC
-changes do not update the existing stop-reason fields, and later TIR refinement
-can supersede the heuristic within the searched envelope. A GC information floor remains an experimental change.
+also affect the comparison; fully ambiguous references disable the trim. A trimmed
+end that lands strictly inside a gene moves to the nearest start or end of a gene that
+contains it, the outer one on a tie. Neither the trim nor the snap moves an end outward
+past the pre-trim end or into the protected span of the region. That span is the hull of
+the confirmed seed cores and of every gene that overlaps the region and has a viral match
+(see "Seed-preserving extension"). A region with no such gene protects its cores only.
+An end the trim did not move keeps its coordinate.
+Without such a gene edge the end stays where the trim put it. A side whose coordinate
+the trim changed gets the stop reason `gc_trim`; `left_stop` and `right_stop` do not
+change. Later TIR refinement can supersede the heuristic within the searched envelope. A GC
+information floor remains an experimental change.
 
 V9g also admits mixed NCLDV/MIRUS rescue candidates under its hallmark-composition
 rule. Repeated partial hallmark sets alone do not block a pair. One qualifying
@@ -718,7 +740,9 @@ stop coordinates and reasons without duplicating the gene tables.
 The competition scores are diagnostic only. A stronger cellular hit does not
 defeat a qualifying viral veto. Extension and joint assessment require three
 host-signature matches without intervening qualifying viral support; neutral
-and no-hit genes do not interrupt the count. Recorded stops still constrain repeats,
+and no-hit genes do not interrupt the count. The extension walk, not the joint
+assessment, bridges a run of three when at least two of the next five walk entries have a
+viral match. Recorded stops still constrain repeats,
 and every assigned confirmed seed remains protected.
 
 The filter rewrites the DIAMOND table in place with the same columns. The
@@ -878,34 +902,59 @@ their own hull or child interval there. Only the confirmed core requires
 containment in the final EVE. A1 and A3 passthrough outputs use the protected
 hull without padding, and their marker classification uses that retained hull.
 For ordinary non-CRESS seeds, extension can use the complete searched flanking
-gene interval together with the protected core. The Phase 1 `extension_kb`
-setting still supplies the terminal-repeat and annotation radius; it does not
-cap this outward walk. CRESS seeds and seeds without a searched mapping use
-their original container as the extension envelope.
+gene interval together with the protected core. The walk limit then extends this
+interval over the consecutive genes that already have a taxonomy record, on each
+side, and stops before the first gene without one. Other seeds on the same scaffold
+have their own searched flanks, so the records of such genes often exist. No new
+search runs. The Phase 1 `extension_kb` setting still supplies the terminal-repeat
+and annotation radius; it does not cap this outward walk. CRESS seeds and seeds
+without a searched mapping use their original container as the extension envelope
+and as the walk limit.
 
 One controller starts at the seed and walks flanking genes in genomic order,
-independently on each side. Top-10 identity-qualified viral hits and marker-set
-membership provide positive support only below the configured host-share threshold.
-Independently validated Phase 1 viral markers provide positive support regardless
-of host share. Optional taxonomy ML supplies per-gene support without using the
+independently on each side. A gene has a viral match when Phase 1 validated its
+protein as a viral marker or when a viral hit with at least 25% identity sits in its
+top 10. A viral match provides positive support regardless of host share.
+Marker-set membership provides it only below the configured host-share threshold.
+Optional taxonomy ML supplies per-gene support without using the
 host-signature model as a positive feature. Ambiguous genes, genes without
 hits and isolated model-matched host genes do not extend the boundary on their
 own. Measured unsupported genes remain pending until connected positive support
-occurs within the five-gene lookahead and searched nucleotide envelope. Searched
+occurs within the five-gene lookahead and the walk limit. Inside the seed's own
+searched envelope, searched
 no-hit genes without confirmed marker membership, deep viral veto or ML support are skipped, rather than consuming
 that lookahead; missing taxonomy still limits growth as unavailable context.
-Five unsupported genes end the support search. If the envelope ends after only
+Five unsupported genes end the support search. If the walk limit ends after only
 one to four unsupported genes, the reported limit is the search envelope.
 
+Genes that lie outside the seed's own searched envelope, within the walk limit,
+follow stricter rules. Only a viral match supports growth there: marker-set
+membership, ML support and foreign support (host share below 0.10) do not. A
+searched gene without hits stays in the walk as a gene without support, so it counts
+toward the five-gene gap. Host status and the host-run reset follow the rules inside
+the envelope. These genes do not change whether the host stop was assessable.
+
 Three exterior host matches at the configured host-lineage-share threshold (default 0.35), with no qualifying viral
-support in those genes, stop extension before the first gene in the run. A gene has qualifying viral support
+support in those genes, stop extension before the first gene in the run, unless the
+next five walk entries after the third match include at least two that have a viral
+match (a validated viral marker or a viral hit with at least 25% identity in the top 10).
+Foreign, marker-set and machine-learning support do not count here. Only genes before the
+first gene without a taxonomy record count, even when that missing record lies
+between the first and third host gene. When the viral bridge holds, the run is
+cleared and the walk may continue past it. The recorded stop is the
+start of the first run of three host genes that sets one, or the end of the last
+accepted gene if that lies further out. The run that limits the walk always sets a stop,
+also when an accepted gene overlaps its first host gene. A bridged run sets a stop only
+if the walk did not cross it. If the five-gene support gap ends the walk before it
+reaches the supporters, the bridged run stays uncrossed and sets the stop; the reason
+stays `support_gap`. Ablation A4 records no stop. The bridged host genes
+still count as genes without support for the five-gene gap. A gene has qualifying viral support
 when a viral hit with at least 25% identity sits in its top 10 or anywhere within
 the first `phase2.viral_hit_depth` hits, or when Phase 1 validated its protein as a
 viral marker (status `validated`, from a model that is not a host kinase, COG or
 BUSCO model). A deeper viral hit vetoes host status but does not itself supply
-positive extension support. Top-10 identity-qualified hits provide positive support
-only below the host-share threshold; independently validated Phase 1 viral markers
-provide it regardless of host share. Neutral and searched no-hit genes neither
+positive extension support. A top-10 identity-qualified hit and a validated Phase 1
+viral marker both provide positive support regardless of host share. Neutral and searched no-hit genes neither
 increment nor reset the host count. Qualifying viral support, including a
 deeper-hit veto or confirmed marker, resets it.
 Cellular-versus-viral score competition does not override this veto.
@@ -914,15 +963,28 @@ missing taxonomy is reported as
 an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
 A new exterior endpoint must retain the complete supported gene. A gene that
-crosses a host stop, missing-taxonomy edge or search limit cannot commit a
-partial extension. This does not trim a gene or any sequence already inside
-the confirmed core.
+crosses a host stop, missing-taxonomy edge or walk limit cannot commit a partial
+extension. One exception holds: a supporting gene that starts before a host stop
+or before the first gene without a taxonomy record, and ends no later than the end
+of that gene, is accepted whole. For a host stop, that gene is the first host gene of
+the run. Both end limits apply when a host stop and a gene without a record are
+present, including when either gene contains the other. Here, the first missing-record
+gene is the earliest in directed `(start, end)` walk order. A later missing-record gene
+nested inside it does not impose a tighter endpoint constraint. The exception also
+holds when the gene crosses the walk
+limit, so the region can pass the envelope edge. The recorded stop then lies at the end
+of the accepted gene, so a stop never falls inside the region. Ablation A4 removes the
+stop and its limit. It keeps the limit and the exception of a gene without a taxonomy
+record, so that gene bounds A4 as it bounds the walk with the stop. A4 also accepts every
+gene that the walk with the stop accepts. The stored walked interval is the hull of the walk limit and
+the final boundary. The walk does not trim a gene or any sequence already inside the
+confirmed core.
 A host block crossing the seed edge can stop new growth at that edge, but
 cannot cut the seed.
 An independently confirmed seed remains protected beyond another seed's stop.
 If merging would cross that stop, the candidates stay separate even when their
-retained intervals overlap. A wider searched envelope can therefore expose a
-stop and split a merge that a shorter envelope had allowed.
+retained intervals overlap. A wider walk limit can therefore expose a
+stop and split a merge that a shorter limit had allowed.
 Phase 3 reports the retained coordinates directly. It does not export a second
 candidate interval or reduction fields. Integration-gene scans use the retained
 interval plus the configured Phase 1 extension flank.
@@ -956,9 +1018,9 @@ The existing `phase2.host_trim_enabled` and `host_trim_score_threshold`
 settings control this exterior stop. ViroSync rejects window, step, host-fraction,
 viral-fraction, buffer and overlap-score keys in `phase2`.
 
-The controller distinguishes a host stop, a support gap and the search-envelope
-limit. A later ML, merge, repeat or rescue operation cannot cross a host stop.
-Reaching the envelope records the limit without an automatic new search.
+The controller distinguishes a host stop, a support gap and the walk limit
+(reported as `search_envelope`). A later ML, merge, repeat or rescue operation cannot cross a host stop.
+Reaching the walk limit records the limit without an automatic new search.
 Each independently confirmed seed beyond a stop is processed separately.
 Overlapping search envelopes alone do not merge candidates. An allowed merge
 retains every source seed and the tightest recorded stop on each side. The
@@ -1207,7 +1269,9 @@ CRESS seeds retain their Phase 1 seed interval. An unavailable host model adds n
 host stop; missing gene-taxonomy records inside a child still veto refinement.
 A host run extending beyond the checked interval cannot be evaluated past that
 interval, just as in gene-walk extension. Repeat scanning and candidate conflict
-detection use their existing search windows; the checked interval limits which
+detection use the requested flank window, clipped to the hull of the Phase 2b flank
+mappings and the checked interval, so a region that the walk extended past the
+mappings is scanned at its new ends. The checked interval also limits which
 partitions can be accepted. Phase 3 joint rescue retains its fixed hull.
 For `tir_status=detected`, exactly one pair must match the final outer endpoints,
 and both pre-TIR coordinates must be recorded. `tir_boundary_override` is true
@@ -1324,7 +1388,10 @@ Direct-repeat evidence is recorded by default for genome candidates. The screen
 uses unmasked host sequence around the endpoints assessed in Phase 2. The
 `phase1.extension_kb` setting supplies the requested radius, 5 kb by default;
 the method caps it at 10,000 bases. Scaffold ends and contiguous Phase-2
-taxonomy coverage clip each window. The JSON endpoint assessments record both
+taxonomy coverage clip each window. Coverage is the union of the Phase 2b flank
+mappings and the interval that the extension walk used for each confirmed seed of the
+region, so ends added by a walk that passed the mappings are assessed. Joint rescue
+finalization uses the interval of the joint region for each of its confirmed seeds. The JSON endpoint assessments record both
 the requested and searched windows, reasons for limits, and ambiguous-base
 counts. A pair can be present when assessment is incomplete.
 
@@ -1594,9 +1661,8 @@ The staged depth50 candidate keeps host weighting and positive Phase3 viral
 fractions based on the existing top10 evidence. A deeper-only qualifying hit
 vetoes the EUK penalty and host stopping, but is not new positive extension
 support. Measured cellular dominance does not override this veto. Top10 viral
-evidence supplies positive extension support only below the host-share threshold;
-existing ML support and same-gene Phase1 validated viral markers retain their
-independent positive-support rules. The host signature remains
+evidence and same-gene Phase1 validated viral markers supply positive extension
+support at any host share; existing ML support retains its independent rule. The host signature remains
 estimated from HMM-hit proteins that pass the host-search exclusion and
 host-prefix checks. It is not restricted to housekeeping models.
 

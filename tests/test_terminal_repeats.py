@@ -30,6 +30,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
+from virosync.pipeline.phase2.repeat_evidence import EndAssessment
 from virosync.pipeline.phase2.terminal_repeats import (
     MAX_TIR_ARM_BP,
     find_target_site_duplication,
@@ -1887,7 +1888,9 @@ def test_outward_tir_respects_walked_interval_and_stop(
         extension_bp=500,
         metadata_families={},
     )
-    phase2._annotate_boundary_repeats(result, raw_genome_path=genome, boundary_diamond_query=query, extension_bp=500)
+    phase2._annotate_boundary_repeats(
+        result, walked_intervals={}, raw_genome_path=genome, boundary_diamond_query=query, extension_bp=500
+    )
     state = tmp_path / "refined.json"
     write_phase2_state(state, result)
     loaded = load_phase2_state(state)
@@ -1899,6 +1902,79 @@ def test_outward_tir_respects_walked_interval_and_stop(
     assert (result[0].repeat_evidence.assessed_start, result[0].repeat_evidence.assessed_end) == expected
     assert (result[0].repeat_evidence.parent_start, result[0].repeat_evidence.parent_end) == parent_bounds
     assert loaded == result
+
+
+def test_repeat_scan_covers_the_interval_the_walk_was_allowed_to_use(tmp_path: Path) -> None:
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    parent = RefinedBoundary(
+        "contig",
+        120,
+        400,
+        seed_id="seed-1",
+        original_start=150,
+        original_end=350,
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
+    )
+    narrow_mapping = SeedGeneMapping(
+        seed_id="seed-1", scaffold="contig", seed_start=150, seed_end=350, flank_start_bp=0, flank_end_bp=380
+    )
+
+    result = refine_boundaries_with_terminal_repeats(
+        [parent],
+        allowed_intervals=[(0, 520)],
+        raw_genome_path=genome,
+        validated_markers=[_Marker("contig", 250, 270, "marker-1")],
+        boundary_diamond_query=GenomeDiamondQuery(seed_gene_mappings={"seed-1": narrow_mapping}),
+        boundary_taxonomy_map={},
+        proteome_index={"contig": []},
+        extension_bp=500,
+        metadata_families={},
+    )
+
+    assert (result[0].start, result[0].end) == (100, 420)
+
+
+def _annotated_right_end(tmp_path: Path, walked_intervals: dict[str, tuple[int, int]]) -> EndAssessment:
+    """Annotate a region whose end lies past the Phase 2b flank mapping and return its right-end assessment."""
+    sequence, _ = _planted_repeat()
+    genome = tmp_path / "raw.fna"
+    genome.write_text(f">contig\n{sequence}\n", encoding="utf-8")
+    boundary = RefinedBoundary(
+        "contig",
+        100,
+        420,
+        seed_id="seed-1",
+        original_start=150,
+        original_end=350,
+        confirmed_seeds=(ConfirmedSeed("seed-1", "contig", 150, 350),),
+    )
+    narrow_mapping = SeedGeneMapping(
+        seed_id="seed-1", scaffold="contig", seed_start=150, seed_end=350, flank_start_bp=0, flank_end_bp=380
+    )
+    phase2._annotate_boundary_repeats(
+        [boundary],
+        walked_intervals=walked_intervals,
+        raw_genome_path=genome,
+        boundary_diamond_query=GenomeDiamondQuery(seed_gene_mappings={"seed-1": narrow_mapping}),
+        extension_bp=100,
+    )
+    return boundary.repeat_evidence.right
+
+
+def test_repeat_annotation_assesses_an_end_that_the_wider_walk_added(tmp_path: Path) -> None:
+    right = _annotated_right_end(tmp_path, {"seed-1": (0, 520)})
+
+    assert right.status != "not_assessed"
+    assert "missing_coverage" not in right.reasons
+
+
+def test_repeat_annotation_without_a_walked_interval_has_no_coverage_past_the_mapping(tmp_path: Path) -> None:
+    right = _annotated_right_end(tmp_path, {})
+
+    assert right.status == "not_assessed"
+    assert right.reasons == ("missing_coverage",)
 
 
 @pytest.mark.parametrize(

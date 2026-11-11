@@ -1,6 +1,7 @@
 """Phase 2 subflow: bounded, seed-preserving growth from gene evidence."""
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from virosync.pipeline.phase2.seed_extension import (
     extend_confirmed_seed,
     merge_reachable_boundaries,
     refresh_boundary_classification,
+    seed_walk_limit,
     validate_source_membership,
 )
 from virosync.pipeline.phase2.terminal_repeats import TerminalRepeat
@@ -150,11 +152,17 @@ def _seeds_to_refined_boundaries(
 def _annotate_boundary_repeats(
     boundaries: list[RefinedBoundary],
     *,
+    walked_intervals: Mapping[str, tuple[int, int]],
     raw_genome_path: Path | None,
     boundary_diamond_query: GenomeDiamondQuery | None,
     extension_bp: int,
 ) -> None:
-    """Attach raw-sequence repeat evidence after assigning public candidate IDs."""
+    """Attach raw-sequence repeat evidence after assigning public candidate IDs.
+
+    Taxonomy coverage is the Phase 2b flank mappings plus the walked interval of each
+    confirmed seed of the boundary, keyed by seed ID. A walk that passed the mappings
+    thus has its new ends assessed. A seed without an entry adds no coverage.
+    """
     from Bio import SeqIO
 
     if not boundaries:
@@ -182,7 +190,14 @@ def _annotate_boundary_repeats(
                     end=boundary.end,
                     parent_start=boundary.pre_tir_start if boundary.pre_tir_start is not None else boundary.start,
                     parent_end=boundary.pre_tir_end if boundary.pre_tir_end is not None else boundary.end,
-                    coverage_intervals=tuple(coverage_by_scaffold[scaffold]),
+                    coverage_intervals=(
+                        *coverage_by_scaffold[scaffold],
+                        *(
+                            walked_intervals[core.seed_id]
+                            for core in boundary.confirmed_seeds
+                            if core.seed_id in walked_intervals
+                        ),
+                    ),
                     extension_bp=extension_bp,
                     tir=_retained_terminal_repeat(boundary),
                 )
@@ -690,19 +705,21 @@ def _run_phase2_subflow(
         protected_cores[seed.scaffold].update((core.start, core.end) for core in seed.confirmed_seeds)
     for seed in merged_seeds:
         mapping = boundary_diamond_query.seed_gene_mappings.get(seed.seed_id) if boundary_diamond_query else None
+        genes = proteome_index.get(seed.scaffold, [])
         envelope = (seed.start, seed.end)
+        walk_limit = envelope
         if mapping is not None and seed.predicted_family != "CRESS":
             envelope = (
                 min(seed.start, mapping.flank_start_bp),
                 max(seed.end, mapping.flank_end_bp),
             )
-        for core in seed.confirmed_seeds:
-            walked_intervals[core.seed_id] = envelope
+            walk_limit = seed_walk_limit(envelope, genes, boundary_taxonomy_map)
         kwargs = dict(
             seed=seed,
-            genes=proteome_index.get(seed.scaffold, []),
+            genes=genes,
             taxonomy=boundary_taxonomy_map,
             envelope=envelope,
+            walk_limit=walk_limit,
             host_model=host_signature_model if boundary_host_trim_enabled else None,
             host_threshold=boundary_host_trim_score_threshold,
             ml_support=ml_support.get(seed.seed_id, frozenset()),
@@ -717,6 +734,10 @@ def _run_phase2_subflow(
                 host_coordinate_counts,
                 InterventionCounts(opportunities=int(affected), interventions=int(affected), changed=int(affected)),
             )
+        # A gene ending inside the gene that sets a stop or taxonomy gap can pass the walk limit.
+        walked = (min(walk_limit[0], boundary.start), max(walk_limit[1], boundary.end))
+        for core in seed.confirmed_seeds:
+            walked_intervals[core.seed_id] = walked
         refined_boundaries.append(boundary)
     from virosync.pipeline.eve_type_rules import boundary_compatibility
 
@@ -726,7 +747,9 @@ def _run_phase2_subflow(
     if raw_genome_path is not None:
         from virosync.pipeline.phase2.gc_boundary import trim_boundaries_by_gc
 
-        refined_boundaries = trim_boundaries_by_gc(refined_boundaries, raw_genome_path)
+        refined_boundaries = trim_boundaries_by_gc(
+            refined_boundaries, raw_genome_path, proteome_index, boundary_taxonomy_map
+        )
     allowed_intervals = []
     for boundary in refined_boundaries:
         spans = [walked_intervals[core.seed_id] for core in boundary.confirmed_seeds]
@@ -787,6 +810,7 @@ def _run_phase2_subflow(
     refined_boundaries = assign_boundary_candidate_ids(refined_boundaries)
     _annotate_boundary_repeats(
         refined_boundaries,
+        walked_intervals=walked_intervals,
         raw_genome_path=raw_genome_path,
         boundary_diamond_query=boundary_diamond_query,
         extension_bp=config.phase1.extension_kb * 1000,

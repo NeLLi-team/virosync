@@ -107,6 +107,17 @@ def has_identity_qualified_viral_hit(
     return False
 
 
+def has_viral_match(taxonomy: GeneTaxonomy) -> bool:
+    """Return whether a gene is a validated viral marker or has a viral hit in its top 10.
+
+    The top-10 hit needs at least ``MIN_VIRAL_HIT_PIDENT`` identity. A hit deeper in
+    the search does not count. Host share does not change the result.
+    """
+    return taxonomy.phase1_validated_viral_marker or has_identity_qualified_viral_hit(
+        taxonomy.top10_prefixes, taxonomy.top10_pidents
+    )
+
+
 def has_viral_hit_veto(taxonomy: GeneTaxonomy) -> bool:
     """Return whether a qualifying viral hit keeps a gene from counting as host.
 
@@ -116,11 +127,7 @@ def has_viral_hit_veto(taxonomy: GeneTaxonomy) -> bool:
     dominance does not defeat this veto. Deep-only hits do not supply positive
     extension support.
     """
-    return (
-        taxonomy.phase1_validated_viral_marker
-        or taxonomy.viral_hit_within_depth
-        or has_identity_qualified_viral_hit(taxonomy.top10_prefixes, taxonomy.top10_pidents)
-    )
+    return taxonomy.viral_hit_within_depth or has_viral_match(taxonomy)
 
 
 @dataclass

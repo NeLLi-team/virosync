@@ -283,6 +283,47 @@ def test_ablation_disables_host_stop_without_losing_core():
     assert boundary.right_stop is None
 
 
+def _stub_phase2_boundary_search(
+    tmp_path, monkeypatch, *, mapped, genes=None, flank_end_bp=10000, unsearched=frozenset()
+):
+    """Stub the Phase 2b search so only the taxonomy-ML step varies; return the shared subflow arguments."""
+    import logging
+
+    from virosync.orchestration._flows.single_genome import phase2
+    from virosync.pipeline.phase2.boundary_diamond import GenomeDiamondQuery, SeedGeneMapping
+
+    genes = [gene("v", 8500, 9000, viral=True)] if genes is None else genes
+    query = GenomeDiamondQuery(
+        seed_gene_mappings={
+            "original": SeedGeneMapping("original", "s", 1000, 2000, flank_start_bp=0, flank_end_bp=flank_end_bp)
+        }
+        if mapped
+        else {}
+    )
+    monkeypatch.setattr(phase2, "build_proteome_index", lambda _: {"s": genes})
+    monkeypatch.setattr(phase2, "_require_phase2b_gene_taxonomy_db", lambda *args, **kwargs: tmp_path / "db")
+
+    def searched_evidence(**kwargs):
+        assert [(seed.start, seed.end) for seed in kwargs["merged_seeds"]] == [(1000, 2000)]
+        return phase2._BoundaryEvidence({item.id: item for item in genes if item.id not in unsearched}, None, query)
+
+    monkeypatch.setattr(phase2, "_run_boundary_diamond", searched_evidence)
+    monkeypatch.setattr(phase2, "_recalculate_boundary_composition", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase2, "_annotate_boundary_repeats", lambda *args, **kwargs: None)
+    monkeypatch.setattr(phase2, "_write_phase2_checkpoints", lambda **kwargs: tmp_path / "boundaries.bed")
+    return dict(
+        masked_path=tmp_path / "genome.fna",
+        proteome_path=tmp_path / "proteome.faa",
+        validated_markers=[],
+        host_signature_model=None,
+        output_dir=tmp_path,
+        genome_id="g",
+        genome_start_time=0.0,
+        logger=logging.getLogger(__name__),
+        metadata_families={},
+    )
+
+
 @pytest.mark.parametrize(
     ("family", "mapped", "expected_end"),
     [("NCLDV", True, 9000), ("CRESS", True, 1700), ("NCLDV", False, 1700)],
@@ -659,15 +700,17 @@ def test_neutral_genes_preserve_host_count_and_deep_viral_resets_it(direction, m
     assert blocked is (middle_kind != "deep_viral" or tail_hosts == 3)
 
 
-@pytest.mark.parametrize("pident,expected_veto", [(24.9, False), (25.0, True)])
-def test_host_like_top10_viral_hit_vetoes_without_positive_extension(pident, expected_veto):
+@pytest.mark.parametrize("pident,expected_veto,expected_end", [(24.9, False, 2000), (25.0, True, 2200)])
+def test_host_like_top10_viral_hit_vetoes_and_supports_extension_at_the_identity_floor(
+    pident, expected_veto, expected_end
+):
     hit = gene("mixed", 2100, 2200, host=True, viral=True)
     hit.top10_prefixes = ["EUK__"] * 9 + ["NCLDV__"]
     hit.top10_pidents = [90.0] * 9 + [pident]
     hit.viral_hit_within_depth = False
     assert has_viral_hit_veto(hit) is expected_veto
     boundary = grow([hit])
-    assert boundary.end == 2000
+    assert boundary.end == expected_end
     assert boundary.right_stop is None
 
 
@@ -796,3 +839,1037 @@ def test_nonviral_foreign_support_does_not_reset_joint_host_count():
         blocked = _gap_has_host_barrier(children, genes, {g.id: g for g in genes}, None, 0.35, frozenset())
 
     assert blocked is True
+
+
+def foreign_gene(name, start, end):
+    """Return a gene with cellular hits and a host share of 0.0, so it counts as foreign."""
+    item = gene(name, start, end)
+    item.share = 0.0
+    return item
+
+
+def no_hit_gene(name, start, end):
+    """Return a searched gene without any hit."""
+    item = gene(name, start, end)
+    item.top10_prefixes = []
+    item.top10_pidents = []
+    return item
+
+
+def extend(genes, *, start=1000, end=2000, taxonomy=None, envelope=(0, 10000), **kwargs):
+    """Extend a seed; a gene flagged host has share 1.0, a gene with a share attribute that share, others 0.2."""
+    seed = MergedSeed(
+        "s", start, end, seed_id="original", confirmed_seeds=(ConfirmedSeed("original", "s", start, end),)
+    )
+    model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
+    records = {item.id: item for item in genes} if taxonomy is None else taxonomy
+    with patch(
+        "virosync.pipeline.phase2.seed_extension.host_lineage_share",
+        side_effect=lambda record, _model: getattr(record, "share", 1.0 if record.host else 0.2),
+    ):
+        return extend_confirmed_seed(seed, genes, records, envelope, model, 0.35, **kwargs)
+
+
+def test_host_like_gene_with_a_viral_top10_hit_supports_growth():
+    boundary = extend([gene("m", 2100, 2200, host=True, viral=True)])
+    assert boundary.end == 2200
+
+
+def test_five_host_like_genes_with_viral_top10_hits_do_not_end_the_walk():
+    boundary = extend(
+        [
+            gene("m1", 2100, 2200, host=True, viral=True),
+            gene("m2", 2300, 2400, host=True, viral=True),
+            gene("m3", 2500, 2600, host=True, viral=True),
+            gene("m4", 2700, 2800, host=True, viral=True),
+            gene("m5", 2900, 3000, host=True, viral=True),
+        ]
+    )
+    assert boundary.end == 3000
+    assert boundary.right_stop_reason == "search_envelope"
+
+
+def test_marker_set_membership_alone_does_not_support_growth_at_a_host_like_share():
+    boundary = extend([gene("m", 2100, 2200, host=True)], viral_marker_genes=frozenset({"m"}))
+    assert boundary.end == 2000
+
+
+def test_marker_set_membership_supports_growth_below_the_host_share_threshold():
+    boundary = extend([gene("m", 2100, 2200)], viral_marker_genes=frozenset({"m"}))
+    assert boundary.end == 2200
+
+
+def real_stop_genes():
+    """Return a gene that ends inside the first host gene of a stop, then three host genes."""
+    return [
+        gene("v", 72678, 73992, viral=True),
+        gene("h1", 73980, 75960, host=True),
+        gene("h2", 76000, 78466, host=True),
+        gene("h3", 78488, 78890, host=True),
+    ]
+
+
+def test_supporting_gene_ending_inside_the_first_host_gene_is_accepted():
+    boundary = extend(real_stop_genes(), start=70000, end=72000, envelope=(0, 100000))
+    assert boundary.end == 73992
+
+
+def test_right_stop_after_a_gene_ending_inside_the_first_host_gene_equals_the_region_end():
+    boundary = extend(real_stop_genes(), start=70000, end=72000, envelope=(0, 100000))
+    assert boundary.right_stop == boundary.end
+    assert boundary.right_stop_reason == "host_stop"
+
+
+def mirrored_real_stop_genes():
+    """Return the genes of real_stop_genes mirrored to the left of the seed (x becomes 200000 - x)."""
+    return [
+        gene("v", 126008, 127322, viral=True),
+        gene("h1", 124040, 126020, host=True),
+        gene("h2", 121534, 124000, host=True),
+        gene("h3", 121110, 121512, host=True),
+    ]
+
+
+def test_supporting_gene_ending_inside_the_first_host_gene_on_the_left_is_accepted():
+    boundary = extend(mirrored_real_stop_genes(), start=128000, end=130000, envelope=(0, 200000))
+    assert boundary.start == 126008
+
+
+def test_left_stop_after_a_gene_ending_inside_the_first_host_gene_equals_the_region_start():
+    boundary = extend(mirrored_real_stop_genes(), start=128000, end=130000, envelope=(0, 200000))
+    assert boundary.left_stop == boundary.start
+    assert boundary.left_stop_reason == "host_stop"
+
+
+def test_supporting_gene_ending_beyond_the_first_host_gene_is_not_accepted():
+    genes = [gene("v", 72678, 76500, viral=True), *real_stop_genes()[1:]]
+    boundary = extend(genes, start=70000, end=72000, envelope=(0, 100000))
+    assert boundary.end == 72000
+    assert boundary.right_stop == 73980
+
+
+def test_supporting_gene_ending_inside_the_first_gene_without_a_record_is_accepted():
+    supported = gene("v", 2100, 2500, viral=True)
+    boundary = extend([supported, gene("u", 2400, 2600)], taxonomy={"v": supported})
+    assert boundary.end == 2500
+    assert boundary.right_stop_reason == "taxonomy_unavailable"
+
+
+def test_supporting_gene_ending_beyond_the_first_gene_without_a_record_is_not_accepted():
+    supported = gene("v", 2100, 2700, viral=True)
+    boundary = extend([supported, gene("u", 2400, 2600)], taxonomy={"v": supported})
+    assert boundary.end == 2000
+
+
+def test_supporting_gene_crossing_the_envelope_edge_is_not_accepted():
+    boundary = extend([gene("v", 2400, 3200, viral=True)], envelope=(0, 3000))
+    assert boundary.end == 2000
+    assert boundary.right_stop_reason == "search_envelope"
+
+
+def test_supporting_gene_crossing_the_walk_limit_is_not_accepted():
+    boundary = extend([gene("v", 2400, 3200, viral=True)], envelope=(0, 2500), walk_limit=(0, 3000))
+    assert boundary.end == 2000
+    assert boundary.right_stop_reason == "search_envelope"
+
+
+def test_three_host_genes_followed_by_two_supporting_genes_in_five_are_bridged():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("s1", 2700, 2800, viral=True),
+            gene("n1", 2900, 3000),
+            gene("s2", 3100, 3200, viral=True),
+        ]
+    )
+    assert boundary.end == 3200
+    assert boundary.right_stop is None
+
+
+def test_three_host_genes_followed_by_two_supporting_genes_on_the_left_are_bridged():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("s1", 7200, 7300, viral=True),
+            gene("n1", 7000, 7100),
+            gene("s2", 6800, 6900, viral=True),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 6800
+    assert boundary.left_stop is None
+
+
+def test_three_host_genes_followed_by_one_supporting_gene_stop_the_walk():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("s1", 2700, 2800, viral=True),
+            gene("n1", 2900, 3000),
+        ]
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+    assert boundary.right_stop_reason == "host_stop"
+
+
+def marked_marker_gene(name, start, end):
+    """Return a gene without a viral hit that Phase 1 validated as a viral marker."""
+    item = gene(name, start, end)
+    item.phase1_validated_viral_marker = True
+    return item
+
+
+def test_two_foreign_supporters_do_not_bridge_a_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            foreign_gene("f1", 2700, 2800),
+            foreign_gene("f2", 2900, 3000),
+        ]
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_two_foreign_supporters_do_not_bridge_a_host_run_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            foreign_gene("f1", 7200, 7300),
+            foreign_gene("f2", 7000, 7100),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+
+
+def test_two_ml_supported_genes_do_not_bridge_a_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("m1", 2700, 2800),
+            gene("m2", 2900, 3000),
+        ],
+        ml_support=frozenset({"m1", "m2"}),
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_two_ml_supported_genes_do_not_bridge_a_host_run_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("m1", 7200, 7300),
+            gene("m2", 7000, 7100),
+        ],
+        start=8000,
+        end=9000,
+        ml_support=frozenset({"m1", "m2"}),
+    )
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+
+
+def test_two_marker_set_members_without_a_viral_match_do_not_bridge_a_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("k1", 2700, 2800),
+            gene("k2", 2900, 3000),
+        ],
+        viral_marker_genes=frozenset({"k1", "k2"}),
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_two_marker_set_members_without_a_viral_match_do_not_bridge_a_host_run_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("k1", 7200, 7300),
+            gene("k2", 7000, 7100),
+        ],
+        start=8000,
+        end=9000,
+        viral_marker_genes=frozenset({"k1", "k2"}),
+    )
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+
+
+def test_one_viral_match_and_one_foreign_supporter_do_not_bridge_a_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("v1", 2700, 2800, viral=True),
+            foreign_gene("f1", 2900, 3000),
+        ]
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_one_viral_match_and_one_foreign_supporter_do_not_bridge_a_host_run_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("v1", 7200, 7300, viral=True),
+            foreign_gene("f1", 7000, 7100),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+
+
+def test_two_validated_viral_markers_without_a_top10_hit_bridge_a_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            marked_marker_gene("k1", 2700, 2800),
+            marked_marker_gene("k2", 2900, 3000),
+        ]
+    )
+    assert boundary.end == 3000
+    assert boundary.right_stop is None
+
+
+def test_second_supporting_gene_at_the_fifth_entry_bridges_the_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("s1", 2700, 2800, viral=True),
+            gene("n1", 2900, 3000),
+            gene("n2", 3100, 3200),
+            gene("n3", 3300, 3400),
+            gene("s2", 3500, 3600, viral=True),
+        ]
+    )
+    assert boundary.end == 3600
+    assert boundary.right_stop is None
+
+
+def test_second_supporting_gene_at_the_sixth_entry_does_not_bridge_the_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("s1", 2700, 2800, viral=True),
+            gene("n1", 2900, 3000),
+            gene("n2", 3100, 3200),
+            gene("n3", 3300, 3400),
+            gene("n4", 3500, 3600),
+            gene("s2", 3700, 3800, viral=True),
+        ]
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_bridged_host_genes_count_toward_the_five_gene_support_gap():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("n1", 2700, 2800),
+            gene("n2", 2900, 3000),
+            gene("s1", 3100, 3200, viral=True),
+            gene("s2", 3300, 3400, viral=True),
+        ]
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+    assert boundary.right_stop_reason == "support_gap"
+
+
+def test_supporters_beyond_a_gene_without_a_record_do_not_bridge_a_host_run():
+    genes = [
+        gene("h1", 2100, 2200, host=True),
+        gene("h2", 2300, 2400, host=True),
+        gene("h3", 2500, 2600, host=True),
+        gene("u", 2700, 2800),
+        gene("s1", 2900, 3000, viral=True),
+        gene("s2", 3100, 3200, viral=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+    assert boundary.right_stop_reason == "host_stop"
+
+
+def test_supporters_beyond_a_gene_without_a_record_do_not_bridge_a_host_run_on_the_left():
+    genes = [
+        gene("h1", 7800, 7900, host=True),
+        gene("h2", 7600, 7700, host=True),
+        gene("h3", 7400, 7500, host=True),
+        gene("u", 7200, 7300),
+        gene("s1", 7000, 7100, viral=True),
+        gene("s2", 6800, 6900, viral=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"}, start=8000, end=9000)
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+
+
+def test_supporters_before_a_gene_without_a_record_still_bridge_a_host_run():
+    genes = [
+        gene("h1", 2100, 2200, host=True),
+        gene("h2", 2300, 2400, host=True),
+        gene("h3", 2500, 2600, host=True),
+        gene("s1", 2700, 2800, viral=True),
+        gene("s2", 2900, 3000, viral=True),
+        gene("u", 3100, 3200),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
+    assert boundary.end == 3000
+    assert boundary.right_stop is None
+
+
+def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_right():
+    genes = [
+        gene("v", 2100, 2600, viral=True),
+        gene("u", 2300, 2400),
+        gene("h1", 2300, 2800, host=True),
+        gene("h2", 2900, 3000, host=True),
+        gene("h3", 3100, 3200, host=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2300
+
+
+def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_left():
+    genes = [
+        gene("v", 7400, 7900, viral=True),
+        gene("u", 7600, 7700),
+        gene("h1", 7200, 7700, host=True),
+        gene("h2", 7000, 7100, host=True),
+        gene("h3", 6800, 6900, host=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"}, start=8000, end=9000)
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7700
+
+
+def test_tied_host_stop_and_missing_gene_accept_a_gene_that_ends_inside_both():
+    genes = [
+        gene("v", 2100, 2350, viral=True),
+        gene("u", 2300, 2400),
+        gene("h1", 2300, 2800, host=True),
+        gene("h2", 2900, 3000, host=True),
+        gene("h3", 3100, 3200, host=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
+    assert boundary.end == 2350
+
+
+def test_tied_host_stop_and_missing_gene_use_the_host_end_when_it_is_tighter():
+    genes = [
+        gene("v", 2100, 2600, viral=True),
+        gene("u", 2300, 2800),
+        gene("h1", 2300, 2400, host=True),
+        gene("h2", 2900, 3000, host=True),
+        gene("h3", 3100, 3200, host=True),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
+    assert boundary.end == 2000
+
+
+def test_disabled_host_stop_keeps_the_span_of_the_walk_with_the_host_stop():
+    genes = [
+        gene("v", 2100, 2700, viral=True),
+        gene("h1", 2300, 2800, host=True),
+        gene("h2", 2350, 2400, host=True),
+        gene("h3", 2400, 2450, host=True),
+    ]
+    with_stop = extend(genes, start=1300, end=2000, envelope=(1000, 2500))
+    without_stop = extend(genes, start=1300, end=2000, envelope=(1000, 2500), disable_host_stop=True)
+    assert with_stop.end == 2700
+    assert without_stop.end == 2700
+    assert without_stop.right_stop is None
+
+
+def test_uncrossed_bridged_host_run_sets_the_stop_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("n1", 7200, 7300),
+            gene("n2", 7000, 7100),
+            gene("s1", 6800, 6900, viral=True),
+            gene("s2", 6600, 6700, viral=True),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 8000
+    assert boundary.left_stop == 7900
+    assert boundary.left_stop_reason == "support_gap"
+
+
+def test_stop_of_an_uncrossed_bridged_run_is_the_accepted_end_when_that_is_further_out():
+    boundary = extend(
+        [
+            gene("s0", 2100, 2450, viral=True),
+            gene("h1", 2300, 2400, host=True),
+            gene("h2", 2500, 2600, host=True),
+            gene("h3", 2700, 2800, host=True),
+            gene("n1", 2900, 3000),
+            gene("n2", 3100, 3200),
+            gene("s1", 3300, 3400, viral=True),
+            gene("s2", 3500, 3600, viral=True),
+        ]
+    )
+    assert boundary.end == 2450
+    assert boundary.right_stop == 2450
+
+
+def test_crossed_first_run_and_uncrossed_second_run_stop_at_the_second_on_the_right():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("s1", 2700, 2800, viral=True),
+            gene("s2", 2900, 3000, viral=True),
+            gene("h4", 3100, 3200, host=True),
+            gene("h5", 3300, 3400, host=True),
+            gene("h6", 3500, 3600, host=True),
+        ]
+    )
+    assert boundary.end == 3000
+    assert boundary.right_stop == 3100
+    assert boundary.right_stop_reason == "host_stop"
+
+
+def test_crossed_first_run_and_uncrossed_second_run_stop_at_the_second_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7800, 7900, host=True),
+            gene("h2", 7600, 7700, host=True),
+            gene("h3", 7400, 7500, host=True),
+            gene("s1", 7200, 7300, viral=True),
+            gene("s2", 7000, 7100, viral=True),
+            gene("h4", 6800, 6900, host=True),
+            gene("h5", 6600, 6700, host=True),
+            gene("h6", 6400, 6500, host=True),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 7000
+    assert boundary.left_stop == 6900
+    assert boundary.left_stop_reason == "host_stop"
+
+
+def test_disabled_host_stop_returns_no_stop_for_an_uncrossed_bridged_run():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            gene("n1", 2700, 2800),
+            gene("n2", 2900, 3000),
+            gene("s1", 3100, 3200, viral=True),
+            gene("s2", 3300, 3400, viral=True),
+        ],
+        disable_host_stop=True,
+    )
+    assert boundary.right_stop is None
+
+
+def test_unbridged_run_that_limits_the_walk_sets_a_stop_when_hosts_start_before_the_limit():
+    boundary = extend(
+        [
+            gene("h1", 1700, 3000, host=True),
+            gene("h2", 1800, 2100, host=True),
+            gene("h3", 1850, 2150, host=True),
+            gene("s", 1900, 2200, viral=True),
+            gene("h4", 2300, 2400, host=True),
+            gene("h5", 2500, 2600, host=True),
+            gene("h6", 2700, 2800, host=True),
+        ]
+    )
+    assert boundary.end == 2200
+    assert boundary.right_stop == 2200
+
+
+def test_unbridged_run_that_limits_the_walk_sets_a_stop_when_hosts_start_before_the_limit_on_the_left():
+    boundary = extend(
+        [
+            gene("h1", 7000, 8300, host=True),
+            gene("h2", 7900, 8200, host=True),
+            gene("h3", 7850, 8150, host=True),
+            gene("s", 7800, 8100, viral=True),
+            gene("h4", 7600, 7700, host=True),
+            gene("h5", 7400, 7500, host=True),
+            gene("h6", 7200, 7300, host=True),
+        ],
+        start=8000,
+        end=9000,
+    )
+    assert boundary.start == 7800
+    assert boundary.left_stop == 7800
+
+
+def test_disabled_host_stop_does_not_take_the_reach_of_the_removed_host_gene():
+    genes = [
+        gene("h1", 2100, 4000, host=True),
+        gene("h2", 2200, 2250, host=True),
+        gene("h3", 2300, 2350, host=True),
+        gene("s", 2400, 3500, viral=True),
+        gene("u", 2500, 2600),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"}, disable_host_stop=True)
+    assert boundary.end == 2000
+
+
+def test_disabled_host_stop_accepts_a_gene_ending_inside_the_gene_without_a_record_after_a_short_first_host():
+    genes = [
+        gene("h1", 2100, 2150, host=True),
+        gene("h2", 2200, 2250, host=True),
+        gene("h3", 2300, 2350, host=True),
+        gene("s", 2400, 3000, viral=True),
+        gene("u", 2500, 3100),
+    ]
+    boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"}, disable_host_stop=True)
+    assert boundary.end == 3000
+
+
+def test_walk_limit_stops_before_the_first_gene_without_a_record():
+    from virosync.pipeline.phase2.seed_extension import seed_walk_limit
+
+    genes = [gene("a", 2100, 2200), gene("b", 2300, 2400), gene("c", 2500, 2600), gene("d", 2700, 2800)]
+    records = {item.id: item for item in genes if item.id != "c"}
+    assert seed_walk_limit((1000, 2000), genes, records) == (1000, 2400)
+
+
+def test_walk_limit_extends_to_the_left_over_genes_with_records():
+    from virosync.pipeline.phase2.seed_extension import seed_walk_limit
+
+    genes = [gene("a", 800, 900), gene("b", 600, 700), gene("c", 400, 500), gene("d", 200, 300)]
+    records = {item.id: item for item in genes if item.id != "c"}
+    assert seed_walk_limit((1000, 2000), genes, records) == (600, 2000)
+
+
+def test_walk_limit_equals_the_envelope_when_the_first_outer_gene_has_no_record():
+    from virosync.pipeline.phase2.seed_extension import seed_walk_limit
+
+    genes = [gene("a", 2100, 2200), gene("b", 2300, 2400)]
+    assert seed_walk_limit((1000, 2000), genes, {"b": genes[1]}) == (1000, 2000)
+
+
+def test_walk_limit_covers_a_gene_with_a_record_that_crosses_the_envelope_edge():
+    from virosync.pipeline.phase2.seed_extension import seed_walk_limit
+
+    genes = [gene("a", 1900, 2300), gene("b", 2400, 2500)]
+    assert seed_walk_limit((1000, 2000), genes, {"a": genes[0]}) == (1000, 2300)
+
+
+def test_walk_limit_ignores_genes_inside_the_envelope():
+    from virosync.pipeline.phase2.seed_extension import seed_walk_limit
+
+    genes = [gene("a", 1100, 1200), gene("b", 2100, 2200)]
+    assert seed_walk_limit((1000, 2000), genes, {"b": genes[1]}) == (1000, 2200)
+
+
+def test_genes_outside_the_envelope_are_ignored_without_a_walk_limit():
+    boundary = extend([gene("out", 2700, 2800, viral=True)], envelope=(0, 2500))
+    assert boundary.end == 2000
+
+
+def test_viral_match_outside_the_envelope_supports_growth():
+    boundary = extend([gene("out", 2700, 2800, viral=True)], envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.end == 2800
+
+
+def test_host_like_gene_with_a_viral_match_outside_the_envelope_supports_growth():
+    boundary = extend([gene("out", 2700, 2800, host=True, viral=True)], envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.end == 2800
+
+
+def test_walk_to_the_limit_reports_the_search_envelope():
+    boundary = extend([gene("out", 2700, 2800, viral=True)], envelope=(0, 2500), walk_limit=(0, 2800))
+    assert boundary.right_stop_reason == "search_envelope"
+
+
+def test_foreign_gene_inside_the_envelope_supports_growth():
+    boundary = extend([foreign_gene("in", 2100, 2200)], envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.end == 2200
+
+
+def test_foreign_gene_outside_the_envelope_does_not_support_growth():
+    boundary = extend([foreign_gene("out", 2700, 2800)], envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.end == 2000
+
+
+def test_marker_set_membership_outside_the_envelope_does_not_support_growth():
+    boundary = extend(
+        [gene("out", 2700, 2800)],
+        envelope=(0, 2500),
+        walk_limit=(0, 4000),
+        viral_marker_genes=frozenset({"out"}),
+    )
+    assert boundary.end == 2000
+
+
+def test_ml_support_outside_the_envelope_does_not_support_growth():
+    boundary = extend(
+        [gene("out", 2700, 2800)], envelope=(0, 2500), walk_limit=(0, 4000), ml_support=frozenset({"out"})
+    )
+    assert boundary.end == 2000
+
+
+def test_ml_support_inside_the_envelope_supports_growth():
+    boundary = extend([gene("in", 2100, 2200)], envelope=(0, 2500), walk_limit=(0, 4000), ml_support=frozenset({"in"}))
+    assert boundary.end == 2200
+
+
+def test_searched_genes_without_hits_outside_the_envelope_count_toward_the_gap():
+    boundary = extend(
+        [
+            no_hit_gene("n1", 2700, 2800),
+            no_hit_gene("n2", 2900, 3000),
+            no_hit_gene("n3", 3100, 3200),
+            no_hit_gene("n4", 3300, 3400),
+            no_hit_gene("n5", 3500, 3600),
+            gene("far", 3700, 3800, viral=True),
+        ],
+        envelope=(0, 2500),
+        walk_limit=(0, 4000),
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop_reason == "support_gap"
+
+
+def test_searched_genes_without_hits_inside_the_envelope_are_skipped():
+    boundary = extend(
+        [
+            no_hit_gene("n1", 2100, 2200),
+            no_hit_gene("n2", 2300, 2400),
+            no_hit_gene("n3", 2500, 2600),
+            no_hit_gene("n4", 2700, 2800),
+            no_hit_gene("n5", 2900, 3000),
+            gene("far", 3100, 3200, viral=True),
+        ],
+        envelope=(0, 4000),
+        walk_limit=(0, 4000),
+    )
+    assert boundary.end == 3200
+
+
+def test_searched_genes_without_hits_inside_the_envelope_do_not_use_up_the_bridge_window():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            no_hit_gene("n1", 2700, 2800),
+            no_hit_gene("n2", 2900, 3000),
+            no_hit_gene("n3", 3100, 3200),
+            no_hit_gene("n4", 3300, 3400),
+            no_hit_gene("n5", 3500, 3600),
+            gene("s1", 3700, 3800, viral=True),
+            gene("s2", 3900, 4000, viral=True),
+        ],
+        envelope=(0, 5000),
+        walk_limit=(0, 5000),
+    )
+    assert boundary.end == 4000
+    assert boundary.right_stop is None
+
+
+def test_searched_genes_without_hits_outside_the_envelope_use_up_the_bridge_window():
+    boundary = extend(
+        [
+            gene("h1", 2100, 2200, host=True),
+            gene("h2", 2300, 2400, host=True),
+            gene("h3", 2500, 2600, host=True),
+            no_hit_gene("n1", 2700, 2800),
+            no_hit_gene("n2", 2900, 3000),
+            no_hit_gene("n3", 3100, 3200),
+            no_hit_gene("n4", 3300, 3400),
+            no_hit_gene("n5", 3500, 3600),
+            gene("s1", 3700, 3800, viral=True),
+            gene("s2", 3900, 4000, viral=True),
+        ],
+        envelope=(0, 2050),
+        walk_limit=(0, 5000),
+    )
+    assert boundary.end == 2000
+    assert boundary.right_stop == 2100
+
+
+def test_three_host_genes_outside_the_envelope_stop_the_walk():
+    boundary = extend(
+        [
+            gene("near", 2100, 2200, viral=True),
+            gene("h1", 2700, 2800, host=True),
+            gene("h2", 2900, 3000, host=True),
+            gene("h3", 3100, 3200, host=True),
+            gene("far", 3300, 3400, viral=True),
+        ],
+        envelope=(0, 2500),
+        walk_limit=(0, 4000),
+    )
+    assert boundary.end == 2200
+    assert boundary.right_stop == 2700
+
+
+def test_viral_gene_outside_the_envelope_resets_the_host_run():
+    boundary = extend(
+        [
+            gene("h1", 2700, 2800, host=True),
+            gene("h2", 2900, 3000, host=True),
+            gene("v", 3100, 3200, viral=True),
+            gene("h3", 3300, 3400, host=True),
+        ],
+        envelope=(0, 2500),
+        walk_limit=(0, 4000),
+    )
+    assert boundary.right_stop is None
+
+
+def test_gene_without_a_record_outside_the_envelope_leaves_the_host_stop_available():
+    boundary = extend([gene("out", 2700, 2800)], taxonomy={}, envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.host_stop_available is True
+    assert boundary.right_stop_reason == "taxonomy_unavailable"
+
+
+def test_gene_without_a_record_inside_the_envelope_removes_the_host_stop():
+    boundary = extend([gene("in", 2100, 2200)], taxonomy={}, envelope=(0, 2500), walk_limit=(0, 4000))
+    assert boundary.host_stop_available is False
+
+
+def test_phase2_walked_interval_contains_a_gene_accepted_across_the_envelope_edge(tmp_path, monkeypatch):
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase2
+
+    arguments = _stub_phase2_boundary_search(
+        tmp_path,
+        monkeypatch,
+        mapped=True,
+        genes=[gene("v", 1500, 2050, viral=True), gene("u", 1950, 2100)],
+        unsearched=frozenset({"u"}),
+    )
+    config = PipelineConfig().with_overrides(
+        resume=False, gene_taxonomy_faa_db=tmp_path / "db", boundary_taxonomy_ml_enabled=False, threads=1
+    )
+    seed = MergedSeed(
+        "s",
+        1000,
+        2000,
+        seed_id="original",
+        predicted_family="CRESS",
+        confirmed_seeds=(ConfirmedSeed("original", "s", 1300, 1700),),
+    )
+
+    result = phase2._run_phase2_subflow(merged_seeds=[seed], config=config, **arguments)
+
+    assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (1300, 2050)
+
+
+def test_phase2_walks_past_the_searched_envelope_over_genes_with_records(tmp_path, monkeypatch):
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase2
+
+    arguments = _stub_phase2_boundary_search(
+        tmp_path,
+        monkeypatch,
+        mapped=True,
+        flank_end_bp=3000,
+        genes=[
+            gene("v1", 2500, 2600, viral=True),
+            gene("v2", 3500, 3600, viral=True),
+            gene("v3", 4500, 4600, viral=True),
+        ],
+    )
+    config = PipelineConfig().with_overrides(
+        resume=False, gene_taxonomy_faa_db=tmp_path / "db", boundary_taxonomy_ml_enabled=False, threads=1
+    )
+    seed = MergedSeed(
+        "s",
+        1000,
+        2000,
+        seed_id="original",
+        predicted_family="NCLDV",
+        confirmed_seeds=(ConfirmedSeed("original", "s", 1300, 1700),),
+    )
+
+    result = phase2._run_phase2_subflow(merged_seeds=[seed], config=config, **arguments)
+
+    assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (1300, 4600)
+
+
+@pytest.mark.parametrize("direction,expected_span,expected_stop", [(1, (1000, 2000), 2100), (-1, (8000, 9000), 7900)])
+def test_missing_record_inside_host_run_blocks_later_bridge(direction, expected_span, expected_stop):
+    genes = [
+        gene("h1", 2100, 2200, host=True),
+        gene("f", 2250, 2280),
+        gene("h2", 2300, 2400, host=True),
+        gene("u", 2500, 2600),
+        gene("h3", 2700, 2800, host=True),
+        gene("s1", 2900, 3000, viral=True),
+        gene("s2", 3100, 3200, viral=True),
+    ]
+    genes[1].share = 0.0
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    boundary = extend(
+        genes,
+        start=expected_span[0],
+        end=expected_span[1],
+        taxonomy={item.id: item for item in genes if item.id != "u"},
+    )
+    assert (boundary.start, boundary.end) == expected_span
+    assert (boundary.right_stop if direction == 1 else boundary.left_stop) == expected_stop
+
+
+@pytest.mark.parametrize("direction,core", [(1, (1000, 2000)), (-1, (8000, 9000))])
+@pytest.mark.parametrize("disable_host_stop", [False, True])
+@pytest.mark.parametrize("support_end,expected_right,expected_left", [(2900, 2000, 8000), (2600, 2600, 7400)])
+def test_nested_missing_record_caps_whole_gene_acceptance(
+    direction, core, disable_host_stop, support_end, expected_right, expected_left
+):
+    genes = [
+        gene("v", 2050, support_end, viral=True),
+        gene("h1", 2100, 3000, host=True),
+        gene("h2", 2150, 2200, host=True),
+        gene("h3", 2250, 2300, host=True),
+        gene("u", 2500, 2600),
+    ]
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    boundary = extend(
+        genes,
+        start=core[0],
+        end=core[1],
+        taxonomy={item.id: item for item in genes if item.id != "u"},
+        disable_host_stop=disable_host_stop,
+    )
+    assert (boundary.start, boundary.end) == ((1000, expected_right) if direction == 1 else (expected_left, 9000))
+
+
+@pytest.mark.parametrize("direction,core", [(1, (1000, 2000)), (-1, (8000, 9000))])
+@pytest.mark.parametrize("disable_host_stop,expected_right,expected_left", [(False, 2000, 8000), (True, 2900, 7100)])
+def test_nested_host_record_caps_normal_walk_but_not_a4(
+    direction, core, disable_host_stop, expected_right, expected_left
+):
+    genes = [
+        gene("v", 2050, 2900, viral=True),
+        gene("u", 2100, 3000),
+        gene("h1", 2500, 2600, host=True),
+        gene("h2", 2550, 2600, host=True),
+        gene("h3", 2570, 2650, host=True),
+    ]
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    boundary = extend(
+        genes,
+        start=core[0],
+        end=core[1],
+        taxonomy={item.id: item for item in genes if item.id != "u"},
+        disable_host_stop=disable_host_stop,
+    )
+    assert (boundary.start, boundary.end) == ((1000, expected_right) if direction == 1 else (expected_left, 9000))
+
+
+def test_phase2_asymmetric_bridge_reports_overlap_without_changing_seed_ownership(tmp_path, monkeypatch):
+    from virosync.config import PipelineConfig
+    from virosync.orchestration._flows.single_genome import phase2
+    from virosync.pipeline.phase2.boundary_diamond import GenomeDiamondQuery, SeedGeneMapping
+
+    genes = [
+        gene("a", 1800, 1900, viral=True),
+        gene("h1", 2100, 2200, host=True),
+        gene("h2", 2300, 2400, host=True),
+        gene("h3", 2500, 2600, host=True),
+        gene("b1", 3500, 3600, viral=True),
+        gene("b2", 3700, 3800, viral=True),
+    ]
+    seeds = [
+        MergedSeed(
+            "s",
+            1000,
+            2000,
+            seed_id="a",
+            predicted_family="NCLDV",
+            confirmed_seeds=(ConfirmedSeed("a", "s", 1000, 2000),),
+        ),
+        MergedSeed(
+            "s",
+            3500,
+            3800,
+            seed_id="b",
+            predicted_family="NCLDV",
+            confirmed_seeds=(ConfirmedSeed("b", "s", 3500, 3800),),
+        ),
+    ]
+    arguments = _stub_phase2_boundary_search(tmp_path, monkeypatch, mapped=True, genes=genes)
+    query = GenomeDiamondQuery(
+        seed_gene_mappings={
+            "a": SeedGeneMapping("a", "s", 1000, 2000, flank_start_bp=0, flank_end_bp=2050),
+            "b": SeedGeneMapping("b", "s", 3500, 3800, flank_start_bp=3400, flank_end_bp=4000),
+        }
+    )
+    monkeypatch.setattr(
+        phase2,
+        "_run_boundary_diamond",
+        lambda **kwargs: phase2._BoundaryEvidence({item.id: item for item in genes}, None, query),
+    )
+    monkeypatch.setattr(
+        "virosync.pipeline.phase2.seed_extension.host_lineage_share", lambda record, model: 1.0 if record.host else 0.2
+    )
+    arguments["host_signature_model"] = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
+    config = PipelineConfig().with_overrides(
+        resume=False, gene_taxonomy_faa_db=tmp_path / "db", boundary_taxonomy_ml_enabled=False, threads=1
+    )
+    result = phase2._run_phase2_subflow(merged_seeds=seeds, config=config, **arguments)
+
+    assert len(result.refined_boundaries) == 2
+    first, second = result.refined_boundaries
+    assert (first.start, first.end, second.start, second.end) == (1000, 3800, 3500, 3800)
+    assert first.confirmed_seeds == seeds[0].confirmed_seeds
+    assert second.confirmed_seeds == seeds[1].confirmed_seeds
+    assert first.right_stop is None
+    assert second.left_stop == 2600
+    assert max(first.start, second.start) < min(first.end, second.end)

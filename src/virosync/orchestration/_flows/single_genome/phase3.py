@@ -1460,6 +1460,7 @@ def _prepare_joint_boundaries(
         try:
             _annotate_boundary_repeats(
                 finalized,
+                walked_intervals={core.seed_id: (joint.start, joint.end) for core in joint.confirmed_seeds},
                 raw_genome_path=raw_genome_path,
                 boundary_diamond_query=boundary_diamond_query,
                 extension_bp=config.phase1.extension_kb * 1000,

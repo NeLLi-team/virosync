@@ -42,9 +42,13 @@ def test_domain_records_retain_original_host_weights(mode, as_object):
     baseline = hs.build_host_signature_model(convert(original), weight_mode=mode)
     expanded = hs.build_host_signature_model(convert(original + alternatives), weight_mode=mode)
     assert (
-        expanded.lineage_weights["metamonada|trichomonadida"] == baseline.lineage_weights["metamonada|trichomonadida"]
+        expanded.lineage_weights["eukaryota|metamonada|trichomonadida"]
+        == baseline.lineage_weights["eukaryota|metamonada|trichomonadida"]
     )
-    assert expanded.lineage_weights["discoba|euglenida"] == baseline.lineage_weights["discoba|euglenida"]
+    assert (
+        expanded.lineage_weights["eukaryota|discoba|euglenida"]
+        == baseline.lineage_weights["eukaryota|discoba|euglenida"]
+    )
 
 
 @pytest.mark.parametrize("mode", ["rank", "bitscore"])
@@ -181,11 +185,11 @@ def test_no_query_host_evidence_is_explicit_and_does_not_search(tmp_path, monkey
 @pytest.mark.parametrize(
     "domain,queries_expected,weights_expected",
     [
-        ("Wrong", ["ctg_3"], {"discoba|euglenida": 55.0}),
+        ("Wrong", ["ctg_3"], {"eukaryota|discoba|euglenida": 55.0}),
         (
             "Polymerase",
             ["ctg_3"],
-            {"discoba|euglenida": 55.0},
+            {"eukaryota|discoba|euglenida": 55.0},
         ),
     ],
 )

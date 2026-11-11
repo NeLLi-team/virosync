@@ -912,16 +912,21 @@ def _scan_bounds(
     boundary: RefinedBoundary,
     mappings: list[SeedGeneMapping],
     *,
+    allowed_interval: tuple[int, int],
     sequence_length: int,
     extension_bp: int,
 ) -> tuple[int, int] | None:
-    """Return the requested flank interval clipped to Phase-2b coverage."""
+    """Return the requested flank interval clipped to the searched coverage.
+
+    Coverage is the hull of the Phase-2b flank mappings and the interval the walk
+    was allowed to use, which can pass the mappings when the walk limit is wider.
+    """
     if not mappings:
         return None
     requested_start = max(0, min(boundary.start, boundary.original_start) - extension_bp)
     requested_end = min(sequence_length, max(boundary.end, boundary.original_end) + extension_bp)
-    coverage_start = min(mapping.flank_start_bp for mapping in mappings)
-    coverage_end = max(mapping.flank_end_bp for mapping in mappings)
+    coverage_start = min(allowed_interval[0], *(mapping.flank_start_bp for mapping in mappings))
+    coverage_end = max(allowed_interval[1], *(mapping.flank_end_bp for mapping in mappings))
     scan_start = max(requested_start, coverage_start)
     scan_end = min(requested_end, coverage_end)
     if scan_start >= scan_end:
@@ -1260,6 +1265,7 @@ def _plan_boundary_partition(
     bounds = _scan_bounds(
         boundary,
         mappings,
+        allowed_interval=allowed_interval,
         sequence_length=len(sequence),
         extension_bp=extension_bp,
     )
@@ -1747,10 +1753,11 @@ def _prepare_worker_files(
         count = index + 1
         if index == 0:
             sequence_bytes = Path(task.raw_genome_path).stat().st_size
-        for _, boundary, _ in task.boundaries:
+        for _, boundary, allowed_interval in task.boundaries:
             bounds = _scan_bounds(
                 boundary,
                 _relevant_seed_mappings(boundary, task.boundary_diamond_query),
+                allowed_interval=allowed_interval,
                 sequence_length=sequence_bytes,
                 extension_bp=task.extension_bp,
             )

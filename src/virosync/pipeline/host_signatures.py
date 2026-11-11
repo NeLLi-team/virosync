@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from math import log
+from math import log, sqrt
 from pathlib import Path
 
 from virosync.pipeline.taxonomy_utils import (
@@ -142,7 +142,7 @@ def _split_csv_field(value) -> list[str]:
     text = str(value).strip()
     if not text:
         return []
-    return [item for item in text.split(",") if item]
+    return text.split(",")
 
 
 def _parse_float_list(values: list[str]) -> list[float]:
@@ -200,17 +200,20 @@ def _lineage_tokens(lineage: str, min_token_length: int) -> list[str]:
         level in {"mito", "plastid", "vir", "ncldv", "mirus", "phage", "ppv", "plv", "vp", "cress"} for level in levels
     ):
         return []
-    # Eukaryota validates cellular origin but contributes no host signature token.
-    return [
-        *(domain for domain in domains if domain != "eukaryota"),
-        *(
-            level
-            for level in levels
-            if level not in _CELLULAR_DOMAINS
-            and is_assigned_level(level, min_token_length)
-            and level not in _RANK_FILLERS
-        ),
-    ]
+    return list(
+        dict.fromkeys(
+            [
+                *domains,
+                *(
+                    level
+                    for level in levels
+                    if level not in _CELLULAR_DOMAINS
+                    and is_assigned_level(level, min_token_length)
+                    and level not in _RANK_FILLERS
+                ),
+            ]
+        )
+    )
 
 
 def _tokens_for_target(target: str, taxonomy_lookup: dict | None, min_token_length: int) -> list[str]:
@@ -322,18 +325,14 @@ def _get_record_attr(record, name: str, default=None):
 
 
 def score_host_signature(fingerprint: TaxonomyFingerprint, model: HostSignatureModel) -> float:
-    """Average learned host-token prevalence over filtered cellular tokens.
+    """Compare filtered cellular token vectors by cosine similarity.
 
     Call host_lineage_share for records: a generic fingerprint cannot recover
     namespace exclusions or the retained-hit denominator.
     """
-    gene = {
-        token: weight
-        for token, weight in fingerprint.weighted_tokens.items()
-        if _CELLULAR_DOMAINS.get(token.strip().lower()) != "eukaryota"
-    }
-    host, host_max = _host_distribution(model)
-    norm = sum(gene.values()) * host_max
+    gene = _canonical_token_weights(fingerprint.weighted_tokens)
+    host, host_norm = _host_distribution(model)
+    norm = sqrt(sum(weight * weight for weight in gene.values())) * host_norm
     return sum(weight * host.get(token, 0.0) for token, weight in gene.items()) / norm if norm else 0.0
 
 
@@ -347,28 +346,32 @@ def host_token_weights(model: HostSignatureModel) -> dict[str, float]:
     return _host_distribution(model)[0]
 
 
-def _host_distribution(model: HostSignatureModel) -> tuple[dict[str, float], float]:
-    configured = os.environ.get("VIROSYNC_HOST_LINEAGE", "")
-    fallback_key = (configured, model.min_token_length) if configured else ("", 0)
-    cache = getattr(model, HOST_TOKEN_CACHE_ATTRIBUTE, None)
-    # Snapshot equality catches in-place edits without rebuilding the vector and
-    # its maximum in Python for every boundary gene. The model is fixed during a run.
-    if cache is not None and cache[0] == model.token_weights and cache[1] == fallback_key:
-        return cache[2], cache[3]
+def _canonical_token_weights(tokens: Mapping[str, float]) -> dict[str, float]:
+    """Use the same named-token and cellular-domain aliases in both vectors."""
     weights: dict[str, float] = {}
-    for token, weight in model.token_weights.items():
+    for token, weight in tokens.items():
         token = token.strip().lower()
         if weight <= 0 or token in _RANK_FILLERS or token in {"mito", "plastid"} or token.endswith("-peve"):
             continue
         if token not in _CELLULAR_DOMAINS and not is_assigned_level(token, 0):
             continue
         token = _CELLULAR_DOMAINS.get(token, token)
-        if token == "eukaryota":
-            continue
         weights[token] = weights.get(token, 0.0) + weight
+    return weights
+
+
+def _host_distribution(model: HostSignatureModel) -> tuple[dict[str, float], float]:
+    configured = os.environ.get("VIROSYNC_HOST_LINEAGE", "")
+    fallback_key = (configured, model.min_token_length) if configured else ("", 0)
+    cache = getattr(model, HOST_TOKEN_CACHE_ATTRIBUTE, None)
+    # Snapshot equality catches in-place edits without rebuilding the vector and
+    # its norm in Python for every boundary gene. The model is fixed during a run.
+    if cache is not None and cache[0] == model.token_weights and cache[1] == fallback_key:
+        return cache[2], cache[3]
+    weights = _canonical_token_weights(model.token_weights)
     if not weights and configured:
         weights = dict.fromkeys(_lineage_tokens(configured, model.min_token_length), 1.0)
-    norm = max(weights.values(), default=0.0)
+    norm = sqrt(sum(weight * weight for weight in weights.values()))
     setattr(model, HOST_TOKEN_CACHE_ATTRIBUTE, (dict(model.token_weights), fallback_key, weights, norm))
     return weights, norm
 
@@ -379,7 +382,7 @@ def host_stop_available(model: HostSignatureModel | None) -> bool:
 
 
 def host_lineage_share(record, model: HostSignatureModel) -> float:
-    """Return mean host-token prevalence scaled by retained cellular hit mass.
+    """Return token cosine similarity scaled by retained cellular hit mass.
 
     Keep original hit ranks, including viral, pEVE, organelle and unknown weight
     in the denominator. This score is a similarity, not a host probability.
@@ -387,6 +390,10 @@ def host_lineage_share(record, model: HostSignatureModel) -> float:
     weights: dict[str, float] = {}
     total = assigned = 0.0
     for rank, (target, bits, _, _) in enumerate(_parse_top10_hits(record)[:10]):
+        # Empty padding keeps its rank position but is not a retained hit.
+        # An unidentified hit with a recorded bitscore still contributes mass.
+        if not target.strip() and bits <= 0:
+            continue
         weight = compute_hit_weight(rank, bits, model.weight_mode)
         if weight <= 0:
             continue

@@ -107,18 +107,18 @@ def test_two_hosts_do_not_stop_and_missing_taxonomy_limits_growth(monkeypatch, m
         assert boundary.end == 3100
 
 
-def test_a4_and_production_preserve_host_like_positive_support_gate(monkeypatch):
+def test_a4_and_production_both_extend_over_a_host_like_gene_with_a_viral_top10_hit(monkeypatch):
     boundary, _, _ = grow(monkeypatch, disabled=True)
     assert boundary.end == 3100
     assert boundary.right_stop is None
-    # Host-like top-10 viral evidence vetoes stopping but supplies no positive support.
+    # Host-like top-10 viral evidence vetoes stopping and supplies positive support.
     gene, tax = classified("hweak", 2100, 2200, viral=80.0, shallow_viral=True)
     seed = MergedSeed("ctg", 1000, 2000, seed_id="core", confirmed_seeds=(ConfirmedSeed("core", "ctg", 1000, 2000),))
     model = SimpleNamespace(token_weights={"host": 1}, lineage_weights={"euk|host": 1.0})
     normal = extend_confirmed_seed(seed, [gene], {"hweak": tax}, (0, 10000), model, 0.35)
     disabled = extend_confirmed_seed(seed, [gene], {"hweak": tax}, (0, 10000), model, 0.35, disable_host_stop=True)
-    assert normal.end == 2000
-    assert disabled.end == 2000
+    assert normal.end == 2200
+    assert disabled.end == 2200
 
 
 def test_competition_and_positive_fields_use_the_same_sorted_hits():

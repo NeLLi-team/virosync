@@ -13,10 +13,19 @@ accepted regions with their evidence.
 
 Confirmed marker-bearing gene cores remain inside candidates as boundaries change.
 With default settings, an exterior gene counts as host when its host-lineage share
-is at least 0.35 and it carries no validated viral marker. A viral or EUK-pEVE hit
-does not override this host assignment. Three host genes stop extension before
-the first of them unless a gene supporting extension lies between them. Other
-genes do not reset the count, so the three need not be adjacent.
+is at least 0.35 and it has no viral evidence. Viral evidence is a validated viral
+marker, or a viral hit with at least 25% identity in the top 10 or within the first
+`phase2.viral_hit_depth` hits. Three host genes stop extension before the first of
+them. A gene with viral evidence between them resets the count. Other genes, including
+genes that only foreign or machine-learning evidence supports, do not, so the three
+need not be adjacent. The walk may continue past the three when at least two of the next
+five walk entries after the third have a viral match (a validated viral marker or a top-10 viral
+hit), counting only genes before the first gene without a taxonomy record. Foreign,
+marker-set and machine-learning support do not count. Inside the seed envelope, searched
+no-hit genes without marker-set membership, a qualifying viral veto, or ML support are
+skipped; outside it they take a place in the window. The stop stays unless the walk then
+accepts a supporting gene beyond the three. A validated viral marker or a top-10 viral hit supports extension
+at any host share.
 
 ViroSync runs on CPUs by default. A GPU is not required for the core workflow.
 The default environment includes the tools for notebook reports and figures.

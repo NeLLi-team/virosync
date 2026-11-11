@@ -335,6 +335,7 @@ def test_repeat_annotation_records_missing_raw_sequence() -> None:
 
     phase2._annotate_boundary_repeats(
         [boundary],
+        walked_intervals={},
         raw_genome_path=None,
         boundary_diamond_query=None,
         extension_bp=100,
@@ -385,6 +386,7 @@ def test_repeat_annotation_preserves_retained_tir_and_uses_real_taxonomy_windows
 
     phase2._annotate_boundary_repeats(
         [boundary],
+        walked_intervals={},
         raw_genome_path=raw_genome,
         boundary_diamond_query=query,
         extension_bp=100,

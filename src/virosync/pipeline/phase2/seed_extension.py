@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
-from dataclasses import replace
-from typing import TYPE_CHECKING, TypeAlias
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, NamedTuple, TypeAlias
 
 from virosync.ablation import AblationID
 from virosync.pipeline.host_signatures import HostSignatureModel, host_lineage_share, host_stop_available
@@ -20,8 +20,8 @@ from virosync.pipeline.phase1.seed_merger import (
 from virosync.pipeline.phase2.boundary_diamond import (
     GeneTaxonomy,
     _listify_top10_field,
-    has_identity_qualified_viral_hit,
     has_viral_hit_veto,
+    has_viral_match,
     pORF,
 )
 from virosync.pipeline.phase2.boundary_refiner import RefinedBoundary
@@ -30,8 +30,48 @@ if TYPE_CHECKING:
     from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 
 
-# Gene, positive growth support, host match, queried, independent viral/marker reset.
-GeneEvidence: TypeAlias = tuple[pORF, bool, bool, bool, bool]
+# Gene, positive growth support, host match, queried, independent viral/marker reset,
+# viral match (validated viral marker or viral top-10 hit).
+GeneEvidence: TypeAlias = tuple[pORF, bool, bool, bool, bool, bool]
+
+# A run of three host genes is bridged when at least BRIDGE_MIN_VIRAL_GENES of the
+# next BRIDGE_WINDOW_GENES walk entries have a viral match.
+BRIDGE_WINDOW_GENES = 5
+BRIDGE_MIN_VIRAL_GENES = 2
+
+# A gene with hits and a host share below this value is foreign to the host.
+FOREIGN_HOST_SHARE = 0.10
+
+
+@dataclass(frozen=True)
+class _EvidenceRules:
+    """Per-seed inputs that decide what each gene adds to the walk."""
+
+    host_model: HostSignatureModel | None
+    host_stop_available: bool
+    host_threshold: float
+    ml_support: frozenset[str]
+    viral_marker_genes: frozenset[str]
+
+
+class _Entry(NamedTuple):
+    """One gene of a directed walk; coordinates grow away from the seed."""
+
+    start: int
+    end: int
+    support: bool
+    host: bool
+    covered: bool
+    reset_host_run: bool
+    viral_match: bool
+
+
+class _HostRun(NamedTuple):
+    """A run of three host genes in walk order."""
+
+    first: _Entry
+    third_index: int
+    bridged: bool
 
 
 def confirmed_seed_core(seed: MergedSeed) -> MergedSeed:
@@ -59,49 +99,54 @@ def extend_confirmed_seed(
     viral_marker_genes: frozenset[str] = frozenset(),
     disable_host_stop: bool = False,
     protected_seed_intervals: tuple[tuple[int, int], ...] = (),
+    walk_limit: tuple[int, int] | None = None,
 ) -> RefinedBoundary:
-    """Retain the core and commit only connected support inside the searched span.
+    """Retain the core and commit only connected support inside the walk limit.
 
     Three host-signature matches without intervening qualifying viral support
-    stop growth. Neutral genes do not reset the count. Top-10 viral hits and
-    marker-set membership support growth below the host-share threshold;
-    independently validated Phase1 markers support it at any host share.
-    Deep-only hits veto host status without extending the hull.
+    stop growth, unless at least two of the next five walk entries have a viral match.
+    A bridge changes only where the walk may go. The run that limits the walk always
+    sets a stop. A bridged run sets one only if the walk did not cross it, that is,
+    if the walk accepted no supporting gene that follows the run's third host gene.
+    Neutral genes do not reset the count. A viral match (a validated viral marker
+    or a viral top-10 hit) supports growth at any host share. Marker-set
+    membership supports it below the host-share threshold. Deep-only hits veto
+    host status without extending the hull.
+
+    The walk limit defaults to ``envelope``. Genes outside the envelope but inside
+    the limit support growth only through a viral match, and a searched gene
+    without hits there counts toward the support gap.
+
+    A supporting gene is accepted when it ends before the limit that stops the
+    walk. It is also accepted when it starts before a host stop or before the first
+    gene without a record and ends inside that gene, even if that takes the region
+    past the walk limit. The stop then moves to the end of the accepted gene, so it
+    never lies inside the returned region. Any other gene that crosses the limit is
+    not accepted. Only supporters before the first gene without a record can bridge
+    a run of three host genes. Disabling the host stop (A4) removes the stop and its
+    limit but keeps the limit and allowance of a gene without a record. It also accepts
+    every gene that the walk with the stop accepts.
     """
     # Repeat assessment keeps the search context without protecting its padding.
     original_start, original_end = seed.start, seed.end
     seed = confirmed_seed_core(seed)
     available = host_stop_available(host_model)
+    rules = _EvidenceRules(host_model, available, host_threshold, ml_support, viral_marker_genes)
+    limit = envelope if walk_limit is None else walk_limit
     coverage_complete = True
     evidence: list[GeneEvidence] = []
     for gene in genes:
-        if gene.start >= envelope[1] or gene.end <= envelope[0]:
+        if not _overlaps(gene, limit):
             continue
         tax = taxonomy.get(gene.id)
-        marker = gene.id in viral_marker_genes or (tax is not None and tax.phase1_validated_viral_marker)
-        share = (
-            host_lineage_share(tax, host_model) if available and host_model is not None and tax is not None else None
-        )
-        host_share = share is not None and share >= host_threshold
-        validated = tax is not None and tax.phase1_validated_viral_marker
-        marker_support = validated or (gene.id in viral_marker_genes and not host_share)
-        viral = marker_support or (
-            tax is not None
-            and not host_share
-            and has_identity_qualified_viral_hit(tax.top10_prefixes, tax.top10_pidents)
-        )
-        host = tax is not None and is_extension_host_gene(tax, host_share_ok=host_share, marker=marker)
-        foreign = bool(
-            share is not None and share < 0.10 and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
-        )
-        has_hits = tax is not None and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
-        reset_host_run = marker or (tax is not None and has_viral_hit_veto(tax))
-        if tax is not None and not has_hits and not reset_host_run and gene.id not in ml_support:
-            continue
-        coverage_complete &= tax is not None
-        evidence.append((gene, viral or foreign or gene.id in ml_support, host, tax is not None, reset_host_run))
-    left, left_reason, left_stop = _walk(seed.start, envelope[0], evidence, -1, disable_host_stop)
-    right, right_reason, right_stop = _walk(seed.end, envelope[1], evidence, 1, disable_host_stop)
+        inside_envelope = _overlaps(gene, envelope)
+        # A gene outside the envelope never changes whether host stopping was assessable.
+        coverage_complete &= tax is not None or not inside_envelope
+        item = _gene_evidence(gene, tax, rules, inside_envelope=inside_envelope)
+        if item is not None:
+            evidence.append(item)
+    left, left_reason, left_stop = _walk(seed.start, limit[0], evidence, -1, disable_host_stop)
+    right, right_reason, right_stop = _walk(seed.end, limit[1], evidence, 1, disable_host_stop)
     return RefinedBoundary(
         scaffold=seed.scaffold,
         start=left,
@@ -128,60 +173,140 @@ def extend_confirmed_seed(
     )
 
 
+def seed_walk_limit(
+    envelope: tuple[int, int], genes: Sequence[pORF], taxonomy: Mapping[str, GeneTaxonomy]
+) -> tuple[int, int]:
+    """Widen a seed's search envelope over consecutive genes that have a taxonomy record.
+
+    Each edge moves outward over the genes beyond it, in scaffold order, and stops
+    before the first gene without a record. A gene that crosses the edge moves it to
+    its far end. Other seeds on the scaffold are searched with their own envelopes,
+    so such records often exist. No search runs here.
+    """
+    return _outward_limit(envelope[0], genes, taxonomy, -1), _outward_limit(envelope[1], genes, taxonomy, 1)
+
+
+def _outward_limit(edge: int, genes: Sequence[pORF], taxonomy: Mapping[str, GeneTaxonomy], direction: int) -> int:
+    """Return the edge moved outward over consecutive genes with a record; direction is 1 or -1."""
+    directed_edge = direction * edge
+    outer = sorted(
+        (min(direction * gene.start, direction * gene.end), max(direction * gene.start, direction * gene.end), gene.id)
+        for gene in genes
+        if max(direction * gene.start, direction * gene.end) > directed_edge
+    )
+    limit = directed_edge
+    for _start, end, gene_id in outer:
+        if gene_id not in taxonomy:
+            break
+        limit = max(limit, end)
+    return direction * limit
+
+
+def _overlaps(gene: pORF, interval: tuple[int, int]) -> bool:
+    return gene.start < interval[1] and gene.end > interval[0]
+
+
+def _gene_evidence(
+    gene: pORF, tax: GeneTaxonomy | None, rules: _EvidenceRules, *, inside_envelope: bool
+) -> GeneEvidence | None:
+    """Return what one gene adds to the walk, or None for a searched gene to skip.
+
+    Inside the seed's envelope a searched gene without hits or independent evidence
+    is skipped. Outside it, only a viral match supports growth, and such a gene stays
+    in the walk as an entry without support. Host status and the host-run reset are
+    the same in both places.
+    """
+    marker = gene.id in rules.viral_marker_genes or (tax is not None and tax.phase1_validated_viral_marker)
+    share = (
+        host_lineage_share(tax, rules.host_model)
+        if rules.host_stop_available and rules.host_model is not None and tax is not None
+        else None
+    )
+    host_share = share is not None and share >= rules.host_threshold
+    has_hits = tax is not None and any(str(p).strip() for p in _listify_top10_field(tax.top10_prefixes))
+    reset_host_run = marker or (tax is not None and has_viral_hit_veto(tax))
+    if inside_envelope and tax is not None and not has_hits and not reset_host_run and gene.id not in rules.ml_support:
+        return None
+    viral_match = tax is not None and has_viral_match(tax)
+    support = viral_match
+    if inside_envelope:
+        foreign = share is not None and share < FOREIGN_HOST_SHARE and has_hits
+        member = gene.id in rules.viral_marker_genes and not host_share
+        support = support or foreign or member or gene.id in rules.ml_support
+    host = tax is not None and is_extension_host_gene(tax, host_share_ok=host_share, marker=marker)
+    return (gene, support, host, tax is not None, reset_host_run, viral_match)
+
+
 def is_extension_host_gene(taxonomy: GeneTaxonomy, *, host_share_ok: bool, marker: bool) -> bool:
     """Count a host-signature match only when no qualifying viral evidence vetoes it."""
     return host_share_ok and not marker and not has_viral_hit_veto(taxonomy)
 
 
 def _walk(
-    core_edge: int, envelope_edge: int, evidence: list[GeneEvidence], direction: int, disable_host_stop: bool
+    core_edge: int, limit_edge: int, evidence: list[GeneEvidence], direction: int, disable_host_stop: bool
 ) -> tuple[int, str, int | None]:
-    """Classify all overlapping flank genes before accepting any long feature."""
-    # Directed coordinates make left and right walks identical. Crossing genes
-    # participate in the stop assessment but cannot remove any core sequence.
+    """Classify all overlapping flank genes before accepting any long feature.
+
+    Returns the accepted end, the stop reason and the stop coordinate. The first unbridged
+    run of three host genes limits the walk and always sets a stop. A bridged run sets a stop
+    only if the walk did not cross it: it is crossed when the walk accepted a supporting entry
+    that follows the run's third host gene in walk order. Walk order is directed, so the test
+    holds for both sides. The first such run sets the stop, at the run's first host start or
+    at the accepted end if that lies further out, so a stop never lies inside the region.
+    """
+    # Directed coordinates make left and right walks identical. A supporting gene
+    # that crosses the limit is accepted only when it ends inside the gene that sets
+    # a host stop or a missing-taxonomy edge; it never removes core sequence.
+    # Disabling the host stop (A4) drops the stop but keeps that allowance, so A4
+    # never accepts less than the walk with the stop.
     edge = direction * core_edge
-    cap = max(edge, direction * envelope_edge)
+    cap = max(edge, direction * limit_edge)
     ordered = sorted(
         (
-            (
+            _Entry(
                 min(direction * g.start, direction * g.end),
                 max(direction * g.start, direction * g.end),
                 support,
                 host,
                 covered,
                 reset_host_run,
+                viral_match,
             )
-            for g, support, host, covered, reset_host_run in evidence
+            for g, support, host, covered, reset_host_run, viral_match in evidence
             if max(direction * g.start, direction * g.end) > edge
         ),
-        key=lambda row: (row[0], row[1]),
+        key=lambda entry: (entry.start, entry.end),
     )
-    barrier = None
-    run: list[int] = []
-    if not disable_host_stop:
-        for start, end, support, host, covered, reset_host_run in ordered:
-            if host:
-                run = [*run, start]
-            elif reset_host_run:
-                run = []
-            if len(run) == 3:
-                barrier = max(edge, run[0])
-                break
-    missing_edge = next(
-        (max(edge, start) for start, end, support, host, covered, reset_host_run in ordered if not covered), None
-    )
-    limit = min(cap, barrier) if barrier is not None else cap
-    if missing_edge is not None:
-        limit = min(limit, missing_edge)
+    runs = _host_runs(ordered)
+    first_host = runs[-1].first if runs and not runs[-1].bridged else None
+    first_uncovered = next((entry for entry in ordered if not entry.covered), None)
+    barrier = None if first_host is None else max(edge, first_host.start)
+    missing_edge = None if first_uncovered is None else max(edge, first_uncovered.start)
+    # A supporting entry may end at `reach`: the limit, or the end of the gene that sets it.
+    # Host and missing-record ends both constrain acceptance, including nested genes.
+    host_setters = [] if first_host is None else [(max(edge, first_host.start), first_host.end)]
+    gap_setters = [] if first_uncovered is None else [(max(edge, first_uncovered.start), first_uncovered.end)]
+    limit, reach = min([(cap, cap), *host_setters, *gap_setters])
+    if first_host is not None:
+        reach = min(reach, first_host.end)
+    if first_uncovered is not None:
+        reach = min(reach, first_uncovered.end)
+    # The walk scans to `scan_limit` and accepts up to `scan_reach`. Ablation A4 drops
+    # the host setter there, but it still accepts what the walk with the stop accepts.
+    scan_limit, scan_reach = min([(cap, cap), *gap_setters]) if disable_host_stop else (limit, reach)
+    if disable_host_stop:
+        barrier = None
     accepted = edge
+    last_accepted = -1
     pending = 0
     reason = "search_envelope"
-    for start, end, support, host, covered, reset_host_run in ordered:
-        if start >= limit:
+    for index, entry in enumerate(ordered):
+        if entry.start >= scan_limit:
             break
-        if support:
-            if end <= limit:
-                accepted = max(accepted, end)
+        if entry.support:
+            if entry.end <= scan_reach or (entry.start < limit and entry.end <= reach):
+                accepted = max(accepted, entry.end)
+                last_accepted = index
             pending = 0
         else:
             pending += 1
@@ -194,7 +319,38 @@ def _walk(
         reason = "taxonomy_unavailable"
     if accepted == edge and not ordered:
         reason = "no_exterior_evidence"
-    return direction * accepted, reason, direction * barrier if barrier is not None else None
+    # The unbridged run always sets a stop. A bridged run sets one only if the walk did
+    # not cross it. A stop must not lie inside the region, so it moves out to the accepted end.
+    uncrossed = next((run for run in runs if not run.bridged or last_accepted <= run.third_index), None)
+    stop = None if disable_host_stop or uncrossed is None else max(edge, uncrossed.first.start, accepted)
+    return direction * accepted, reason, direction * stop if stop is not None else None
+
+
+def _host_runs(ordered: list[_Entry]) -> list[_HostRun]:
+    """Return the runs of three host genes in walk order, up to the first unbridged run.
+
+    A run is bridged when at least ``BRIDGE_MIN_VIRAL_GENES`` of the next
+    ``BRIDGE_WINDOW_GENES`` entries have a viral match. Foreign, marker-set and ML
+    support do not count. Deep-hit vetoes reset the host counter but do not bridge it. Only entries before the first gene
+    without a taxonomy record count, because the walk cannot reach later ones.
+    """
+    runs: list[_HostRun] = []
+    run: list[_Entry] = []
+    first_missing = next((index for index, entry in enumerate(ordered) if not entry.covered), len(ordered))
+    for index, entry in enumerate(ordered):
+        if entry.host:
+            run = [*run, entry]
+        elif entry.reset_host_run:
+            run = []
+        if len(run) < 3:
+            continue
+        window = ordered[index + 1 : min(index + 1 + BRIDGE_WINDOW_GENES, first_missing)]
+        bridged = sum(follower.viral_match for follower in window) >= BRIDGE_MIN_VIRAL_GENES
+        runs.append(_HostRun(run[0], index, bridged))
+        if not bridged:
+            break
+        run = []
+    return runs
 
 
 def merge_reachable_boundaries(boundaries: list[RefinedBoundary], compatible=None) -> list[RefinedBoundary]:
