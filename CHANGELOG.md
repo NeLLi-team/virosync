@@ -4,6 +4,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+
+- Phase reuse: `--reuse-phase1-from OLD_OUT --reuse-phase1-code-sha256 SHA` starts a new run in
+  a fresh folder from the Phase 0 and Phase 1 results of an earlier run of the same genome. The
+  run rebuilds the host signature model with the current code and runs Phase 2 and Phase 3 in
+  full. It refuses when the earlier run is invalid, when its code SHA-256 differs from `SHA`, or
+  when any identity component other than the code, the input path and the output path differs. The
+  earlier folder is never written or deleted. See "Output compatibility and resume" in
+  `docs/METHODS.md`.
+- `scripts/compare_run_outputs.py` compares the scientific tables and JSON files of two genome
+  output folders and exits with status 1 when they differ.
+
 ### Changed
 
 - GC edge trim: a trimmed region end that lands inside a gene moves to the nearest edge of

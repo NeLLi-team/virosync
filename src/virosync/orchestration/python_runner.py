@@ -20,6 +20,7 @@ from typing import TextIO, TypedDict, cast
 
 from virosync.config import ConfigError, PipelineConfig
 from virosync.orchestration._flows.single_genome import single_genome_flow
+from virosync.orchestration._flows.single_genome.phase1_reuse import Phase1Reuse, Phase1ReuseError
 from virosync.output_contract import (
     EFFECTIVE_EVE_CLASS_COUNT_KEYS,
     LEGACY_EVE_CLASS_COUNT_KEYS,
@@ -195,9 +196,12 @@ def _enforce_exclusive_class_counts(results: list[GenomeRunResult]) -> list[Geno
 def _preflight_genome_runs(
     genome_paths: Iterable[Path],
     output_base_dir: Path,
+    phase1_reuse: Phase1Reuse | None = None,
 ) -> list[GenomeRunSpec]:
     """Validate the complete batch mapping before any worker or output is created."""
     output_base_dir = Path(output_base_dir)
+    if phase1_reuse is not None:
+        phase1_reuse.require_disjoint(output_base_dir)
     specs: list[GenomeRunSpec] = []
     invalid: list[str] = []
     sources_by_id: dict[str, list[Path]] = {}
@@ -299,6 +303,7 @@ def _run_one_genome(
     retries: int = 1,
     retry_delay_seconds: int = 60,
     progress_callback: QueryProgressCallback | None = None,
+    phase1_reuse: Phase1Reuse | None = None,
 ) -> GenomeRunResult:
     run_single = _single_genome_callable()
     last_exc: BaseException | None = None
@@ -328,6 +333,8 @@ def _run_one_genome(
             }
             if progress_callback is not None:
                 run_kwargs["progress_callback"] = progress_callback
+            if phase1_reuse is not None:
+                run_kwargs["phase1_reuse"] = phase1_reuse
             result = _normalize_worker_result(
                 spec.genome_id,
                 run_single(**run_kwargs),
@@ -339,9 +346,9 @@ def _run_one_genome(
                     not result.get("success", False),
                 )
             return result
-        except TSVInvariantError as exc:
+        except (TSVInvariantError, Phase1ReuseError) as exc:
             logger.error(
-                "%s: deterministic invariant failure: %s",
+                "%s: deterministic failure: %s",
                 spec.genome_id,
                 exc,
             )
@@ -543,13 +550,17 @@ def run_batch_python(
     retry_delay_seconds: int = 60,
     effective_config: dict | None = None,
     progress: BatchProgress | None = None,
+    phase1_reuse: Phase1Reuse | None = None,
 ) -> list[GenomeRunResult]:
-    """Run genomes concurrently with standard-library Python primitives."""
+    """Run genomes concurrently with standard-library Python primitives.
+
+    ``phase1_reuse`` starts every genome from the Phase 0 and Phase 1 results of an earlier run.
+    """
     genome_paths = [Path(path) for path in genome_paths]
     if config.host.self_reference_keys and len(genome_paths) != 1:
         raise ConfigError("host.self_reference_keys requires exactly one input genome")
     output_base_dir = Path(output_base_dir)
-    run_specs = _preflight_genome_runs(genome_paths, output_base_dir)
+    run_specs = _preflight_genome_runs(genome_paths, output_base_dir, phase1_reuse)
     output_base_dir.mkdir(parents=True, exist_ok=True)
     if effective_config is not None:
         effective_path = output_base_dir / "effective_config.json"
@@ -576,6 +587,7 @@ def run_batch_python(
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
                 progress_callback=(partial(progress.update, spec.genome_id) if progress is not None else None),
+                phase1_reuse=phase1_reuse,
             ): (idx, spec.genome_id)
             for idx, spec in enumerate(run_specs)
         }

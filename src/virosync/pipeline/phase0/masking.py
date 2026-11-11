@@ -354,12 +354,26 @@ def _status_path(output_dir: Path) -> Path:
     return Path(output_dir) / "masking_status.json"
 
 
-def write_masking_status(result: MaskingResult, output_dir: Path) -> MaskingResult:
-    """Atomically persist a successful/off/fallback result and attach its digest."""
+def write_masking_status(
+    result: MaskingResult,
+    output_dir: Path,
+    *,
+    repeat_region_count: int | None = None,
+) -> MaskingResult:
+    """Atomically persist a successful/off/fallback result and attach its digest.
+
+    ``repeat_region_count`` states the persisted region count of a result that is
+    loaded without its regions; the default counts ``result.repeat_regions``.
+    """
     status_path = _status_path(output_dir)
     status_path.parent.mkdir(parents=True, exist_ok=True)
     with atomic_write_context(status_path, "w") as handle:
-        json.dump(result.to_status_payload(), handle, indent=2, sort_keys=True)
+        json.dump(
+            result.to_status_payload(repeat_region_count=repeat_region_count),
+            handle,
+            indent=2,
+            sort_keys=True,
+        )
         handle.write("\n")
     _require_regular_file(status_path, "masking status")
     return replace(

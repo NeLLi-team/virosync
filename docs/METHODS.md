@@ -195,6 +195,93 @@ starts a new run. The value remains a token-signature fallback for an empty lear
 recording it does not change how the detector uses it.
 `provenance.json` repeats this captured value as `configuration.host_lineage`.
 
+#### Reuse Phase 0 and Phase 1 of an earlier run
+
+Any source change alters the run fingerprint, so a normal resume repeats Phase 0
+and the Phase 1 searches, which take most of the run time. The option pair
+`--reuse-phase1-from OLD_OUT --reuse-phase1-code-sha256 SHA` starts a new run in
+a fresh output folder instead. The new run copies the Phase 0 and Phase 1
+results of an earlier run of the same genome and rebuilds the host signature
+model with the current code. Phase 2 and Phase 3 then run in full. The mode runs
+no gene calling and no marker search, and it reads no Phase 2 checkpoint of the
+earlier run.
+
+```bash
+pixi run virosync run -i genomes/ -o results_new --config config/orchestration.yaml \
+  --reuse-phase1-from results_old \
+  --reuse-phase1-code-sha256 "$(jq -r .identities.code.source_sha256 \
+    results_old/GENOME/virosync_run_state.json)"
+```
+
+| Rule | Behavior |
+| --- | --- |
+| Earlier folder | `OLD_OUT` is the `-o` value of the earlier run: the folder with one subfolder per genome. The rule is the same for one genome and for a batch. ViroSync reads `OLD_OUT/<genome_id>`. A genome without a valid earlier run fails alone, and the other genomes continue. |
+| Read-only | The earlier folder is never written or deleted, `--clean-run` included. ViroSync refuses, before it writes anything, when the new `-o` folder equals `OLD_OUT`, lies inside it or contains it. |
+| Validation | The resume validators check the earlier run with its own recorded fingerprint. Its run state, its Phase 0 and Phase 1 markers and all recorded artifact hashes must be valid. ViroSync neither reads nor hashes the later phases of the earlier run. |
+| Code | `--reuse-phase1-code-sha256` states which source produced the earlier Phase 0 and Phase 1. It must equal `identities.code.source_sha256` in the earlier `virosync_run_state.json`. The two options are required together. |
+| Identity | The new run identity must equal the earlier one in every component except `code`, `input_path` and `output_dir`: `genome_id`, `input` (size and SHA-256), `config`, `environment`, `resources`, `requested_masking`, the schema versions and the coordinate convention. ViroSync refuses and names each component that differs. The `environment` component includes the lockfile, the installed package inventory and the kernel release, so a different node image also refuses. |
+| Ablation | Only `A0` runs can be reused. |
+
+The new folder holds its own copies of `phase0/` and `phase1/` (copies, not
+links), its own run state and phase markers under the new fingerprint, and its
+own Phase 2 and Phase 3 results. The copies keep their bytes, with these
+exceptions:
+
+- `phase0/masking/masking_status.json` records the new path of the masked
+  genome and carries the matching `result_fingerprint`.
+- The host signature model is rebuilt: `phase1/marker_validation/host_signature_model.json`,
+  `phase1/marker_validation/host_signature_model_debug.tsv` and the model and
+  signature set in `phase1/resume_state.json`. No other Phase 1 file depends
+  on the host score or the model, so every other Phase 1 file is a copy.
+- `phase0/reuse_provenance.json` and `phase1/reuse_provenance.json` record the
+  earlier folder, its run fingerprint and code SHA-256, the SHA-256 of the
+  earlier phase marker, every copied file with its size and SHA-256, and every
+  rewritten file with its old and new SHA-256. Each phase marker authenticates
+  its record.
+
+The model rebuild needs the host records of the Phase 1 host search. ViroSync
+rebuilds them from the saved files and runs no new search. The model reads two
+things for each protein of that search: its scaffold and its ten best DIAMOND
+matches. `phase1/marker_validation/host_hmm_hit_porfs.faa` lists the proteins in
+the order of the search, `host_diamond_top10.tsv` holds the matches, and the
+Phase 0 proteome gives the scaffold. The same function as in the Phase 1 search
+builds the records. A confirmed frameshift-rescue protein has viral evidence, so
+the search excludes it. ViroSync stops with an error when such a protein appears
+in the rescue host-search FASTA, or when a host-search file is missing.
+
+An earlier run that ended in Phase 1 without seeds ends the new run in Phase 1
+too. ViroSync writes the empty outputs again with the earlier early-exit reason
+from `virosync_run_complete.json`, and rebuilds the model files when the earlier
+run wrote them.
+
+Repeating the command resumes inside the new folder: the Phase 0 and Phase 1
+copies are loaded from there, and the earlier folder is read again only to
+validate it. `--clean-run` deletes the new folder and imports again.
+
+A reused run is intended to match a fresh run with the current source in every
+scientific output. These fields differ by design:
+
+| Where | Field |
+| --- | --- |
+| `virosync_run_state.json`, `phase*.complete.json` | `run_fingerprint`, `attempt`, `dependency_sha256`, the artifact digests of the files below, `identities.output_dir`, `identities.input_path`, `identities.code` |
+| `phase0/masking/masking_status.json` | `output_path` and `result_fingerprint`, when the masked genome lies in the run folder |
+| `virosync_run_complete.json` | `generated_at`, `config_fingerprint`, `effective_masking_fingerprint`, output paths |
+| `virosync_summary.json` | `generated_at` |
+| `run.log`, `provenance.json`, `effective_config.json`, `*/resource_metrics/*.json` | timings, timestamps, paths |
+| `phase0/reuse_provenance.json`, `phase1/reuse_provenance.json` | the whole file; fresh runs have none |
+
+`scripts/compare_run_outputs.py` checks two genome output folders. It compares
+the canonical and detailed prediction tables, the repeat-candidate table, BED,
+GFF3, `virosync_summary.json`, `evidence_profiles.json`, `gene_functions.tsv`,
+`gene_function_length_exclusions.tsv`, `eve_ani_edges.tsv`, the Phase 2
+taxonomy table and boundary BED, `host_signature_model.json` and
+`phase1/resume_state.json`. It ignores only the key `generated_at` in JSON
+files, prints each difference and exits with status 1 when any exists.
+
+```bash
+pixi run python scripts/compare_run_outputs.py results_fresh/GENOME results_new/GENOME
+```
+
 ### V9g candidate policy and known limits
 
 The V9g defaults join Phase 1 markers within both 20,000 bp and 10 genes,

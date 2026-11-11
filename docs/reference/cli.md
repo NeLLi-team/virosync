@@ -50,6 +50,8 @@ Relative paths in a list file start at the current working directory.
 | `-o PATH`, `--output PATH` | Required output root. ViroSync creates one subdirectory per genome. |
 | `--config PATH` | Read orchestration and pipeline defaults from this YAML file. The path must exist. |
 | `--clean-run` | Start again without reusing completed output. Otherwise, resume when the input, settings and saved outputs still match. |
+| `--reuse-phase1-from PATH` | Start from the Phase 0 and Phase 1 results of an earlier run. `PATH` is the `-o` folder of the earlier run and must exist. The new `-o` folder must not equal it, lie inside it or contain it. Needs `--reuse-phase1-code-sha256`. See [Reuse Phase 0 and Phase 1 of an earlier run](../METHODS.md#reuse-phase-0-and-phase-1-of-an-earlier-run). |
+| `--reuse-phase1-code-sha256 SHA` | Source SHA-256 of the earlier run: its `identities.code.source_sha256` in `virosync_run_state.json`. Needs `--reuse-phase1-from`. |
 | `--plots`, `--no-plots` | Enable or disable notebook and figure rendering. Default: `execution.generate_plots: false`. Scientific tables, sequence exports, evidence and audits remain required in either mode. |
 | `-w N`, `--workers N` | Run up to N genomes at once. Minimum: 1. The shipped config sets 6. |
 | `--threads-per-worker N` | Set tool threads for each genome. Minimum: 1. Default: `compute.threads`, or 8 if unset. ViroSync lowers the value to `compute.max_threads` (48 in the shipped config) divided by the genome limit and prints a warning. |

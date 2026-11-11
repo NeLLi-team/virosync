@@ -22,6 +22,7 @@ from virosync.config import (
     FeatureResolution,
     PipelineConfig,
 )
+from virosync.orchestration._flows.single_genome.phase1_reuse import Phase1Reuse, Phase1ReuseError
 from virosync.orchestration.python_runner import (
     BatchProgress,
     GenomeRunResult,
@@ -1198,6 +1199,25 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     help="Ignore existing outputs and start from scratch",
 )
 @click.option(
+    "--reuse-phase1-from",
+    "reuse_phase1_from",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Start from the Phase 0 and Phase 1 results of an earlier run. Give the -o folder of the earlier run. "
+        "Needs --reuse-phase1-code-sha256"
+    ),
+)
+@click.option(
+    "--reuse-phase1-code-sha256",
+    "reuse_phase1_code_sha256",
+    default=None,
+    help=(
+        "Source SHA-256 that the earlier run recorded as identities.code.source_sha256 "
+        "in virosync_run_state.json. Needs --reuse-phase1-from"
+    ),
+)
+@click.option(
     "--workers",
     "-w",
     default=None,
@@ -1425,6 +1445,8 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
 def run(
     input_path: Path,
     output_dir: Path,
+    reuse_phase1_from: Path | None,
+    reuse_phase1_code_sha256: str | None,
     workers: int | None,
     threads_per_worker: int | None,
     max_concurrent_genomes: int | None,
@@ -1475,6 +1497,7 @@ def run(
     """
     verbose, quiet = _command_output_flags(verbose)
     ctx = click.get_current_context()
+    phase1_reuse = _phase1_reuse_request(reuse_phase1_from, reuse_phase1_code_sha256)
 
     def explicit(name: str, value: _OptionValue) -> _OptionValue | None:
         if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE:
@@ -1565,7 +1588,7 @@ def run(
     if not genome_paths:
         raise click.ClickException("No genome files found in input")
     try:
-        _preflight_genome_runs(genome_paths, output_dir)
+        _preflight_genome_runs(genome_paths, output_dir, phase1_reuse)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     _preflight_native_tools()
@@ -1622,9 +1645,22 @@ def run(
         retry_delay_seconds=(application_config.orchestration.retry_delay_seconds),
         effective_config=effective_payload,
         progress=progress,
+        phase1_reuse=phase1_reuse,
     )
 
     _print_batch_results(results, output_dir, quiet=quiet)
+
+
+def _phase1_reuse_request(old_base: Path | None, code_sha256: str | None) -> Phase1Reuse | None:
+    """Combine the two reuse options into one request, or none when neither is set."""
+    if old_base is None and code_sha256 is None:
+        return None
+    if old_base is None or code_sha256 is None:
+        raise click.UsageError("--reuse-phase1-from and --reuse-phase1-code-sha256 are required together")
+    try:
+        return Phase1Reuse(old_base=old_base, code_sha256=code_sha256)
+    except Phase1ReuseError as exc:
+        raise click.UsageError(f"--reuse-phase1-code-sha256: {exc}") from exc
 
 
 def _preflight_native_tools() -> None:

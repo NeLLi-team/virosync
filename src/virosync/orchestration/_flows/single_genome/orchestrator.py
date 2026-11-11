@@ -74,6 +74,7 @@ from .manifest import (
     _write_completion_manifest,
 )
 from .phase1 import Phase1Result, Phase1Terminal, _run_phase1_subflow
+from .phase1_reuse import PROVENANCE_FILENAME, Phase1Reuse, import_phase0, import_phase1, open_reused_run
 from .phase1_state import PHASE1_STATE_SCHEMA
 from .phase2 import Phase2Result, Phase2Terminal, _run_phase2_subflow
 from .phase2_resume_state import PHASE2_RESUME_STATE_SCHEMA
@@ -652,9 +653,11 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
             "phase0/masking/masking_status.json",
             "phase0/proteome.fasta",
             "phase0/genes.gff",
+            f"phase0/{PROVENANCE_FILENAME}",
         ),
         1: (
             "phase1/ablation_events.json",
+            f"phase1/{PROVENANCE_FILENAME}",
             "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
             "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
             "phase1/frameshift_screening/frameshift_hits.tsv",
@@ -1146,6 +1149,9 @@ def _serialized_run(function):
             Path(bound.arguments["output_dir"]),
             bound.arguments["genome_id"],
         )
+        reuse = bound.arguments.get("phase1_reuse")
+        if reuse is not None:
+            reuse.require_disjoint(output_dir.parent, bound.arguments["genome_id"])
         with sibling_run_lock(output_dir):
             try:
                 result = function(*args, **kwargs)
@@ -1381,8 +1387,12 @@ def _single_genome_flow_impl(
     genome_id: str,
     config: PipelineConfig,
     progress_callback: Callable[[float, str, bool], None] | None = None,
+    phase1_reuse: Phase1Reuse | None = None,
 ) -> dict:
-    """Run one genome with a fully resolved nested configuration."""
+    """Run one genome with a fully resolved nested configuration.
+
+    ``phase1_reuse`` starts the run from the Phase 0 and Phase 1 results of an earlier run.
+    """
     import time
     from datetime import datetime
 
@@ -1429,14 +1439,6 @@ def _single_genome_flow_impl(
     # the same pinned regular file even if the link is retargeted mid-run.
     genome_path = Path(genome_path).resolve(strict=True)
     output_dir = _validate_clean_run_target(Path(output_dir), genome_id)
-    # A clean run (resume=False, e.g. --clean-run) must start from a pristine
-    # output directory: file-existence-based resume checks would otherwise let
-    # stale artifacts from an aborted prior run be mistaken for fresh results.
-    if not resume and output_dir.exists():
-        logger.info("Clean run: removing existing output directory %s", output_dir)
-        _remove_output_dir(output_dir, genome_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     flat_identity_config = config.to_flow_kwargs()
     flat_identity_config.update(
         host_prefixes=host_prefixes,
@@ -1451,6 +1453,16 @@ def _single_genome_flow_impl(
         masking=masking,
         device=device,
     )
+    reused = (
+        open_reused_run(phase1_reuse, genome_id=genome_id, identity=run_identity) if phase1_reuse is not None else None
+    )
+    # A clean run (resume=False, e.g. --clean-run) must start from a pristine
+    # output directory: file-existence-based resume checks would otherwise let
+    # stale artifacts from an aborted prior run be mistaken for fresh results.
+    if not resume and output_dir.exists():
+        logger.info("Clean run: removing existing output directory %s", output_dir)
+        _remove_output_dir(output_dir, genome_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
     # Retain the compatibility field name in schema-v2 reports, but bind it to
     # the complete schema-v4 identity rather than the old 16-character config hash.
     config_fingerprint = run_fingerprint
@@ -1611,6 +1623,14 @@ def _single_genome_flow_impl(
             masking=masking,
         )
         logger.info("Resume: reused authenticated Phase 0")
+    elif reused is not None:
+        import_phase0(reused, output_dir=output_dir, genome_path=genome_path)
+        phase0_result = _load_verified_phase0(
+            genome_path=genome_path,
+            output_dir=output_dir,
+            masking=masking,
+        )
+        logger.info("Phase 0 imported from %s", reused.root)
     else:
         phase0_result = _run_phase0_subflow(
             genome_path=genome_path,
@@ -1673,21 +1693,33 @@ def _single_genome_flow_impl(
         )
 
     # === PHASE 1: Seeding ===
-    phase1_result = _run_phase1_subflow(
-        masked_path=masked_path,
-        proteome_path=proteome_path,
-        output_dir=output_dir,
-        genome_id=genome_id,
-        config=replace(
-            config,
-            execution=replace(config.execution, resume=1 in reusable_phases),
-        ),
-        logger=logger,
-        config_fingerprint=config_fingerprint,
-        resume_authorized=1 in reusable_phases,
-        reference_mask=reference_mask,
-        metadata_families=metadata_families,
-    )
+    if reused is not None and 1 not in reusable_phases:
+        phase1_result = import_phase1(
+            reused,
+            output_dir=output_dir,
+            genome_id=genome_id,
+            config=config,
+            masked_path=masked_path,
+            proteome_path=proteome_path,
+            config_fingerprint=config_fingerprint,
+            logger=logger,
+        )
+    else:
+        phase1_result = _run_phase1_subflow(
+            masked_path=masked_path,
+            proteome_path=proteome_path,
+            output_dir=output_dir,
+            genome_id=genome_id,
+            config=replace(
+                config,
+                execution=replace(config.execution, resume=1 in reusable_phases),
+            ),
+            logger=logger,
+            config_fingerprint=config_fingerprint,
+            resume_authorized=1 in reusable_phases,
+            reference_mask=reference_mask,
+            metadata_families=metadata_families,
+        )
     report_progress(45, "phase 1 complete")
 
     if isinstance(phase1_result, Phase1Terminal):
@@ -2414,6 +2446,7 @@ def single_genome_flow(
     resume: bool = True,
     generate_plots: bool = False,
     progress_callback: Callable[[float, str, bool], None] | None = None,
+    phase1_reuse: Phase1Reuse | None = None,
 ) -> dict:
     """Process a single genome through all ViroSync phases.
 
@@ -2440,6 +2473,7 @@ def single_genome_flow(
         "output_dir",
         "genome_id",
         "progress_callback",
+        "phase1_reuse",
         "skip_masking",
     }
 
@@ -2482,6 +2516,7 @@ def single_genome_flow(
         genome_id=genome_id,
         config=effective_config,
         progress_callback=progress_callback,
+        phase1_reuse=phase1_reuse,
     )
 
 

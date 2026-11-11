@@ -428,15 +428,18 @@ class _MockPipeline:
         if task_fn is orchestrator.generate_outputs_task:
             self.generate_outputs_kwargs.append(kwargs)
             output_dir = Path(kwargs["output_dir"])
-            result = kwargs["verification_results"][0]
-            self._write_predictions(
-                output_dir,
-                rows=0 if self.candidate_only else 1,
-                detailed_rows=1,
-                confidence_tier=result.confidence_tier,
-                final_confidence=result.final_confidence,
-                effective_eve_class=self.effective_eve_class,
-            )
+            if kwargs["verification_results"]:
+                result = kwargs["verification_results"][0]
+                self._write_predictions(
+                    output_dir,
+                    rows=0 if self.candidate_only else 1,
+                    detailed_rows=1,
+                    confidence_tier=result.confidence_tier,
+                    final_confidence=result.final_confidence,
+                    effective_eve_class=self.effective_eve_class,
+                )
+            else:
+                self._write_predictions(output_dir, rows=0)
             if self.write_gene_functions:
                 (output_dir / "gene_functions.tsv").write_text(
                     "eve_id\tporf_id\tlabel\tmodule\tevidence\tevalue\nEVE_1\tg1\tPolB\treplication\tGVOGm0054\t1e-20\n"

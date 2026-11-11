@@ -62,6 +62,7 @@ def test_internal_runner_receives_one_resolved_pipeline_config() -> None:
         "output_dir",
         "genome_id",
         "progress_callback",
+        "phase1_reuse",
     }
 
     assert runner_parameters == {"config"}

@@ -1742,6 +1742,8 @@ def _load_phase_record(path: Path) -> PhaseRecord:
 def _validated_phase_prefix(
     output_dir: Path,
     expected_run_fingerprint: str,
+    *,
+    through_phase: int = len(PHASE_MARKER_FILENAMES) - 1,
 ) -> tuple[tuple[PhaseRecord, ...], str | None]:
     try:
         state = _load_run_state(output_dir)
@@ -1751,7 +1753,7 @@ def _validated_phase_prefix(
         return (), "run state has a stale fingerprint"
     records: list[PhaseRecord] = []
     dependency = expected_run_fingerprint
-    for phase, filename in enumerate(PHASE_MARKER_FILENAMES):
+    for phase, filename in enumerate(PHASE_MARKER_FILENAMES[: through_phase + 1]):
         marker = output_dir / filename
         try:
             marker.lstat()
@@ -2834,6 +2836,24 @@ def publish_run_success(
     )
     atomic_write_json(root / RUN_STATE_FILENAME, success)
     return success
+
+
+@_scoped_validation_cache
+def validate_phase_prefix(
+    output_dir: str | Path,
+    *,
+    expected_run_fingerprint: str,
+    through_phase: int,
+) -> tuple[tuple[PhaseRecord, ...], str | None]:
+    """Validate the run state and the chained phase markers up to ``through_phase``.
+
+    Returns the valid records and, when the chain stops early, the reason. Later
+    phases are neither read nor hashed.
+    """
+    _require_sha256(expected_run_fingerprint, "expected_run_fingerprint")
+    if through_phase not in range(len(PHASE_MARKER_FILENAMES)):
+        raise ValueError("through_phase must be in the range 0..3")
+    return _validated_phase_prefix(Path(output_dir), expected_run_fingerprint, through_phase=through_phase)
 
 
 @_scoped_validation_cache
