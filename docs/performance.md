@@ -1,6 +1,6 @@
 # Performance
 
-The November 12 benchmark used ViroSync 1.3.0 at commit `00f4b4e` with resource
+The November 12 benchmark used ViroSync 1.3.0 at commit `8f642ac` with resource
 bundle v1.3.0. ViroSync ran with one worker and 16 threads per input, with
 frameshift screening enabled and the other optional analyses disabled. Comparator
 outputs come from earlier runs and were not repeated. ViroSync is counted with its
@@ -50,7 +50,9 @@ their coverage partly measures agreement with that tool.
 Mean wall time across 30 SynEVEs-2 inputs was 215.3 seconds for ViroSync and
 31.4 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
 were 3,283.3 and 2,039.6 seconds. Mean peak memory on the real genomes was 9.2 GB
-for ViroSync and 2.1 GB for ViralRecall v3.1.0. Each run had 16 allocated CPUs on
+for ViroSync and 2.1 GB for ViralRecall v3.1.0. The ViroSync values come from runs of
+the preceding commit `00f4b4e`, which started from the input; the benchmark runs of
+`8f642ac` reused its saved gene calls and searches. Each run had 16 allocated CPUs on
 the same cluster, but jobs ran on different nodes and dates, so these values do not
 give a general speed ranking.
 
