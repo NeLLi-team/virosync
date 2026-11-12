@@ -27,8 +27,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   `provenance.json` (last two path components and size). The run stops when the Phase 2 query proteins
   differ from the saved query, when the saved tables do not match the query and chunk size, when a table
   is missing or extra, or when the full-proteome variant is enabled. The operator must have shown that
-  the Phase 2 search code is the same in both sources. The import writes
-  `phase2/boundary_diamond/search_reuse.json`.
+  the Phase 2 search code is the same in both sources. When the earlier run saved a
+  search and Phase 2 runs, the import writes `phase2/boundary_diamond/search_reuse.json`.
 - `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
   outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
   also fails when a completed run lacks an output that its run state requires.

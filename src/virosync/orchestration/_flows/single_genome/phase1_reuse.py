@@ -394,6 +394,7 @@ def _require_same_database(root: Path, config: PipelineConfig) -> None:
             "the new run has no gene-taxonomy database (databases.gene_taxonomy_faa_db) "
             "to compare with the earlier run for --reuse-phase2-search"
         )
+    current = Path(current).absolute()
     path = root / "provenance.json"
     if path.is_symlink() or not path.is_file():
         raise Phase1ReuseError(
@@ -410,12 +411,12 @@ def _require_same_database(root: Path, config: PipelineConfig) -> None:
     except (KeyError, TypeError) as exc:
         raise Phase1ReuseError(f"{path} lacks the record databases.gene_taxonomy_db (path, size_bytes)") from exc
     try:
-        size = Path(current).stat().st_size
+        size = current.stat().st_size
     except OSError as exc:
         raise Phase1ReuseError(f"cannot read the size of the gene-taxonomy database {current}: {exc}") from exc
-    if _database_tail(Path(current)) != _database_tail(Path(recorded_path)) or size != recorded_size:
+    if _database_tail(current) != _database_tail(Path(recorded_path)) or size != recorded_size:
         raise Phase1ReuseError(
-            f"the gene-taxonomy database differs from the earlier run: now {Path(current).absolute()} "
+            f"the gene-taxonomy database differs from the earlier run: now {current} "
             f"({size} bytes), earlier {recorded_path} ({recorded_size} bytes)"
         )
 
@@ -428,7 +429,8 @@ def _require_phase2_marker_agrees(root: Path, hashes: Mapping[str, str]) -> None
     """Refuse a file whose hash in the earlier Phase 2 marker differs from its snapshot hash.
 
     The marker, when it exists, authenticates nothing; it can only contradict the snapshot.
-    Refuses a marker that is a symlink, unreadable or malformed.
+    Compares every entry, so a path listed twice must agree both times. Refuses a marker that is a
+    symlink, unreadable or malformed.
     """
     path = root / "phase2.complete.json"
     if not os.path.lexists(path):
@@ -439,11 +441,13 @@ def _require_phase2_marker_agrees(root: Path, hashes: Mapping[str, str]) -> None
         artifacts = json.loads(path.read_text(encoding="utf-8"))["artifacts"]
         if not isinstance(artifacts, list):
             raise TypeError("artifacts is not a list")
-        recorded = {item["relative_path"]: item["sha256"] for item in artifacts}
+        recorded = [(item["relative_path"], item["sha256"]) for item in artifacts]
+        if not all(isinstance(value, str) for entry in recorded for value in entry):
+            raise TypeError("an artifact lacks a string relative_path or sha256")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise Phase1ReuseError(f"cannot read the Phase 2 marker {path}: {exc!r}") from exc
-    for relative, sha256 in hashes.items():
-        if recorded.get(relative, sha256) != sha256:
+    for relative, sha256 in recorded:
+        if hashes.get(relative, sha256) != sha256:
             raise Phase1ReuseError(f"snapshot conflicts with the recorded hash: {relative}")
 
 

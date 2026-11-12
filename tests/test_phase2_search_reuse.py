@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -333,6 +334,17 @@ def test_the_same_database_in_another_bundle_is_accepted(worlds: Worlds, tmp_pat
     assert source.phase2_search == _saved_search(old)
 
 
+def test_a_relative_database_path_naming_the_recorded_file_is_accepted(
+    worlds: Worlds, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old, new = worlds
+    monkeypatch.chdir(_database(old).parent)
+
+    source = _open(old, new, _request(old, manifest=_listing(tmp_path, old)), database=Path("combined_proteome.dmnd"))
+
+    assert source.phase2_search == _saved_search(old)
+
+
 def test_a_database_with_another_name_is_refused(worlds: Worlds, tmp_path: Path) -> None:
     old, new = worlds
     other = tmp_path / "bundle/marker/marker.dmnd"
@@ -438,6 +450,19 @@ def test_a_phase2_marker_hash_that_equals_the_listed_hash_is_accepted(worlds: Wo
     assert _open(old, new, _request(old, manifest=manifest)).phase2_search == _saved_search(old)
 
 
+def test_a_phase2_marker_that_lists_a_file_twice_is_refused_when_any_entry_differs(
+    worlds: Worlds, tmp_path: Path
+) -> None:
+    old, new = worlds
+    manifest = _listing(tmp_path, old)
+    right = _sha256_of(old.output_dir / HITS)
+    artifacts = [{"relative_path": HITS, "sha256": sha} for sha in ("0" * 64, right)]
+    (old.output_dir / "phase2.complete.json").write_text(json.dumps({"artifacts": artifacts}), encoding="utf-8")
+
+    with pytest.raises(Phase1ReuseError, match=f"snapshot conflicts with the recorded hash: {HITS}"):
+        _open(old, new, _request(old, manifest=manifest))
+
+
 def test_a_phase2_marker_never_authenticates_a_file(worlds: Worlds, tmp_path: Path) -> None:
     old, new = worlds
     manifest = _write_snapshot(tmp_path, [f"{_sha256_of(old.output_dir / QUERY)}  demo/{QUERY}"])
@@ -447,7 +472,18 @@ def test_a_phase2_marker_never_authenticates_a_file(worlds: Worlds, tmp_path: Pa
         _open(old, new, _request(old, manifest=manifest))
 
 
-@pytest.mark.parametrize("content", ["{", "[]", '{"artifacts": {}}', '{"artifacts": [{"relative_path": "x"}]}'])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{",
+        "[]",
+        '{"artifacts": {}}',
+        '{"artifacts": [{"relative_path": "x"}]}',
+        '{"artifacts": ["x"]}',
+        '{"artifacts": [{"relative_path": 1, "sha256": "x"}]}',
+        '{"artifacts": [{"relative_path": "x", "sha256": 1}]}',
+    ],
+)
 def test_a_malformed_phase2_marker_is_refused(worlds: Worlds, tmp_path: Path, content: str) -> None:
     old, new = worlds
     manifest = _listing(tmp_path, old)
@@ -815,6 +851,46 @@ def test_a_saved_table_replaced_by_a_symlink_is_refused_at_the_copy(
         _run_search(tmp_path, "later", saved_search=saved)
 
     assert not (tmp_path / "later/boundary_diamond.tsv").exists()
+
+
+def _saved_in_genome_layout(tmp_path: Path, saved: SavedBoundarySearch) -> SavedBoundarySearch:
+    """Copy the saved tables to ``genome/phase2/boundary_diamond/`` and point the search there."""
+    folder = tmp_path / "genome/phase2/boundary_diamond"
+    folder.mkdir(parents=True)
+    for table in saved.hit_tables:
+        (folder / table.path.name).write_bytes(table.path.read_bytes())
+    return replace(saved, hit_tables=tuple(replace(table, path=folder / table.path.name) for table in saved.hit_tables))
+
+
+@pytest.mark.parametrize("replaced", ["genome/phase2/boundary_diamond", "genome/phase2"])
+def test_a_saved_table_whose_parent_folder_was_replaced_by_a_symlink_is_refused_at_the_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replaced: str
+) -> None:
+    _, saved = _earlier_search(tmp_path, monkeypatch)
+    saved = _saved_in_genome_layout(tmp_path, saved)
+    folder = tmp_path / replaced
+    identical = tmp_path / "identical-folder"
+    folder.rename(identical)
+    folder.symlink_to(identical)
+    _forbid_search(monkeypatch)
+
+    with pytest.raises(SavedSearchError, match="cannot open the saved Phase 2 hit table"):
+        _run_search(tmp_path, "later", saved_search=saved)
+
+    assert not (tmp_path / "later/boundary_diamond.tsv").exists()
+
+
+def test_a_fifo_in_place_of_a_saved_table_is_refused_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, saved = _earlier_search(tmp_path, monkeypatch)
+    table = saved.hit_tables[0].path
+    table.unlink()
+    os.mkfifo(table)
+    _forbid_search(monkeypatch)
+
+    with pytest.raises(SavedSearchError, match="is not a regular file"):
+        _run_search(tmp_path, "later", saved_search=saved)
 
 
 def test_a_saved_table_that_is_not_a_regular_file_is_refused_at_the_copy(

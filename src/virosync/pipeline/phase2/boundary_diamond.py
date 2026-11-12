@@ -1621,29 +1621,49 @@ def _import_saved_search(
     return all_hits
 
 
+def _open_saved_table(path: Path) -> int:
+    """Open ``path`` read-only through pinned folder descriptors and follow no symlink.
+
+    ``path`` is ``<genome folder>/phase2/boundary_diamond/<name>``. A FIFO opens at once.
+    """
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    phase2 = os.open(path.parent.parent, directory_flags)
+    try:
+        folder = os.open(path.parent.name, directory_flags, dir_fd=phase2)
+        try:
+            return os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+        finally:
+            os.close(folder)
+    finally:
+        os.close(phase2)
+
+
 def _copy_verified(table: SavedHitTable, destination: Path) -> None:
     """Copy ``table`` atomically and refuse a copy whose SHA-256 is not the authenticated one.
 
-    Opens the table without following a symlink and reads it only if it is a regular file.
+    Reads the table only if it is a regular file below unreplaced folders.
     """
     try:
-        descriptor = os.open(table.path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = _open_saved_table(table.path)
     except OSError as exc:
         raise SavedSearchError(f"cannot open the saved Phase 2 hit table {table.path}: {exc}") from exc
-    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise SavedSearchError(f"the saved Phase 2 hit table {table.path} is not a regular file")
+        reader = os.fdopen(descriptor, "rb")
+    except BaseException:
         os.close(descriptor)
-        raise SavedSearchError(f"the saved Phase 2 hit table {table.path} is not a regular file")
+        raise
     digest = hashlib.sha256()
-    with os.fdopen(descriptor, "rb") as reader:
-        with atomic_write_context(destination, mode="wb") as writer:
-            for chunk in iter(lambda: reader.read(_COPY_CHUNK_BYTES), b""):
-                digest.update(chunk)
-                writer.write(chunk)
-            if digest.hexdigest() != table.sha256:
-                raise SavedSearchError(
-                    f"the saved Phase 2 hit table {table.path} has SHA-256 {digest.hexdigest()}, "
-                    f"not the authenticated {table.sha256}"
-                )
+    with reader, atomic_write_context(destination, mode="wb") as writer:
+        for chunk in iter(lambda: reader.read(_COPY_CHUNK_BYTES), b""):
+            digest.update(chunk)
+            writer.write(chunk)
+        if digest.hexdigest() != table.sha256:
+            raise SavedSearchError(
+                f"the saved Phase 2 hit table {table.path} has SHA-256 {digest.hexdigest()}, "
+                f"not the authenticated {table.sha256}"
+            )
 
 
 def filter_taxonomy_to_boundary(
