@@ -60,7 +60,7 @@ cat results/example/batch_summary.tsv
 ```
 
 With resource bundle v1.3.0, the `test-1` row reports `status=success`,
-`predictions=17`, and `accepted=4`.
+`predictions=17`, and `accepted=1`.
 
 ## Run your own genomes
 

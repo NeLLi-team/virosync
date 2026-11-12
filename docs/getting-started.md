@@ -92,9 +92,8 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-The previous v1.2.0 example check expected `status=success`, `predictions=7`, and
-`accepted=2` for `test-1`. Expected counts for the final v1.3.0 (b611) bundle
-remain pending its actual example, resume, and frameshift smoke validation.
+With resource bundle v1.3.0, the `test-1` row reports `status=success`,
+`predictions=17`, and `accepted=1`.
 
 ## Run your genome
 
