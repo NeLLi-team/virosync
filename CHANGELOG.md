@@ -506,3 +506,10 @@ v1.0.6 core resource bundle.
 Outputs are a confidence-tiered prediction table, BED, GFF3 and FASTA of
 accepted regions, per-region gene taxonomy, and a run manifest. Runs are
 resumable and skip completed genomes.
+
+
+Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Historical SOURCE10/SOURCE12 files whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply missing historical authentication. Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
+
+The patched source has a new code identity. Any semantic equivalence claim must compare Phase 0/1 code against this repair source, including the host-model and no-seed refactor. Output comparison includes scientific identity, consumed Phase 0/1 artifacts and jelly-roll exports; non-JSON files stream in bounded chunks. JSON comparison still parses complete documents and can require memory proportional to document size. No runtime override, historical-hash manifest option, campaign credit or acceptance is granted by these options.
+
+- Bound output lookup to an explicit genome root and verify masked-output ownership, preserving validated masking-off input sharing.

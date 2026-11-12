@@ -15,7 +15,7 @@ import json
 import os
 import re
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 
@@ -54,7 +54,7 @@ _CHECKPOINT = "phase1/resume_state.json"
 _HOST_FASTA = "phase1/marker_validation/host_hmm_hit_porfs.faa"
 _HOST_TSV = "phase1/marker_validation/host_diamond_top10.tsv"
 _RESCUE_HOST_FASTA = "phase1/frameshift_screening/validation/host_hmm_hit_porfs.faa"
-# Phase 1 files that Phase 2 and Phase 3 read and that no phase marker records. The protein search
+# Required ordinary-marker search files, authenticated by new Phase 1 markers. The protein search
 # writes all four whenever it finds a hit. Without them, jelly-roll classification, the viral
 # top-ten flags or the gene-function evidence drop out without an error.
 _SEARCH_FILES = (
@@ -62,6 +62,22 @@ _SEARCH_FILES = (
     "phase1/marker_validation/diamond_top10_taxonomy.tsv",
     "phase1/marker_validation/hmm_hit_porfs.faa",
     "phase1/hmm/hmm_hits_validated.tsv",
+)
+PHASE1_CONSUMED_FILES = (
+    *_SEARCH_FILES,
+    "phase1/novelty/diamond/diamond_combined.tsv",
+    "phase1/hhg/hmm_hits_validated.tsv",
+    _MODEL_JSON,
+    _MODEL_DEBUG,
+    _HOST_FASTA,
+    _HOST_TSV,
+    _RESCUE_HOST_FASTA,
+    "phase1/frameshift_screening/validation/host_diamond_top10.tsv",
+    "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
+    "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
+    "phase1/frameshift_screening/frameshift_hits.tsv",
+    "phase1/frameshift_screening/frameshift_events.tsv",
+    "phase1/pfam_arbitration.tsv",
 )
 # Phase 1 files that the host signature model changes. They are rebuilt, not copied.
 _PHASE1_REBUILT = (_MODEL_JSON, _MODEL_DEBUG, _CHECKPOINT)
@@ -124,6 +140,7 @@ class ReusedRun:
     markers: Mapping[int, str]
     terminal_reason: str | None = None
     checkpoint: Phase1ResumeState | None = None
+    artifacts: Mapping[str, str] = field(default_factory=dict)
 
 
 def _require_disjoint(old: Path, new: Path) -> None:
@@ -146,6 +163,9 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
     lacks a Phase 1 file that Phase 2 or Phase 3 read.
     """
     root = request.old_dir(genome_id)
+    for path in (request.old_base, root, root / "phase0", root / "phase1"):
+        if path.is_symlink():
+            raise Phase1ReuseError(f"the earlier run contains a symlink root: {path}")
     try:
         state = load_run_state(root)
     except (OSError, TypeError, ValueError) as exc:
@@ -153,6 +173,8 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
         if (request.old_base / RUN_STATE_FILENAME).exists():
             hint = "; pass the base folder of the earlier run (its -o value), not a genome folder"
         raise Phase1ReuseError(f"no earlier run at {root}: {exc}{hint}") from exc
+    if state.status == "running":
+        raise Phase1ReuseError("the earlier run is still running")
     code = cast(Mapping[str, str], state.identities["code"])["source_sha256"]
     if code != request.code_sha256:
         raise Phase1ReuseError(f"the earlier run records code SHA-256 {code}, not {request.code_sha256}")
@@ -169,9 +191,21 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
             "The validators open the paths that the earlier run recorded, so its folder and its input genome "
             f"{state.identities['input_path']} must still lie at the recorded paths"
         )
+    artifacts = {}
+    for record in records:
+        for artifact in record.artifacts:
+            previous = artifacts.setdefault(artifact.relative_path, artifact.sha256)
+            if previous != artifact.sha256:
+                raise Phase1ReuseError(f"conflicting authenticated hashes: {artifact.relative_path}")
+    for relative in PHASE1_CONSUMED_FILES:
+        if (root / relative).exists():
+            _require_authenticated(root, relative, artifacts)
+    _require_authenticated(root, _MASKING_STATUS, artifacts)
     _require_masking_without_fallback(root)
     terminal = records[1].outcome == "terminal_zero"
-    checkpoint = None if terminal else _load_complete_checkpoint(root)
+    checkpoint = None if terminal else _load_complete_checkpoint(root, artifacts)
+    if terminal:
+        _require_authenticated(root, "virosync_run_complete.json", artifacts)
     return ReusedRun(
         root=root,
         run_fingerprint=state.run_fingerprint,
@@ -179,6 +213,7 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
         markers={phase: marker_sha256(root, phase) for phase in (0, 1)},
         terminal_reason=_terminal_reason(root) if terminal else None,
         checkpoint=checkpoint,
+        artifacts=artifacts,
     )
 
 
@@ -193,9 +228,13 @@ def _require_masking_without_fallback(root: Path) -> None:
         )
 
 
-def _load_complete_checkpoint(root: Path) -> Phase1ResumeState:
+def _load_complete_checkpoint(root: Path, artifacts: Mapping[str, str]) -> Phase1ResumeState:
     """Load the Phase 1 checkpoint and require the search files that a run with a protein hit wrote."""
+    _require_authenticated(root, _CHECKPOINT, artifacts)
     checkpoint = load_phase1_state(root / _CHECKPOINT)
+    _require_authenticated(root, _CHECKPOINT, artifacts)
+    if not checkpoint.validated_markers:
+        raise Phase1ReuseError("empty nonterminal Phase 1 checkpoint cannot be reused")
     if all(is_rescued_protein_id(marker.query_porf) for marker in checkpoint.validated_markers):
         return checkpoint
     missing = [relative for relative in _SEARCH_FILES if not (root / relative).is_file()]
@@ -203,7 +242,37 @@ def _load_complete_checkpoint(root: Path) -> Phase1ResumeState:
         raise Phase1ReuseError(
             f"the earlier run at {root} lacks Phase 1 files that Phase 2 or Phase 3 read: " + ", ".join(missing)
         )
+    for relative in _SEARCH_FILES:
+        _require_authenticated(root, relative, artifacts)
     return checkpoint
+
+
+def _require_authenticated(root: Path, relative: str, artifacts: Mapping[str, str]) -> None:
+    expected = artifacts.get(relative)
+    if expected is None:
+        raise Phase1ReuseError(f"no authenticated old phase artifact for {relative}; run a fresh Phase 1")
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        raise Phase1ReuseError(f"authenticated input is not a regular file: {relative}")
+    with path.open("rb") as handle:
+        actual = hashlib.file_digest(handle, "sha256").hexdigest()
+    if actual != expected:
+        raise Phase1ReuseError(f"authenticated input changed: {relative}")
+
+
+def require_matching_phase0_origin(source: ReusedRun, output_dir: Path) -> None:
+    """Reject a reusable Phase 0 from a fresh run or a different import origin."""
+    path = output_dir / "phase0" / PROVENANCE_FILENAME
+    try:
+        provenance = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Phase1ReuseError("reusable Phase 0 has no authenticated import origin") from exc
+    if (
+        provenance.get("old_run_folder") != str(source.root.resolve())
+        or provenance.get("old_phase_marker_sha256") != source.markers[0]
+        or provenance.get("old_run_fingerprint") != source.run_fingerprint
+    ):
+        raise Phase1ReuseError("reusable Phase 0 import origin differs")
 
 
 def _differing_components(earlier: Mapping[str, object], current: Mapping[str, object]) -> list[str]:
@@ -246,12 +315,13 @@ def import_phase0(source: ReusedRun, *, output_dir: Path, genome_path: Path) -> 
     The status records the absolute path of the masked genome, which lies in the
     run folder, and a fingerprint of that record.
     """
-    copied = _copy_tree(source.root, output_dir, "phase0", skip=_PHASE0_NOT_COPIED)
+    copied = _copy_tree(source, output_dir, "phase0", skip=_PHASE0_NOT_COPIED)
     _rebase_masking_status(source, output_dir, genome_path)
     _write_provenance(source, output_dir, 0, copied, _rewritten(source, output_dir, [_MASKING_STATUS]))
 
 
 def _rebase_masking_status(source: ReusedRun, output_dir: Path, genome_path: Path) -> None:
+    _require_authenticated(source.root, _MASKING_STATUS, source.artifacts)
     status = source.root / _MASKING_STATUS
     earlier = load_masking_result(status)
     region_count = json.loads(status.read_text(encoding="utf-8"))["repeat_region_count"]
@@ -263,6 +333,7 @@ def _rebase_masking_status(source: ReusedRun, output_dir: Path, genome_path: Pat
         except ValueError as exc:
             raise Phase1ReuseError(f"the masked genome {earlier.output_path} is outside the earlier run") from exc
         output_path = Path(output_dir).resolve() / relative
+    _require_authenticated(source.root, _MASKING_STATUS, source.artifacts)
     write_masking_status(
         replace(earlier, output_path=output_path),
         Path(output_dir) / "phase0" / "masking",
@@ -287,7 +358,7 @@ def import_phase1(
     the early-exit reason of the earlier run. Every other run loads its lossless
     checkpoint and replaces the model, the signature set and their files.
     """
-    copied = _copy_tree(source.root, output_dir, "phase1", skip=_PHASE1_NOT_COPIED)
+    copied = _copy_tree(source, output_dir, "phase1", skip=_PHASE1_NOT_COPIED)
     model_inputs = {
         "output_dir": output_dir,
         "config": config,
@@ -312,7 +383,10 @@ def import_phase1(
             elapsed_sec=0.0,
             ablation_counts=InterventionCounts(),
         )
-    state = source.checkpoint or load_phase1_state(source.root / _CHECKPOINT)
+    if source.checkpoint is None:
+        raise Phase1ReuseError("nonterminal import lacks its validated checkpoint")
+    _require_authenticated(source.root, _CHECKPOINT, source.artifacts)
+    state = source.checkpoint
     confirmed = {
         m.query_porf.split("|aa", 1)[0] for m in state.validated_markers if is_rescued_protein_id(m.query_porf)
     }
@@ -442,8 +516,11 @@ def check_rescue_host_search(rescue_host_faa: Path, confirmed_ids: Collection[st
         )
 
 
-def _copy_tree(source_root: Path, output_dir: Path, top: str, *, skip: frozenset[str]) -> list[dict[str, object]]:
-    """Copy every regular file below ``top`` and return its relative path, size and SHA-256."""
+def _copy_tree(source: ReusedRun, output_dir: Path, top: str, *, skip: frozenset[str]) -> list[dict[str, object]]:
+    """Copy only authenticated regular files below ``top`` and check their saved hashes."""
+    source_root = source.root
+    if (source_root / top).is_symlink():
+        raise Phase1ReuseError(f"the earlier run contains a symlink root: {top}")
     copied: list[dict[str, object]] = []
     pending = [Path(top)]
     while pending:
@@ -458,12 +535,19 @@ def _copy_tree(source_root: Path, output_dir: Path, top: str, *, skip: frozenset
                     pending.append(relative)
                 elif not entry.is_file():
                     raise Phase1ReuseError(f"the earlier run contains a special file: {relative}")
-                elif relative.as_posix() not in skip:
-                    copied.append(_copy_file(Path(entry.path), Path(output_dir) / relative, relative))
+                elif relative.as_posix() not in skip and relative.as_posix() in source.artifacts:
+                    copied.append(
+                        _copy_file(
+                            Path(entry.path),
+                            Path(output_dir) / relative,
+                            relative,
+                            source.artifacts[relative.as_posix()],
+                        )
+                    )
     return sorted(copied, key=lambda item: str(item["path"]))
 
 
-def _copy_file(source: Path, destination: Path, relative: Path) -> dict[str, object]:
+def _copy_file(source: Path, destination: Path, relative: Path, expected_sha256: str) -> dict[str, object]:
     digest = hashlib.sha256()
     size = 0
     with source.open("rb") as reader, destination.open("xb") as writer:
@@ -471,6 +555,8 @@ def _copy_file(source: Path, destination: Path, relative: Path) -> dict[str, obj
             digest.update(chunk)
             writer.write(chunk)
             size += len(chunk)
+    if digest.hexdigest() != expected_sha256:
+        raise Phase1ReuseError(f"authenticated input changed during copy: {relative}")
     return {"path": relative.as_posix(), "size": size, "sha256": digest.hexdigest()}
 
 
@@ -484,7 +570,10 @@ def _rewritten(source: ReusedRun, output_dir: Path, relatives: Iterable[str]) ->
 
 
 def _sha256_or_none(path: Path) -> str | None:
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    if not path.is_file():
+        return None
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _write_provenance(
@@ -502,6 +591,10 @@ def _write_provenance(
         "old_code_sha256": source.code_sha256,
         "old_phase_marker_sha256": source.markers[phase],
         "copied": copied,
+        "authentication": "old phase artifact hashes; unauthenticated files were not copied",
+        "parent_reuse_provenance": {
+            relative: sha for relative, sha in source.artifacts.items() if relative.endswith("/" + PROVENANCE_FILENAME)
+        },
         "rewritten": rewritten,
     }
     atomic_write(

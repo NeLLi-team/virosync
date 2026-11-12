@@ -214,3 +214,24 @@ Run `pixi run -e structural check-structural-runtime` with the options below.
 With no required option, check only tools enabled in the config. A failed
 required check returns a nonzero exit status. This command does not download
 models or databases.
+
+
+Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Historical SOURCE10/SOURCE12 files whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply missing historical authentication. Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
+
+The patched source has a new code identity. Any semantic equivalence claim must compare Phase 0/1 code against this repair source, including the host-model and no-seed refactor. Output comparison includes scientific identity, consumed Phase 0/1 artifacts and jelly-roll exports; non-JSON files stream in bounded chunks. JSON comparison still parses complete documents and can require memory proportional to document size. No runtime override, historical-hash manifest option, campaign credit or acceptance is granted by these options.
+
+Only authenticated phase files are copied. Unbound intermediates are omitted;
+existing downstream-consumed files without an old marker hash cause refusal.
+Output lookup stays inside the genome run root, including fallback paths, so a
+neighboring run cannot supply missing search evidence. The comparison tool requires
+gene-function tables for full runs with the current resource bundle; older bundles
+without those tables cannot receive a complete-comparison result. Evidence graphs
+remain conditional on coherence analyses.
+
+The output generator defaults to its own output folder as the genome root.
+Nested export callers supply the genome root explicitly; fallback lookup never
+leaves that root. The comparator requires enabled masked outputs to resolve
+inside their own genome folders and to distinct files. Masking-off is different:
+the native writer uses the original input path. A shared unmasked input is allowed
+only when the native masking validator verifies that path and its bytes against
+each run's recorded input identity and explicit masking-off request.

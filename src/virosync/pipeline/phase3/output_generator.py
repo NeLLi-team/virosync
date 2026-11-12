@@ -629,17 +629,22 @@ class OutputGenerator:
         seed_marker_allowlist: list[str] | None = None,
         export_all_eve_sequences: bool = False,
         gene_function_inputs: GeneFunctionInputs | None = None,
+        run_root: Path | None = None,
     ):
         """Initialize output generator.
 
         Args:
             output_dir: Base output directory
+            run_root: Genome run directory for evidence lookup; defaults to output_dir
             genome_fasta: Path to genome FASTA (for extracting sequences)
             proteome_fasta: Path to proteome FASTA (for extracting proteins)
             gene_function_inputs: Files that label core genes; without them
                 (or without a proteome) no gene-function table is written
         """
         self.output_dir = Path(output_dir)
+        self.run_root = Path(run_root).resolve() if run_root is not None else self.output_dir.resolve()
+        if not self.output_dir.resolve().is_relative_to(self.run_root):
+            raise ValueError("output directory must belong to the genome run root")
         self.genome_fasta = genome_fasta
         self.proteome_fasta = proteome_fasta
         self.extended_output = extended_output
@@ -688,7 +693,7 @@ class OutputGenerator:
     def _find_file(self, relative_paths: list[Path]) -> Path | None:
         for rel in relative_paths:
             candidate = (self.output_dir / rel).resolve()
-            if candidate.exists():
+            if candidate.is_relative_to(self.run_root) and candidate.is_file():
                 return candidate
         return None
 

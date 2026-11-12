@@ -1406,6 +1406,7 @@ def generate_outputs_task(
     canonical_results: list | None = None,
     promoted_low_results: list | None = None,
     gene_function_inputs: GeneFunctionInputs | None = None,
+    run_root: Path | None = None,
 ) -> dict:
     """Generate output files from verification results.
 
@@ -1414,6 +1415,7 @@ def generate_outputs_task(
     Args:
         verification_results: List of VerificationResult objects
         output_dir: Output directory for files
+        run_root: Genome run directory when outputs are written to a nested directory
         genome_path: Path to genome for sequence extraction
         proteome_path: Path to proteome for sequence extraction
         accepted_only: Only include accepted results (default: False, include all)
@@ -1449,6 +1451,7 @@ def generate_outputs_task(
         seed_marker_allowlist=seed_marker_allowlist,
         export_all_eve_sequences=export_all_eve_sequences,
         gene_function_inputs=gene_function_inputs,
+        run_root=run_root,
     )
 
     return output_gen.generate_all(

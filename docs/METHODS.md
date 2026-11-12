@@ -228,13 +228,13 @@ that the earlier run records it.
 | Earlier folder | `OLD_OUT` is the `-o` value of the earlier run: the folder with one subfolder per genome. The rule is the same for one genome and for a batch. ViroSync reads `OLD_OUT/<genome_id>`. A genome without a valid earlier run fails alone, and the other genomes continue. |
 | Read-only | The earlier folder is never written or deleted, `--clean-run` included. ViroSync refuses, before it writes anything, when the new `-o` folder equals `OLD_OUT`, lies inside it or contains it. |
 | Validation | The resume validators check the earlier run with its own recorded fingerprint. Its run state, its Phase 0 and Phase 1 markers and all recorded artifact hashes must be valid. ViroSync neither reads nor hashes the later phases of the earlier run. The validators open the absolute paths that the earlier run recorded, so the earlier folder and its input genome must still lie at those paths, although `input_path` is exempt from the identity comparison. A moved folder or input is refused, and the message names the path. |
-| Search files | Phase 2 and Phase 3 read four Phase 1 files that the earlier markers do not record: `phase1/marker_validation/validated_marker_hits.tsv`, `phase1/marker_validation/diamond_top10_taxonomy.tsv`, `phase1/marker_validation/hmm_hit_porfs.faa` and `phase1/hmm/hmm_hits_validated.tsv`. Without them, jelly-roll classification, the viral top-ten flags or the gene-function evidence silently drop out. ViroSync refuses an earlier run that lacks one of them when its checkpoint holds a marker of an ordinary protein, because then the Phase 1 search wrote the files. The provenance record hashes the copies. The files are checked for presence, not authenticated. An earlier run that ended in Phase 1 needs none of them. |
+| Search files | New Phase 1 markers authenticate the four ordinary-marker search files: `phase1/marker_validation/validated_marker_hits.tsv`, `phase1/marker_validation/diamond_top10_taxonomy.tsv`, `phase1/marker_validation/hmm_hit_porfs.faa` and `phase1/hmm/hmm_hits_validated.tsv`. An ordinary-marker checkpoint requires all four files and their old marker hashes. Existing consumed fallback, host, frameshift and Pfam files also need authenticated hashes. Missing or changed hashes cause refusal, including historical SOURCE10/SOURCE12 folders without this closure. Terminal-zero runs need only the files they actually wrote. Copy-time digests must equal the saved hashes. |
 | Masking | An earlier run whose masking fell back to another backend is refused. A new run could mask with the requested backend and give another proteome. |
 | Code | `--reuse-phase1-code-sha256` states which source produced the earlier Phase 0 and Phase 1. It must equal `identities.code.source_sha256` in the earlier `virosync_run_state.json`. The two options are required together. |
 | Identity | The new run identity must equal the earlier one in every component except `code`, `input_path` and `output_dir`: `genome_id`, `input` (size and SHA-256), `config`, `environment`, `resources`, `requested_masking`, the schema versions and the coordinate convention. ViroSync refuses and names each component that differs. The `environment` component includes the lockfile, the installed package inventory and the kernel release, so a different node image also refuses. |
 | Ablation | Only `A0` runs can be reused. |
 
-The new folder holds its own copies of `phase0/` and `phase1/` (copies, not
+The new folder holds authenticated files from `phase0/` and `phase1/` (copies, not
 links), its own run state and phase markers under the new fingerprint, and its
 own Phase 2 and Phase 3 results. The copies keep their bytes, with these
 exceptions:
@@ -244,12 +244,13 @@ exceptions:
 - The host signature model is rebuilt: `phase1/marker_validation/host_signature_model.json`,
   `phase1/marker_validation/host_signature_model_debug.tsv` and the model and
   signature set in `phase1/resume_state.json`. No other Phase 1 file depends
-  on the host score or the model, so every other Phase 1 file is a copy.
+  on the host score or the model; other authenticated Phase 1 files retain their bytes.
 - `phase0/reuse_provenance.json` and `phase1/reuse_provenance.json` record the
   earlier folder, its run fingerprint and code SHA-256, the SHA-256 of the
   earlier phase marker, every copied file with its size and SHA-256, and every
-  rewritten file with its old and new SHA-256. Each phase marker authenticates
-  its record.
+  rewritten file with its old and new SHA-256. Each phase marker binds its
+  provenance record and the downstream-consumed copies. An earlier import record
+  is referenced by hash so a second-hop import does not hide that provenance.
 
 The model rebuild needs the host records of the Phase 1 host search. ViroSync
 rebuilds them from the saved files and runs no new search. The model reads two
@@ -1828,3 +1829,24 @@ A validated capsid hit supplies jelly-roll sequence support only when its full-s
 Jelly-roll intake retains every alternate model for each exact query ID, including its exported Pfam override. Only ordinary eligible records supply sequence support or HK97 marker inference. Repeated rows do not create extra HMM domains. The first output query and model remain diagnostic provenance; a qualifying HK97 alternative can supply the family inference. Raw validation status remains unchanged, and blocked or weak rows can still receive independently qualified structural support.
 
 Frameshift-marker overlap arbitration applies the capsid score floor before selecting the highest-scoring eligible locus. A sub-10 capsid cannot suppress an overlapping eligible noncapsid marker; raw candidate exports remain unchanged.
+
+
+Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Historical SOURCE10/SOURCE12 files whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply missing historical authentication. Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
+
+The patched source has a new code identity. Any semantic equivalence claim must compare Phase 0/1 code against this repair source, including the host-model and no-seed refactor. Output comparison includes scientific identity, consumed Phase 0/1 artifacts and jelly-roll exports; non-JSON files stream in bounded chunks. JSON comparison still parses complete documents and can require memory proportional to document size. No runtime override, historical-hash manifest option, campaign credit or acceptance is granted by these options.
+
+Only authenticated phase files are copied. Unbound intermediates are omitted;
+existing downstream-consumed files without an old marker hash cause refusal.
+Output lookup stays inside the genome run root, including fallback paths, so a
+neighboring run cannot supply missing search evidence. The comparison tool requires
+gene-function tables for full runs with the current resource bundle; older bundles
+without those tables cannot receive a complete-comparison result. Evidence graphs
+remain conditional on coherence analyses.
+
+The output generator defaults to its own output folder as the genome root.
+Nested export callers supply the genome root explicitly; fallback lookup never
+leaves that root. The comparator requires enabled masked outputs to resolve
+inside their own genome folders and to distinct files. Masking-off is different:
+the native writer uses the original input path. A shared unmasked input is allowed
+only when the native masking validator verifies that path and its bytes against
+each run's recorded input identity and explicit masking-off request.

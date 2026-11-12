@@ -70,7 +70,7 @@ def _make_worlds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    search_files: bool = False,
+    search_files: bool = True,
     terminal_phase: int | None = None,
     masking: MaskingConfig | None = None,
 ) -> tuple[_MockPipeline, _MockPipeline]:
@@ -304,27 +304,16 @@ def test_an_old_run_without_a_file_that_phase3_reads_is_refused(
     old, new = search_worlds
     (old.output_dir / missing).unlink()
 
-    with pytest.raises(Phase1ReuseError, match=missing):
+    with pytest.raises(Phase1ReuseError, match="valid Phase 0 and Phase 1"):
         _flow(new, _reuse(old))
 
     assert not new.output_dir.exists()
 
 
-def test_an_old_run_without_an_ordinary_marker_needs_no_search_files(
-    worlds: tuple[_MockPipeline, _MockPipeline],
-) -> None:
-    old, new = worlds
-    assert not any((old.output_dir / relative).exists() for relative in SEARCH_FILES)
-
-    assert _flow(new, _reuse(old))["success"] is True
-
-
 def test_an_old_run_that_ended_in_phase1_needs_no_search_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True, terminal_phase=1)
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=False, terminal_phase=1)
     monkeypatch.setattr(phase1_module, "call_task", new._call_task)
     monkeypatch.setattr(phase1_module, "_generate_required_reports", new._generate_required_reports)
-    for relative in SEARCH_FILES:
-        (old.output_dir / relative).unlink()
 
     assert _flow(new, _reuse(old))["success"] is True
 
@@ -386,6 +375,13 @@ def test_old_run_that_ended_in_phase1_gives_the_same_terminal_result(
     monkeypatch.setattr(phase1_module, "_generate_required_reports", new._generate_required_reports)
     stale_model = old.output_dir / "phase1/marker_validation/host_signature_model.json"
     stale_model.write_text('{"stale": true}\n')
+    # Publish this test's synthetic source model as part of its authenticated fixture.
+    marker_path = old.output_dir / "phase1.complete.json"
+    marker = json.loads(marker_path.read_text())
+    artifacts = {item["relative_path"]: item for item in marker["artifacts"]}
+    artifacts.update({item.relative_path: asdict(item) for item in orchestrator._phase_artifacts(old.output_dir, 1)})
+    marker["artifacts"] = [artifacts[key] for key in sorted(artifacts)]
+    marker_path.write_text(json.dumps(marker))
     sentinel = _sentinel_model()
     monkeypatch.setattr(host_signatures, "build_host_signature_model", lambda records, **kwargs: sentinel)
     before = _tree(old.output_dir.parent)
@@ -925,7 +921,12 @@ def _fresh_phase1(
 
 def _import_into(replay_dir: Path, kwargs: dict) -> Phase1Result:
     source = ReusedRun(
-        root=kwargs["output_dir"], run_fingerprint="1" * 64, code_sha256=OLD_CODE, markers={0: "a" * 64, 1: "b" * 64}
+        root=kwargs["output_dir"],
+        run_fingerprint="1" * 64,
+        code_sha256=OLD_CODE,
+        markers={0: "a" * 64, 1: "b" * 64},
+        checkpoint=load_phase1_state(kwargs["output_dir"] / "phase1/resume_state.json"),
+        artifacts={name: digest for name, digest in _tree(kwargs["output_dir"]).items() if digest is not None},
     )
     replay = import_phase1(
         source,
@@ -1082,6 +1083,7 @@ def test_phase0_import_rebases_the_masked_genome_and_keeps_the_old_status(tmp_pa
         run_fingerprint="1" * 64,
         code_sha256=OLD_CODE,
         markers={0: "a" * 64, 1: "b" * 64},
+        artifacts={name: digest for name, digest in before.items() if digest is not None},
     )
 
     import_phase0(source, output_dir=new_root, genome_path=genome)
@@ -1114,3 +1116,94 @@ def test_phase0_import_refuses_a_symlink_in_the_old_run(tmp_path: Path) -> None:
 
     with pytest.raises(Phase1ReuseError, match="symlink"):
         import_phase0(source, output_dir=tmp_path / "new" / "g", genome_path=tmp_path / "g.fna")
+
+
+@pytest.mark.parametrize("relative", SEARCH_FILES)
+def test_repair_changed_consumed_file_is_refused(tmp_path, monkeypatch, relative):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    path = old.output_dir / relative
+    path.write_bytes(path.read_bytes() + b"changed after completion\n")
+    with pytest.raises(Phase1ReuseError):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+def test_repair_unbound_consumed_files_are_refused(tmp_path, monkeypatch):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    path = old.output_dir / "phase1.complete.json"
+    marker = json.loads(path.read_text())
+    marker["artifacts"] = [a for a in marker["artifacts"] if a["relative_path"] not in SEARCH_FILES]
+    path.write_text(json.dumps(marker))
+    with pytest.raises(Phase1ReuseError, match="authenticated"):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+def test_repair_copy_checks_validated_expected_hash(tmp_path, monkeypatch):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    source = phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+    path = old.output_dir / "phase0/proteome.fasta"
+    path.write_bytes(path.read_bytes() + b"changed between check and copy\n")
+    with pytest.raises(Phase1ReuseError, match="changed"):
+        import_phase0(source, output_dir=new.output_dir, genome_path=new.genome)
+
+
+def test_repair_running_old_run_is_refused(tmp_path, monkeypatch):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    path = old.output_dir / "virosync_run_state.json"
+    state = json.loads(path.read_text())
+    state["status"] = "running"
+    path.write_text(json.dumps(state))
+    with pytest.raises(Phase1ReuseError, match="running"):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+@pytest.mark.parametrize("relative", ["phase0", "phase1"])
+def test_repair_symlink_phase_root_is_refused(tmp_path, monkeypatch, relative):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    path = old.output_dir / relative
+    moved = old.output_dir / (relative + "-moved")
+    path.rename(moved)
+    path.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(Phase1ReuseError, match="symlink"):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+def test_repair_fresh_phase0_cannot_receive_imported_phase1(tmp_path, monkeypatch):
+    from virosync.orchestration._flows.single_genome.run_state import invalidate_from_phase
+
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
+    new.search_files = True
+    assert new.run()["success"]
+    invalidate_from_phase(new.output_dir, from_phase=1)
+    with pytest.raises(Phase1ReuseError, match="origin"):
+        _flow(new, _reuse(old))
+
+
+def test_repair_empty_nonterminal_checkpoint_is_refused(tmp_path, monkeypatch):
+    old, new = _make_worlds(tmp_path, monkeypatch, search_files=False)
+    with pytest.raises(Phase1ReuseError, match="empty"):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+def test_repair_output_lookup_cannot_cross_run_root(tmp_path):
+    from virosync.pipeline.phase3.output_generator import OutputGenerator
+
+    output = tmp_path / "new" / "phase3_synthesis"
+    output.mkdir(parents=True)
+    stray = tmp_path / "phase1/marker_validation/diamond_top10_taxonomy.tsv"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("unowned search\n")
+    generator = OutputGenerator(output_dir=output, run_root=output.parent)
+    assert generator._find_diamond_results() is None
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["phase1/novelty/diamond/diamond_combined.tsv", "phase1/hhg/hmm_hits_validated.tsv", "phase1/pfam_arbitration.tsv"],
+)
+def test_repair_existing_unbound_fallback_is_refused(worlds, relative):
+    old, new = worlds
+    path = old.output_dir / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("unbound\n")
+    with pytest.raises(Phase1ReuseError, match="authenticated"):
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)

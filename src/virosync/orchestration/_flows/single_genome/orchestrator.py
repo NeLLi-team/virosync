@@ -74,7 +74,15 @@ from .manifest import (
     _write_completion_manifest,
 )
 from .phase1 import Phase1Result, Phase1Terminal, _run_phase1_subflow
-from .phase1_reuse import PROVENANCE_FILENAME, Phase1Reuse, import_phase0, import_phase1, open_reused_run
+from .phase1_reuse import (
+    PHASE1_CONSUMED_FILES,
+    PROVENANCE_FILENAME,
+    Phase1Reuse,
+    import_phase0,
+    import_phase1,
+    open_reused_run,
+    require_matching_phase0_origin,
+)
 from .phase1_state import PHASE1_STATE_SCHEMA
 from .phase2 import Phase2Result, Phase2Terminal, _run_phase2_subflow
 from .phase2_resume_state import PHASE2_RESUME_STATE_SCHEMA
@@ -657,6 +665,7 @@ def _phase_artifacts(output_dir: Path, phase: int) -> tuple:
         ),
         1: (
             "phase1/ablation_events.json",
+            *PHASE1_CONSUMED_FILES,
             f"phase1/{PROVENANCE_FILENAME}",
             "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
             "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
@@ -1474,6 +1483,10 @@ def _single_genome_flow_impl(
             expected_fingerprint=run_fingerprint,
             expected_input=genome_path,
         )
+    if reused is not None and resume:
+        origin_plan = plan_resume(output_dir, expected_run_fingerprint=run_fingerprint)
+        if 0 in origin_plan.reusable_phases:
+            require_matching_phase0_origin(reused, output_dir)
     validated_hits_tsv = output_dir / "phase1" / "marker_validation" / "validated_marker_hits.tsv"
 
     if resume and completed_artifacts is not None:
@@ -1980,6 +1993,7 @@ def _single_genome_flow_impl(
         generate_outputs_task,
         verification_results=verification_results,
         output_dir=candidate_output_dir,
+        run_root=output_dir,
         genome_path=masked_path,
         proteome_path=proteome_path,
         accepted_only=False,

@@ -875,7 +875,7 @@ def test_protein_counts_use_full_half_open_hit_overlap(tmp_path: Path) -> None:
         "left_crossing\tctg\t15\t22\t+\tVP_Penton_1\t100\tvalidated\n"
         "right_touch\tctg\t30\t40\t+\tVP_ATPase_1\t100\tvalidated\n"
     )
-    generator = OutputGenerator(output_dir=phase3_dir)
+    generator = OutputGenerator(output_dir=phase3_dir, run_root=tmp_path)
 
     observed = generator._load_protein_counts_by_region([("ctg", 20, 30)])
 
@@ -902,7 +902,7 @@ def test_malformed_confirmed_table_does_not_discard_ordinary_marker_hits(
     confirmed = tmp_path / "phase1" / "frameshift_screening" / "confirmed_frameshift_markers.tsv"
     confirmed.parent.mkdir(parents=True)
     confirmed.write_text("bad_header\nvalue\n")
-    generator = OutputGenerator(output_dir=phase3_dir)
+    generator = OutputGenerator(output_dir=phase3_dir, run_root=tmp_path)
 
     hits, protein_models = generator._parse_validated_marker_hits()
 
@@ -1654,3 +1654,19 @@ def test_reported_capsid_is_not_ordinary_pattern_credit_but_raw_display_survives
     assert dict(models) == {"s_1": {"GVOGm0054"}}
     assert generator._load_hmm_targets()["s_1"] == {"GVOGm0054"}
     assert generator._marker_names_for_region("s", 200, 290, status_filter="unvalidated") == ["VP_MCP_6"]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_repair02_output_lookup_stays_inside_explicit_run(tmp_path: Path, nested: bool) -> None:
+    root = tmp_path / "genome"
+    output = root / "phase3_synthesis" if nested else root
+    output.mkdir(parents=True)
+    stray = tmp_path / "phase1/marker_validation/diamond_top10_taxonomy.tsv"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("neighbor search\n")
+    generator = OutputGenerator(output_dir=output, **({"run_root": root} if nested else {}))
+    assert generator._find_diamond_results() is None
+    owned = root / "phase1/marker_validation/diamond_top10_taxonomy.tsv"
+    owned.parent.mkdir(parents=True)
+    owned.write_text("owned search\n")
+    assert generator._find_diamond_results() == owned.resolve()

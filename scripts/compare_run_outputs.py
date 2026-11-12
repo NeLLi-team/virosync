@@ -32,9 +32,12 @@ import argparse
 import json
 import sys
 from collections.abc import Iterator, Sequence
-from itertools import islice
+from itertools import islice, zip_longest
 from pathlib import Path
 from typing import NamedTuple
+
+from virosync.pipeline.phase0.masking import load_masking_result
+from virosync.pipeline.phase1.frameshift_screening import is_rescued_protein_id
 
 # Each entry lists the places where one output can lie. The first one that exists counts.
 # ``{genome_id}`` stands for the genome ID in the run state.
@@ -57,6 +60,31 @@ SCIENTIFIC_OUTPUTS: dict[str, tuple[str, ...]] = {
     "host signature model": ("phase1/marker_validation/host_signature_model.json",),
     "phase 1 checkpoint": ("phase1/resume_state.json",),
 }
+CONSUMED_FILES = (
+    "phase0/proteome.fasta",
+    "phase0/genes.gff",
+    "phase1/marker_validation/validated_marker_hits.tsv",
+    "phase1/marker_validation/diamond_top10_taxonomy.tsv",
+    "phase1/marker_validation/hmm_hit_porfs.faa",
+    "phase1/hmm/hmm_hits_validated.tsv",
+    "phase1/marker_validation/host_diamond_top10.tsv",
+    "phase1/marker_validation/host_hmm_hit_porfs.faa",
+    "phase1/frameshift_screening/validation/host_diamond_top10.tsv",
+    "phase1/frameshift_screening/validation/host_hmm_hit_porfs.faa",
+    "phase1/frameshift_screening/confirmed_frameshift_markers.tsv",
+    "phase1/frameshift_screening/confirmed_frameshift_proteins.faa",
+    "phase1/frameshift_screening/frameshift_events.tsv",
+    "phase1/frameshift_screening/frameshift_hits.tsv",
+    "phase1/pfam_arbitration.tsv",
+    "phase1/novelty/diamond/diamond_combined.tsv",
+    "phase1/hhg/hmm_hits_validated.tsv",
+)
+SCIENTIFIC_OUTPUTS.update({name: (name,) for name in CONSUMED_FILES})
+SCIENTIFIC_OUTPUTS["jelly-roll proteins"] = (
+    "virosync_jelly_roll_proteins.tsv",
+    "phase3_synthesis/virosync_jelly_roll_proteins.tsv",
+)
+
 SCIENTIFIC_DIRECTORIES: tuple[str, ...] = (
     "phase3_synthesis/gene_taxonomy",
     "phase3_synthesis/gvclass_input",
@@ -77,6 +105,8 @@ _REQUIRED_FULL_RUN = (
     "phase 2 taxonomy table",
     "phase 2 boundaries",
     "phase 2 checkpoint",
+    "gene functions",
+    "gene function exclusions",
 )
 _REQUIRED_WITH_EVES = ("EVE sequences",)
 _REQUIRED_WITH_EVES_FILES = (
@@ -119,6 +149,17 @@ def compare_runs(first: Path, second: Path) -> list[str]:
     """Return one message per difference between the scientific outputs of two folders."""
     summaries = {first: read_run_summary(first), second: read_run_summary(second)}
     differences: list[str] = []
+    identities = [
+        json.loads((folder / RUN_STATE_FILENAME).read_text("utf-8"))["identities"] for folder in (first, second)
+    ]
+    for key in sorted(set(identities[0]) | set(identities[1])):
+        if key not in {"code", "input_path", "output_dir"} and identities[0].get(key) != identities[1].get(key):
+            differences.append(f"scientific identity differs: {key}")
+    for identity in identities:
+        for key in ("genome_id", "input", "config", "environment", "resources"):
+            if key not in identity:
+                differences.append(f"scientific identity missing: {key}")
+    differences.extend(_masked_genome_differences(first, second))
     for folder, summary in summaries.items():
         differences.extend(_completion_problems(folder, summary))
     if summaries[first].terminal_phase != summaries[second].terminal_phase:
@@ -154,9 +195,16 @@ def _ended(summary: RunSummary) -> str:
 def _completion_problems(folder: Path, summary: RunSummary) -> list[str]:
     if summary.status != "success":
         return [f"{folder}: run state is {summary.status!r}, not 'success'"]
-    required = list(_REQUIRED_EVERY_RUN)
+    required = [*_REQUIRED_EVERY_RUN, "phase0/proteome.fasta", "phase0/genes.gff"]
     if summary.terminal_phase is None:
         required.extend(_REQUIRED_FULL_RUN)
+        checkpoint = folder / "phase1/resume_state.json"
+        if checkpoint.is_file():
+            markers = json.loads(checkpoint.read_text("utf-8")).get("validated_markers")
+            if not isinstance(markers, list) or not markers:
+                return [f"{folder}: nonterminal checkpoint has no validated markers"]
+            if any(not is_rescued_protein_id(marker["query_porf"]) for marker in markers):
+                required.extend(CONSUMED_FILES[2:6])
     if summary.accepted:
         required.extend(_REQUIRED_WITH_EVES)
     problems = [
@@ -182,7 +230,7 @@ def _file_differences(name: str, left: Path, right: Path) -> list[str]:
     if left.suffix == ".json":
         found = _json_differences(json.loads(left.read_text("utf-8")), json.loads(right.read_text("utf-8")))
         return [f"{name}: {message}" for message in islice(found, MAX_DIFFERENCES_PER_FILE)]
-    if left.read_bytes() == right.read_bytes():
+    if _same_bytes(left, right):
         return []
     return [f"{name}: {_first_line_difference(left, right)}"]
 
@@ -198,7 +246,7 @@ def _directory_differences(directory: str, left: Path, right: Path) -> list[str]
         for member in sorted(left_members.keys() ^ right_members.keys())
     ]
     for member in sorted(left_members.keys() & right_members.keys()):
-        if left_members[member].read_bytes() != right_members[member].read_bytes():
+        if not _same_bytes(left_members[member], right_members[member]):
             differences.append(
                 f"{directory}/{member}: {_first_line_difference(left_members[member], right_members[member])}"
             )
@@ -209,13 +257,65 @@ def _members(directory: Path) -> dict[str, Path]:
     return {path.relative_to(directory).as_posix(): path for path in sorted(directory.rglob("*")) if path.is_file()}
 
 
+def _same_bytes(left: Path, right: Path) -> bool:
+    """Compare non-JSON artifacts without loading whole files."""
+    with left.open("rb") as first, right.open("rb") as second:
+        while True:
+            a, b = first.read(1024 * 1024), second.read(1024 * 1024)
+            if a != b:
+                return False
+            if not a:
+                return True
+
+
+def _masked_genome_differences(first: Path, second: Path) -> list[str]:
+    """Compare the actual masking inputs while allowing relocated output paths."""
+    relative = "phase0/masking/masking_status.json"
+    paths = [folder / relative for folder in (first, second)]
+    if not all(path.is_file() for path in paths):
+        return [f"required consumed input is missing: {relative}"]
+    records = [json.loads(path.read_text("utf-8")) for path in paths]
+    ignored = {"output_path", "status_sha256", "result_fingerprint"}
+    if {k: v for k, v in records[0].items() if k not in ignored} != {
+        k: v for k, v in records[1].items() if k not in ignored
+    }:
+        return ["masking scientific identity differs"]
+    outputs = [Path(record["output_path"]).resolve() for record in records]
+    if all(record.get("status") == "off" for record in records):
+        for folder, status_path in zip((first, second), paths, strict=True):
+            try:
+                identity = json.loads((folder / RUN_STATE_FILENAME).read_text("utf-8"))["identities"]
+                result = load_masking_result(status_path, expected_input=Path(identity["input_path"]))
+                if (
+                    identity["requested_masking"]["backend"] != "off"
+                    or result.input_sha256 != identity["input"]["sha256"]
+                ):
+                    return ["masking-off input or request differs from the run identity"]
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return [f"masking-off native contract is invalid: {exc}"]
+    else:
+        if any(
+            not output.is_relative_to(folder.resolve()) for folder, output in zip((first, second), outputs, strict=True)
+        ):
+            return ["masked output lies outside its own genome folder"]
+        if outputs[0] == outputs[1]:
+            return ["masked outputs must be distinct files"]
+    if not all(path.is_file() for path in outputs):
+        return ["masked genome is missing"]
+    return [] if _same_bytes(*outputs) else ["masked genome differs"]
+
+
 def _first_line_difference(left: Path, right: Path) -> str:
-    left_lines = left.read_text("utf-8", errors="replace").splitlines()
-    right_lines = right.read_text("utf-8", errors="replace").splitlines()
-    for number, (a, b) in enumerate(zip(left_lines, right_lines, strict=False), start=1):
-        if a != b:
-            return f"line {number} differs: {a[:MAX_LINE_CHARS]} != {b[:MAX_LINE_CHARS]}"
-    return f"line count differs: {len(left_lines)} != {len(right_lines)}"
+    with (
+        left.open(encoding="utf-8", errors="replace") as first,
+        right.open(encoding="utf-8", errors="replace") as second,
+    ):
+        for number, (a, b) in enumerate(zip_longest(first, second), start=1):
+            if a is None or b is None:
+                return f"line count differs at line {number}"
+            if a != b:
+                return f"line {number} differs: {a[:MAX_LINE_CHARS].rstrip()} != {b[:MAX_LINE_CHARS].rstrip()}"
+    return "bytes differ"
 
 
 def _json_differences(left: object, right: object, path: str = "") -> Iterator[str]:

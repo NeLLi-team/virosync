@@ -32,7 +32,27 @@ def _state(root: Path, *, status: str = "success", terminal_phase: int | None = 
     _write(
         root,
         "virosync_run_state.json",
-        json.dumps({"status": status, "identities": {"genome_id": "demo"}, "result": result}),
+        json.dumps(
+            {
+                "status": status,
+                "identities": {
+                    "genome_id": "demo",
+                    "input": {"sha256": "a" * 64},
+                    "config": {"sha256": "b" * 64},
+                    "environment": {"sha256": "c" * 64},
+                    "resources": [],
+                },
+                "result": result,
+            }
+        ),
+    )
+    _write(root, "phase0/proteome.fasta", ">p1\nM\n")
+    _write(root, "phase0/genes.gff", "scaffold\ttest\tCDS\t1\t3\t.\t+\t0\tID=p1\n")
+    _write(root, "phase0/masking/genome.masked.fna", ">scaffold\nACGT\n")
+    _write(
+        root,
+        "phase0/masking/masking_status.json",
+        json.dumps({"output_path": str(root / "phase0/masking/genome.masked.fna")}),
     )
 
 
@@ -54,9 +74,15 @@ def _folder(root: Path, *, generated_at: str = "2026-11-10T10:00:00", rows: int 
     """A completed run that reached Phase 3, with accepted EVEs when ``rows`` is positive."""
     _state(root, rows=rows)
     _exports(root, "phase3_synthesis/", generated_at)
+    _write(root, "phase3_synthesis/gene_functions.tsv", "gene\tfunction\n")
+    _write(root, "phase3_synthesis/gene_function_length_exclusions.tsv", "gene\n")
     _write(root, EVIDENCE, json.dumps({"EVE_1": {"final_confidence": 0.9}}))
     _write(root, MODEL, json.dumps({"token_weights": {"a": 1.5, "b": 2.5}, "token_bits": {"a": [1.5, 0.5]}}))
-    _write(root, "phase1/resume_state.json", json.dumps({"schema_version": 5}))
+    _write(
+        root, "phase1/resume_state.json", json.dumps({"schema_version": 5, "validated_markers": [{"query_porf": "p1"}]})
+    )
+    for relative in compare.CONSUMED_FILES[2:6]:
+        _write(root, relative, "authenticated test search\n")
     _write(root, REFINED_STATE, json.dumps({"boundaries": [{"start": 10, "end": 20}]}))
     _write(root, "phase2/refined_boundaries.bed", "scaffold\t10\t20\tEVE_1\t900\t.\n")
     _write(root, "phase2/boundary_diamond/taxonomy_map.tsv", "porf\ttaxon\np1\tEUK\n")
@@ -313,3 +339,101 @@ def test_a_folder_without_a_run_state_exits_two(tmp_path: Path, capsys: pytest.C
     assert compare.main([str(first), str(second)]) == 2
 
     assert "virosync_run_state.json" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "phase0/proteome.fasta",
+        "phase0/genes.gff",
+        "phase1/marker_validation/diamond_top10_taxonomy.tsv",
+        "phase1/pfam_arbitration.tsv",
+        "virosync_jelly_roll_proteins.tsv",
+    ],
+)
+def test_repair_compares_consumed_and_jelly_roll_files(tmp_path, relative):
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    _write(first, relative, "before\n")
+    _write(second, relative, "after\n")
+    assert any(relative in item for item in compare.compare_runs(first, second))
+
+
+@pytest.mark.parametrize("component", ["input", "config", "environment", "resources"])
+def test_repair_compares_scientific_identity(tmp_path, component):
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    for root, value in ((first, "first"), (second, "second")):
+        path = root / "virosync_run_state.json"
+        state = json.loads(path.read_text())
+        state["identities"][component] = value
+        path.write_text(json.dumps(state))
+    assert any(component in item for item in compare.compare_runs(first, second))
+
+
+def test_repair_missing_full_run_gene_functions_is_a_difference(tmp_path):
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    (first / "phase3_synthesis/gene_functions.tsv").unlink()
+    (second / "phase3_synthesis/gene_functions.tsv").unlink()
+    assert any("gene functions" in item for item in compare.compare_runs(first, second))
+
+
+def test_repair_ordinary_search_missing_in_both_is_a_difference(tmp_path):
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    for root in (first, second):
+        (root / "phase1/marker_validation/diamond_top10_taxonomy.tsv").unlink()
+    assert any("diamond_top10_taxonomy.tsv" in item for item in compare.compare_runs(first, second))
+
+
+@pytest.mark.parametrize("placement", ["shared", "outside", "symlink"])
+def test_repair02_enabled_mask_output_belongs_to_own_run(tmp_path: Path, placement: str) -> None:
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    status = second / "phase0/masking/masking_status.json"
+    record = json.loads(status.read_text())
+    target = first / "phase0/masking/genome.masked.fna"
+    if placement == "outside":
+        target = tmp_path / "outside.fna"
+        target.write_text(">scaffold\nACGT\n")
+    elif placement == "symlink":
+        link = second / "phase0/masking/escape.fna"
+        link.symlink_to(target)
+        target = link
+    record["output_path"] = str(target)
+    status.write_text(json.dumps(record))
+    assert any("masked output" in item for item in compare.compare_runs(first, second))
+
+
+@pytest.mark.parametrize("corrupt", [None, "input_hash", "requested_backend", "output_path"])
+def test_repair02_shared_original_input_requires_native_off_contract(tmp_path: Path, corrupt: str | None) -> None:
+    from virosync.config import MaskingBackend, MaskingConfig
+    from virosync.pipeline.phase0.masking import mask_genome_pipeline
+
+    first, second = _folder(tmp_path / "a"), _folder(tmp_path / "b")
+    original = tmp_path / "original.fna"
+    original.write_text(">scaffold\nACGT\n")
+    for folder in (first, second):
+        result = mask_genome_pipeline(
+            original, folder / "phase0/masking", threads=1, config=MaskingConfig(backend=MaskingBackend.OFF)
+        )
+        state = folder / "virosync_run_state.json"
+        payload = json.loads(state.read_text())
+        payload["identities"].update(
+            {
+                "input_path": str(original),
+                "input": {"sha256": result.input_sha256},
+                "requested_masking": {"backend": "off"},
+            }
+        )
+        if corrupt == "input_hash":
+            payload["identities"]["input"]["sha256"] = "f" * 64
+        elif corrupt == "requested_backend":
+            payload["identities"]["requested_masking"]["backend"] = "trf"
+        state.write_text(json.dumps(payload))
+        if corrupt == "output_path":
+            status = folder / "phase0/masking/masking_status.json"
+            record = json.loads(status.read_text())
+            record["output_path"] = str(folder / "phase0/masking/genome.masked.fna")
+            status.write_text(json.dumps(record))
+    differences = compare.compare_runs(first, second)
+    if corrupt is None:
+        assert differences == []
+    else:
+        assert any("masking-off" in item for item in differences)
