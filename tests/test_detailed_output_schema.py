@@ -45,7 +45,7 @@ def test_write_predictions_detailed_tsv_uses_simplified_schema_and_marker_counts
     output_dir.mkdir()
     _write_validated_marker_hits(tmp_path / "phase1" / "marker_validation" / "validated_marker_hits.tsv")
 
-    generator = OutputGenerator(output_dir=output_dir, extended_output=True)
+    generator = OutputGenerator(output_dir=output_dir, extended_output=True, run_root=tmp_path)
     result = VerificationResult(
         eve_id="EVE_scaf1_100-400",
         scaffold="scaf1",
