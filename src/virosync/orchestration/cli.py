@@ -22,7 +22,7 @@ from virosync.config import (
     FeatureResolution,
     PipelineConfig,
 )
-from virosync.orchestration._flows.single_genome.phase1_reuse import Phase1Reuse, Phase1ReuseError
+from virosync.orchestration._flows.single_genome.phase1_reuse import Phase1Reuse, Phase1ReuseError, load_snapshot
 from virosync.orchestration.python_runner import (
     BatchProgress,
     GenomeRunResult,
@@ -1220,6 +1220,24 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     ),
 )
 @click.option(
+    "--reuse-phase1-snapshot",
+    "reuse_phase1_snapshot",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Reuse an earlier run whose markers record no hash for the Phase 1 files that Phases 2 and 3 read. "
+        "Give a sha256sum listing of those files, made inside the -o folder of the earlier run. "
+        "It proves that the files did not change since the listing, not that the earlier run wrote them. "
+        "Needs --reuse-phase1-snapshot-sha256 and --reuse-phase1-from"
+    ),
+)
+@click.option(
+    "--reuse-phase1-snapshot-sha256",
+    "reuse_phase1_snapshot_sha256",
+    default=None,
+    help="SHA-256 of the --reuse-phase1-snapshot file. Needs --reuse-phase1-snapshot",
+)
+@click.option(
     "--workers",
     "-w",
     default=None,
@@ -1449,6 +1467,8 @@ def run(
     output_dir: Path,
     reuse_phase1_from: Path | None,
     reuse_phase1_code_sha256: str | None,
+    reuse_phase1_snapshot: Path | None,
+    reuse_phase1_snapshot_sha256: str | None,
     workers: int | None,
     threads_per_worker: int | None,
     max_concurrent_genomes: int | None,
@@ -1499,7 +1519,12 @@ def run(
     """
     verbose, quiet = _command_output_flags(verbose)
     ctx = click.get_current_context()
-    phase1_reuse = _phase1_reuse_request(reuse_phase1_from, reuse_phase1_code_sha256)
+    phase1_reuse = _phase1_reuse_request(
+        reuse_phase1_from,
+        reuse_phase1_code_sha256,
+        reuse_phase1_snapshot,
+        reuse_phase1_snapshot_sha256,
+    )
 
     def explicit(name: str, value: _OptionValue) -> _OptionValue | None:
         if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE:
@@ -1653,16 +1678,33 @@ def run(
     _print_batch_results(results, output_dir, quiet=quiet)
 
 
-def _phase1_reuse_request(old_base: Path | None, code_sha256: str | None) -> Phase1Reuse | None:
-    """Combine the two reuse options into one request, or none when neither is set."""
-    if old_base is None and code_sha256 is None:
+def _phase1_reuse_request(
+    old_base: Path | None,
+    code_sha256: str | None,
+    snapshot: Path | None,
+    snapshot_sha256: str | None,
+) -> Phase1Reuse | None:
+    """Combine the reuse options into one request, or none when none is set."""
+    if old_base is None and code_sha256 is None and snapshot is None and snapshot_sha256 is None:
         return None
-    if old_base is None or code_sha256 is None:
+    if (old_base is None) != (code_sha256 is None):
         raise click.UsageError("--reuse-phase1-from and --reuse-phase1-code-sha256 are required together")
+    if (snapshot is None) != (snapshot_sha256 is None):
+        raise click.UsageError("--reuse-phase1-snapshot and --reuse-phase1-snapshot-sha256 are required together")
+    if old_base is None or code_sha256 is None:
+        raise click.UsageError("--reuse-phase1-snapshot and --reuse-phase1-snapshot-sha256 need --reuse-phase1-from")
     try:
-        return Phase1Reuse(old_base=old_base, code_sha256=code_sha256)
+        request = Phase1Reuse(old_base=old_base, code_sha256=code_sha256)
     except Phase1ReuseError as exc:
         raise click.UsageError(f"--reuse-phase1-code-sha256: {exc}") from exc
+    if snapshot is None:
+        return request
+    try:
+        request = replace(request, snapshot_manifest=snapshot, snapshot_sha256=snapshot_sha256)
+        load_snapshot(request)
+    except Phase1ReuseError as exc:
+        raise click.UsageError(f"--reuse-phase1-snapshot: {exc}") from exc
+    return request
 
 
 def _preflight_native_tools() -> None:

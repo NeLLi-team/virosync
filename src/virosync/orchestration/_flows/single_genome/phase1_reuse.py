@@ -89,6 +89,8 @@ _UNCOMPARED_COMPONENTS = frozenset({"input_path", "output_dir", "code"})
 # The host model reads neither the model name nor the score of a host-search query.
 _HOST_QUERY_MODEL = "host_search_query"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+# One line of ``sha256sum`` output: hash, two spaces (text mode) or a space and an asterisk (binary mode), path.
+_SNAPSHOT_LINE = re.compile(r"([0-9a-f]{64})(?: {2}| \*)(.+)\Z")
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 
@@ -102,14 +104,22 @@ class Phase1Reuse:
 
     ``old_base`` is the ``-o`` folder of the earlier run, which holds one subfolder
     per genome. ``code_sha256`` is the source SHA-256 that the earlier run recorded.
+    ``snapshot_manifest`` is an optional ``sha256sum`` listing, taken inside ``old_base``
+    after the earlier run, and ``snapshot_sha256`` is the SHA-256 of that listing. Both or neither.
     """
 
     old_base: Path
     code_sha256: str
+    snapshot_manifest: Path | None = None
+    snapshot_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if _SHA256.fullmatch(self.code_sha256) is None:
             raise Phase1ReuseError("the code SHA-256 must be 64 lowercase hexadecimal characters")
+        if (self.snapshot_manifest is None) != (self.snapshot_sha256 is None):
+            raise Phase1ReuseError("the snapshot manifest and its SHA-256 are required together")
+        if self.snapshot_sha256 is not None and _SHA256.fullmatch(self.snapshot_sha256) is None:
+            raise Phase1ReuseError("the snapshot SHA-256 must be 64 lowercase hexadecimal characters")
 
     def old_dir(self, genome_id: str) -> Path:
         """Return the folder of the earlier run of one genome."""
@@ -132,6 +142,8 @@ class ReusedRun:
     ``markers`` holds the SHA-256 of its Phase 0 and Phase 1 markers.
     ``terminal_reason`` is the early-exit reason of a run that ended in Phase 1.
     ``checkpoint`` is the Phase 1 checkpoint of a run that did not end there.
+    ``snapshot_authenticated`` holds the files that only a snapshot authenticated, with their
+    SHA-256, and ``snapshot_sha256`` is the SHA-256 of that snapshot.
     """
 
     root: Path
@@ -141,6 +153,8 @@ class ReusedRun:
     terminal_reason: str | None = None
     checkpoint: Phase1ResumeState | None = None
     artifacts: Mapping[str, str] = field(default_factory=dict)
+    snapshot_sha256: str | None = None
+    snapshot_authenticated: Mapping[str, str] = field(default_factory=dict)
 
 
 def _require_disjoint(old: Path, new: Path) -> None:
@@ -197,6 +211,7 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
             previous = artifacts.setdefault(artifact.relative_path, artifact.sha256)
             if previous != artifact.sha256:
                 raise Phase1ReuseError(f"conflicting authenticated hashes: {artifact.relative_path}")
+    snapshot_authenticated = _apply_snapshot(request, genome_id, artifacts)
     for relative in PHASE1_CONSUMED_FILES:
         if (root / relative).exists():
             _require_authenticated(root, relative, artifacts)
@@ -214,7 +229,64 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
         terminal_reason=_terminal_reason(root) if terminal else None,
         checkpoint=checkpoint,
         artifacts=artifacts,
+        snapshot_sha256=request.snapshot_sha256,
+        snapshot_authenticated=snapshot_authenticated,
     )
+
+
+def load_snapshot(request: Phase1Reuse) -> dict[str, str]:
+    """Return the path-to-SHA-256 map of the snapshot listing, or an empty map without a snapshot.
+
+    Refuses a listing that is a symlink or not a regular file, whose SHA-256 is not the
+    stated one, that has a malformed or blank line, or that lists one path with two hashes.
+    A leading ``./`` on a path is dropped.
+    """
+    manifest = request.snapshot_manifest
+    if manifest is None:
+        return {}
+    if manifest.is_symlink() or not manifest.is_file():
+        raise Phase1ReuseError(f"the snapshot is not a regular file: {manifest}")
+    try:
+        content = manifest.read_bytes()
+        text = content.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Phase1ReuseError(f"cannot read the snapshot {manifest}: {exc}") from exc
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != request.snapshot_sha256:
+        raise Phase1ReuseError(
+            f"the snapshot {manifest} has SHA-256 {actual}, which does not match --reuse-phase1-snapshot-sha256"
+        )
+    hashes: dict[str, str] = {}
+    for line in text.removesuffix("\n").split("\n"):
+        match = _SNAPSHOT_LINE.fullmatch(line)
+        if match is None:
+            raise Phase1ReuseError(f"malformed snapshot line in {manifest}: {line!r}")
+        sha256, path = match.groups()
+        path = path.removeprefix("./")
+        if hashes.setdefault(path, sha256) != sha256:
+            raise Phase1ReuseError(f"the snapshot lists {path} twice with different hashes")
+    return hashes
+
+
+def _apply_snapshot(request: Phase1Reuse, genome_id: str, artifacts: dict[str, str]) -> dict[str, str]:
+    """Add the snapshot hash of each consumed Phase 1 file that the phase markers do not record.
+
+    Returns the files that the snapshot authenticated. Refuses a snapshot hash that differs from a
+    recorded one. Entries of other genomes, of files outside ``PHASE1_CONSUMED_FILES`` and of
+    files that the earlier run does not have authenticate nothing.
+    """
+    snapshot = load_snapshot(request)
+    root = request.old_dir(genome_id)
+    authenticated: dict[str, str] = {}
+    for relative in PHASE1_CONSUMED_FILES:
+        listed = snapshot.get(f"{genome_id}/{relative}")
+        recorded = artifacts.get(relative)
+        if listed is None or listed == recorded or not (root / relative).exists():
+            continue
+        if recorded is not None:
+            raise Phase1ReuseError(f"snapshot conflicts with the recorded hash: {relative}")
+        artifacts[relative] = authenticated[relative] = listed
+    return authenticated
 
 
 def _require_masking_without_fallback(root: Path) -> None:
@@ -583,6 +655,11 @@ def _write_provenance(
     copied: list[dict[str, object]],
     rewritten: list[dict[str, object]],
 ) -> None:
+    snapshot_authenticated = {
+        relative: sha
+        for relative, sha in source.snapshot_authenticated.items()
+        if relative.startswith(f"phase{phase}/")
+    }
     document = {
         "schema": PROVENANCE_SCHEMA,
         "phase": phase,
@@ -597,6 +674,14 @@ def _write_provenance(
         },
         "rewritten": rewritten,
     }
+    if snapshot_authenticated:
+        document["authentication"] = (
+            "old phase artifact hashes; the files in snapshot_authenticated were authenticated by checksums "
+            "taken after the earlier run (a snapshot), not by hashes recorded when the files were written; "
+            "unauthenticated files were not copied"
+        )
+        document["snapshot_manifest_sha256"] = source.snapshot_sha256
+        document["snapshot_authenticated"] = snapshot_authenticated
     atomic_write(
         Path(output_dir) / f"phase{phase}" / PROVENANCE_FILENAME,
         json.dumps(document, indent=2, sort_keys=True) + "\n",

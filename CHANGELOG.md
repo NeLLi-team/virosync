@@ -15,6 +15,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   folder is never written or deleted. The option needs the operator to have shown that the Phase 0
   and Phase 1 code of both sources is identical except for the host signature model. See "Output
   compatibility and resume" in `docs/METHODS.md`.
+- Phase reuse snapshot: `--reuse-phase1-snapshot PATH --reuse-phase1-snapshot-sha256 SHA` lets an
+  earlier run that recorded no hash for the Phase 1 files that Phases 2 and 3 read be reused. `PATH` is a
+  `sha256sum` listing taken inside the earlier `-o` folder. The provenance records of the import name the
+  listing hash and the files it authenticated. A snapshot proves that the files did not change between
+  the listing and the import, not that the earlier run wrote them.
 - `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
   outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
   also fails when a completed run lacks an output that its run state requires.

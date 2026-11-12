@@ -689,7 +689,7 @@ def test_cli_rejects_a_malformed_code_sha256(tmp_path: Path, monkeypatch: pytest
     )
 
     assert result.exit_code != 0
-    assert "SHA-256" in result.output
+    assert "--reuse-phase1-code-sha256: the code SHA-256" in result.output
     assert not received
 
 
@@ -1207,3 +1207,441 @@ def test_repair_existing_unbound_fallback_is_refused(worlds, relative):
     path.write_text("unbound\n")
     with pytest.raises(Phase1ReuseError, match="authenticated"):
         phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+
+
+def _drop_search_hashes(old: _MockPipeline) -> None:
+    """Make the earlier run look like one made by an older source: its markers lack the search file hashes."""
+    path = old.output_dir / "phase1.complete.json"
+    marker = json.loads(path.read_text())
+    marker["artifacts"] = [a for a in marker["artifacts"] if a["relative_path"] not in SEARCH_FILES]
+    path.write_text(json.dumps(marker))
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _snapshot_lines(old: _MockPipeline, *, genome: str = "demo", prefix: str = "", mark: str = "  ") -> list[str]:
+    return [f"{_sha256_of(old.output_dir / relative)}{mark}{prefix}{genome}/{relative}" for relative in SEARCH_FILES]
+
+
+def _write_snapshot(tmp_path: Path, lines: list[str]) -> tuple[Path, str]:
+    path = tmp_path / "snapshot.sha256"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path, _sha256_of(path)
+
+
+def _snapshot_reuse(old: _MockPipeline, manifest: Path, manifest_sha256: str) -> Phase1Reuse:
+    return Phase1Reuse(
+        old_base=old.output_dir.parent,
+        code_sha256=OLD_CODE,
+        snapshot_manifest=manifest,
+        snapshot_sha256=manifest_sha256,
+    )
+
+
+def _open_with_snapshot(old: _MockPipeline, new: _MockPipeline, manifest: Path, manifest_sha256: str):
+    request = _snapshot_reuse(old, manifest, manifest_sha256)
+    return phase1_reuse.open_reused_run(request, genome_id="demo", identity=new.identity)
+
+
+def _provenance(run: _MockPipeline, phase: int) -> dict:
+    return json.loads((run.output_dir / f"phase{phase}/reuse_provenance.json").read_text())
+
+
+def test_an_old_run_without_search_hashes_is_refused_without_a_snapshot(
+    search_worlds: tuple[_MockPipeline, _MockPipeline],
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+
+    with pytest.raises(Phase1ReuseError, match="no authenticated old phase artifact"):
+        _flow(new, _reuse(old))
+
+
+def test_a_snapshot_lets_an_old_run_without_search_hashes_be_reused_and_copies_the_files(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+
+    result = _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    assert result["success"] is True
+    for relative in SEARCH_FILES:
+        assert (new.output_dir / relative).read_bytes() == (old.output_dir / relative).read_bytes()
+
+
+def test_the_phase1_provenance_names_the_manifest_and_the_files_it_authenticated(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+
+    _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    provenance = _provenance(new, 1)
+    assert provenance["snapshot_manifest_sha256"] == manifest_sha256
+    assert provenance["snapshot_authenticated"] == {
+        relative: _sha256_of(old.output_dir / relative) for relative in SEARCH_FILES
+    }
+
+
+def test_the_phase1_provenance_says_that_a_snapshot_authenticated_the_files(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+
+    _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    assert "snapshot" in _provenance(new, 1)["authentication"]
+    assert _provenance(new, 1)["schema"] == phase1_reuse.PROVENANCE_SCHEMA
+
+
+def test_the_phase0_provenance_has_no_snapshot_fields(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+
+    _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    phase0 = _provenance(new, 0)
+    assert "snapshot_manifest_sha256" not in phase0
+    assert "snapshot_authenticated" not in phase0
+    assert "snapshot" not in phase0["authentication"]
+
+
+@pytest.mark.parametrize(("prefix", "mark"), [("./", "  "), ("", " *")], ids=["dot-slash", "binary-mark"])
+def test_a_snapshot_line_may_start_with_dot_slash_or_use_the_binary_mark(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path, prefix: str, mark: str
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old, prefix=prefix, mark=mark))
+
+    source = _open_with_snapshot(old, new, manifest, manifest_sha256)
+
+    assert source.snapshot_authenticated == {
+        relative: _sha256_of(old.output_dir / relative) for relative in SEARCH_FILES
+    }
+
+
+def test_a_snapshot_hash_that_differs_from_the_file_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    lines = _snapshot_lines(old)
+    lines[0] = "0" * 64 + lines[0][64:]
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, lines)
+
+    with pytest.raises(Phase1ReuseError, match="authenticated input changed"):
+        _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    assert not new.output_dir.exists()
+
+
+def test_a_file_that_changes_between_validation_and_copy_is_refused_with_a_snapshot(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+    source = _open_with_snapshot(old, new, manifest, manifest_sha256)
+    path = old.output_dir / SEARCH_FILES[0]
+    path.write_bytes(path.read_bytes() + b"changed between check and copy\n")
+
+    with pytest.raises(Phase1ReuseError, match="changed during copy"):
+        import_phase1(
+            source,
+            output_dir=new.output_dir,
+            genome_id="demo",
+            config=PipelineConfig(),
+            masked_path=new.genome,
+            proteome_path=new.genome,
+            config_fingerprint=new.fingerprint,
+            logger=logging.getLogger("test"),
+        )
+
+
+def test_a_manifest_with_another_sha256_than_the_stated_one_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, _ = _write_snapshot(tmp_path, _snapshot_lines(old))
+
+    with pytest.raises(Phase1ReuseError, match="SHA-256"):
+        _flow(new, _snapshot_reuse(old, manifest, "0" * 64))
+
+    assert not new.output_dir.exists()
+
+
+def test_a_snapshot_hash_that_conflicts_with_a_recorded_hash_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    lines = _snapshot_lines(old)
+    lines[1] = "0" * 64 + lines[1][64:]
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, lines)
+
+    with pytest.raises(Phase1ReuseError, match="snapshot conflicts with the recorded hash"):
+        _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+
+def test_a_snapshot_of_another_genome_does_not_authenticate_this_genome(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old, genome="other"))
+
+    with pytest.raises(Phase1ReuseError, match="no authenticated old phase artifact"):
+        _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+
+HOST_MODEL = "phase1/marker_validation/host_signature_model.json"
+
+
+def _add_unrecorded_host_model(old: _MockPipeline) -> Path:
+    """Add a consumed Phase 1 file that the phase markers of the earlier run do not record."""
+    path = old.output_dir / HOST_MODEL
+    path.write_text("{}\n", encoding="utf-8")
+    return path
+
+
+def test_a_consumed_file_without_a_recorded_hash_is_refused_without_a_snapshot_entry(
+    worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = worlds
+    _add_unrecorded_host_model(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [f"{'a' * 64}  demo/phase1/other.tsv"])
+
+    with pytest.raises(Phase1ReuseError, match=f"no authenticated old phase artifact for {HOST_MODEL}"):
+        _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+
+def test_a_consumed_file_without_a_recorded_hash_is_accepted_with_a_snapshot_entry(
+    worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = worlds
+    model = _add_unrecorded_host_model(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [f"{_sha256_of(model)}  demo/{HOST_MODEL}"])
+
+    assert _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))["success"] is True
+
+
+def test_the_phase1_provenance_lists_a_rebuilt_file_that_the_snapshot_authenticated(
+    worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = worlds
+    model = _add_unrecorded_host_model(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [f"{_sha256_of(model)}  demo/{HOST_MODEL}"])
+
+    _flow(new, _snapshot_reuse(old, manifest, manifest_sha256))
+
+    provenance = _provenance(new, 1)
+    assert provenance["snapshot_authenticated"] == {HOST_MODEL: _sha256_of(model)}
+    assert HOST_MODEL not in {item["path"] for item in provenance["copied"]}
+
+
+def test_a_snapshot_entry_for_a_file_outside_the_consumed_files_authenticates_nothing(
+    worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = worlds
+    unconsumed = old.output_dir / "phase1/unconsumed.tsv"
+    unconsumed.write_text("unconsumed\n")
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [f"{_sha256_of(unconsumed)}  demo/phase1/unconsumed.tsv"])
+
+    source = _open_with_snapshot(old, new, manifest, manifest_sha256)
+
+    assert "phase1/unconsumed.tsv" not in source.artifacts
+    assert source.snapshot_authenticated == {}
+
+
+def test_a_snapshot_entry_for_an_absent_consumed_file_authenticates_nothing(
+    worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = worlds
+    absent = "phase1/novelty/diamond/diamond_combined.tsv"
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [f"{'0' * 64}  demo/{absent}"])
+
+    source = _open_with_snapshot(old, new, manifest, manifest_sha256)
+
+    assert not (old.output_dir / absent).exists()
+    assert source.snapshot_authenticated == {}
+
+
+def test_a_snapshot_that_matches_the_recorded_hashes_changes_no_provenance_byte(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+    _flow(new, _reuse(old))
+    plain = {phase: (new.output_dir / f"phase{phase}/reuse_provenance.json").read_bytes() for phase in (0, 1)}
+
+    _flow(new, _snapshot_reuse(old, manifest, manifest_sha256), resume=False)
+
+    with_snapshot = {phase: (new.output_dir / f"phase{phase}/reuse_provenance.json").read_bytes() for phase in (0, 1)}
+    assert with_snapshot == plain
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "{sha}",
+        "{sha} demo/phase1/hmm/hmm_hits_validated.tsv",
+        "{upper}  demo/phase1/hmm/hmm_hits_validated.tsv",
+        "{short}  demo/phase1/hmm/hmm_hits_validated.tsv",
+        "{sha}  ",
+        "",
+    ],
+    ids=["no-path", "one-space", "uppercase-hash", "short-hash", "empty-path", "blank-line"],
+)
+def test_a_malformed_snapshot_line_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path, line: str
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    sha = "a" * 64
+    manifest, manifest_sha256 = _write_snapshot(
+        tmp_path, [*_snapshot_lines(old), line.format(sha=sha, upper=sha.upper(), short=sha[:63])]
+    )
+
+    with pytest.raises(Phase1ReuseError, match="malformed snapshot line"):
+        _open_with_snapshot(old, new, manifest, manifest_sha256)
+
+
+def test_a_path_listed_twice_in_a_snapshot_with_different_hashes_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    lines = _snapshot_lines(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, [*lines, "0" * 64 + "  ./" + lines[0][66:]])
+
+    with pytest.raises(Phase1ReuseError, match="twice with different hashes"):
+        _open_with_snapshot(old, new, manifest, manifest_sha256)
+
+
+def test_a_symlinked_snapshot_is_refused(search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+    manifest, manifest_sha256 = _write_snapshot(tmp_path, _snapshot_lines(old))
+    link = tmp_path / "link.sha256"
+    link.symlink_to(manifest)
+
+    with pytest.raises(Phase1ReuseError, match="regular file"):
+        _open_with_snapshot(old, new, link, manifest_sha256)
+
+
+def test_a_snapshot_that_is_a_folder_is_refused(
+    search_worlds: tuple[_MockPipeline, _MockPipeline], tmp_path: Path
+) -> None:
+    old, new = search_worlds
+    _drop_search_hashes(old)
+
+    with pytest.raises(Phase1ReuseError, match="regular file"):
+        _open_with_snapshot(old, new, tmp_path, "0" * 64)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"snapshot_manifest": Path("m.sha256")}, {"snapshot_sha256": "0" * 64}],
+    ids=["manifest-only", "sha-only"],
+)
+def test_a_request_needs_both_snapshot_fields(tmp_path: Path, fields: dict) -> None:
+    with pytest.raises(Phase1ReuseError, match="together"):
+        Phase1Reuse(old_base=tmp_path, code_sha256=OLD_CODE, **fields)
+
+
+def test_a_request_rejects_a_malformed_snapshot_sha256(tmp_path: Path) -> None:
+    with pytest.raises(Phase1ReuseError, match="snapshot SHA-256"):
+        Phase1Reuse(old_base=tmp_path, code_sha256=OLD_CODE, snapshot_manifest=Path("m.sha256"), snapshot_sha256="ABC")
+
+
+def _cli_snapshot(tmp_path: Path) -> tuple[Path, Path]:
+    old_base = tmp_path / "campaign"
+    old_base.mkdir()
+    manifest = tmp_path / "snapshot.sha256"
+    manifest.write_text(f"{'a' * 64}  g/phase1/hmm/hmm_hits_validated.tsv\n", encoding="utf-8")
+    return old_base, manifest
+
+
+def test_cli_passes_the_snapshot_to_the_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old_base, manifest = _cli_snapshot(tmp_path)
+
+    result, received = _invoke_run(
+        tmp_path,
+        monkeypatch,
+        *("--reuse-phase1-from", str(old_base), "--reuse-phase1-code-sha256", OLD_CODE),
+        *("--reuse-phase1-snapshot", str(manifest), "--reuse-phase1-snapshot-sha256", _sha256_of(manifest)),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert received["phase1_reuse"] == Phase1Reuse(
+        old_base=old_base,
+        code_sha256=OLD_CODE,
+        snapshot_manifest=manifest,
+        snapshot_sha256=_sha256_of(manifest),
+    )
+
+
+def test_cli_refuses_a_snapshot_with_another_sha256_before_any_genome_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_base, manifest = _cli_snapshot(tmp_path)
+
+    result, received = _invoke_run(
+        tmp_path,
+        monkeypatch,
+        *("--reuse-phase1-from", str(old_base), "--reuse-phase1-code-sha256", OLD_CODE),
+        *("--reuse-phase1-snapshot", str(manifest), "--reuse-phase1-snapshot-sha256", "0" * 64),
+    )
+
+    assert result.exit_code != 0
+    assert "does not match --reuse-phase1-snapshot-sha256" in result.output
+    assert not received
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ("--reuse-phase1-snapshot", "{manifest}"),
+        ("--reuse-phase1-snapshot-sha256", "0" * 64),
+    ],
+    ids=["path-only", "sha-only"],
+)
+def test_cli_needs_both_snapshot_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: tuple) -> None:
+    old_base, manifest = _cli_snapshot(tmp_path)
+
+    result, received = _invoke_run(
+        tmp_path,
+        monkeypatch,
+        *("--reuse-phase1-from", str(old_base), "--reuse-phase1-code-sha256", OLD_CODE),
+        *(item.format(manifest=manifest) for item in options),
+    )
+
+    assert result.exit_code != 0
+    assert "required together" in result.output
+    assert not received
+
+
+def test_cli_needs_the_reuse_folder_for_the_snapshot_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, manifest = _cli_snapshot(tmp_path)
+
+    result, received = _invoke_run(
+        tmp_path,
+        monkeypatch,
+        *("--reuse-phase1-snapshot", str(manifest), "--reuse-phase1-snapshot-sha256", _sha256_of(manifest)),
+    )
+
+    assert result.exit_code != 0
+    assert "need --reuse-phase1-from" in result.output
+    assert not received
