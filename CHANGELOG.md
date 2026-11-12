@@ -28,17 +28,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Region extension: a gene with a viral match supports growth at any host share. A viral
   match is a validated viral marker or a viral top-10 hit with at least 25% identity.
   Before, a host-like gene with a top-10 viral hit gave no support.
-- Region extension: a supporting gene that ends inside the first host gene of a stop, or
-  inside the first gene without a taxonomy record, is accepted whole. This holds even
-  when the gene crosses the search limit. Before, a viral gene that overlapped that gene
-  by a few bases was dropped. A gene that ends beyond that gene is still not accepted, and
-  neither is a gene that crosses a search limit that no stop or taxonomy gap sets. The
-  recorded stop moves to the end of the accepted gene, so it never lies inside the region.
-  If a stop and a gene without a record start at the same coordinate, the tighter end
-  applies. A supporter must also end within the first missing-record gene when that
-  gene is nested inside the first host gene, or vice versa. Disabling host stopping (A4) keeps every gene that the walk with the stop accepts.
-  It keeps the limit and the exception of a gene without a record, so such a gene bounds
-  A4 as it bounds the walk with the stop.
+- Region extension: a supporting gene that starts before a host stop and ends inside
+  its first host gene can be accepted whole, even beyond the search limit. The recorded
+  stop moves to the accepted gene's end, so it never lies inside the region. This
+  allowance cannot cross the near edge of the first gene without a taxonomy record,
+  including when that missing-record gene is nested inside the host gene. A supporting
+  gene that overlaps the missing-record gene is dropped whole, not trimmed. Disabling
+  host stopping (A4) retains this strict gap barrier and accepts every gene that the
+  normal walk accepts. Neither walk trims the confirmed seed core; if a missing-record
+  gene overlaps that core, the strict Phase 3 taxonomy-coverage check still refuses it.
 - Region extension: three host genes no longer stop the walk when at least two of the
   next five walk entries have a viral match (a validated viral marker or a viral top-10 hit).
   Inside the seed's envelope a searched gene without hits is skipped unless it has

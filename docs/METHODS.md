@@ -1083,21 +1083,17 @@ an evidence limitation; it does not imply host origin. Overlapping genes are
 checked before a supported gene can extend the boundary past another feature.
 A new exterior endpoint must retain the complete supported gene. A gene that
 crosses a host stop, missing-taxonomy edge or walk limit cannot commit a partial
-extension. One exception holds: a supporting gene that starts before a host stop
-or before the first gene without a taxonomy record, and ends no later than the end
-of that gene, is accepted whole. For a host stop, that gene is the first host gene of
-the run. Both end limits apply when a host stop and a gene without a record are
-present, including when either gene contains the other. Here, the first missing-record
-gene is the earliest in directed `(start, end)` walk order. A later missing-record gene
-nested inside it does not impose a tighter endpoint constraint. The exception also
-holds when the gene crosses the walk
-limit, so the region can pass the envelope edge. The recorded stop then lies at the end
-of the accepted gene, so a stop never falls inside the region. Ablation A4 removes the
-stop and its limit. It keeps the limit and the exception of a gene without a taxonomy
-record, so that gene bounds A4 as it bounds the walk with the stop. A4 also accepts every
+extension. A supporting gene that starts before a host stop and ends no later
+than the first host gene's end can be accepted whole, including beyond the walk
+limit. The recorded stop then lies at the accepted gene's end. This allowance
+never crosses the near edge of the first gene without a taxonomy record, including
+when the host gene contains that missing-record gene. The first missing-record gene
+is the earliest in directed `(start, end)` walk order. Ablation A4 removes the host
+stop and its limit but retains the same strict missing-record edge. A4 also accepts every
 gene that the walk with the stop accepts. The stored walked interval is the hull of the walk limit and
 the final boundary. The walk does not trim a gene or any sequence already inside the
-confirmed core.
+confirmed core. If a missing-record gene overlaps that core, the core is retained
+and the strict Phase 3 taxonomy-coverage check still refuses incomplete evidence.
 A host block crossing the seed edge can stop new growth at that edge, but
 cannot cut the seed.
 An independently confirmed seed remains protected beyond another seed's stop.

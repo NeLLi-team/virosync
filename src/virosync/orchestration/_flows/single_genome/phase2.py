@@ -734,7 +734,7 @@ def _run_phase2_subflow(
                 host_coordinate_counts,
                 InterventionCounts(opportunities=int(affected), interventions=int(affected), changed=int(affected)),
             )
-        # A gene ending inside the gene that sets a stop or taxonomy gap can pass the walk limit.
+        # A gene ending inside the first host gene of a stop can pass the walk limit, but not a taxonomy gap.
         walked = (min(walk_limit[0], boundary.start), max(walk_limit[1], boundary.end))
         for core in seed.confirmed_seeds:
             walked_intervals[core.seed_id] = walked

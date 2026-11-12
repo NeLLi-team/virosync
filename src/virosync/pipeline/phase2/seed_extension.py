@@ -118,14 +118,14 @@ def extend_confirmed_seed(
     without hits there counts toward the support gap.
 
     A supporting gene is accepted when it ends before the limit that stops the
-    walk. It is also accepted when it starts before a host stop or before the first
-    gene without a record and ends inside that gene, even if that takes the region
-    past the walk limit. The stop then moves to the end of the accepted gene, so it
-    never lies inside the returned region. Any other gene that crosses the limit is
-    not accepted. Only supporters before the first gene without a record can bridge
-    a run of three host genes. Disabling the host stop (A4) removes the stop and its
-    limit but keeps the limit and allowance of a gene without a record. It also accepts
-    every gene that the walk with the stop accepts.
+    walk. A gene starting before a host stop may also end inside its first host
+    gene, even past the walk limit. The stop then moves to the accepted gene's end.
+    This allowance never crosses the near edge of the first gene without a record.
+    Only supporters before that missing-record gene can bridge a host run.
+    Disabling the host stop (A4) removes its limit but keeps the strict missing-record
+    edge and accepts every gene that the normal walk accepts. Neither walk trims
+    confirmed core sequence; missing taxonomy overlapping the core remains subject
+    to the strict Phase 3 coverage check.
     """
     # Repeat assessment keeps the search context without protecting its padding.
     original_start, original_end = seed.start, seed.end
@@ -255,8 +255,8 @@ def _walk(
     at the accepted end if that lies further out, so a stop never lies inside the region.
     """
     # Directed coordinates make left and right walks identical. A supporting gene
-    # that crosses the limit is accepted only when it ends inside the gene that sets
-    # a host stop or a missing-taxonomy edge; it never removes core sequence.
+    # that crosses the limit may end inside the gene that sets a host stop, but
+    # never beyond the near missing-taxonomy edge; it never removes core sequence.
     # Disabling the host stop (A4) drops the stop but keeps that allowance, so A4
     # never accepts less than the walk with the stop.
     edge = direction * core_edge
@@ -282,15 +282,15 @@ def _walk(
     first_uncovered = next((entry for entry in ordered if not entry.covered), None)
     barrier = None if first_host is None else max(edge, first_host.start)
     missing_edge = None if first_uncovered is None else max(edge, first_uncovered.start)
-    # A supporting entry may end at `reach`: the limit, or the end of the gene that sets it.
-    # Host and missing-record ends both constrain acceptance, including nested genes.
+    # A supporting entry may end at `reach`: the limit, or the first host setter's end.
+    # The first missing-record near edge constrains even a nested host allowance.
     host_setters = [] if first_host is None else [(max(edge, first_host.start), first_host.end)]
-    gap_setters = [] if first_uncovered is None else [(max(edge, first_uncovered.start), first_uncovered.end)]
+    gap_setters = [] if missing_edge is None else [(missing_edge, missing_edge)]
     limit, reach = min([(cap, cap), *host_setters, *gap_setters])
     if first_host is not None:
         reach = min(reach, first_host.end)
-    if first_uncovered is not None:
-        reach = min(reach, first_uncovered.end)
+    if missing_edge is not None:
+        reach = min(reach, missing_edge)
     # The walk scans to `scan_limit` and accepts up to `scan_reach`. Ablation A4 drops
     # the host setter there, but it still accepts what the walk with the stop accepts.
     scan_limit, scan_reach = min([(cap, cap), *gap_setters]) if disable_host_stop else (limit, reach)

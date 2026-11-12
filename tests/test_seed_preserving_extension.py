@@ -948,10 +948,10 @@ def test_supporting_gene_ending_beyond_the_first_host_gene_is_not_accepted():
     assert boundary.right_stop == 73980
 
 
-def test_supporting_gene_ending_inside_the_first_gene_without_a_record_is_accepted():
+def test_supporting_gene_ending_inside_the_first_missing_record_is_rejected():
     supported = gene("v", 2100, 2500, viral=True)
     boundary = extend([supported, gene("u", 2400, 2600)], taxonomy={"v": supported})
-    assert boundary.end == 2500
+    assert boundary.end == 2000
     assert boundary.right_stop_reason == "taxonomy_unavailable"
 
 
@@ -1260,7 +1260,7 @@ def test_supporters_before_a_gene_without_a_record_still_bridge_a_host_run():
     assert boundary.right_stop is None
 
 
-def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_right():
+def test_tied_host_stop_and_missing_gene_stop_before_the_gap_on_the_right():
     genes = [
         gene("v", 2100, 2600, viral=True),
         gene("u", 2300, 2400),
@@ -1273,7 +1273,7 @@ def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_right():
     assert boundary.right_stop == 2300
 
 
-def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_left():
+def test_tied_host_stop_and_missing_gene_stop_before_the_gap_on_the_left():
     genes = [
         gene("v", 7400, 7900, viral=True),
         gene("u", 7600, 7700),
@@ -1286,7 +1286,7 @@ def test_tied_host_stop_and_missing_gene_use_the_tighter_end_on_the_left():
     assert boundary.left_stop == 7700
 
 
-def test_tied_host_stop_and_missing_gene_accept_a_gene_that_ends_inside_both():
+def test_tied_host_stop_and_missing_gene_reject_a_gene_ending_inside_both():
     genes = [
         gene("v", 2100, 2350, viral=True),
         gene("u", 2300, 2400),
@@ -1295,10 +1295,10 @@ def test_tied_host_stop_and_missing_gene_accept_a_gene_that_ends_inside_both():
         gene("h3", 3100, 3200, host=True),
     ]
     boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"})
-    assert boundary.end == 2350
+    assert boundary.end == 2000
 
 
-def test_tied_host_stop_and_missing_gene_use_the_host_end_when_it_is_tighter():
+def test_tied_host_stop_and_missing_gene_keep_the_gap_edge_before_host_end():
     genes = [
         gene("v", 2100, 2600, viral=True),
         gene("u", 2300, 2800),
@@ -1460,7 +1460,7 @@ def test_disabled_host_stop_does_not_take_the_reach_of_the_removed_host_gene():
     assert boundary.end == 2000
 
 
-def test_disabled_host_stop_accepts_a_gene_ending_inside_the_gene_without_a_record_after_a_short_first_host():
+def test_disabled_host_stop_rejects_gap_overlap_after_a_short_first_host():
     genes = [
         gene("h1", 2100, 2150, host=True),
         gene("h2", 2200, 2250, host=True),
@@ -1469,7 +1469,7 @@ def test_disabled_host_stop_accepts_a_gene_ending_inside_the_gene_without_a_reco
         gene("u", 2500, 3100),
     ]
     boundary = extend(genes, taxonomy={item.id: item for item in genes if item.id != "u"}, disable_host_stop=True)
-    assert boundary.end == 3000
+    assert boundary.end == 2000
 
 
 def test_walk_limit_stops_before_the_first_gene_without_a_record():
@@ -1677,7 +1677,7 @@ def test_gene_without_a_record_inside_the_envelope_removes_the_host_stop():
     assert boundary.host_stop_available is False
 
 
-def test_phase2_walked_interval_contains_a_gene_accepted_across_the_envelope_edge(tmp_path, monkeypatch):
+def test_phase2_rejects_support_crossing_an_unsearched_gene_at_the_envelope_edge(tmp_path, monkeypatch):
     from virosync.config import PipelineConfig
     from virosync.orchestration._flows.single_genome import phase2
 
@@ -1702,7 +1702,7 @@ def test_phase2_walked_interval_contains_a_gene_accepted_across_the_envelope_edg
 
     result = phase2._run_phase2_subflow(merged_seeds=[seed], config=config, **arguments)
 
-    assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (1300, 2050)
+    assert (result.refined_boundaries[0].start, result.refined_boundaries[0].end) == (1300, 1700)
 
 
 def test_phase2_walks_past_the_searched_envelope_over_genes_with_records(tmp_path, monkeypatch):
@@ -1764,7 +1764,9 @@ def test_missing_record_inside_host_run_blocks_later_bridge(direction, expected_
 
 @pytest.mark.parametrize("direction,core", [(1, (1000, 2000)), (-1, (8000, 9000))])
 @pytest.mark.parametrize("disable_host_stop", [False, True])
-@pytest.mark.parametrize("support_end,expected_right,expected_left", [(2900, 2000, 8000), (2600, 2600, 7400)])
+@pytest.mark.parametrize(
+    "support_end,expected_right,expected_left", [(2900, 2000, 8000), (2600, 2000, 8000), (2500, 2500, 7500)]
+)
 def test_nested_missing_record_caps_whole_gene_acceptance(
     direction, core, disable_host_stop, support_end, expected_right, expected_left
 ):
@@ -1789,8 +1791,8 @@ def test_nested_missing_record_caps_whole_gene_acceptance(
 
 
 @pytest.mark.parametrize("direction,core", [(1, (1000, 2000)), (-1, (8000, 9000))])
-@pytest.mark.parametrize("disable_host_stop,expected_right,expected_left", [(False, 2000, 8000), (True, 2900, 7100)])
-def test_nested_host_record_caps_normal_walk_but_not_a4(
+@pytest.mark.parametrize("disable_host_stop,expected_right,expected_left", [(False, 2000, 8000), (True, 2000, 8000)])
+def test_missing_record_before_nested_host_caps_both_walks(
     direction, core, disable_host_stop, expected_right, expected_left
 ):
     genes = [
@@ -1873,3 +1875,46 @@ def test_phase2_asymmetric_bridge_reports_overlap_without_changing_seed_ownershi
     assert first.right_stop is None
     assert second.left_stop == 2600
     assert max(first.start, second.start) < min(first.end, second.end)
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+@pytest.mark.parametrize("host_before_gap", [False, True])
+def test_four_base_gap_overlap_rejects_whole_support_in_normal_and_a4(direction, host_before_gap):
+    genes = [gene("safe", 2010, 2040, viral=True), gene("support", 2050, 2504, viral=True), gene("missing", 2500, 3000)]
+    if host_before_gap:
+        genes += [
+            gene("h1", 2100, 3100, host=True),
+            gene("h2", 2150, 2200, host=True),
+            gene("h3", 2250, 2300, host=True),
+        ]
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    core = (1000, 2000) if direction == 1 else (8000, 9000)
+    taxonomy = {item.id: item for item in genes if item.id != "missing"}
+    normal = extend(genes, start=core[0], end=core[1], taxonomy=taxonomy)
+    a4 = extend(genes, start=core[0], end=core[1], taxonomy=taxonomy, disable_host_stop=True)
+    expected = (1000, 2040) if direction == 1 else (7960, 9000)
+    assert (normal.start, normal.end) == expected
+    assert (a4.start, a4.end) == expected
+    assert a4.start <= normal.start and a4.end >= normal.end
+    assert normal.confirmed_seeds == a4.confirmed_seeds == (ConfirmedSeed("original", "s", *core),)
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_missing_gene_straddling_core_preserves_seed_and_phase3_refusal(direction):
+    from virosync.orchestration._flows.single_genome.phase3 import _query_boundary_coordinate_records
+
+    genes = [gene("missing", 1900, 2100), gene("support", 1950, 2104, viral=True)]
+    if direction == -1:
+        for item in genes:
+            item.start, item.end = 10000 - item.end, 10000 - item.start
+    core = (1000, 2000) if direction == 1 else (8000, 9000)
+    taxonomy = {"support": genes[1]}
+    boundary = extend(genes, start=core[0], end=core[1], taxonomy=taxonomy)
+    assert (boundary.start, boundary.end) == core
+    assert boundary.confirmed_seeds == (ConfirmedSeed("original", "s", *core),)
+    with pytest.raises(RuntimeError, match="1 overlapping genes were not searched"):
+        _query_boundary_coordinate_records(
+            boundary=boundary, taxonomy_index={}, marker_index={}, taxonomy_map=taxonomy, proteome_index={"s": genes}
+        )
