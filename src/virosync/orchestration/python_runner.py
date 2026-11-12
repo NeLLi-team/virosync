@@ -26,6 +26,7 @@ from virosync.output_contract import (
     LEGACY_EVE_CLASS_COUNT_KEYS,
     effective_eve_class_count_total,
 )
+from virosync.pipeline.phase2.boundary_diamond import SavedSearchError
 from virosync.utils.atomic_write import atomic_write
 from virosync.utils.path_safety import require_strict_child, validate_path_component
 from virosync.validation.tsv_invariants import TSVInvariantError
@@ -346,7 +347,7 @@ def _run_one_genome(
                     not result.get("success", False),
                 )
             return result
-        except (TSVInvariantError, Phase1ReuseError) as exc:
+        except (TSVInvariantError, Phase1ReuseError, SavedSearchError) as exc:
             logger.error(
                 "%s: deterministic failure: %s",
                 spec.genome_id,

@@ -27,9 +27,12 @@ Key design principles:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
+import os
 import random
+import stat
 import subprocess
 from collections import Counter
 from collections.abc import Iterable
@@ -70,6 +73,8 @@ TOP_HIT_COUNT = 10
 
 # Keep boundary algorithm selection independent of query/chunk size.
 BOUNDARY_DIAMOND_FLAGS = ["--algo", "1"]
+
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 def _listify_top10_field(value) -> list:
@@ -168,6 +173,31 @@ class BoundaryDiamondConfig:
     def top_hit_count(self) -> int:
         """Return how many leading hits the ``top10_*`` fields hold."""
         return min(self.top_k, TOP_HIT_COUNT)
+
+
+class SavedSearchError(ValueError):
+    """A saved gene-taxonomy search cannot stand in for the search of this run."""
+
+
+@dataclass(frozen=True, slots=True)
+class SavedHitTable:
+    """One hit table of an earlier search with its authenticated SHA-256."""
+
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class SavedBoundarySearch:
+    """The authenticated query hash and hit tables of an earlier gene-taxonomy search.
+
+    ``query_sha256`` is the SHA-256 of the earlier ``genome_boundary_query.faa``.
+    ``hit_tables`` are the tables of that search in chunk order, named as
+    ``saved_hit_table_names`` names them.
+    """
+
+    query_sha256: str
+    hit_tables: tuple[SavedHitTable, ...]
 
 
 @dataclass
@@ -1415,10 +1445,12 @@ def run_batched_diamond(
     proteome_index: dict[str, list[pORF]],
     config: BoundaryDiamondConfig,
     taxonomy_lookup: dict | None = None,
+    saved_search: SavedBoundarySearch | None = None,
 ) -> dict[str, GeneTaxonomy]:
     """Search once for positive and deeper host-veto evidence.
 
-    Returns taxonomy keyed by pORF ID for fast lookup.
+    Returns taxonomy keyed by pORF ID for fast lookup. With ``saved_search`` the
+    search is replaced by the saved hit table of an earlier run.
 
     Args:
         query: GenomeDiamondQuery with all pORF IDs to query
@@ -1428,9 +1460,15 @@ def run_batched_diamond(
         proteome_index: Scaffold -> sorted list of pORF objects
         config: BoundaryDiamondConfig with execution parameters
         taxonomy_lookup: Optional taxonomy label lookup for fingerprinting
+        saved_search: Authenticated query hash and hit tables of an earlier search
 
     Returns:
         Dict mapping pORF ID to GeneTaxonomy
+
+    Raises:
+        SavedSearchError: The query differs from the saved query, the saved
+            tables do not fit the query and chunk size, or a saved table
+            differs from its hash.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1511,7 +1549,16 @@ def run_batched_diamond(
             extra_flags=BOUNDARY_DIAMOND_FLAGS,
         )
 
-    hits = search(output_dir, max(config.top_k, config.viral_hit_depth))
+    if saved_search is None:
+        hits = search(output_dir, max(config.top_k, config.viral_hit_depth))
+    else:
+        hits = _import_saved_search(
+            saved_search,
+            query_fasta=query_fasta,
+            n_sequences=n_sequences,
+            chunk_size=config.chunk_size,
+            output_dir=output_dir,
+        )
     taxonomy_map = _classify_query_hits(query, hits, proteome_index, config, taxonomy_lookup)
 
     # Log summary statistics
@@ -1528,6 +1575,75 @@ def run_batched_diamond(
     )
 
     return taxonomy_map
+
+
+def saved_hit_table_names(n_sequences: int, chunk_size: int) -> tuple[str, ...]:
+    """Name the hit tables that a search of ``n_sequences`` queries writes, in chunk order."""
+    size = max(1, chunk_size)
+    if n_sequences <= size:
+        return ("boundary_diamond.tsv",)
+    n_chunks = -(-n_sequences // size)
+    return tuple(f"diamond_chunk_{number}.tsv" for number in range(1, n_chunks + 1))
+
+
+def _import_saved_search(
+    saved: SavedBoundarySearch,
+    *,
+    query_fasta: Path,
+    n_sequences: int,
+    chunk_size: int,
+    output_dir: Path,
+) -> dict[str, list[DiamondHit]]:
+    """Copy the saved hit tables into ``output_dir`` and merge their hits, in place of a search.
+
+    Each copy is atomic and its SHA-256 must equal the authenticated one. The tables merge
+    in chunk order like the chunks of ``run_diamond_chunked``.
+    """
+    with query_fasta.open("rb") as handle:
+        query_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+    if query_sha256 != saved.query_sha256:
+        raise SavedSearchError(
+            "the Phase 2 query proteins differ from the earlier run "
+            f"(query SHA-256 {query_sha256}, saved {saved.query_sha256})"
+        )
+    expected = saved_hit_table_names(n_sequences, chunk_size)
+    names = tuple(table.path.name for table in saved.hit_tables)
+    if names != expected:
+        raise SavedSearchError(
+            f"the saved Phase 2 hit tables {', '.join(names)} do not match {', '.join(expected)}, "
+            f"which a query of {n_sequences} proteins with chunk size {chunk_size} needs"
+        )
+    all_hits: dict[str, list[DiamondHit]] = {}
+    for table in saved.hit_tables:
+        destination = output_dir / table.path.name
+        _copy_verified(table, destination)
+        all_hits.update(parse_diamond_output(destination))
+    return all_hits
+
+
+def _copy_verified(table: SavedHitTable, destination: Path) -> None:
+    """Copy ``table`` atomically and refuse a copy whose SHA-256 is not the authenticated one.
+
+    Opens the table without following a symlink and reads it only if it is a regular file.
+    """
+    try:
+        descriptor = os.open(table.path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise SavedSearchError(f"cannot open the saved Phase 2 hit table {table.path}: {exc}") from exc
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise SavedSearchError(f"the saved Phase 2 hit table {table.path} is not a regular file")
+    digest = hashlib.sha256()
+    with os.fdopen(descriptor, "rb") as reader:
+        with atomic_write_context(destination, mode="wb") as writer:
+            for chunk in iter(lambda: reader.read(_COPY_CHUNK_BYTES), b""):
+                digest.update(chunk)
+                writer.write(chunk)
+            if digest.hexdigest() != table.sha256:
+                raise SavedSearchError(
+                    f"the saved Phase 2 hit table {table.path} has SHA-256 {digest.hexdigest()}, "
+                    f"not the authenticated {table.sha256}"
+                )
 
 
 def filter_taxonomy_to_boundary(

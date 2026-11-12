@@ -15,6 +15,7 @@ from virosync.pipeline.phase2.boundary_diamond import (
     ControlStats,
     GeneTaxonomy,
     GenomeDiamondQuery,
+    SavedBoundarySearch,
     build_proteome_index,
     classify_cached_diamond_query,
     collect_query_proteins,
@@ -46,6 +47,7 @@ from .manifest import (
     _empty_prediction_summary,
     _write_empty_run_log,
 )
+from .phase1_reuse import Phase1ReuseError
 from .phase2_resume_state import (
     PHASE2_RESUME_STATE_FILENAME,
     load_phase2_resume_state,
@@ -326,8 +328,12 @@ def _run_boundary_diamond(
     logger: object,
     reference_mask: ReferenceMask = ReferenceMask(),
     viral_marker_genes: frozenset[str] = frozenset(),
+    saved_search: SavedBoundarySearch | None = None,
 ) -> _BoundaryEvidence:
-    """Classify the shared seed, flank, and control protein query."""
+    """Classify the shared seed, flank, and control protein query.
+
+    ``saved_search`` replaces the gene-taxonomy search by the saved search of an earlier run.
+    """
     phase2 = config.phase2
     target_control_genes = max(1, phase2.diamond_control_sample_size)
     control_min_distance = max(1, phase2.diamond_control_min_distance)
@@ -393,6 +399,7 @@ def _run_boundary_diamond(
             proteome_index=proteome_index,
             config=diamond_config,
             taxonomy_lookup=tax_lookup,
+            saved_search=saved_search,
         )
     logger.info("Phase 2b: Diamond complete (%d pORFs classified)", len(taxonomy_map))
 
@@ -435,6 +442,8 @@ def _run_phase2_subflow(
     reference_mask: ReferenceMask = ReferenceMask(),
     *,
     metadata_families: dict,
+    saved_boundary_search: SavedBoundarySearch | None = None,
+    require_saved_boundary_search: bool = False,
 ) -> Phase2Result | Phase2Terminal:
     """Search bounded gene context and extend complete confirmed seeds outward.
 
@@ -451,6 +460,8 @@ def _run_phase2_subflow(
         host_signature_model: HostSignatureModel from Phase 1
         config: Resolved pipeline configuration.
         logger: Logger instance
+        saved_boundary_search: Saved gene-taxonomy search of an earlier run, used in place of a search.
+        require_saved_boundary_search: Stop with an error instead of searching when no saved search is given.
 
     Returns:
         Inputs for Phase 3, or a terminal public flow result.
@@ -655,6 +666,10 @@ def _run_phase2_subflow(
     )
 
     if phase2b_db and merged_seeds:
+        if require_saved_boundary_search and saved_boundary_search is None:
+            raise Phase1ReuseError(
+                "the earlier run saved no Phase 2 search, and --reuse-phase2-search allows no new search"
+            )
         logger.info("-" * 60)
         logger.info("Phase 2b: Running batched Diamond for boundary refinement")
         logger.info(
@@ -674,6 +689,7 @@ def _run_phase2_subflow(
             superset_diamond_hits=superset_diamond_hits,
             logger=logger,
             reference_mask=reference_mask,
+            saved_search=saved_boundary_search,
         )
         boundary_taxonomy_map = boundary_evidence.taxonomy_map
         boundary_control_stats = boundary_evidence.control_stats

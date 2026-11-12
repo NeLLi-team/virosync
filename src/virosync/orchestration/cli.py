@@ -1238,6 +1238,18 @@ def verify_resources(config_path: Path, db_root: Path | None, full: bool) -> Non
     help="SHA-256 of the --reuse-phase1-snapshot file. Needs --reuse-phase1-snapshot",
 )
 @click.option(
+    "--reuse-phase2-search",
+    "reuse_phase2_search",
+    is_flag=True,
+    default=False,
+    help=(
+        "Import the Phase 2 gene-taxonomy search of the earlier run and start no new search. "
+        "The saved query and hit tables need SHA-256 values from the snapshot, and the gene-taxonomy "
+        "database must be the one of the earlier run. Every failed condition refuses the run. "
+        "Needs --reuse-phase1-from; the snapshot options supply the hashes"
+    ),
+)
+@click.option(
     "--workers",
     "-w",
     default=None,
@@ -1469,6 +1481,7 @@ def run(
     reuse_phase1_code_sha256: str | None,
     reuse_phase1_snapshot: Path | None,
     reuse_phase1_snapshot_sha256: str | None,
+    reuse_phase2_search: bool,
     workers: int | None,
     threads_per_worker: int | None,
     max_concurrent_genomes: int | None,
@@ -1524,6 +1537,7 @@ def run(
         reuse_phase1_code_sha256,
         reuse_phase1_snapshot,
         reuse_phase1_snapshot_sha256,
+        reuse_phase2_search,
     )
 
     def explicit(name: str, value: _OptionValue) -> _OptionValue | None:
@@ -1683,8 +1697,11 @@ def _phase1_reuse_request(
     code_sha256: str | None,
     snapshot: Path | None,
     snapshot_sha256: str | None,
+    reuse_phase2_search: bool,
 ) -> Phase1Reuse | None:
     """Combine the reuse options into one request, or none when none is set."""
+    if reuse_phase2_search and old_base is None:
+        raise click.UsageError("--reuse-phase2-search: needs --reuse-phase1-from")
     if old_base is None and code_sha256 is None and snapshot is None and snapshot_sha256 is None:
         return None
     if (old_base is None) != (code_sha256 is None):
@@ -1694,7 +1711,7 @@ def _phase1_reuse_request(
     if old_base is None or code_sha256 is None:
         raise click.UsageError("--reuse-phase1-snapshot and --reuse-phase1-snapshot-sha256 need --reuse-phase1-from")
     try:
-        request = Phase1Reuse(old_base=old_base, code_sha256=code_sha256)
+        request = Phase1Reuse(old_base=old_base, code_sha256=code_sha256, reuse_phase2_search=reuse_phase2_search)
     except Phase1ReuseError as exc:
         raise click.UsageError(f"--reuse-phase1-code-sha256: {exc}") from exc
     if snapshot is None:

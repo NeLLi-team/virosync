@@ -204,7 +204,8 @@ a fresh output folder instead. The new run copies the Phase 0 and Phase 1
 results of an earlier run of the same genome and rebuilds the host signature
 model with the current code. Phase 2 and Phase 3 then run in full. The mode runs
 no gene calling and no marker search, and it reads no Phase 2 checkpoint of the
-earlier run.
+earlier run. Phase 2 repeats its gene-taxonomy search unless `--reuse-phase2-search`
+imports the saved result of the earlier run (see "Reuse the Phase 2 gene-taxonomy search").
 
 ```bash
 pixi run virosync run -i genomes/ -o results_new --config config/orchestration.yaml \
@@ -291,7 +292,7 @@ scientific output. These fields differ by design:
 | `virosync_run_complete.json` | `generated_at`, `config_fingerprint`, `effective_masking_fingerprint`, output paths |
 | `virosync_summary.json` | `generated_at` |
 | `run.log`, `provenance.json`, `effective_config.json`, `*/resource_metrics/*.json` | timings, timestamps, paths |
-| `phase0/reuse_provenance.json`, `phase1/reuse_provenance.json` | the whole file; fresh runs have none |
+| `phase0/reuse_provenance.json`, `phase1/reuse_provenance.json`, `phase2/boundary_diamond/search_reuse.json` | the whole file; fresh runs have none |
 
 `scripts/compare_run_outputs.py` checks two genome output folders. It compares:
 
@@ -323,6 +324,40 @@ when a folder has no readable run state.
 ```bash
 pixi run python scripts/compare_run_outputs.py results_fresh/GENOME results_new/GENOME
 ```
+
+##### Reuse the Phase 2 gene-taxonomy search
+
+A reused run repeats the gene-taxonomy DIAMOND search of Phase 2. For the same genome
+and the same Phase 1 results, the query proteins of that search and the hit tables
+that it writes can equal those of the earlier run. The flag `--reuse-phase2-search`
+copies the saved hit tables of the earlier run and starts no Phase 2 search. It imports a
+single saved search and a chunked saved search. It needs `--reuse-phase1-from`; without
+it the command fails with a usage error.
+
+The option rests on a second precondition that ViroSync cannot check. The Phase 2 search
+code must be the same in the earlier source and the current source: the DIAMOND call with its
+flags, the hit filters and the parser. The run identity does not compare code. Passing the
+option states this.
+
+Every failed condition below refuses the run with an error. No condition falls back to a new search.
+
+| Rule | Behavior |
+| --- | --- |
+| Files | ViroSync reads the saved query `phase2/boundary_diamond/genome_boundary_query.faa` and the saved hit tables of the earlier genome folder. A query of at most `phase2.diamond_chunk_size` proteins has one table, `boundary_diamond.tsv`. A larger query has K = ceil(n / chunk size) tables, `diamond_chunk_1.tsv` to `diamond_chunk_K.tsv`, where n is the number of proteins in the saved query. |
+| Authentication | Each file must be a regular file, not a symlink, below the earlier genome folder. Only the snapshot authenticates it: the listing line is `GENOME_ID/phase2/boundary_diamond/<name>`, and the snapshot reads these entries only with this flag. A file without a listed hash is refused, and the error names it. The actual SHA-256 of the file must equal the listed hash. If the earlier `phase2.complete.json` exists and lists one of the files, its hash must equal the listed hash, or the run is refused. That marker authenticates nothing; a marker that is a symlink, unreadable or malformed is refused. |
+| Database | The gene-taxonomy database of the new run (`databases.gene_taxonomy_faa_db`) must be the database of the earlier search, because the run identity names the resource bundle and not the database file in it. ViroSync reads `databases.gene_taxonomy_db` (`path` and `size_bytes`) from the earlier `provenance.json`. The last two path components must be equal after removing the `.dmnd` suffix (for example `genomes/combined_proteome`), and the size of the new database file must equal `size_bytes`. A `provenance.json` that is missing, is not a regular file, is not valid JSON or lacks the record is refused, and so is a new run without a database. This file only refuses; it authenticates nothing. |
+| Complete set | ViroSync counts the proteins of the saved query and takes the chunk size of the new run. Every table of the expected set must exist; a missing table is refused. The earlier folder must hold no other hit table, so `boundary_diamond.tsv` next to chunk tables or a chunk table beyond K is refused as inconsistent. |
+| Missing search | An earlier run with no saved query and no hit table, for example a genome without seeds, imports without error, and the new run stops with an error if it reaches the Phase 2 search. A saved query without tables, or tables without the saved query, is refused at the import. |
+| Full-proteome variant | A configuration with `phase2.diamond_superset_prototype_enabled` is refused. The saved table of that variant is not supported. |
+| Query check | Phase 2 writes the query FASTA as usual and hashes it. A hash that differs from the authenticated hash of the saved query stops the run: the query proteins differ from the earlier run. |
+| Table names | Phase 2 recomputes the expected table names from the current query and chunk size. They must equal the names of the saved tables, or the run stops. |
+| Copy | ViroSync copies each saved table under the same name into `phase2/boundary_diamond/` of the new run, checks its SHA-256 against the authenticated hash, parses it with the parser of the search, merges the chunks in order as the chunked search does, and classifies the hits as after a search. |
+| Recomputed | The taxonomy map and the control statistics, the boundary walk, the merge, the trim, the repeat scans and Phase 3 run as in any reused run. Only the DIAMOND search is replaced. |
+| Record | `phase2/boundary_diamond/search_reuse.json` names the earlier genome folder, the relative path and SHA-256 of the saved query and of every imported table, that the snapshot authenticated it, and the SHA-256 of the snapshot listing. `phase0/reuse_provenance.json` and `phase1/reuse_provenance.json` carry `phase2_search_reuse_requested: true`. A start with the flag writes the file and the field. A later start of the same folder keeps both, also when it runs without the flag. |
+
+Resume and `--clean-run` behave as for any reused run. Each run authenticates the saved files again.
+Give the flag on every start of the folder: a restart without it runs the Phase 2 search when
+Phase 2 was not complete.
 
 ### V9g candidate policy and known limits
 

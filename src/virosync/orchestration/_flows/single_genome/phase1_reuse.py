@@ -5,7 +5,8 @@ repeats the Phase 1 searches. This module validates an earlier run of the same
 genome, copies its ``phase0/`` and ``phase1/`` files into a fresh output folder
 and rebuilds the host signature model with the current code. The orchestrator
 then publishes both phases under the new fingerprint and runs Phase 2 and
-Phase 3 in full. The earlier folder is only read.
+Phase 3 in full. The earlier folder is only read. On request the run also imports the saved
+Phase 2 gene-taxonomy search of the earlier run in place of a new search.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from virosync.pipeline.phase1.marker_validation import (
     ValidatedMarkerHit,
     filter_validated_markers,
 )
+from virosync.pipeline.phase2.boundary_diamond import SavedBoundarySearch, SavedHitTable, saved_hit_table_names
 from virosync.utils.atomic_write import atomic_write
 
 from .phase1 import Phase1Result, Phase1Terminal, _build_host_model, _finish_without_seeds
@@ -46,6 +48,8 @@ from .run_state import (
 
 PROVENANCE_SCHEMA = "virosync.phase_reuse/v1"
 PROVENANCE_FILENAME = "reuse_provenance.json"
+SEARCH_REUSE_SCHEMA = "virosync.phase2_search_reuse/v1"
+SEARCH_REUSE_FILE = "phase2/boundary_diamond/search_reuse.json"
 
 _MASKING_STATUS = "phase0/masking/masking_status.json"
 _MODEL_JSON = "phase1/marker_validation/host_signature_model.json"
@@ -79,6 +83,11 @@ PHASE1_CONSUMED_FILES = (
     "phase1/frameshift_screening/frameshift_events.tsv",
     "phase1/pfam_arbitration.tsv",
 )
+# The Phase 2 gene-taxonomy search of an earlier run: its query proteins and its hit tables
+# (one table, or one per chunk).
+_SEARCH_DIR = "phase2/boundary_diamond"
+_SEARCH_QUERY = f"{_SEARCH_DIR}/genome_boundary_query.faa"
+_HIT_TABLE = re.compile(r"boundary_diamond\.tsv|diamond_chunk_\d+\.tsv")
 # Phase 1 files that the host signature model changes. They are rebuilt, not copied.
 _PHASE1_REBUILT = (_MODEL_JSON, _MODEL_DEBUG, _CHECKPOINT)
 # An earlier import record is never copied: the new record names its source run instead.
@@ -106,12 +115,15 @@ class Phase1Reuse:
     per genome. ``code_sha256`` is the source SHA-256 that the earlier run recorded.
     ``snapshot_manifest`` is an optional ``sha256sum`` listing, taken inside ``old_base``
     after the earlier run, and ``snapshot_sha256`` is the SHA-256 of that listing. Both or neither.
+    ``reuse_phase2_search`` imports the saved Phase 2 gene-taxonomy search of the earlier run;
+    the snapshot may then authenticate its files.
     """
 
     old_base: Path
     code_sha256: str
     snapshot_manifest: Path | None = None
     snapshot_sha256: str | None = None
+    reuse_phase2_search: bool = False
 
     def __post_init__(self) -> None:
         if _SHA256.fullmatch(self.code_sha256) is None:
@@ -144,6 +156,8 @@ class ReusedRun:
     ``checkpoint`` is the Phase 1 checkpoint of a run that did not end there.
     ``snapshot_authenticated`` holds the files that only a snapshot authenticated, with their
     SHA-256, and ``snapshot_sha256`` is the SHA-256 of that snapshot.
+    ``phase2_search_requested`` says that the run imports the Phase 2 search, and ``phase2_search``
+    is the authenticated saved search, or none when the earlier run saved none.
     """
 
     root: Path
@@ -155,6 +169,8 @@ class ReusedRun:
     artifacts: Mapping[str, str] = field(default_factory=dict)
     snapshot_sha256: str | None = None
     snapshot_authenticated: Mapping[str, str] = field(default_factory=dict)
+    phase2_search_requested: bool = False
+    phase2_search: SavedBoundarySearch | None = None
 
 
 def _require_disjoint(old: Path, new: Path) -> None:
@@ -167,14 +183,23 @@ def _require_disjoint(old: Path, new: Path) -> None:
         raise Phase1ReuseError(f"the new output folder {new} contains the earlier folder {old}")
 
 
-def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[str, object]) -> ReusedRun:
+def open_reused_run(
+    request: Phase1Reuse,
+    *,
+    genome_id: str,
+    identity: Mapping[str, object],
+    config: PipelineConfig,
+) -> ReusedRun:
     """Validate the earlier run of one genome against the identity of the new run.
 
     Reads the earlier folder only. Raises ``Phase1ReuseError`` with the reason when
     the run state, the Phase 0 and Phase 1 records, the recorded artifact hashes,
     the code SHA-256, the ablation arm or any identity component other than the
     code and the two paths does not match, when its masking fell back, or when it
-    lacks a Phase 1 file that Phase 2 or Phase 3 read.
+    lacks a Phase 1 file that Phase 2 or Phase 3 read. With ``reuse_phase2_search`` it
+    also refuses a saved Phase 2 search that is incomplete, inconsistent or not
+    authenticated, and a ``config`` that enables the full-proteome variant. The
+    ``config`` gives the chunk size that fixes which hit tables the search must have.
     """
     root = request.old_dir(genome_id)
     for path in (request.old_base, root, root / "phase0", root / "phase1"):
@@ -217,6 +242,7 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
             _require_authenticated(root, relative, artifacts)
     _require_authenticated(root, _MASKING_STATUS, artifacts)
     _require_masking_without_fallback(root)
+    phase2_search = _open_phase2_search(root, snapshot_authenticated, config) if request.reuse_phase2_search else None
     terminal = records[1].outcome == "terminal_zero"
     checkpoint = None if terminal else _load_complete_checkpoint(root, artifacts)
     if terminal:
@@ -231,6 +257,8 @@ def open_reused_run(request: Phase1Reuse, *, genome_id: str, identity: Mapping[s
         artifacts=artifacts,
         snapshot_sha256=request.snapshot_sha256,
         snapshot_authenticated=snapshot_authenticated,
+        phase2_search_requested=request.reuse_phase2_search,
+        phase2_search=phase2_search,
     )
 
 
@@ -269,16 +297,20 @@ def load_snapshot(request: Phase1Reuse) -> dict[str, str]:
 
 
 def _apply_snapshot(request: Phase1Reuse, genome_id: str, artifacts: dict[str, str]) -> dict[str, str]:
-    """Add the snapshot hash of each consumed Phase 1 file that the phase markers do not record.
+    """Add the snapshot hash of each consumed file that the phase markers do not record.
 
-    Returns the files that the snapshot authenticated. Refuses a snapshot hash that differs from a
-    recorded one. Entries of other genomes, of files outside ``PHASE1_CONSUMED_FILES`` and of
-    files that the earlier run does not have authenticate nothing.
+    The consumed files are ``PHASE1_CONSUMED_FILES`` and, with ``reuse_phase2_search``, the saved
+    Phase 2 query and hit tables that the earlier folder holds. Returns the files that the snapshot
+    authenticated. Refuses a snapshot hash that differs from a recorded one. Entries of other genomes,
+    of other files and of files that the earlier run does not have authenticate nothing.
     """
     snapshot = load_snapshot(request)
     root = request.old_dir(genome_id)
     authenticated: dict[str, str] = {}
-    for relative in PHASE1_CONSUMED_FILES:
+    consumed = PHASE1_CONSUMED_FILES
+    if request.reuse_phase2_search:
+        consumed = (*consumed, _SEARCH_QUERY, *_saved_hit_tables(root))
+    for relative in consumed:
         listed = snapshot.get(f"{genome_id}/{relative}")
         recorded = artifacts.get(relative)
         if listed is None or listed == recorded or not (root / relative).exists():
@@ -287,6 +319,138 @@ def _apply_snapshot(request: Phase1Reuse, genome_id: str, artifacts: dict[str, s
             raise Phase1ReuseError(f"snapshot conflicts with the recorded hash: {relative}")
         artifacts[relative] = authenticated[relative] = listed
     return authenticated
+
+
+def _saved_hit_tables(root: Path) -> list[str]:
+    """List the hit tables, relative to ``root``, that the earlier Phase 2 search folder holds."""
+    folder = root / _SEARCH_DIR
+    if folder.is_symlink() or not folder.is_dir():
+        return []
+    return [f"{_SEARCH_DIR}/{name}" for name in sorted(os.listdir(folder)) if _HIT_TABLE.fullmatch(name)]
+
+
+def _open_phase2_search(
+    root: Path, snapshot_hashes: Mapping[str, str], config: PipelineConfig
+) -> SavedBoundarySearch | None:
+    """Authenticate the saved Phase 2 search of the earlier run, or return none when it saved none.
+
+    Only the snapshot hashes in ``snapshot_hashes`` authenticate the files. The number of proteins in
+    the saved query and the chunk size of ``config`` fix the hit tables that the search must have:
+    ``boundary_diamond.tsv``, or ``diamond_chunk_1.tsv`` to ``diamond_chunk_K.tsv``. Refuses the
+    full-proteome variant, a symlinked search folder, a gene-taxonomy database that differs from the
+    earlier one, a missing or extra table, a file without a snapshot hash or that is not a regular file
+    with that hash, and a hash that the earlier Phase 2 marker records differently.
+    """
+    phase2 = config.phase2
+    if phase2.diamond_superset_prototype_enabled:
+        raise Phase1ReuseError(
+            "--reuse-phase2-search does not support phase2.diamond_superset_prototype_enabled: "
+            "the saved table of the full-proteome variant cannot be imported"
+        )
+    for folder in (root / "phase2", root / _SEARCH_DIR):
+        if folder.is_symlink():
+            raise Phase1ReuseError(f"the earlier run contains a symlink root: {folder}")
+    tables = _saved_hit_tables(root)
+    if not os.path.lexists(root / _SEARCH_QUERY):
+        if tables:
+            raise Phase1ReuseError(f"the earlier run saved Phase 2 hit tables but not {_SEARCH_QUERY}")
+        return None
+    _require_same_database(root, config)
+    _require_saved_hash(root, _SEARCH_QUERY, snapshot_hashes)
+    with (root / _SEARCH_QUERY).open("rb") as handle:
+        n_sequences = sum(1 for line in handle if line.startswith(b">"))
+    expected = [f"{_SEARCH_DIR}/{name}" for name in saved_hit_table_names(n_sequences, phase2.diamond_chunk_size)]
+    missing = [relative for relative in expected if relative not in tables]
+    if missing:
+        raise Phase1ReuseError("the earlier run's saved Phase 2 search lacks " + ", ".join(missing))
+    extra = [relative for relative in tables if relative not in expected]
+    if extra:
+        raise Phase1ReuseError(
+            f"the earlier run holds Phase 2 hit tables outside the expected set ({', '.join(expected)}): "
+            + ", ".join(extra)
+        )
+    for relative in expected:
+        _require_saved_hash(root, relative, snapshot_hashes)
+    _require_phase2_marker_agrees(
+        root, {relative: snapshot_hashes[relative] for relative in (_SEARCH_QUERY, *expected)}
+    )
+    return SavedBoundarySearch(
+        query_sha256=snapshot_hashes[_SEARCH_QUERY],
+        hit_tables=tuple(SavedHitTable(root / relative, snapshot_hashes[relative]) for relative in expected),
+    )
+
+
+def _require_same_database(root: Path, config: PipelineConfig) -> None:
+    """Refuse a new run whose gene-taxonomy database is not the one the earlier run searched.
+
+    The run identity names the resource bundle, not the database file inside it. The earlier
+    ``provenance.json`` records the database path and size. The last two path components, without a
+    ``.dmnd`` suffix, and the size of the file must be equal. The record is read only to refuse; it
+    authenticates nothing.
+    """
+    current = config.databases.gene_taxonomy_faa_db
+    if current is None:
+        raise Phase1ReuseError(
+            "the new run has no gene-taxonomy database (databases.gene_taxonomy_faa_db) "
+            "to compare with the earlier run for --reuse-phase2-search"
+        )
+    path = root / "provenance.json"
+    if path.is_symlink() or not path.is_file():
+        raise Phase1ReuseError(
+            f"the earlier run has no regular provenance.json at {path}; "
+            "--reuse-phase2-search needs it to compare the gene-taxonomy database"
+        )
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))["databases"]["gene_taxonomy_db"]
+        recorded_path, recorded_size = record["path"], record["size_bytes"]
+        if not isinstance(recorded_path, str) or not isinstance(recorded_size, int):
+            raise TypeError("path is not a string or size_bytes is not an integer")
+    except (OSError, ValueError) as exc:
+        raise Phase1ReuseError(f"cannot read {path}: {exc}") from exc
+    except (KeyError, TypeError) as exc:
+        raise Phase1ReuseError(f"{path} lacks the record databases.gene_taxonomy_db (path, size_bytes)") from exc
+    try:
+        size = Path(current).stat().st_size
+    except OSError as exc:
+        raise Phase1ReuseError(f"cannot read the size of the gene-taxonomy database {current}: {exc}") from exc
+    if _database_tail(Path(current)) != _database_tail(Path(recorded_path)) or size != recorded_size:
+        raise Phase1ReuseError(
+            f"the gene-taxonomy database differs from the earlier run: now {Path(current).absolute()} "
+            f"({size} bytes), earlier {recorded_path} ({recorded_size} bytes)"
+        )
+
+
+def _database_tail(path: Path) -> tuple[str, str]:
+    return path.parent.name, path.name.removesuffix(".dmnd")
+
+
+def _require_phase2_marker_agrees(root: Path, hashes: Mapping[str, str]) -> None:
+    """Refuse a file whose hash in the earlier Phase 2 marker differs from its snapshot hash.
+
+    The marker, when it exists, authenticates nothing; it can only contradict the snapshot.
+    Refuses a marker that is a symlink, unreadable or malformed.
+    """
+    path = root / "phase2.complete.json"
+    if not os.path.lexists(path):
+        return
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("not a regular file")
+        artifacts = json.loads(path.read_text(encoding="utf-8"))["artifacts"]
+        if not isinstance(artifacts, list):
+            raise TypeError("artifacts is not a list")
+        recorded = {item["relative_path"]: item["sha256"] for item in artifacts}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise Phase1ReuseError(f"cannot read the Phase 2 marker {path}: {exc!r}") from exc
+    for relative, sha256 in hashes.items():
+        if recorded.get(relative, sha256) != sha256:
+            raise Phase1ReuseError(f"snapshot conflicts with the recorded hash: {relative}")
+
+
+def _require_saved_hash(root: Path, relative: str, artifacts: Mapping[str, str]) -> None:
+    if relative not in artifacts:
+        raise Phase1ReuseError(f"no authenticated hash for {relative}: list it in the snapshot as GENOME_ID/{relative}")
+    _require_authenticated(root, relative, artifacts)
 
 
 def _require_masking_without_fallback(root: Path) -> None:
@@ -648,6 +812,27 @@ def _sha256_or_none(path: Path) -> str | None:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
+def record_phase2_search_import(source: ReusedRun, output_dir: Path, logger) -> None:
+    """Record in the new run folder that the Phase 2 search of the earlier run is imported.
+
+    Writes nothing when the earlier run saved no search.
+    """
+    search = source.phase2_search
+    if search is None:
+        return
+    files = [(_SEARCH_QUERY, search.query_sha256)] + [
+        (table.path.relative_to(source.root).as_posix(), table.sha256) for table in search.hit_tables
+    ]
+    document: dict[str, object] = {
+        "schema": SEARCH_REUSE_SCHEMA,
+        "old_run_folder": str(source.root.resolve()),
+        "files": [{"path": relative, "sha256": sha256, "authenticated_by": "snapshot"} for relative, sha256 in files],
+        "snapshot_manifest_sha256": source.snapshot_sha256,
+    }
+    atomic_write(Path(output_dir) / SEARCH_REUSE_FILE, json.dumps(document, indent=2, sort_keys=True) + "\n")
+    logger.info("Phase 2 search imported from %s", source.root.resolve())
+
+
 def _write_provenance(
     source: ReusedRun,
     output_dir: Path,
@@ -682,6 +867,8 @@ def _write_provenance(
         )
         document["snapshot_manifest_sha256"] = source.snapshot_sha256
         document["snapshot_authenticated"] = snapshot_authenticated
+    if source.phase2_search_requested:
+        document["phase2_search_reuse_requested"] = True
     atomic_write(
         Path(output_dir) / f"phase{phase}" / PROVENANCE_FILENAME,
         json.dumps(document, indent=2, sort_keys=True) + "\n",

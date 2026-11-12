@@ -1124,7 +1124,7 @@ def test_repair_changed_consumed_file_is_refused(tmp_path, monkeypatch, relative
     path = old.output_dir / relative
     path.write_bytes(path.read_bytes() + b"changed after completion\n")
     with pytest.raises(Phase1ReuseError):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def test_repair_unbound_consumed_files_are_refused(tmp_path, monkeypatch):
@@ -1134,12 +1134,12 @@ def test_repair_unbound_consumed_files_are_refused(tmp_path, monkeypatch):
     marker["artifacts"] = [a for a in marker["artifacts"] if a["relative_path"] not in SEARCH_FILES]
     path.write_text(json.dumps(marker))
     with pytest.raises(Phase1ReuseError, match="authenticated"):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def test_repair_copy_checks_validated_expected_hash(tmp_path, monkeypatch):
     old, new = _make_worlds(tmp_path, monkeypatch, search_files=True)
-    source = phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+    source = phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
     path = old.output_dir / "phase0/proteome.fasta"
     path.write_bytes(path.read_bytes() + b"changed between check and copy\n")
     with pytest.raises(Phase1ReuseError, match="changed"):
@@ -1153,7 +1153,7 @@ def test_repair_running_old_run_is_refused(tmp_path, monkeypatch):
     state["status"] = "running"
     path.write_text(json.dumps(state))
     with pytest.raises(Phase1ReuseError, match="running"):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 @pytest.mark.parametrize("relative", ["phase0", "phase1"])
@@ -1164,7 +1164,7 @@ def test_repair_symlink_phase_root_is_refused(tmp_path, monkeypatch, relative):
     path.rename(moved)
     path.symlink_to(moved, target_is_directory=True)
     with pytest.raises(Phase1ReuseError, match="symlink"):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def test_repair_fresh_phase0_cannot_receive_imported_phase1(tmp_path, monkeypatch):
@@ -1181,7 +1181,7 @@ def test_repair_fresh_phase0_cannot_receive_imported_phase1(tmp_path, monkeypatc
 def test_repair_empty_nonterminal_checkpoint_is_refused(tmp_path, monkeypatch):
     old, new = _make_worlds(tmp_path, monkeypatch, search_files=False)
     with pytest.raises(Phase1ReuseError, match="empty"):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def test_repair_output_lookup_cannot_cross_run_root(tmp_path):
@@ -1206,7 +1206,7 @@ def test_repair_existing_unbound_fallback_is_refused(worlds, relative):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("unbound\n")
     with pytest.raises(Phase1ReuseError, match="authenticated"):
-        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity)
+        phase1_reuse.open_reused_run(_reuse(old), genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def _drop_search_hashes(old: _MockPipeline) -> None:
@@ -1242,7 +1242,7 @@ def _snapshot_reuse(old: _MockPipeline, manifest: Path, manifest_sha256: str) ->
 
 def _open_with_snapshot(old: _MockPipeline, new: _MockPipeline, manifest: Path, manifest_sha256: str):
     request = _snapshot_reuse(old, manifest, manifest_sha256)
-    return phase1_reuse.open_reused_run(request, genome_id="demo", identity=new.identity)
+    return phase1_reuse.open_reused_run(request, genome_id="demo", identity=new.identity, config=PipelineConfig())
 
 
 def _provenance(run: _MockPipeline, phase: int) -> dict:

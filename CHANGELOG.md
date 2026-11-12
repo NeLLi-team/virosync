@@ -20,6 +20,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   `sha256sum` listing taken inside the earlier `-o` folder. The provenance records of the import name the
   listing hash and the files it authenticated. A snapshot proves that the files did not change between
   the listing and the import, not that the earlier run wrote them.
+- Phase 2 search reuse: `--reuse-phase2-search`, valid with `--reuse-phase1-from`, imports the saved
+  gene-taxonomy search of the earlier run, single or chunked, and starts no Phase 2 search. The saved
+  query and every hit table need a SHA-256 from the snapshot, and a hash that the earlier Phase 2 marker
+  records must agree. The gene-taxonomy database of the new run must match the one in the earlier
+  `provenance.json` (last two path components and size). The run stops when the Phase 2 query proteins
+  differ from the saved query, when the saved tables do not match the query and chunk size, when a table
+  is missing or extra, or when the full-proteome variant is enabled. The operator must have shown that
+  the Phase 2 search code is the same in both sources. The import writes
+  `phase2/boundary_diamond/search_reuse.json`.
 - `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
   outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
   also fails when a completed run lacks an output that its run state requires.

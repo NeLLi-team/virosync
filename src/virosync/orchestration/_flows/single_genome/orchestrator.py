@@ -81,6 +81,7 @@ from .phase1_reuse import (
     import_phase0,
     import_phase1,
     open_reused_run,
+    record_phase2_search_import,
     require_matching_phase0_origin,
 )
 from .phase1_state import PHASE1_STATE_SCHEMA
@@ -1463,7 +1464,9 @@ def _single_genome_flow_impl(
         device=device,
     )
     reused = (
-        open_reused_run(phase1_reuse, genome_id=genome_id, identity=run_identity) if phase1_reuse is not None else None
+        open_reused_run(phase1_reuse, genome_id=genome_id, identity=run_identity, config=config)
+        if phase1_reuse is not None
+        else None
     )
     # A clean run (resume=False, e.g. --clean-run) must start from a pristine
     # output directory: file-existence-based resume checks would otherwise let
@@ -1815,6 +1818,8 @@ def _single_genome_flow_impl(
     # === PHASE 2: Boundary Refinement ===
     from virosync.orchestration.resource_monitor import ResourceMonitor
 
+    if reused is not None and 2 not in reusable_phases:
+        record_phase2_search_import(reused, output_dir, logger)
     with ResourceMonitor(
         task_name="boundary_refinement",
         genome_id=genome_id,
@@ -1841,6 +1846,8 @@ def _single_genome_flow_impl(
             resume_authorized=2 in reusable_phases,
             reference_mask=reference_mask,
             metadata_families=metadata_families,
+            saved_boundary_search=reused.phase2_search if reused is not None else None,
+            require_saved_boundary_search=reused is not None and reused.phase2_search_requested,
         )
     report_progress(75, "phase 2 complete")
 
