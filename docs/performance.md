@@ -47,9 +47,9 @@ their coverage partly measures agreement with that tool.
 
 ## Runtime and peak memory
 
-Mean wall time across 30 SynEVEs-2 inputs was 215.3 seconds for ViroSync and
+Mean wall time across 30 SynEVEs-2 inputs was 211.3 seconds for ViroSync and
 31.4 seconds for ViralRecall v3.1.0. Across five real-genome inputs, the means
-were 3,283.3 and 2,039.6 seconds. Mean peak memory on the real genomes was 9.2 GB
+were 3,272.7 and 2,039.6 seconds. Mean peak memory on the real genomes was 9.2 GB
 for ViroSync and 2.1 GB for ViralRecall v3.1.0. The ViroSync values come from runs of
 the preceding commit `00f4b4e`, which started from the input; the benchmark runs of
 `8f642ac` reused its saved gene calls and searches. Each run had 16 allocated CPUs on
