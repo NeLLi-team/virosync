@@ -1,0 +1,52 @@
+{
+  "bundle_kind": "source",
+  "files": [
+    {
+      "path": "models/combined.hmm.h3f",
+      "role": "hmm_index",
+      "sha256": "dfa817cc7cecb706ae611e88705d816c9d13425f4cd19ec26dd0b6114bc7ef06",
+      "size": 29040588
+    },
+    {
+      "path": "models/combined.hmm.h3i",
+      "role": "hmm_index",
+      "sha256": "db7e2903580725bbd0ce12906e23bd0bc72b6fac5416933a6dba8896904d5ea0",
+      "size": 88192
+    },
+    {
+      "path": "models/combined.hmm.h3m",
+      "role": "hmm_index",
+      "sha256": "a67499994a551476e98d7fd6019ad5ec300c257de459038a51ff412730e4a133",
+      "size": 66394818
+    },
+    {
+      "path": "models/combined.hmm.h3p",
+      "role": "hmm_index",
+      "sha256": "1d83b0f364b26f70b03186d2527f20c9e452454b95598cb9ae28d1d1958f5603",
+      "size": 77901356
+    },
+    {
+      "path": "marker/marker.faa",
+      "role": "marker_proteins",
+      "sha256": "599f66400524eb3ddb3bcc2db0f91c6890f98566c465c6061337f67af2923dc9",
+      "size": 3648543830
+    }
+  ],
+  "resource_version": "v1.3.1",
+  "runtime_manifest_sha256": "b1b7cfbda7ba1074e411091fb67a7e5bfb94b1daa826249056d63c7dbb0bac5e",
+  "schema_version": 2,
+  "semantic_counts": {
+    "gene_function_labels": 412,
+    "gene_function_models": 412,
+    "hmm_index_files": 4,
+    "hmm_models": 1086,
+    "marker_diamond_sequences": 7046156,
+    "marker_proteins": 7046156,
+    "model_annotations": 1086,
+    "og_marker_mappings": 808,
+    "pfam_models": 937,
+    "proteome_diamond_sequences": 67759249,
+    "taxonomy_labels": 200597
+  },
+  "version": "v1.3.1"
+}

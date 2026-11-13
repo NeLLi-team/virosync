@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "resource_version": "v1.3.1",
+  "status": "private_candidate_not_published",
+  "scientific_acceptance": false,
+  "built": "2026-11-12",
+  "base_bundle": {
+    "resource_version": "v1.3.0",
+    "archive_sha256": "c62b364f9b89a813444066544a2f5166c3caecc0cb80f86ae580d4f31c6b1c37",
+    "manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+  },
+  "taxonomy_labels_replacement": {
+    "labels_sha256": "fc95d1c5544e306a87ed06810ee6e5333eba130e3dc5bbf5113f348d5e5fef28",
+    "records": 200597,
+    "records_changed": 13317,
+    "records_changed_by_prefix": {
+      "EUK": 7933,
+      "EUK-pEVE": 5384
+    }
+  },
+  "runtime": {
+    "filename": "resources_v1_3_1_runtime.tar.gz",
+    "archive_sha256": "bf45046a413e438eeec5e2f1e67d6c21f73329a9267cad723d3b6c66a3fe1bc9",
+    "archive_size_bytes": 11566521184,
+    "payload_size_bytes": 25738264551,
+    "manifest_sha256": "b1b7cfbda7ba1074e411091fb67a7e5bfb94b1daa826249056d63c7dbb0bac5e"
+  },
+  "source": {
+    "filename": "resources_v1_3_1_source.tar.gz",
+    "archive_sha256": "1a75c78e9458677670f95aeb65396287bfe9e7cb805a5c8f317bc7288d7a07ff",
+    "archive_size_bytes": 1917838636,
+    "manifest_sha256": "83fdb71d321d77fa6ca9913f0afec1919e83e52ec8f37979e520c1975f1aa061",
+    "runtime_manifest_sha256": "b1b7cfbda7ba1074e411091fb67a7e5bfb94b1daa826249056d63c7dbb0bac5e"
+  },
+  "semantic_counts": {
+    "gene_function_labels": 412,
+    "gene_function_models": 412,
+    "hmm_index_files": 4,
+    "hmm_models": 1086,
+    "marker_diamond_sequences": 7046156,
+    "marker_proteins": 7046156,
+    "model_annotations": 1086,
+    "og_marker_mappings": 808,
+    "pfam_models": 937,
+    "proteome_diamond_sequences": 67759249,
+    "taxonomy_labels": 200597
+  },
+  "limits": "Built with scripts/build_resource_bundle.py --split --skip-hmmpress --skip-marker-dmnd from the v1.3.0 payload and source files, with taxonomy/labels.tsv replaced. Every other payload file is byte-identical to v1.3.0. Public availability and final scientific gates remain pending."
+}

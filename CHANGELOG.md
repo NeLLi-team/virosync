@@ -4,6 +4,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Resources
+
+- Resource bundle v1.3.1 equals v1.3.0 with the corrected taxonomy label table
+  (13,317 of 200,597 records: full lineage strings for 7,933 `EUK` and 5,384
+  `EUK-pEVE` records). The config, the database manager, the CI checks and
+  `release-manifests/resources_v1_3_1/` pin v1.3.1. The v1.3.0 manifests stay as
+  build evidence. Publication and scientific qualification remain pending.
+
 ### Added
 
 - Phase reuse: `--reuse-phase1-from OLD_OUT --reuse-phase1-code-sha256 SHA` starts a new run in

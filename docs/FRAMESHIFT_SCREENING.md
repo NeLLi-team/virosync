@@ -41,7 +41,7 @@ pixi run example-frameshift
 cat results/example-frameshift/batch_summary.tsv
 ```
 
-With resource bundle v1.3.0, the row must report `status=success`,
+With resource bundle v1.3.1, the row must report `status=success`,
 `predictions=5`, and `accepted=3`. The example checks the Phase 1 rescue path:
 it must write confirmed frameshift markers and rescued proteins. Its rescued
 markers are hits of the kinase model `VS000087`, which validate but never start
