@@ -1,6 +1,6 @@
 # ViroSync resource bundle
 
-The candidate core resource version is `v1.3.0`, supplied as
+The core resource version is `v1.3.0`, supplied as
 `resources_v1_3_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
 gene-function profiles, marker and broad reference-proteome DIAMOND databases,
 taxonomy labels, and marker annotations used for EVE detection, boundary
@@ -20,8 +20,7 @@ build with the revision 8 table supplied as an explicit labels file. Every other
 payload file of the two builds is byte-identical.
 
 `release-manifests/resources_v1_3_0/` holds the exact runtime and source manifests
-and their archive identities. These files describe a private candidate; they do
-not establish scientific acceptance or public availability. The manifests of the
+and their archive identities. The manifests of the
 earlier private build are in `release-manifests/resources_v1_3_0/benchmarked_core/`;
 build evidence of v1.2.0 remains in `release-manifests/resources_v1_2_0/`.
 
@@ -31,10 +30,9 @@ genomes. The resource build tree stores these sequences in
 archive contains the DIAMOND database; the matching source companion contains
 the FASTA. Both encode the same marker reference set.
 
-Use the matching ViroSync 1.3.0 source for this candidate. The exact archive and
-payload sizes are recorded in the release manifest provenance. Allow space for
-both the archive and extracted resources, plus the environment and results.
-Public installation requires the release gate and published archive first.
+Use ViroSync 1.3.0 with this bundle. The exact archive and payload sizes are
+recorded in the release manifest provenance. Allow space for both the archive
+and extracted resources, plus the environment and results.
 
 Install the core resources:
 

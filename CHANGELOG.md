@@ -2,9 +2,7 @@
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [1.3.0] - 2026-11-03
-
-Private release candidate; the date records preparation, not publication.
+## [1.3.0] - 2026-11-16
 
 ### Resources
 

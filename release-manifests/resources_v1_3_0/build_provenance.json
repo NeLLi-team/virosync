@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
   "resource_version": "v1.3.0",
-  "status": "private_candidate_not_published",
-  "scientific_acceptance": false,
+  "status": "published",
   "built": "2026-11-16",
+  "published": "2026-11-16",
+  "url": "https://dl.newlineages.com/virosync/resources_v1_3_0_runtime.tar.gz",
   "base_bundle": {
     "description": "Earlier private build of v1.3.0, never published; the 12 November 2026 benchmark and the protist_db screen ran on it with taxonomy labels revision 8 supplied as an explicit file. Its manifests are in benchmarked_core/.",
     "resource_version": "v1.3.0",
