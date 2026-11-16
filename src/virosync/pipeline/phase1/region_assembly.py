@@ -794,7 +794,6 @@ def assemble_candidate_regions(
             continue
 
         # Step 4b: Iterative extension
-        scaffold_length = scaffold_lengths.get(scaffold, float("inf"))
         logger.info(f"  Iteratively extending {len(clusters)} clusters...")
 
         for cluster in clusters:

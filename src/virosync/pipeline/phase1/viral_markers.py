@@ -14,6 +14,7 @@ References:
 - Gaïa et al. 2023: Mirusviricota discovery
 - Boratto et al. 2024: Mriyaviruses characterization
 """
+
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping

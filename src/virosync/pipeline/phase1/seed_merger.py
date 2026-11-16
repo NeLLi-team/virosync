@@ -5,6 +5,7 @@ The active pipeline produces HHG seeds only; the legacy novelty and
 compositional seed sources are retained in the dataclass schema as
 zero placeholders but are no longer populated in the main flow.
 """
+
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field

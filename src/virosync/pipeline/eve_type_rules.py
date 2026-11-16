@@ -8,6 +8,7 @@ carries a full set of functional categories, because one degraded EVE often carr
 duplicated hallmark genes. Regions whose seed cores interleave are one EVE and always
 merge; refused regions that overlap are cut apart midway between their seed cores.
 """
+
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import replace
