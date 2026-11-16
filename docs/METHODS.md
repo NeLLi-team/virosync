@@ -863,7 +863,7 @@ max(96P, 32P + 160Q + 24I, 24P + 808I) + 256H + MK.
 The final interval component is 80 + 216 + 512 = 808 bytes per row; these byte
 allowances remain predictive and require calibration, unlike the cardinality bounds.
 It predicts one pool's memory use; independently admitted genome pools can spend
-the same sampled headroom. The prepared campaign runs one genome per task at a time.
+the same sampled headroom.
 Supported memory accounting uses cgroup v2. Headroom credits only inactive file
 cache after subtracting dirty/writeback bytes, never the file or shared-memory
 totals. A Slurm job without a readable finite v2 memory budget runs serially;
@@ -1872,9 +1872,9 @@ Jelly-roll intake retains every alternate model for each exact query ID, includi
 Frameshift-marker overlap arbitration applies the capsid score floor before selecting the highest-scoring eligible locus. A sub-10 capsid cannot suppress an overlapping eligible noncapsid marker; raw candidate exports remain unchanged.
 
 
-Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Historical SOURCE10/SOURCE12 files whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply missing historical authentication, unless you pass the snapshot options described in "Reuse Phase 0 and Phase 1 of an earlier run". Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
+Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Files of an earlier run whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply a missing recorded hash, unless you pass the snapshot options described in "Reuse Phase 0 and Phase 1 of an earlier run". Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
 
-The patched source has a new code identity. Any semantic equivalence claim must compare Phase 0/1 code against this repair source, including the host-model and no-seed refactor. Output comparison includes scientific identity, consumed Phase 0/1 artifacts and jelly-roll exports; non-JSON files stream in bounded chunks. JSON comparison still parses complete documents and can require memory proportional to document size. No runtime override, campaign credit or acceptance is granted by these options.
+The check that the Phase 0 and Phase 1 code of the two sources is identical must use the source of the new run. `scripts/compare_run_outputs.py` compares the scientific identity, the consumed Phase 0 and Phase 1 files and the jelly-roll exports. It reads non-JSON files in bounded chunks and parses each JSON file whole, so its memory use grows with the largest JSON file. These options grant no runtime override.
 
 Only authenticated phase files are copied. Unbound intermediates are omitted;
 existing downstream-consumed files without an old marker hash cause refusal, unless the snapshot options supply the hash.

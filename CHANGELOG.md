@@ -33,6 +33,12 @@ Private release candidate; the date records preparation, not publication.
   `sha256sum` listing taken inside the earlier `-o` folder. The provenance records of the import name the
   listing hash and the files it authenticated. A snapshot proves that the files did not change between
   the listing and the import, not that the earlier run wrote them.
+- Phase reuse checks: the phase markers of the earlier run must record a SHA-256 for every Phase 1
+  file that Phases 2 and 3 read, or a snapshot must supply it; otherwise the import is refused.
+  Files are hashed again while they are copied. An earlier run that is still running, a symbolic
+  link as run folder and an empty nonterminal Phase 1 checkpoint are refused; an authenticated
+  terminal-zero run can be reused. A resumed Phase 0 must have the same recorded import origin, so a
+  fresh Phase 0 or one of another origin never receives an imported Phase 1.
 - Phase 2 search reuse: `--reuse-phase2-search`, valid with `--reuse-phase1-from`, imports the saved
   gene-taxonomy search of the earlier run, single or chunked, and starts no Phase 2 search. The saved
   query and every hit table need a SHA-256 from the snapshot, and a hash that the earlier Phase 2 marker
@@ -43,8 +49,10 @@ Private release candidate; the date records preparation, not publication.
   the Phase 2 search code is the same in both sources. When the earlier run saved a
   search and Phase 2 runs, the import writes `phase2/boundary_diamond/search_reuse.json`.
 - `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
-  outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
-  also fails when a completed run lacks an output that its run state requires.
+  outputs, jelly-roll exports, consumed Phase 0 and Phase 1 files and JSON files of two genome output
+  folders and exits with status 1 when they differ. It also fails when a completed run lacks an output
+  that its run state requires. It reads non-JSON files in bounded chunks and parses each JSON file
+  whole, so its memory use grows with the largest JSON file.
 
 - Reference masking: every run ignores DIAMOND hits to its own assembly, named by
   `--self-reference-key` (config `host.self_reference_keys`) or else by a `GCA_` or
@@ -262,6 +270,8 @@ Private release candidate; the date records preparation, not publication.
   candidate that only they support. Model names match without case and without
   a suffix after the first `_` or `.` (`vs000087_Pkinase`). The models still
   count as markers inside a region that another marker seeded.
+- Output lookup is bound to an explicit genome root, and a masked output must belong to its run.
+  Runs without masking still share their validated input.
 
 ## [1.0.2] - 2026-10-06
 
@@ -518,10 +528,3 @@ v1.0.6 core resource bundle.
 Outputs are a confidence-tiered prediction table, BED, GFF3 and FASTA of
 accepted regions, per-region gene taxonomy, and a run manifest. Runs are
 resumable and skip completed genomes.
-
-
-Saved Phase 1 reuse requires authenticated consumed-file closure in the old phase markers. Historical SOURCE10/SOURCE12 files whose markers lack this closure are refused; compute a fresh Phase 1 instead. A current hash or copied provenance record cannot supply missing historical authentication. Files are checked again during copying. Running old runs and symlinked roots are refused. A resumed Phase 0 must have the same recorded import origin; a fresh or different-origin Phase 0 cannot receive imported Phase 1. Empty nonterminal checkpoints are refused, while legitimate authenticated terminal-zero runs remain supported.
-
-The patched source has a new code identity. Any semantic equivalence claim must compare Phase 0/1 code against this repair source, including the host-model and no-seed refactor. Output comparison includes scientific identity, consumed Phase 0/1 artifacts and jelly-roll exports; non-JSON files stream in bounded chunks. JSON comparison still parses complete documents and can require memory proportional to document size. No runtime override, historical-hash manifest option, campaign credit or acceptance is granted by these options.
-
-- Bound output lookup to an explicit genome root and verify masked-output ownership, preserving validated masking-off input sharing.
