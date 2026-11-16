@@ -32,8 +32,8 @@
       "size": 3648543830
     }
   ],
-  "resource_version": "v1.3.1",
-  "runtime_manifest_sha256": "b1b7cfbda7ba1074e411091fb67a7e5bfb94b1daa826249056d63c7dbb0bac5e",
+  "resource_version": "v1.3.0",
+  "runtime_manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354",
   "schema_version": 2,
   "semantic_counts": {
     "gene_function_labels": 412,
@@ -48,5 +48,5 @@
     "proteome_diamond_sequences": 67759249,
     "taxonomy_labels": 200597
   },
-  "version": "v1.3.1"
+  "version": "v1.3.0"
 }

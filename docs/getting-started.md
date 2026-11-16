@@ -72,7 +72,7 @@ Resources download about 11.6 GB, use about 25.7 GB when installed, and need abo
 pixi run setup-virosync-resources
 ```
 
-Setup installs resource bundle v1.3.1 in `resources/virosync` by default.
+Setup installs resource bundle v1.3.0 in `resources/virosync` by default.
 See [Databases](RESOURCE_BUNDLE.md) to use another location.
 
 Verify the install:
@@ -83,7 +83,7 @@ pixi run virosync orchestrate resources verify \
   --full
 ```
 
-The output must include `Version: v1.3.1`.
+The output must include `Version: v1.3.0`.
 
 ## Run the example
 
@@ -92,7 +92,7 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-With resource bundle v1.3.1, the `test-1` row reports `status=success`,
+With resource bundle v1.3.0, the `test-1` row reports `status=success`,
 `predictions=17`, and `accepted=1`.
 
 ## Run your genome

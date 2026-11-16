@@ -59,7 +59,7 @@ pixi run example
 cat results/example/batch_summary.tsv
 ```
 
-With resource bundle v1.3.1, the `test-1` row reports `status=success`,
+With resource bundle v1.3.0, the `test-1` row reports `status=success`,
 `predictions=17`, and `accepted=1`.
 
 ## Run your own genomes
@@ -96,6 +96,6 @@ Frameshift-sensitive marker detection is off by default. Add
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.3.0 uses resource bundle v1.3.1.
+ViroSync 1.3.0 uses resource bundle v1.3.0.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

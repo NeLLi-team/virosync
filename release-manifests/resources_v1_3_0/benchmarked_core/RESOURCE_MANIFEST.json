@@ -4,13 +4,13 @@
     {
       "path": "DB_VERSION",
       "role": "bundle_version",
-      "sha256": "de330ffe0c07a9f297ed7df1ab160eccc9634461998dbd02e8dabb55c165297c",
+      "sha256": "1c6e945d74b4dc17923055e616b0f50f46d05ba0c4d9d080a481370905d3e614",
       "size": 7
     },
     {
       "path": "DATABASE_README.txt",
       "role": "bundle_documentation",
-      "sha256": "88a14932c700d29d981769759f88b8e8200a9cb20c133bea9490674ed8affc8e",
+      "sha256": "5b61547a604070cc4b3fc4772e339b8b492c20caaf96958657aa9b3289d34d7f",
       "size": 1370
     },
     {
@@ -52,8 +52,8 @@
     {
       "path": "taxonomy/labels.tsv",
       "role": "taxonomy_labels",
-      "sha256": "fc95d1c5544e306a87ed06810ee6e5333eba130e3dc5bbf5113f348d5e5fef28",
-      "size": 28990794
+      "sha256": "dcf7083652f477a2f02893a8c6e0608f0bf054c2f5b8c6ac3a8ed0bf3fa98631",
+      "size": 27957263
     },
     {
       "path": "models/gene_function.hmm",
@@ -68,7 +68,7 @@
       "size": 34116
     }
   ],
-  "resource_version": "v1.3.1",
+  "resource_version": "v1.3.0",
   "schema_version": 2,
   "semantic_counts": {
     "gene_function_labels": 412,
@@ -83,5 +83,5 @@
     "proteome_diamond_sequences": 67759249,
     "taxonomy_labels": 200597
   },
-  "version": "v1.3.1"
+  "version": "v1.3.0"
 }

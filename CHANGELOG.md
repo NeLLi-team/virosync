@@ -2,15 +2,20 @@
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [1.3.0] - 2026-11-03
+
+Private release candidate; the date records preparation, not publication.
 
 ### Resources
 
-- Resource bundle v1.3.1 equals v1.3.0 with the corrected taxonomy label table
-  (13,317 of 200,597 records: full lineage strings for 7,933 `EUK` and 5,384
-  `EUK-pEVE` records). The config, the database manager, the CI checks and
-  `release-manifests/resources_v1_3_1/` pin v1.3.1. The v1.3.0 manifests stay as
-  build evidence. Publication and scientific qualification remain pending.
+- Resource bundle v1.3.0 holds taxonomy label table revision 8 (full lineage strings
+  for 7,933 `EUK` and 5,384 `EUK-pEVE` records; 13,317 of 200,597 records). The config,
+  the database manager, the CI checks and `release-manifests/resources_v1_3_0/` pin it.
+  An earlier private build of v1.3.0 (manifest
+  `b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354`) held the previous
+  table and was never published. The benchmark of 12 November 2026 used that build with
+  the revision 8 table as an explicit labels file; its manifests remain in
+  `release-manifests/resources_v1_3_0/benchmarked_core/`.
 
 ### Added
 
@@ -40,63 +45,6 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - `scripts/compare_run_outputs.py` compares the scientific tables, sequence exports, gene-taxonomy
   outputs and JSON files of two genome output folders and exits with status 1 when they differ. It
   also fails when a completed run lacks an output that its run state requires.
-
-### Changed
-
-- GC edge trim: a trimmed region end that lands inside a gene moves to the nearest edge of
-  that gene (the outer one on a tie), within the pre-trim span and outside the seed core.
-  Before, the trim could end a region in the middle of a gene. A side that the trim moved
-  reports the stop reason `gc_trim`.
-- Region extension: a gene with a viral match supports growth at any host share. A viral
-  match is a validated viral marker or a viral top-10 hit with at least 25% identity.
-  Before, a host-like gene with a top-10 viral hit gave no support.
-- Region extension: a supporting gene that starts before a host stop and ends inside
-  its first host gene can be accepted whole, even beyond the search limit. The recorded
-  stop moves to the accepted gene's end, so it never lies inside the region. This
-  allowance cannot cross the near edge of the first gene without a taxonomy record,
-  including when that missing-record gene is nested inside the host gene. A supporting
-  gene that overlaps the missing-record gene is dropped whole, not trimmed. Disabling
-  host stopping (A4) retains this strict gap barrier and accepts every gene that the
-  normal walk accepts. Neither walk trims the confirmed seed core; if a missing-record
-  gene overlaps that core, the strict Phase 3 taxonomy-coverage check still refuses it.
-- Region extension: three host genes no longer stop the walk when at least two of the
-  next five walk entries have a viral match (a validated viral marker or a viral top-10 hit).
-  Inside the seed's envelope a searched gene without hits is skipped unless it has
-  marker-set membership, a qualifying viral veto, or ML support.
-  Foreign, marker-set and machine-learning support do not count toward a bridge.
-  Qualifying viral evidence resets a host run, including a deep-hit veto; only top-10
-  viral matches and validated viral markers count toward a bridge. Only genes before the first gene without a taxonomy
-  record count, because the walk cannot reach later ones. The bridged host genes still
-  count toward the five-gene support gap. A bridge changes only where the walk may go.
-  The run that limits the walk always sets a stop, also when an accepted gene overlaps its
-  first host gene. A bridged run sets a stop only if the walk did not cross it. If the
-  support gap ends the walk before the supporters, the run stays uncrossed and the stop is
-  kept. Joint rescue is unchanged.
-- Region extension: the walk continues past the seed's own search envelope over the
-  consecutive genes that have a taxonomy record, and stops before the first gene without
-  one. There, only a viral match supports growth, and a searched gene without hits counts
-  toward the support gap. No new search runs, and CRESS seeds and seeds without a searched
-  mapping keep their envelope.
-- Direct-repeat evidence: the taxonomy coverage of a region includes the interval that the
-  walk used for its seeds, so ends added by a walk past the Phase 2b flank mappings are
-  assessed. Before, such an end was reported as `not_assessed` with `missing_coverage`.
-  The final annotation of a joint region uses the joint interval for each of its seeds.
-- Terminal repeats: the scan covers the interval that the walk was allowed to use, not
-  only the Phase 2b flank mappings. Before, a region that the wider walk extended past the
-  mappings was scanned only up to the mappings, so repeats at its new ends were missed.
-- GC edge trim: a gene that overlaps the region and has a viral match is protected like the
-  seed core. Neither the trim nor the gene-edge snap moves an end into it.
-
-## [1.3.0] - 2026-11-03
-
-Private release candidate; the date records preparation, not publication.
-
-### Resources
-
-- Bind the rebuilt v1.3.0 runtime and source bundles by their admitted manifests
-  and archive checksums. Publication and scientific qualification remain pending.
-
-### Added
 
 - Reference masking: every run ignores DIAMOND hits to its own assembly, named by
   `--self-reference-key` (config `host.self_reference_keys`) or else by a `GCA_` or
@@ -152,6 +100,50 @@ Private release candidate; the date records preparation, not publication.
   instead. The environment adds `syntviz` 0.2 (PyPI) and Node.js 22.
 
 ### Changed
+
+- GC edge trim: a trimmed region end that lands inside a gene moves to the nearest edge of
+  that gene (the outer one on a tie), within the pre-trim span and outside the seed core.
+  Before, the trim could end a region in the middle of a gene. A side that the trim moved
+  reports the stop reason `gc_trim`.
+- Region extension: a gene with a viral match supports growth at any host share. A viral
+  match is a validated viral marker or a viral top-10 hit with at least 25% identity.
+  Before, a host-like gene with a top-10 viral hit gave no support.
+- Region extension: a supporting gene that starts before a host stop and ends inside
+  its first host gene can be accepted whole, even beyond the search limit. The recorded
+  stop moves to the accepted gene's end, so it never lies inside the region. This
+  allowance cannot cross the near edge of the first gene without a taxonomy record,
+  including when that missing-record gene is nested inside the host gene. A supporting
+  gene that overlaps the missing-record gene is dropped whole, not trimmed. Disabling
+  host stopping (A4) retains this strict gap barrier and accepts every gene that the
+  normal walk accepts. Neither walk trims the confirmed seed core; if a missing-record
+  gene overlaps that core, the strict Phase 3 taxonomy-coverage check still refuses it.
+- Region extension: three host genes no longer stop the walk when at least two of the
+  next five walk entries have a viral match (a validated viral marker or a viral top-10 hit).
+  Inside the seed's envelope a searched gene without hits is skipped unless it has
+  marker-set membership, a qualifying viral veto, or ML support.
+  Foreign, marker-set and machine-learning support do not count toward a bridge.
+  Qualifying viral evidence resets a host run, including a deep-hit veto; only top-10
+  viral matches and validated viral markers count toward a bridge. Only genes before the first gene without a taxonomy
+  record count, because the walk cannot reach later ones. The bridged host genes still
+  count toward the five-gene support gap. A bridge changes only where the walk may go.
+  The run that limits the walk always sets a stop, also when an accepted gene overlaps its
+  first host gene. A bridged run sets a stop only if the walk did not cross it. If the
+  support gap ends the walk before the supporters, the run stays uncrossed and the stop is
+  kept. Joint rescue is unchanged.
+- Region extension: the walk continues past the seed's own search envelope over the
+  consecutive genes that have a taxonomy record, and stops before the first gene without
+  one. There, only a viral match supports growth, and a searched gene without hits counts
+  toward the support gap. No new search runs, and CRESS seeds and seeds without a searched
+  mapping keep their envelope.
+- Direct-repeat evidence: the taxonomy coverage of a region includes the interval that the
+  walk used for its seeds, so ends added by a walk past the Phase 2b flank mappings are
+  assessed. Before, such an end was reported as `not_assessed` with `missing_coverage`.
+  The final annotation of a joint region uses the joint interval for each of its seeds.
+- Terminal repeats: the scan covers the interval that the walk was allowed to use, not
+  only the Phase 2b flank mappings. Before, a region that the wider walk extended past the
+  mappings was scanned only up to the mappings, so repeats at its new ends were missed.
+- GC edge trim: a gene that overlaps the region and has a viral match is protected like the
+  seed core. Neither the trim nor the gene-edge snap moves an end into it.
 
 - A gene is never host-like when a qualifying viral hit appears among its first
   `phase2.viral_hit_depth` hits (default 50, at least 10) or Phase 1 validated its

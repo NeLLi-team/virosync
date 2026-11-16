@@ -52,8 +52,8 @@
     {
       "path": "taxonomy/labels.tsv",
       "role": "taxonomy_labels",
-      "sha256": "dcf7083652f477a2f02893a8c6e0608f0bf054c2f5b8c6ac3a8ed0bf3fa98631",
-      "size": 27957263
+      "sha256": "fc95d1c5544e306a87ed06810ee6e5333eba130e3dc5bbf5113f348d5e5fef28",
+      "size": 28990794
     },
     {
       "path": "models/gene_function.hmm",

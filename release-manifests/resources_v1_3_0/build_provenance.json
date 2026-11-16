@@ -3,21 +3,35 @@
   "resource_version": "v1.3.0",
   "status": "private_candidate_not_published",
   "scientific_acceptance": false,
-  "built": "2026-11-03",
-  "root_admission_sha256": "d111fdfdf1b02bae40c1d01d38b2575f77013abd6bc74b46b45952223d32e2b1",
+  "built": "2026-11-16",
+  "base_bundle": {
+    "description": "Earlier private build of v1.3.0, never published; the 12 November 2026 benchmark and the protist_db screen ran on it with taxonomy labels revision 8 supplied as an explicit file. Its manifests are in benchmarked_core/.",
+    "resource_version": "v1.3.0",
+    "archive_sha256": "c62b364f9b89a813444066544a2f5166c3caecc0cb80f86ae580d4f31c6b1c37",
+    "manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+  },
+  "taxonomy_labels_replacement": {
+    "labels_sha256": "fc95d1c5544e306a87ed06810ee6e5333eba130e3dc5bbf5113f348d5e5fef28",
+    "records": 200597,
+    "records_changed": 13317,
+    "records_changed_by_prefix": {
+      "EUK": 7933,
+      "EUK-pEVE": 5384
+    }
+  },
   "runtime": {
     "filename": "resources_v1_3_0_runtime.tar.gz",
-    "archive_sha256": "c62b364f9b89a813444066544a2f5166c3caecc0cb80f86ae580d4f31c6b1c37",
-    "archive_size_bytes": 11566470914,
-    "payload_size_bytes": 25737231020,
-    "manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+    "archive_sha256": "80090803abdecae47bab4aa6687328b0c99f121f3c43324b3f6c644df3be0c9a",
+    "archive_size_bytes": 11566521182,
+    "payload_size_bytes": 25738264551,
+    "manifest_sha256": "8d6e33b32c2d37017393c1153f4a52954426fd2d3465f1223aea6f9618b01012"
   },
   "source": {
     "filename": "resources_v1_3_0_source.tar.gz",
-    "archive_sha256": "cb3f07153b45b9c5ffac0048574424c58d0d3c19824585ba24f43e46b5de6130",
-    "archive_size_bytes": 1917838631,
-    "manifest_sha256": "98a19d78ee1ae5a84302720d910523bc085edbb43a9fa441b1c3b730642d285a",
-    "runtime_manifest_sha256": "b61106b85e7584c7b6064edd192a7d30563a7876ad5b814630032ff619b85354"
+    "archive_sha256": "777b2e178fbb83b44dbd293a10270094606aa2f3bc809dc4d723228a046263bd",
+    "archive_size_bytes": 1917838632,
+    "manifest_sha256": "772a96b4883cac1b020d0f046d6d721151b7a59cc1a6b7adf37216e867eb5cb5",
+    "runtime_manifest_sha256": "8d6e33b32c2d37017393c1153f4a52954426fd2d3465f1223aea6f9618b01012"
   },
   "semantic_counts": {
     "gene_function_labels": 412,
@@ -32,5 +46,5 @@
     "proteome_diamond_sequences": 67759249,
     "taxonomy_labels": 200597
   },
-  "limits": "Exact admitted native resource bytes; package not rebuilt. Public availability and final scientific gates remain pending."
+  "limits": "Built with scripts/build_resource_bundle.py --split --skip-hmmpress --skip-marker-dmnd from the payload and source files of the base bundle, with taxonomy/labels.tsv replaced by revision 8. Every other payload file is byte-identical to the base bundle. Public availability and final scientific gates remain pending."
 }

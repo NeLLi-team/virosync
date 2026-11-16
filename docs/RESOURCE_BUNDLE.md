@@ -1,7 +1,7 @@
 # ViroSync resource bundle
 
-The candidate core resource version is `v1.3.1`, supplied as
-`resources_v1_3_1_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
+The candidate core resource version is `v1.3.0`, supplied as
+`resources_v1_3_0_runtime.tar.gz`. It includes marker HMMs, Pfam profiles,
 gene-function profiles, marker and broad reference-proteome DIAMOND databases,
 taxonomy labels, and marker annotations used for EVE detection, boundary
 refinement, classification, and gene labels.
@@ -12,16 +12,18 @@ profiles, and 200,597 taxonomy labels. These counts are recorded in the runtime
 manifest. See [Methods](METHODS.md) for how ViroSync uses reference evidence and
 [Structure-derived capsids](reference/capsid-models.md) for the profile catalogue.
 
-Bundle v1.3.1 equals v1.3.0 in every payload file except `taxonomy/labels.tsv`.
-The v1.3.1 table holds the full lineage strings of 7,933 `EUK` and 5,384
-`EUK-pEVE` records (13,317 of 200,597 records). `DB_VERSION` and
-`DATABASE_README.txt` name the new version. Bundle v1.3.0 holds the earlier table.
+The taxonomy label table of v1.3.0 is revision 8. It holds the full lineage
+strings of 7,933 `EUK` and 5,384 `EUK-pEVE` records (13,317 of 200,597 records).
+An earlier private build of v1.3.0 held the previous table and was never
+published. The benchmark of 12 November 2026 and the protist screen ran on that
+build with the revision 8 table supplied as an explicit labels file. Every other
+payload file of the two builds is byte-identical.
 
-`release-manifests/resources_v1_3_1/` holds the exact runtime and source manifests
+`release-manifests/resources_v1_3_0/` holds the exact runtime and source manifests
 and their archive identities. These files describe a private candidate; they do
-not establish scientific acceptance or public availability. Build evidence of
-earlier bundles remains in `release-manifests/resources_v1_3_0/` and
-`release-manifests/resources_v1_2_0/`.
+not establish scientific acceptance or public availability. The manifests of the
+earlier private build are in `release-manifests/resources_v1_3_0/benchmarked_core/`;
+build evidence of v1.2.0 remains in `release-manifests/resources_v1_2_0/`.
 
 Marker references contain full proteins with identifiers linked to reference
 genomes. The resource build tree stores these sequences in
@@ -118,7 +120,7 @@ pixi run python scripts/build_gene_function_profiles.py \
 
 The script streams both HMM files, so it does not load the 4 GB VOGDB file
 into memory. Copy the two outputs into `models/` of the resource tree before
-`scripts/build_resource_bundle.py --split --version v1.3.1`.
+`scripts/build_resource_bundle.py --split --version v1.3.0`.
 
 ### Credits
 
