@@ -442,7 +442,9 @@ Treat `eve_id` as an opaque identifier: read coordinates from the `scaffold`,
 `canonical_selection_outcome` records direct retention, gate rejection, loss
 of a frameshift-rescued marker, overlap selection or suppression, or lack of
 viral evidence. Both `kept` and `overlap_selected` can identify accepted
-candidates. An overlap loser is retained as `overlap_retained_unique_witness`
+candidates. `tier_rescue_low` and `tier_rescue_medium` identify gate-rejected
+NCLDV or Mirus regions accepted by the tier rescue, and `tier_promoted_medium`
+a kept LOW call that the rescue lifted to MEDIUM. An overlap loser is retained as `overlap_retained_unique_witness`
 when it carries an authenticated, fully contained spatial witness absent from
 the selected candidates. Witness coverage requires the same complete evidence
 membership, not interval overlap alone. Losers are reconsidered in tier, score
@@ -487,6 +489,26 @@ Polintoviricetes, Eupolintoviridae and Adintoviridae alone do not settle this
 subtype. A dot means unresolved or not applicable. An accepted
 `UNKNOWN` region requires a contained spatial witness or support from an ANI
 cluster with a marker-bearing EVE; this support alone does not prove viral origin.
+
+Two capsid class rules then name accepted calls, after ANI class transfer. They read
+the best model of each gene that overlaps the call (the `seed_marker_names` and
+`other_marker_names` columns). NCLDV MCP models name `NCLDV`; the `plv_mcp`,
+`vp_mcp`, `vp_penton` and `mcp_poli` prefixes name `PPV`; the `mirus_mcp` and
+`mcp_mirus` prefixes name `MIRUS`; structure-derived profiles name their
+[profile class](#profile-classes-for-euk-peve-only-hits), which makes
+`EVE_CAPSID_NOVEL_0026` a Mirus profile. Shared MCP aliases such as `VS000005`
+name no class.
+
+- A call whose capsid profiles name only `MIRUS` is `MIRUS`, whatever its other
+  markers or gene-taxonomy class say. Mirusviricota combine an HK97-fold capsid
+  with NCLDV-like informational genes, so NCLDV markers beside a Mirus capsid are
+  expected. A Mirus capsid beside a capsid of another class changes nothing.
+- A `VIRAL_UNKNOWN` or `UNKNOWN` call takes the class its capsid profiles name,
+  when they name exactly one class and `marker_family_hits` names no other family.
+
+The rules change only `effective_eve_class`; a call they name `PPV` keeps its
+computed `ppv_subtype`. GVClass results are not read: ViroSync exports GVClass
+input but does not run it.
 
 `EUK-pEVE` is a reference class, not a published class. It marks viral-like
 proteins that sit in eukaryotic genome assemblies (resource bundle v1.2.0 and
@@ -1348,6 +1370,25 @@ capsid supplies a MEDIUM floor and a capsid with a distinct compatible core
 group supplies a HIGH floor without a distance restriction. The spatial rules
 add their floors only when all witness genes remain fully contained. Floors
 use the configured tier thresholds, whose defaults are 0.2 and 0.7.
+
+A detected TIR, a matched TSD or a DDE integrase, tyrosine recombinase or serine
+recombinase gene inside the region adds one integration bonus of +0.05 before
+the caps. Ambiguous TIRs, flank-only genes, direct repeats and GC deviation add
+nothing. On the 1.3.0 protist cohort this bonus moves about 1,700 MEDIUM calls
+to HIGH, almost all PPV; +0.10 would move about 2,800.
+
+After overlap selection, a [tier rescue](reference/scoring.md#tier-rescue-of-ncldv-and-mirus-regions)
+keeps NCLDV and Mirus regions without a core hallmark that the caps and the LOW
+gate would otherwise reject. A region of at least 5,000 bp with at least two
+interior genes carrying an NCLDV hit, or two carrying a MIRUS hit, among their
+top ten hits, a `host_signature_fraction` of 0.5 or less and no overlap with a
+kept call becomes LOW. It becomes MEDIUM with an integration mark: a detected
+TIR, a matched TSD, a DDE integrase, tyrosine recombinase or serine recombinase
+gene, or a GC deviation of 0.10 or more. A kept LOW call that meets the same rule
+and has a mark becomes MEDIUM. The rescue sets the tier, not the score. On the
+1.3.0 protist cohort, a post-hoc version of this rule raised NCLDV HIGH and
+MEDIUM calls from 23,668 to 25,839 and Mirus calls from 2,075 to 2,993. These
+regions have no core hallmark; treat them as candidates that need inspection.
 A reported-capsid hit must first pass the 10-bit admission floor. Its witness
 supplies MEDIUM after these caps only when status is
 `validated`, score >= 75, or viral identity among the retained marker top20 > 0;

@@ -1,6 +1,6 @@
 # ViroSync
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.1-blue)
 [![License: non-commercial use only](https://img.shields.io/badge/license-non--commercial-orange.svg)](LICENSE)
 
 ViroSync finds candidate endogenous viral elements (EVEs) in assembled
@@ -96,6 +96,6 @@ Frameshift-sensitive marker detection is off by default. Add
 See the [documentation](https://nelli-team.github.io/virosync/) for output
 details, command options, and optional analyses.
 
-ViroSync 1.3.0 uses resource bundle v1.3.0.
+ViroSync 1.3.1 uses resource bundle v1.3.0.
 
 ViroSync is available for non-commercial use under [LICENSE](LICENSE).

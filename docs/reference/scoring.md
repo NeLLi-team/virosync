@@ -203,6 +203,7 @@ to 0.06 for two genes or fewer. It is off by default.
 | Family consistency | Two region, taxonomy, marker or domain votes for one NCLDV, MIRUS or PPV family; three or more | +0.04; +0.05 |
 | Viral enrichment | Viral-gene fraction ≥ 0.15 | min(0.12, fraction × 0.4) |
 | Hallmark coherence | Compatible families beyond the first | See the table above |
+| Integration | `tir_status` `detected`, `tsd_assessment_status` `assessed_match`, or a DDE integrase, tyrosine recombinase or serine recombinase gene inside the region; counted once | +0.05 |
 | Structural | Optional structural analysis | 0.15 × structural score |
 | EUK penalty | Fraction of genes with three eukaryotic hits at 70% identity or more and neither same-gene Phase1 validated viral-marker evidence nor a qualifying viral hit in the top 10 or within `phase2.viral_hit_depth` (candidate default 50), × 0.20; or, above 80% high-identity eukaryotic genes and below 10% viral genes, that fraction × 0.12. The larger term applies. Both terms exclude qualifying top-10 or deeper viral hits and same-gene Phase1 validated viral markers. This corrects the broad penalty at depth 10 too; positive evidence is unchanged. Raw top1-host diagnostics are unchanged | up to −0.12 |
 | Size penalty | One, two or three genes, without full capsid credit (capsid fraction 1) | −0.15, −0.08 or −0.04 |
@@ -211,6 +212,12 @@ A family vote from taxonomy needs a dominant-family fraction of 0.25 or more, an
 marker vote needs a positive marker-complement score. The scorer also holds
 taxonomy-distribution and host-divergence bonuses. The default flow does not
 produce their inputs, so both stay at zero.
+
+The integration bonus ignores ambiguous TIRs, direct repeats, GC deviation and
+integrase genes in the flanks. GC deviation already counts in the composition
+component. The caps below still apply, so a candidate with fewer than two cores
+cannot reach HIGH through this bonus. On the 1.3.0 protist cohort, +0.05 moves
+about 1,700 MEDIUM calls to HIGH, almost all of them PPV.
 
 ### Caps and floors
 
@@ -300,6 +307,40 @@ tier or coordinates. They remain a benchmark experiment pending native review.
 Capsid evidence in this table is the [`has_capsid_evidence` flag](../METHODS.md#capsid-evidence).
 It is separate from the capsid role in the catalogue.
 
+## Tier rescue of NCLDV and Mirus regions
+
+The zero-core cap and the LOW gate reject most NCLDV and Mirus regions without a
+core hallmark. Cellular homologues often outrank the viral references of their
+genes, so these regions can still carry several genes with a viral hit among
+their top ten. After overlap selection, ViroSync applies one rescue pass to
+regions whose published class (`effective_eve_class`) is `NCLDV` or `MIRUS`.
+
+A region meets the rescue rule when:
+
+- it is at least 5,000 bp long;
+- at least two interior genes have an NCLDV hit among their top ten hits, or at
+  least two have a MIRUS hit; the two counts are not added;
+- `host_signature_fraction` is 0.5 or less.
+
+A gate-rejected region that meets the rule and overlaps no kept call of any class
+becomes LOW. Of overlapping rescues, the region with more viral top-ten genes
+wins, then the longer region, then the smaller `eve_id`. The region becomes
+MEDIUM instead when it also has an integration mark:
+
+- `tir_status` `detected`;
+- `tsd_assessment_status` `assessed_match`;
+- a DDE integrase, tyrosine recombinase or serine recombinase gene inside the
+  region or in its flanks;
+- `gc_deviation` of 0.10 or more.
+
+A kept LOW call that meets the rule and has a mark also becomes MEDIUM. Ambiguous
+TIRs and internal direct repeats are not marks: both are common in repeat-rich
+host sequence. The rescue changes the tier and acceptance, not `final_confidence`,
+so a rescued MEDIUM call can have a score below 0.2.
+`canonical_selection_outcome` records `tier_rescue_low`, `tier_rescue_medium`
+or `tier_promoted_medium`; `normal_quality_gate_reason` keeps the gate's own
+decision. The A6 gate-bypass arm skips the rescue.
+
 ## Joint assessment of adjacent seeds
 
 One nonrecursive pass after gating can join two adjacent, disjoint candidates of
@@ -333,7 +374,7 @@ gives the full rules.
 | Published class | `effective_eve_class` |
 | Qualifying core families | `qualifying_hallmark_genes` |
 | Normal quality-gate decision | `normal_quality_gate_reason` in the detailed table, including A6 counterfactual decisions |
-| Final selection outcome | `canonical_selection_outcome` in the detailed table |
+| Final selection outcome and tier rescue | `canonical_selection_outcome` in the detailed table |
 | Joint rescue | `joint_seed_provenance` in the detailed table |
 | Components, weights, floor, witnesses and supplementary module | `score_components` and `supplementary_viral_evidence` in `evidence_profiles.json` |
 

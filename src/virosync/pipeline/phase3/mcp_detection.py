@@ -193,6 +193,33 @@ def _catalogue_capsid_models() -> frozenset[str]:
     )
 
 
+# Family-scoped capsid profiles and the class they name, for the capsid class rules.
+CAPSID_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("plv_mcp", "PPV"),
+    ("vp_mcp", "PPV"),
+    ("vp_penton", "PPV"),
+    ("mcp_poli", "PPV"),
+    ("mirus_mcp", "MIRUS"),
+    ("mcp_mirus", "MIRUS"),
+)
+
+
+def capsid_profile_class(name: str | None) -> str:
+    """Return the class a capsid profile names, or ``""``.
+
+    NCLDV MCP models name NCLDV, the family-scoped prefixes name their family,
+    and structure-derived profiles name the class of their training EVEs.
+    Shared MCP aliases and other markers name no class.
+    """
+    lower = (name or "").lower().strip()
+    if lower in NCLDV_MCP_MODELS:
+        return "NCLDV"
+    for prefix, named in CAPSID_CLASS_PREFIXES:
+        if lower.startswith(prefix):
+            return named
+    return structure_profile_class(lower)
+
+
 def structure_profile_class(name: str | None) -> str:
     """Return the class of a structure-derived profile's training EVEs, or ``""``.
 

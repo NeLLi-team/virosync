@@ -39,8 +39,10 @@ from virosync.pipeline.phase2.boundary_refiner import (
 from virosync.pipeline.phase2.seed_extension import refresh_boundary_classification
 from virosync.pipeline.phase2.terminal_repeats import refine_boundaries_with_terminal_repeats
 from virosync.pipeline.phase3.acceptance_selection import (
+    apply_tier_rescue,
     select_phase3_acceptance,
 )
+from virosync.pipeline.phase3.class_rules import apply_capsid_class_rules
 from virosync.pipeline.phase3.eve_ani_clustering import (
     cluster_accepted_eves,
     recluster_survivors,
@@ -1113,7 +1115,8 @@ def _run_phase3_subflow(
             )
 
     validate_results_seed_containment(verification_results)
-    acceptance_selection = select_phase3_acceptance(verification_results, ablation_id)
+    # The tier rescue rewrites tiers, so it runs once, on the final selection.
+    acceptance_selection = apply_tier_rescue(select_phase3_acceptance(verification_results, ablation_id))
 
     ablation_counts = acceptance_selection.intervention_counts
     if ablation_id is AblationID.A5:
@@ -1147,6 +1150,11 @@ def _run_phase3_subflow(
         # Cluster sizes counted the dropped members; recount over the survivors
         # so no published row claims a relative that is not published.
         recluster_survivors(accepted_results, ani_pairs)
+    # Capsid class rules name the final calls, after ANI class transfer and before
+    # any class is counted or persisted.
+    capsid_named = apply_capsid_class_rules(accepted_results, validated_markers)
+    if capsid_named:
+        logger.info("Capsid class rules named %d accepted predictions", capsid_named)
     # Count only what the gate itself rejected. The unsupported-EVE removal is
     # reported separately; folding it in here would blame the gate for it.
     quality_gate_dropped = len(verification_results) - gate_kept

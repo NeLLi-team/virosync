@@ -30,7 +30,7 @@ genomes. The resource build tree stores these sequences in
 archive contains the DIAMOND database; the matching source companion contains
 the FASTA. Both encode the same marker reference set.
 
-Use ViroSync 1.3.0 with this bundle. The exact archive and payload sizes are
+ViroSync 1.3.0 and 1.3.1 use this bundle. The exact archive and payload sizes are
 recorded in the release manifest provenance. Allow space for both the archive
 and extracted resources, plus the environment and results.
 

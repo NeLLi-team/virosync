@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from virosync.ablation import AblationID, InterventionCounts
+from virosync.output_contract import normalize_effective_eve_class
 from virosync.pipeline.hallmark_evidence import HallmarkWitness, contained_witnesses, has_spatial_rescue
 
-from .evidence_synthesizer import VerificationResult
-from .output_generator import QualityGateDecision, evaluate_v2_quality_gate
+from .evidence_synthesizer import VerificationResult, tsd_status
+from .integration_genes import INTEGRASE_MECHANISMS
+from .output_generator import (
+    QualityGateDecision,
+    evaluate_v2_quality_gate,
+    interior_taxonomy_records,
+    top10_family_gene_counts,
+)
+
+TIER_RESCUE_CLASSES = ("NCLDV", "MIRUS")
+TIER_RESCUE_MIN_LENGTH_BP = 5_000
+TIER_RESCUE_MIN_VIRAL_GENES = 2
+TIER_RESCUE_MAX_HOST_SIGNATURE_FRACTION = 0.5
+TIER_RESCUE_MIN_GC_DEVIATION = 0.10
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +74,13 @@ class AcceptanceSelection:
 
     @property
     def promoted_low_results(self) -> tuple[VerificationResult, ...]:
-        """Return canonical LOW candidates promoted by the normal gate."""
+        """Return canonical LOW candidates promoted by the normal gate and still LOW."""
         return tuple(
             candidate.result
             for candidate in self.candidates
-            if candidate.canonical_kept and candidate.normal_gate_decision.promoted_low
+            if candidate.canonical_kept
+            and candidate.normal_gate_decision.promoted_low
+            and candidate.result.confidence_tier == "LOW"
         )
 
     @property
@@ -275,3 +290,91 @@ def select_phase3_acceptance(
             )
         )
     return AcceptanceSelection(ablation_id=ablation_id, candidates=tuple(candidates))
+
+
+def apply_tier_rescue(selection: AcceptanceSelection) -> AcceptanceSelection:
+    """Rescue NCLDV and Mirus regions without a core hallmark and lift marked LOW calls.
+
+    A gate-rejected region that meets the rescue rule and overlaps no kept call
+    becomes LOW, or MEDIUM with an integration mark. Of overlapping rescues, the
+    region with more top-10 viral genes, then the longer one, then the smaller
+    ``eve_id`` wins. A kept LOW call that meets the rule and has a mark becomes
+    MEDIUM. Call this once, after ``select_phase3_acceptance``: it rewrites
+    ``confidence_tier`` and ``canonical_selection_outcome`` of the changed
+    results. The A6 arm is returned unchanged.
+    """
+    if selection.ablation_id is AblationID.A6:
+        return selection
+    candidates = [_promote_marked_low(candidate) for candidate in selection.candidates]
+    taken: dict[str, list[tuple[int, int]]] = {}
+    for candidate in candidates:
+        if candidate.canonical_kept:
+            taken.setdefault(candidate.result.scaffold, []).append((candidate.result.start, candidate.result.end))
+    rescuable = [
+        index
+        for index, candidate in enumerate(candidates)
+        if candidate.selection_outcome == "normal_gate_rejected" and _meets_rescue_rule(candidate.result)
+    ]
+    rescuable.sort(key=lambda index: _rescue_rank(candidates[index].result))
+    for index in rescuable:
+        result = candidates[index].result
+        intervals = taken.setdefault(result.scaffold, [])
+        if any(result.start < end and start < result.end for start, end in intervals):
+            continue
+        intervals.append((result.start, result.end))
+        result.confidence_tier = "MEDIUM" if integration_marks(result) else "LOW"
+        outcome = f"tier_rescue_{result.confidence_tier.lower()}"
+        candidates[index] = replace(candidates[index], canonical_kept=True, selection_outcome=outcome)
+    for candidate in candidates:
+        candidate.result.canonical_selection_outcome = candidate.selection_outcome
+    return AcceptanceSelection(ablation_id=selection.ablation_id, candidates=tuple(candidates))
+
+
+def integration_marks(result: VerificationResult) -> tuple[str, ...]:
+    """Return the integration marks that lift a rescue-rule region to MEDIUM.
+
+    Ambiguous TIRs and internal direct repeats do not count: both are common in
+    repeat-rich host sequence.
+    """
+    marks = []
+    if result.tir_status == "detected":
+        marks.append("terminal_inverted_repeat")
+    if tsd_status(result) == "assessed_match":
+        marks.append("target_site_duplication")
+    if any(hit["mechanism"] in INTEGRASE_MECHANISMS for hit in result.integration_gene_hits):
+        marks.append("integrase_gene")
+    if result.gc_deviation >= TIER_RESCUE_MIN_GC_DEVIATION:
+        marks.append("gc_deviation")
+    return tuple(marks)
+
+
+def viral_top10_genes(result: VerificationResult) -> int:
+    """Return the larger of the NCLDV and MIRUS top-10 gene counts; the two are never added."""
+    counts = top10_family_gene_counts(interior_taxonomy_records(result))
+    return max(counts["NCLDV"], counts["MIRUS"])
+
+
+def _meets_rescue_rule(result: VerificationResult) -> bool:
+    return (
+        normalize_effective_eve_class(result.taxonomy_class) in TIER_RESCUE_CLASSES
+        and result.length >= TIER_RESCUE_MIN_LENGTH_BP
+        and result.host_signature_fraction <= TIER_RESCUE_MAX_HOST_SIGNATURE_FRACTION
+        and viral_top10_genes(result) >= TIER_RESCUE_MIN_VIRAL_GENES
+    )
+
+
+def _rescue_rank(result: VerificationResult) -> tuple[int, int, str]:
+    return (-viral_top10_genes(result), -result.length, result.eve_id)
+
+
+def _promote_marked_low(candidate: CandidateAcceptance) -> CandidateAcceptance:
+    result = candidate.result
+    if not (
+        candidate.canonical_kept
+        and result.confidence_tier == "LOW"
+        and _meets_rescue_rule(result)
+        and integration_marks(result)
+    ):
+        return candidate
+    result.confidence_tier = "MEDIUM"
+    return replace(candidate, selection_outcome="tier_promoted_medium")

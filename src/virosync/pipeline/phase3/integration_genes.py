@@ -20,6 +20,7 @@ from virosync.pipeline.phase1.marker_validation import ValidatedMarkerHit
 from virosync.pipeline.phase1.viral_markers import base_marker_gene_id
 
 __all__ = [
+    "INTEGRASE_MECHANISMS",
     "INTEGRATION_PROFILE_MANIFEST_PATH",
     "INTEGRATION_PROFILE_PATH",
     "IntegrationGeneHit",
@@ -33,6 +34,9 @@ __all__ = [
 INTEGRATION_PROFILE_PATH = Path(__file__).parents[2] / "data" / "integration_profiles.hmm"
 INTEGRATION_PROFILE_MANIFEST_PATH = Path(__file__).parents[2] / "data" / "integration_profiles.json"
 MAX_INTEGRATION_PROTEIN_LENGTH = 100_000
+# Mechanisms that insert DNA into a host genome. Generic annotation labels and
+# ``repair_recombinase`` (an NCLDV core-type gene) are not integration marks.
+INTEGRASE_MECHANISMS = frozenset({"dde_integrase", "tyrosine_recombinase", "serine_recombinase"})
 
 IntegrationLocation = Literal["interior", "upstream", "downstream", "boundary_overlap"]
 

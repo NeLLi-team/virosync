@@ -24,7 +24,7 @@ from virosync.utils.resource_manifest import (
     load_resource_manifest,
 )
 
-SOFTWARE_VERSION = "1.3.0"
+SOFTWARE_VERSION = "1.3.1"
 DATABASE_VERSION = "v1.3.0"
 RESOURCE_ARCHIVE = "resources_v1_3_0_runtime.tar.gz"
 RESOURCE_URL = f"https://dl.newlineages.com/virosync/{RESOURCE_ARCHIVE}"

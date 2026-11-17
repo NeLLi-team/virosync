@@ -387,6 +387,28 @@ def _taxonomy_prefixes(value: object) -> list[str]:
     return [canonical_family(str(prefix).rstrip("_")) for prefix in raw_prefixes if str(prefix).strip()]
 
 
+def interior_taxonomy_records(result: VerificationResult) -> list[dict]:
+    """Return a result's gene-taxonomy records without flanking genes, as dictionaries."""
+    records = []
+    for record in getattr(result, "gene_taxonomy_records", []) or []:
+        if isinstance(record, dict):
+            if not record.get("is_flanking", False):
+                records.append(record)
+        elif not getattr(record, "is_flanking", False):
+            records.append(getattr(record, "__dict__", {}))
+    return records
+
+
+def top10_family_gene_counts(records: list[dict]) -> dict[str, int]:
+    """Count the genes with an NCLDV, MIRUS, PPV or CRESS reference among their top ten hits."""
+    counts = dict.fromkeys(("NCLDV", "MIRUS", "PPV", "CRESS"), 0)
+    for record in records:
+        families = set(_taxonomy_prefixes(record.get("top10_prefixes")))
+        for family in counts:
+            counts[family] += family in families
+    return counts
+
+
 def _qualified_viral_prefixes(record: dict) -> list[str]:
     """Reference namespaces of a record's identity-qualified viral top-10 hits.
 
@@ -1932,22 +1954,10 @@ class OutputGenerator:
                 unvalidated_og_names.add(target)
 
         taxonomy_counts = {prefix: 0 for prefix in DETAILED_TAXONOMY_PARTITION}
-        top10_support = {prefix: 0 for prefix in ("NCLDV", "MIRUS", "PPV", "CRESS")}
-
-        all_gene_tax_records = getattr(result, "gene_taxonomy_records", []) or []
-        gene_tax_records: list[dict] = []
-        for record in all_gene_tax_records:
-            is_flanking = (
-                record.get("is_flanking", False) if isinstance(record, dict) else getattr(record, "is_flanking", False)
-            )
-            if not is_flanking:
-                gene_tax_records.append(record if isinstance(record, dict) else getattr(record, "__dict__", {}))
+        gene_tax_records = interior_taxonomy_records(result)
+        top10_support = top10_family_gene_counts(gene_tax_records)
         summary_gene_tax_total = getattr(result, "gene_taxonomy_total", 0) or 0
         for record in gene_tax_records:
-            raw_viral = set(_taxonomy_prefixes(record.get("top10_prefixes")))
-            for family in top10_support:
-                if family in raw_viral:
-                    top10_support[family] += 1
             taxonomy_counts[_taxonomy_partition_bucket(record)] += 1
 
         if not gene_tax_records:

@@ -2,6 +2,33 @@
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [1.3.1] - 2026-11-17
+
+Uses resource bundle v1.3.0 unchanged.
+
+### Changed
+
+- Tier rescue of NCLDV and Mirus regions without a core hallmark. After overlap selection, a
+  gate-rejected region with published class NCLDV or MIRUS becomes LOW when it is at least
+  5,000 bp long, at least two interior genes carry an NCLDV hit (or two a MIRUS hit) among their
+  top ten hits, its `host_signature_fraction` is 0.5 or less, and it overlaps no kept call. It
+  becomes MEDIUM with an integration mark: a detected TIR, a matched TSD, a DDE integrase,
+  tyrosine recombinase or serine recombinase gene, or a GC deviation of 0.10 or more. A kept LOW
+  call that meets the rule and has a mark becomes MEDIUM. `canonical_selection_outcome` records
+  `tier_rescue_low`, `tier_rescue_medium` or `tier_promoted_medium`. The rescue sets the tier,
+  not `final_confidence`. A post-hoc version on the 1.3.0 protist cohort raised NCLDV HIGH and
+  MEDIUM calls from 23,668 to 25,839 and Mirus calls from 2,075 to 2,993.
+- Integration bonus: a detected TIR, a matched TSD or an interior DDE integrase, tyrosine
+  recombinase or serine recombinase gene adds +0.05 to the confidence score, once. The cap below
+  HIGH for fewer than two core groups still applies. On the 1.3.0 protist cohort about 1,700
+  MEDIUM calls, almost all PPV, reach HIGH with this bonus.
+- Capsid class rules for accepted calls, after ANI class transfer. A call whose capsid profiles
+  name only Mirusviricota (`mirus_mcp*`, `mcp_mirus*`, `EVE_CAPSID_NOVEL_0026`) is MIRUS,
+  whatever its other markers say. A VIRAL_UNKNOWN or UNKNOWN call takes the class its capsid
+  profiles name, when they name exactly one class and its marker families name no other. The
+  protist_db post-hoc version also used GVClass for unclassified calls above 10 kb; ViroSync
+  does not run GVClass, so that rule is not part of this release.
+
 ## [1.3.0] - 2026-11-16
 
 ### Resources

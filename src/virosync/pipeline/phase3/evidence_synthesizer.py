@@ -58,6 +58,7 @@ from virosync.pipeline.phase3.gene_taxonomy import (
     qualified_viral_hits,
     viral_hit_categories,
 )
+from virosync.pipeline.phase3.integration_genes import INTEGRASE_MECHANISMS
 from virosync.pipeline.phase3.low_support import assess_competitive_viral_support
 from virosync.pipeline.taxonomy_utils import EUK_PEVE_LABEL, resolve_org_id
 from virosync.utils.path_safety import require_strict_child, safe_filename_component
@@ -119,6 +120,11 @@ PLV_CORE_MARKER_PREFIXES = {
     "mcp": ("plv_mcp",),
     "pc": ("plv_pc",),
 }
+
+# Added once for a detected TIR, a matched TSD or an interior integrase gene.
+# On the 1.3.0 protist cohort it lifts about 1,700 MEDIUM calls to HIGH,
+# mostly PPV; +0.10 would lift about 2,800.
+INTEGRATION_BONUS = 0.05
 
 
 def _cress_gene_support(hallmark_hits: list) -> tuple[set[str], set[str]]:
@@ -1896,6 +1902,7 @@ class _ConfidenceBonuses:
     taxonomy_distribution: float
     host_divergence: float
     viral_enrichment: float
+    integration: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -2160,6 +2167,9 @@ def _calculate_confidence_bonuses(
 
     add_common_bonus(result.hallmark_assessment.summary.coherence_bonus)
 
+    integration_bonus = INTEGRATION_BONUS if has_integration_bonus_evidence(result) else 0.0
+    add_common_bonus(integration_bonus)
+
     return _ConfidenceBonuses(
         common=common_bonus,
         reference=reference_bonus,
@@ -2167,7 +2177,28 @@ def _calculate_confidence_bonuses(
         taxonomy_distribution=taxonomy_distribution_bonus,
         host_divergence=host_divergence_bonus,
         viral_enrichment=viral_enrichment_bonus,
+        integration=integration_bonus,
     )
+
+
+def has_integration_bonus_evidence(result: VerificationResult) -> bool:
+    """Return whether a result has a detected TIR, a matched TSD or an interior integrase gene.
+
+    Ambiguous TIRs, flank-only integrase genes, direct repeats and GC deviation
+    give no bonus; GC deviation already counts in the composition component.
+    """
+    if result.tir_status == "detected" or tsd_status(result) == "assessed_match":
+        return True
+    return any(
+        hit["mechanism"] in INTEGRASE_MECHANISMS and hit["location"] == "interior"
+        for hit in result.integration_gene_hits
+    )
+
+
+def tsd_status(result: VerificationResult) -> str:
+    """Return the target-site-duplication assessment status, or ``not_assessed``."""
+    evidence = result.repeat_evidence
+    return evidence.tsd.status if evidence is not None else "not_assessed"
 
 
 def _log_confidence_bonuses(
@@ -2256,6 +2287,7 @@ def _assemble_confidence(
             "weighted_base": float(weighted_base),
             "bonus_total": float(bonus_total),
             "composition_bonus": float(selected_composition_bonus),
+            "integration_bonus": float(bonuses.integration),
             "composition_cap_active": composition_cap_active,
             "composition_evidence_active": include_composition,
             "hallmark_summary": asdict(summary),
