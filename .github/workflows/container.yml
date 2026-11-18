@@ -1,0 +1,92 @@
+name: container
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push the SIF to oras://ghcr.io/nelli-team/virosync:<version> and :latest"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  sif:
+    name: Build Apptainer SIF and publish
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Read the software version
+        id: release
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' pyproject.toml | head -n 1)"
+          test -n "${version}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match software version ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Apptainer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:apptainer/ppa
+          sudo apt-get update
+          sudo apt-get install -y apptainer
+
+      - name: Build SIF
+        run: |
+          apptainer build virosync.sif containers/apptainer/virosync.def
+          sha256sum virosync.sif | tee virosync.sif.sha256
+          ls -la virosync.sif
+
+      - name: Smoke-test the SIF without resources
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          reported="$(apptainer exec virosync.sif python -c 'import virosync; print(virosync.__version__)')"
+          test "${reported}" = "${version}"
+          apptainer exec virosync.sif sh -c 'test -x "$VIROSYNC_PRODIGAL_RUNTIME"/*/bin/prodigal-gv'
+          apptainer exec virosync.sif sh -ec 'command -v diamond; command -v gt'
+          apptainer run virosync.sif --help > /dev/null
+
+      - name: Publish SIF to GHCR
+        if: >-
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          printf '%s' "${GITHUB_TOKEN}" | apptainer registry login \
+            --username "${GITHUB_ACTOR}" --password-stdin oras://ghcr.io
+          apptainer push virosync.sif "oras://ghcr.io/nelli-team/virosync:${version}"
+          apptainer push virosync.sif "oras://ghcr.io/nelli-team/virosync:latest"
+          apptainer registry logout oras://ghcr.io
+
+      # A new GHCR package is private until an organisation admin sets it to
+      # public once. This step fails until then: users cannot pull a private package.
+      - name: Verify anonymous pull of the published SIF
+        if: >-
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish)
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          anonymous="$(mktemp -d "${RUNNER_TEMP}/virosync-anonymous.XXXXXX")"
+          mkdir "${anonymous}/config" "${anonymous}/cache"
+          APPTAINER_CONFIGDIR="${anonymous}/config" APPTAINER_CACHEDIR="${anonymous}/cache" \
+            apptainer pull "${anonymous}/virosync.sif" "oras://ghcr.io/nelli-team/virosync:${version}"
+          test "$(sha256sum virosync.sif | cut -d ' ' -f 1)" = "$(sha256sum "${anonymous}/virosync.sif" | cut -d ' ' -f 1)"

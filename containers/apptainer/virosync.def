@@ -1,0 +1,99 @@
+Bootstrap: docker
+From: ghcr.io/prefix-dev/pixi@sha256:d2d0d941b89802e67a622e4adad68c8643f81154461028faebb60aca502db78f
+
+%files
+    LICENSE /opt/virosync/LICENSE
+    README.md /opt/virosync/README.md
+    CHANGELOG.md /opt/virosync/CHANGELOG.md
+    config /opt/virosync/config
+    example /opt/virosync/example
+    pixi.lock /opt/virosync/pixi.lock
+    pixi.toml /opt/virosync/pixi.toml
+    pyproject.toml /opt/virosync/pyproject.toml
+    release-manifests /opt/virosync/release-manifests
+    scripts /opt/virosync/scripts
+    src /opt/virosync/src
+
+%environment
+    export PATH=/opt/virosync/.pixi/envs/default/bin:$PATH
+    export PYTHONPATH=/opt/virosync/src
+    export PYTHONNOUSERSITE=1
+    export VIROSYNC_PRODIGAL_RUNTIME=/opt/prodigal-gv
+    export VIROSYNC_DB_ROOT="${VIROSYNC_DB_ROOT:-/db/virosync}"
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates git \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    cd /opt/virosync
+    pixi install --frozen -e default
+
+    # Corrected Prodigal-GV is compiled once into the image.
+    VIROSYNC_PRODIGAL_RUNTIME=/opt/prodigal-gv PYTHONPATH=/opt/virosync/src \
+        /opt/virosync/.pixi/envs/default/bin/python -m virosync.utils.prodigal_runtime setup
+
+    pixi clean cache -y || true
+    rm -rf /root/.cache/rattler /root/.cache/pixi
+    find /opt/virosync /opt/prodigal-gv -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+
+    mkdir -p /db /data
+    chmod 777 /db /data
+    chmod -R a+rX /opt/virosync /opt/prodigal-gv
+
+%runscript
+    config=/opt/virosync/config/orchestration.yaml
+    cli="python -m virosync.cli.main"
+    case "${1:-}" in
+        setup-resources)
+            shift
+            exec $cli orchestrate setup --config "$config" --no-interactive-optional --no-write-config "$@"
+            ;;
+        verify-resources)
+            shift
+            exec $cli orchestrate resources verify --config "$config" --full "$@"
+            ;;
+        example)
+            shift
+            output="${1:?usage: example OUTPUT_DIR [options]}"
+            shift
+            exec $cli run -i /opt/virosync/example -o "$output" --config "$config" \
+                -w 1 --threads-per-worker 8 --clean-run "$@"
+            ;;
+        "" | -h | --help)
+            exec $cli --help
+            ;;
+    esac
+    # A pipeline run without --config uses the image's configuration.
+    is_run=0
+    for arg in "$@"; do
+        case "$arg" in
+            --config | --config=*) exec $cli "$@" ;;
+            run | -i | --input | --input=*) is_run=1 ;;
+        esac
+    done
+    if [ "$is_run" = 1 ]; then
+        exec $cli "$@" --config "$config"
+    fi
+    exec $cli "$@"
+
+%labels
+    Author fschulz
+    Version 1.3.1
+    Description ViroSync - endogenous viral element detection
+    ResourceBundle v1.3.0
+
+%help
+    ViroSync 1.3.1. The resource bundle (v1.3.0, about 11.6 GB packed) is not in
+    the image. Bind a host folder to /db and download it once; it goes into
+    /db/virosync:
+
+        apptainer run -B /path/to/virosync-db:/db virosync.sif setup-resources
+        apptainer run -B /path/to/virosync-db:/db virosync.sif verify-resources
+
+    Run the shipped example, or your own genomes (use absolute, bound paths):
+
+        apptainer run -B /path/to/virosync-db:/db -B $PWD:$PWD virosync.sif example $PWD/example-out
+        apptainer run -B /path/to/virosync-db:/db -B /data:/data virosync.sif \
+            -i /data/genomes -o /data/results -w 1 --threads-per-worker 16
+
+    A run without --config uses /opt/virosync/config/orchestration.yaml.

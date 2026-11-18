@@ -52,6 +52,26 @@ Native setup builds the pinned Prodigal-GV capacity correction. The
 [installation guide](docs/getting-started.md) covers its runtime directory and
 direct Python or console use.
 
+### Apptainer image
+
+The image holds ViroSync, its environment and Prodigal-GV, but not the resources.
+Bind a host folder to `/db` and download the resources once; they go into its
+`virosync` subfolder:
+
+```bash
+apptainer pull virosync_1.3.1.sif oras://ghcr.io/nelli-team/virosync:1.3.1
+mkdir -p virosync-db
+apptainer run -B "$PWD/virosync-db:/db" virosync_1.3.1.sif setup-resources
+apptainer run -B "$PWD/virosync-db:/db" virosync_1.3.1.sif verify-resources
+apptainer run -B "$PWD/virosync-db:/db" -B "$PWD:$PWD" virosync_1.3.1.sif example "$PWD/example-out"
+apptainer run -B "$PWD/virosync-db:/db" -B /data:/data virosync_1.3.1.sif \
+  -i /data/genomes -o /data/results -w 1 --threads-per-worker 16
+```
+
+Use absolute paths inside bound folders. A run without `--config` uses the
+image's `config/orchestration.yaml`. [containers/README.md](containers/README.md)
+describes how the image is built and published.
+
 ## Quick start
 
 ```bash
