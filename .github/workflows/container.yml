@@ -60,7 +60,7 @@ jobs:
           reported="$(apptainer exec virosync.sif python -c 'import virosync; print(virosync.__version__)')"
           test "${reported}" = "${version}"
           apptainer exec virosync.sif sh -c 'test -x "$VIROSYNC_PRODIGAL_RUNTIME"/*/bin/prodigal-gv'
-          apptainer exec virosync.sif sh -ec 'command -v diamond; command -v gt'
+          apptainer exec virosync.sif sh -ec 'command -v diamond; command -v gt; command -v curl; command -v wget'
           apptainer run virosync.sif --help > /dev/null
 
       - name: Publish SIF to GHCR

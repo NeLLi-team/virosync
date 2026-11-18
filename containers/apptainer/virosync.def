@@ -22,7 +22,7 @@ From: ghcr.io/prefix-dev/pixi@sha256:d2d0d941b89802e67a622e4adad68c8643f81154461
     export VIROSYNC_DB_ROOT="${VIROSYNC_DB_ROOT:-/db/virosync}"
 
 %post
-    apt-get update && apt-get install -y --no-install-recommends ca-certificates git \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git wget \
         && apt-get clean && rm -rf /var/lib/apt/lists/*
 
     cd /opt/virosync
